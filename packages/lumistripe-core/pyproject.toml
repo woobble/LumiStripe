@@ -7,7 +7,7 @@ license = "MIT"
 authors = [
     { name = "Felix Sternberg", email = "felix@sternberg.cx" }
 ]
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 dependencies = [
     "typing-extensions>=4.16",
     "numpy>=2.5",
