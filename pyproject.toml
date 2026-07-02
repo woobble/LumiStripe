@@ -1,0 +1,27 @@
+[project]
+name = "lumistripe"
+version = "0.1.0"
+requires-python = ">=3.13"
+license = "MIT"
+dependencies = [
+    "lumistripe-core",
+]
+
+[tool.uv.workspace]
+members = [
+    "packages/lumistripe-core",
+    "apps/lumistripe-app",
+]
+
+[tool.uv.sources]
+lumistripe-core = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1",
+    "ruff>=0.15",
+    "mypy>=2.1",
+]
+
+[tool.pytest.ini_options]
+python_files = ["test_*.py"]

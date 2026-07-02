@@ -1,0 +1,153 @@
+import numpy as np
+import pytest
+
+from lumistripe import BrightnessController, Config, DualController, GPIOStripe, Rgb, Rgba, Stripe, SubStripe
+
+
+class FakeLineWriter:
+    def __init__(self) -> None:
+        self.writes: list[tuple[bool, bool]] = []
+
+    def set_values(self, data: bool, clock: bool) -> None:
+        self.writes.append((data, clock))
+
+
+def test_stripe_initializes_clear_pixels() -> None:
+    stripe = Stripe(3)
+    assert stripe.length == 3
+    np.testing.assert_array_equal(
+        stripe.pixels(),
+        np.array([[0, 0, 0, 255], [0, 0, 0, 255], [0, 0, 0, 255]], dtype=np.uint8),
+    )
+
+
+def test_set_pixel_and_set_pixels() -> None:
+    stripe = Stripe(3)
+    stripe.set_pixel(0, Rgb(255, 0, 0))
+    stripe.set_pixel(1, Rgba(0, 255, 0, 0.5))
+    stripe.set_pixels(np.array([[0, 0, 255, 255]], dtype=np.uint8))
+    np.testing.assert_array_equal(
+        stripe.pixels(),
+        np.array([[0, 0, 255, 255], [0, 255, 0, 127], [0, 0, 0, 255]], dtype=np.uint8),
+    )
+
+
+def test_clear_and_fill() -> None:
+    stripe = Stripe(2)
+    stripe.fill(Rgb(255, 100, 50))
+    stripe.clear()
+    np.testing.assert_array_equal(
+        stripe.pixels(),
+        np.array([[0, 0, 0, 255], [0, 0, 0, 255]], dtype=np.uint8),
+    )
+
+
+def test_sub_stripe_maps_to_parent() -> None:
+    stripe = Stripe(5)
+    sub = SubStripe(stripe, 1, 4)
+    sub.set_pixel(1, Rgb(10, 20, 30))
+    np.testing.assert_array_equal(stripe.pixels()[2], np.array([10, 20, 30, 255], dtype=np.uint8))
+
+
+def test_dual_controller_mirrors_writes() -> None:
+    left = Stripe(2)
+    right = Stripe(2)
+    dual = DualController(left, right)
+    dual.fill(Rgb(1, 2, 3))
+    np.testing.assert_array_equal(left.pixels(), right.pixels())
+
+
+def test_brightness_controller_scales_alpha() -> None:
+    stripe = Stripe(1)
+    bright = BrightnessController(stripe, 0.5)
+    bright.set_pixel(0, Rgba(10, 20, 30, 1.0))
+    np.testing.assert_array_equal(stripe.pixels()[0], np.array([10, 20, 30, 127], dtype=np.uint8))
+
+
+def test_bounds_errors() -> None:
+    stripe = Stripe(2)
+    with pytest.raises(IndexError):
+        stripe.pixel(9)
+
+
+def test_sub_stripe_fill_and_clear_update_parent() -> None:
+    stripe = Stripe(4)
+    sub = SubStripe(stripe, 1, 3)
+    sub.fill(Rgb(8, 9, 10))
+    np.testing.assert_array_equal(
+        stripe.pixels(),
+        np.array(
+            [[0, 0, 0, 255], [8, 9, 10, 255], [8, 9, 10, 255], [0, 0, 0, 255]],
+            dtype=np.uint8,
+        ),
+    )
+
+    sub.clear()
+    np.testing.assert_array_equal(
+        stripe.pixels(),
+        np.array(
+            [[0, 0, 0, 255], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 255]],
+            dtype=np.uint8,
+        ),
+    )
+
+
+def test_gpio_stripe_flush_writes_expected_frame_shape() -> None:
+    writer = FakeLineWriter()
+    stripe = GPIOStripe(Config(), 2, _line_writer=writer)
+    stripe.flush()
+
+    pulse_count = 50 + (2 * 25) + 2
+    assert writer.writes[0] == (False, False)
+    assert len(writer.writes) == 1 + pulse_count * 3
+
+
+def test_gpio_stripe_skip_flush_when_clean() -> None:
+    writer = FakeLineWriter()
+    stripe = GPIOStripe(Config(), 1, _line_writer=writer)
+    stripe.flush()
+    first_flush_count = len(writer.writes)
+    stripe.flush()
+    assert len(writer.writes) == first_flush_count
+
+
+def test_gpio_stripe_force_flush_always_writes() -> None:
+    writer = FakeLineWriter()
+    stripe = GPIOStripe(Config(), 1, _line_writer=writer)
+    stripe.flush()
+    first_flush_count = len(writer.writes)
+    stripe.force_flush()
+    assert len(writer.writes) == first_flush_count * 2
+
+
+def test_gpio_stripe_clear_marks_transparent_black() -> None:
+    writer = FakeLineWriter()
+    stripe = GPIOStripe(Config(default_color=Rgb(10, 20, 30)), 1, _line_writer=writer)
+    stripe.clear()
+    np.testing.assert_array_equal(stripe.pixels()[0], np.array([0, 0, 0, 0], dtype=np.uint8))
+
+
+def test_gpio_stripe_transmits_scaled_rgb_bits_msb_first() -> None:
+    writer = FakeLineWriter()
+    stripe = GPIOStripe(Config(), 1, _line_writer=writer)
+    stripe.set_pixel(0, Rgba(255, 0, 0, 0.5))
+    stripe.flush()
+
+    pulses = [writer.writes[index : index + 3] for index in range(1, len(writer.writes), 3)]
+    pixel_pulses = pulses[50 : 50 + 25]
+    assert pixel_pulses[0] == [(True, False), (True, True), (True, False)]
+
+    bits = [pulse[0][0] for pulse in pixel_pulses[1:]]
+    expected = [bool((127 >> bit) & 1) for bit in range(7, -1, -1)] + [False] * 16
+    assert bits == expected
+
+
+def test_gpio_stripe_missing_dependency_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    def raising_import(name: str):
+        if name == "gpiod":
+            raise ImportError("missing")
+        return __import__(name)
+
+    monkeypatch.setattr("lumistripe.gpio.importlib.import_module", raising_import)
+    with pytest.raises(RuntimeError, match="install lumistripe-core\\[gpio\\]"):
+        GPIOStripe(Config(), 1)
