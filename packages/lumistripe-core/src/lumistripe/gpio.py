@@ -109,6 +109,32 @@ class _GPIODLineWriter:
         )
 
 
+class _GPIOMemLineWriter:
+    def __init__(self, config: Config) -> None:
+        try:
+            from lumistripe._gpiomem import GPIOMem as _GPIOMem
+        except ImportError as exc:
+            raise RuntimeError(
+                "gpiomem extension not available; install lumistripe-core on a Raspberry Pi"
+            ) from exc
+        try:
+            self._mem = _GPIOMem(config.gpio_data, config.gpio_clock)
+        except OSError as exc:
+            raise RuntimeError(
+                f"cannot open /dev/gpiomem: {exc}"
+            ) from exc
+
+    def set_values(self, data: bool, clock: bool) -> None:
+        self._mem.set_values(data, clock)
+
+    def flush_pixels(self, pixels: np.ndarray) -> None:
+        self._mem.flush(pixels)
+
+    def close(self) -> None:
+        if hasattr(self, "_mem"):
+            self._mem.close()
+
+
 class GPIOStripe(Stripe):
     def __init__(
         self,
@@ -116,6 +142,7 @@ class GPIOStripe(Stripe):
         length: int,
         *,
         _line_writer: _LineWriter | None = None,
+        _prefer_gpiomem: bool = True,
     ) -> None:
         super().__init__(length, default_color=config.default_color)
         if config.default_color is None:
@@ -123,7 +150,16 @@ class GPIOStripe(Stripe):
             self._dirty[:] = True
         self._config = config
         self._scaled = np.zeros((length, 3), dtype=np.uint8)
-        self._line_writer = _line_writer or _GPIODLineWriter(config)
+
+        if _line_writer is not None:
+            self._line_writer = _line_writer
+        elif _prefer_gpiomem:
+            try:
+                self._line_writer = _GPIOMemLineWriter(config)
+            except RuntimeError:
+                self._line_writer = _GPIODLineWriter(config)
+        else:
+            self._line_writer = _GPIODLineWriter(config)
 
     def flush(self) -> None:
         if not bool(np.any(self._dirty)):
@@ -131,6 +167,11 @@ class GPIOStripe(Stripe):
         self.force_flush()
 
     def force_flush(self) -> None:
+        if hasattr(self._line_writer, "flush_pixels"):
+            self._line_writer.flush_pixels(self._pixels)
+            self._dirty[:] = False
+            return
+
         dirty_indices = np.nonzero(self._dirty)[0]
         for index in dirty_indices:
             rgba = self._pixels[index]
