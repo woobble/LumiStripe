@@ -59,8 +59,8 @@ class MusicDrivenSelector:
         self.last_class_switch_frame = self.frame_count
         self.current_animation_name = None
         self.last_animation_switch_frame = 0
-        self._class_animation_queue.clear()
         class_names = self._available_class_names(player, self.current_class)
+        self._reset_class_rotation(class_names)
         if class_names:
             chosen = self._choose_class_animation(class_names)
             if chosen is not None:
@@ -75,10 +75,12 @@ class MusicDrivenSelector:
         index = player.index_of(name)
         if index is not None:
             player.set_index(index)
-        self.last_animation_switch_frame = self.frame_count
         classes = CLASS_MAP.get(name, ())
         if classes:
             self.current_class = classes[0]
+        class_names = self._available_class_names(player, self.current_class)
+        self._reset_class_rotation(class_names, current_name=name)
+        self.last_animation_switch_frame = self.frame_count
 
     def update(self, player: AnimationPlayer, features: MusicFeatures) -> AnimationClass:
         self.frame_count += 1
@@ -93,7 +95,7 @@ class MusicDrivenSelector:
             self.last_class_switch_frame = self.frame_count
             self.current_animation_name = None
             self.last_animation_switch_frame = 0
-            self._class_animation_queue.clear()
+            self._reset_class_rotation(self._available_class_names(player, self.current_class))
 
         class_names = self._available_class_names(player, self.current_class)
         if class_names and self._should_rotate_animation():
@@ -161,13 +163,14 @@ class MusicDrivenSelector:
         if not class_names:
             return None
 
+        allowed = set(class_names)
+        self._played_recently = [name for name in self._played_recently if name in allowed]
         available = [n for n in class_names if n not in self._played_recently]
         if not available:
             available = class_names
             self._played_recently.clear()
 
-        if not self._class_animation_queue or all(n not in self._class_animation_queue for n in available):
-            pass
+        self._class_animation_queue = [name for name in self._class_animation_queue if name in available]
 
         if not self._class_animation_queue:
             queue = list(available)
@@ -184,6 +187,15 @@ class MusicDrivenSelector:
             self._played_recently.pop(0)
 
         return chosen
+
+    def _reset_class_rotation(self, class_names: list[str], *, current_name: str | None = None) -> None:
+        self._class_animation_queue.clear()
+        allowed = set(class_names)
+        self._played_recently = [name for name in self._played_recently if name in allowed and name != current_name]
+        if current_name is not None and current_name in allowed:
+            self._played_recently.append(current_name)
+            if len(self._played_recently) > 4:
+                self._played_recently = self._played_recently[-4:]
 
     def _available_class_names(self, player: AnimationPlayer, class_: AnimationClass) -> list[str]:
         names: list[str] = []

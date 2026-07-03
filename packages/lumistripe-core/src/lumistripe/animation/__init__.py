@@ -34,6 +34,7 @@ from .rainbow import Rainbow
 from .rainbow_cycle import RainbowCycle
 from .rainbow_strobe import RainbowStrobe
 from .rave_pulse import RavePulse
+from .reactive import AudioReactive, Decay
 from .rgbw_test import RgbwTest
 from .selector import AnimationClass, CLASS_MAP, MusicDrivenSelector, MusicSelectorConfig
 from .shockwave import Shockwave

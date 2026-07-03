@@ -1,4 +1,5 @@
 from lumistripe import AnimationClass, AnimationPlayer, AudioFrame, MusicDrivenSelector, MusicFeatures
+from lumistripe.animation import CLASS_MAP
 
 
 def _fast_party_features() -> MusicFeatures:
@@ -170,3 +171,21 @@ def test_set_manual_animation_falls_back_to_first_class_in_map() -> None:
     selector.set_manual_animation(player, "shockwave")
 
     assert selector.current_class is AnimationClass.HARD_DROP
+
+
+def test_set_manual_animation_invalidates_stale_class_queue() -> None:
+    player = AnimationPlayer.party()
+    selector = MusicDrivenSelector(current_class=AnimationClass.AMBIENT)
+
+    selector.set_manual_class(player, AnimationClass.AMBIENT)
+    selector.set_manual_animation(player, "shockwave")
+
+    hard_drop_names = [
+        entry.animation.name
+        for entry in player.animations
+        if selector.current_class in CLASS_MAP.get(entry.animation.name, ())
+    ]
+    chosen = selector._choose_class_animation(hard_drop_names)
+
+    assert chosen in hard_drop_names
+    assert chosen != "shockwave"
