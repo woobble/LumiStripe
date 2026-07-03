@@ -249,6 +249,8 @@ class HeadlessApp:
         except KeyboardInterrupt:
             self.running = False
         finally:
+            self.controller.clear()
+            self.controller.force_flush()
             self._finish_status()
             self._close_audio_input()
 
@@ -399,6 +401,8 @@ class HeadlessApp:
         except KeyboardInterrupt:
             self.running = False
         finally:
+            self.controller.clear()
+            self.controller.force_flush()
             self._close_audio_input()
 
 

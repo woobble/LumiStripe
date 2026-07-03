@@ -85,7 +85,7 @@ def test_selector_moves_to_high_energy_class() -> None:
     assert class_ in {AnimationClass.FAST_PARTY, AnimationClass.CHAOTIC}
 
 
-def test_selector_prefers_calm_or_groovy_for_quiet_music() -> None:
+def test_selector_prefers_ambient_or_calm_for_quiet_music() -> None:
     player = AnimationPlayer.party()
     selector = MusicDrivenSelector(current_class=AnimationClass.FAST_PARTY)
     hot = _fast_party_features()
@@ -97,7 +97,7 @@ def test_selector_prefers_calm_or_groovy_for_quiet_music() -> None:
     for _ in range(200):
         class_ = selector.update(player, quiet)
 
-    assert class_ in {AnimationClass.CALM, AnimationClass.GROOVY}
+    assert class_ in {AnimationClass.AMBIENT, AnimationClass.CALM, AnimationClass.GROOVY}
 
 
 def test_selector_stays_in_class_with_consistent_input() -> None:

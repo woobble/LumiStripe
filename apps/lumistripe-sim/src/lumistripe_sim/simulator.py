@@ -478,6 +478,8 @@ class SimulatorApp:
         def tick() -> None:
             nonlocal next_frame_at
             if not self.running:
+                self.stripe.clear()
+                self.stripe.force_flush()
                 self._close_audio_input()
                 root.destroy()
                 return
@@ -506,6 +508,8 @@ class SimulatorApp:
             root.mainloop()
         except KeyboardInterrupt:
             self.running = False
+            self.stripe.clear()
+            self.stripe.force_flush()
             self._close_audio_input()
             try:
                 root.destroy()

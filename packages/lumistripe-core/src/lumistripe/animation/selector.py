@@ -165,18 +165,19 @@ class MusicDrivenSelector:
 
         return {
             AnimationClass.AMBIENT: (
-                (1.0 - self.energy_short) * 0.75
-                + (1.0 - self.beat_density) * 0.35
+                (1.0 - self.energy_short) * 0.85
+                + (1.0 - self.beat_density) * 0.45
                 + (1.0 - self.onset_smooth) * 0.3
+                + (1.0 - self.bass_short) * 0.2
                 - groove_support * 0.35
             ),
             AnimationClass.CALM: (
                 (1.0 - self.energy_short) * 0.95
                 + (1.0 - self.beat_density) * 0.22
                 + (1.0 - self.onset_smooth) * 0.18
-                + low_energy_presence * 0.55
-                + quiet_bonus * 0.45
-                + soft_bass_bonus * 0.18
+                + low_energy_presence * 0.35
+                + quiet_bonus * 0.2
+                + soft_bass_bonus * 0.05
                 - self.bass_short * 0.35
                 - bass_ratio * 0.08
                 - active_energy * 1.1
@@ -186,12 +187,12 @@ class MusicDrivenSelector:
                 + self.beat_density * 0.45
                 + self.bass_short * 0.45
                 + self.mid_short * 0.4
-                + sustained_bass_groove
+                + sustained_bass_groove * 0.6
                 + active_energy * 0.3
                 + low_energy_presence * 0.15
                 - bass_dominance * 0.2
             ),
-            AnimationClass.HARD_DROP: rise * 3.2 + self.bass_short * 0.7 + self.accent_short * 0.5 + self.onset_smooth * 0.6 + (1.0 - self.high_short) * 0.3,
+            AnimationClass.HARD_DROP: rise * 3.2 + self.bass_short * 0.7 + self.accent_short * 0.5 + self.onset_smooth * 0.6 + bass_dominance * 0.3 + (1.0 - self.high_short) * 0.3,
             AnimationClass.FAST_PARTY: (
                 self.energy_short * 1.05
                 + self.beat_density * 0.55
@@ -199,22 +200,23 @@ class MusicDrivenSelector:
                 + self.brightness_smooth * 0.35
                 + self.bpm_smooth / 250.0 * 0.2
                 + self.bass_short * 0.2
+                + self.onset_smooth * 0.3
                 + active_energy * 0.45
                 - low_energy_presence * 0.35
                 - bass_dominance * 0.32
             ),
             AnimationClass.BASS_HEAVY: (
-                self.bass_short * 0.8
+                self.bass_short * 0.6
                 + bass_ratio * 0.42
-                + bass_dominance * 0.95
+                + bass_dominance * 0.6
                 + self.energy_short * 0.42
                 + stable_energy * 0.12
                 + self.beat_density * 0.1
                 - low_energy_presence * 0.18
                 - self.high_short * 0.15
             ),
-            AnimationClass.VOCAL_POP: self.mid_short * 0.6 + mid_ratio * 0.6 + self.energy_short * 0.3 + self.beat_density * 0.3,
-            AnimationClass.CHAOTIC: self.energy_short * 0.5 + self.accent_short * 1.0 + self.beat_density * 0.5 + self.high_short * 0.5 + self.onset_smooth * 1.0 + abs(trend) * 0.6,
+            AnimationClass.VOCAL_POP: self.mid_short * 0.6 + mid_ratio * 0.6 + self.energy_short * 0.3 + self.beat_density * 0.3 + self.brightness_smooth * 0.35 + (1.0 - bass_dominance) * 0.3,
+            AnimationClass.CHAOTIC: self.energy_short * 0.6 + self.accent_short * 1.0 + self.beat_density * 0.6 + self.high_short * 0.5 + self.onset_smooth * 1.0 + abs(trend) * 0.6,
         }
 
     def _should_switch_class(self, target_class: AnimationClass, scores: dict[AnimationClass, float]) -> bool:
