@@ -26,6 +26,11 @@ class MusicSelectorConfig:
     confidence_threshold: float = 0.06
     feature_attack: float = 0.28
     feature_release: float = 0.08
+    idle_enter_frames: int = 60
+    idle_energy_threshold: float = 0.03
+    idle_onset_threshold: float = 0.025
+    idle_beat_density_threshold: float = 0.05
+    idle_brightness_threshold: float = 0.08
 
 
 @dataclass(slots=True)
@@ -47,6 +52,8 @@ class MusicDrivenSelector:
     onset_smooth: float = 0.0
     bpm_smooth: float = 120.0
     auto_select: bool = True
+    idle_active: bool = False
+    _idle_frames: int = 0
     _class_animation_queue: list[str] = field(default_factory=list)
     _played_recently: list[str] = field(default_factory=list)
     _rng: Random = field(default_factory=Random)
@@ -86,6 +93,19 @@ class MusicDrivenSelector:
         self.frame_count += 1
         self._update_features(features)
         if not self.auto_select:
+            return self.current_class
+
+        self._update_idle_state()
+        if self.idle_active:
+            idle_names = self._idle_animation_names(player)
+            if idle_names and self._should_rotate_animation():
+                chosen = self._choose_class_animation(idle_names)
+                if chosen is not None:
+                    self.current_animation_name = chosen
+                    self.last_animation_switch_frame = self.frame_count
+                    index = player.index_of(self.current_animation_name)
+                    if index is not None and index != player.current_index():
+                        player.set_index(index)
             return self.current_class
 
         scores = self._class_scores()
@@ -129,18 +149,70 @@ class MusicDrivenSelector:
     def _class_scores(self) -> dict[AnimationClass, float]:
         trend = self.energy_short - self.energy_long
         rise = max(trend, 0.0)
-        bass_ratio = self.bass_short / max(self.energy_short, 0.01)
-        bass_ratio = min(bass_ratio, 5.0)
+        bass_ratio = self.bass_short / max(self.energy_short, 0.08)
+        bass_ratio = min(bass_ratio, 2.0)
         mid_ratio = self.mid_short / max(self.energy_short, 0.01)
-        mid_ratio = min(mid_ratio, 5.0)
+        mid_ratio = min(mid_ratio, 2.0)
+        bass_dominance = max(0.0, self.bass_short - (self.mid_short * 0.65 + self.high_short * 0.45))
+        bass_dominance = min(bass_dominance * 1.8, 1.0)
+        low_energy_presence = max(0.0, 1.0 - self.energy_short * 6.0)
+        active_energy = max(0.0, self.energy_short - 0.24)
+        stable_energy = max(0.0, 1.0 - abs(trend) * 4.0)
+        quiet_bonus = max(0.0, 0.2 - self.energy_short) / 0.2
+        soft_bass_bonus = max(0.0, 0.12 - self.bass_short) / 0.12
+        groove_support = self.beat_density * 0.45 + self.mid_short * 0.35 + self.brightness_smooth * 0.2
+        sustained_bass_groove = self.bass_short * 0.45 + self.mid_short * 0.25 + bass_ratio * 0.15 + stable_energy * 0.15
 
         return {
-            AnimationClass.AMBIENT: (1.0 - self.energy_short) * 1.2 + (1.0 - self.beat_density) * 0.6 + (1.0 - self.onset_smooth) * 0.4,
-            AnimationClass.CALM: (1.0 - self.energy_short) * 0.6 + (1.0 - self.beat_density) * 0.4 + (1.0 - self.bass_short) * 0.3 + (1.0 - self.onset_smooth) * 0.2 + (1.0 - self.high_short) * 0.2,
-            AnimationClass.GROOVY: self.energy_short * 0.4 + self.beat_density * 0.7 + self.bass_short * 0.5 + (1.0 - abs(trend) * 4.0) * 0.3,
+            AnimationClass.AMBIENT: (
+                (1.0 - self.energy_short) * 0.75
+                + (1.0 - self.beat_density) * 0.35
+                + (1.0 - self.onset_smooth) * 0.3
+                - groove_support * 0.35
+            ),
+            AnimationClass.CALM: (
+                (1.0 - self.energy_short) * 0.95
+                + (1.0 - self.beat_density) * 0.22
+                + (1.0 - self.onset_smooth) * 0.18
+                + low_energy_presence * 0.55
+                + quiet_bonus * 0.45
+                + soft_bass_bonus * 0.18
+                - self.bass_short * 0.35
+                - bass_ratio * 0.08
+                - active_energy * 1.1
+            ),
+            AnimationClass.GROOVY: (
+                self.energy_short * 0.4
+                + self.beat_density * 0.45
+                + self.bass_short * 0.45
+                + self.mid_short * 0.4
+                + sustained_bass_groove
+                + active_energy * 0.3
+                + low_energy_presence * 0.15
+                - bass_dominance * 0.2
+            ),
             AnimationClass.HARD_DROP: rise * 3.2 + self.bass_short * 0.7 + self.accent_short * 0.5 + self.onset_smooth * 0.6 + (1.0 - self.high_short) * 0.3,
-            AnimationClass.FAST_PARTY: self.energy_short * 1.0 + self.beat_density * 0.8 + self.high_short * 0.8 + self.brightness_smooth * 0.6 + self.bpm_smooth / 250.0 * 0.5,
-            AnimationClass.BASS_HEAVY: self.bass_short * 0.6 + bass_ratio * 0.6 + self.energy_short * 0.3 + self.beat_density * 0.4,
+            AnimationClass.FAST_PARTY: (
+                self.energy_short * 1.05
+                + self.beat_density * 0.55
+                + self.high_short * 0.45
+                + self.brightness_smooth * 0.35
+                + self.bpm_smooth / 250.0 * 0.2
+                + self.bass_short * 0.2
+                + active_energy * 0.45
+                - low_energy_presence * 0.35
+                - bass_dominance * 0.32
+            ),
+            AnimationClass.BASS_HEAVY: (
+                self.bass_short * 0.8
+                + bass_ratio * 0.42
+                + bass_dominance * 0.95
+                + self.energy_short * 0.42
+                + stable_energy * 0.12
+                + self.beat_density * 0.1
+                - low_energy_presence * 0.18
+                - self.high_short * 0.15
+            ),
             AnimationClass.VOCAL_POP: self.mid_short * 0.6 + mid_ratio * 0.6 + self.energy_short * 0.3 + self.beat_density * 0.3,
             AnimationClass.CHAOTIC: self.energy_short * 0.5 + self.accent_short * 1.0 + self.beat_density * 0.5 + self.high_short * 0.5 + self.onset_smooth * 1.0 + abs(trend) * 0.6,
         }
@@ -187,6 +259,41 @@ class MusicDrivenSelector:
             self._played_recently.pop(0)
 
         return chosen
+
+    def _update_idle_state(self) -> None:
+        if self._is_music_active():
+            if self.idle_active:
+                self.idle_active = False
+                self._idle_frames = 0
+                self.current_animation_name = None
+                self.last_animation_switch_frame = 0
+                self._class_animation_queue.clear()
+            return
+
+        self._idle_frames += 1
+        if not self.idle_active and self._idle_frames >= self.config.idle_enter_frames:
+            self.idle_active = True
+            self.current_animation_name = None
+            self.last_animation_switch_frame = 0
+            self._class_animation_queue.clear()
+
+    def _is_music_active(self) -> bool:
+        return any(
+            (
+                self.energy_short >= self.config.idle_energy_threshold,
+                self.onset_smooth >= self.config.idle_onset_threshold,
+                self.beat_density >= self.config.idle_beat_density_threshold,
+                self.brightness_smooth >= self.config.idle_brightness_threshold,
+            )
+        )
+
+    def _idle_animation_names(self, player: AnimationPlayer) -> list[str]:
+        names: list[str] = []
+        for entry in player.animations:
+            classes = CLASS_MAP.get(entry.animation.name, ())
+            if AnimationClass.AMBIENT in classes or AnimationClass.CALM in classes:
+                names.append(entry.animation.name)
+        return names
 
     def _reset_class_rotation(self, class_names: list[str], *, current_name: str | None = None) -> None:
         self._class_animation_queue.clear()

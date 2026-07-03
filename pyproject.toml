@@ -5,16 +5,21 @@ requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
     "lumistripe-core",
+    "lumistripe-cli",
+    "lumistripe-sim",
 ]
 
 [tool.uv.workspace]
 members = [
     "packages/lumistripe-core",
-    "apps/lumistripe-app",
+    "apps/lumistripe-cli",
+    "apps/lumistripe-sim",
 ]
 
 [tool.uv.sources]
 lumistripe-core = { workspace = true }
+lumistripe-cli = { workspace = true }
+lumistripe-sim = { workspace = true }
 
 [dependency-groups]
 dev = [

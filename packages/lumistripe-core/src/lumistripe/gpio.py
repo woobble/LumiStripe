@@ -29,43 +29,84 @@ class _GPIODLineWriter:
 
     def _open_request(self, config: Config):
         gpiod = self._gpiod
-        if hasattr(gpiod, "request_lines") and hasattr(gpiod, "LineSettings"):
-            direction = getattr(gpiod, "Direction").OUTPUT
-            inactive = getattr(gpiod, "Value").INACTIVE
-            settings = gpiod.LineSettings(direction=direction, output_value=inactive)
-            return gpiod.request_lines(
-                config.chip,
-                consumer=config.consumer,
-                config={
-                    config.gpio_data: settings,
-                    config.gpio_clock: settings,
-                },
-            )
+        try:
+            if self._supports_modern_api(gpiod) and hasattr(gpiod, "request_lines"):
+                direction = self._direction_enum(gpiod).OUTPUT
+                inactive = self._value_enum(gpiod).INACTIVE
+                settings = gpiod.LineSettings(direction=direction, output_value=inactive)
+                return gpiod.request_lines(
+                    config.chip,
+                    consumer=config.consumer,
+                    config={
+                        config.gpio_data: settings,
+                        config.gpio_clock: settings,
+                    },
+                )
 
-        chip = gpiod.Chip(config.chip)
-        if hasattr(gpiod, "LineSettings") and hasattr(chip, "request_lines"):
-            direction = getattr(gpiod, "Direction").OUTPUT
-            inactive = getattr(gpiod, "Value").INACTIVE
-            settings = gpiod.LineSettings(direction=direction, output_value=inactive)
-            return chip.request_lines(
-                consumer=config.consumer,
-                config={
-                    config.gpio_data: settings,
-                    config.gpio_clock: settings,
-                },
-            )
+            if hasattr(gpiod, "Chip"):
+                chip = gpiod.Chip(config.chip)
+            else:
+                chip = None
+            if chip is not None and self._supports_modern_api(gpiod) and hasattr(chip, "request_lines"):
+                direction = self._direction_enum(gpiod).OUTPUT
+                inactive = self._value_enum(gpiod).INACTIVE
+                settings = gpiod.LineSettings(direction=direction, output_value=inactive)
+                return chip.request_lines(
+                    consumer=config.consumer,
+                    config={
+                        config.gpio_data: settings,
+                        config.gpio_clock: settings,
+                    },
+                )
+        except PermissionError as exc:
+            raise RuntimeError(
+                f'permission denied while opening GPIO chip "{config.chip}". '
+                "Add your user to the gpio group or run with appropriate permissions."
+            ) from exc
 
-        raise RuntimeError("unsupported gpiod Python API; expected libgpiod 2.x bindings")
+        raise RuntimeError(
+            "unsupported gpiod Python API; expected libgpiod 2.x bindings with Direction/Value enums"
+        )
 
     def set_values(self, data: bool, clock: bool) -> None:
         gpiod = self._gpiod
-        active = getattr(gpiod, "Value").ACTIVE
-        inactive = getattr(gpiod, "Value").INACTIVE
+        active = self._value_enum(gpiod).ACTIVE
+        inactive = self._value_enum(gpiod).INACTIVE
         values = {
             self._data_pin: active if data else inactive,
             self._clock_pin: active if clock else inactive,
         }
         self._request.set_values(values)
+
+    def _supports_modern_api(self, gpiod: object) -> bool:
+        if not hasattr(gpiod, "LineSettings"):
+            return False
+        try:
+            self._direction_enum(gpiod)
+            self._value_enum(gpiod)
+        except RuntimeError:
+            return False
+        return True
+
+    def _direction_enum(self, gpiod: object):
+        if hasattr(gpiod, "Direction"):
+            return getattr(gpiod, "Direction")
+        line = getattr(gpiod, "line", None)
+        if line is not None and hasattr(line, "Direction"):
+            return getattr(line, "Direction")
+        raise RuntimeError(
+            "unsupported gpiod Python API; expected libgpiod 2.x bindings with Direction/Value enums"
+        )
+
+    def _value_enum(self, gpiod: object):
+        if hasattr(gpiod, "Value"):
+            return getattr(gpiod, "Value")
+        line = getattr(gpiod, "line", None)
+        if line is not None and hasattr(line, "Value"):
+            return getattr(line, "Value")
+        raise RuntimeError(
+            "unsupported gpiod Python API; expected libgpiod 2.x bindings with Direction/Value enums"
+        )
 
 
 class GPIOStripe(Stripe):

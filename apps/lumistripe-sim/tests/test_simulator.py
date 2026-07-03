@@ -1,7 +1,16 @@
 import pytest
 
-from lumistripe import AudioFrame
-from lumistripe_app.simulator import (
+from lumistripe import (
+    AnimationClass,
+    AudioConfig,
+    AudioFrame,
+    AudioNormalization,
+    AudioSmoothing,
+    MusicDrivenSelector,
+    MusicFeatures,
+    MusicSelectorConfig,
+)
+from lumistripe_sim.simulator import (
     MIN_FRAME_SECONDS,
     SimulatorApp,
     SimulatorMode,
@@ -35,6 +44,22 @@ def test_simulator_app_initial_state() -> None:
     assert app.animation_name
     assert app.mode_label == "MANUAL"
     assert app.audio_status == "No audio source active."
+
+
+def test_simulator_app_class_label_reflects_selector_idle_state() -> None:
+    app = SimulatorApp(pixel_count=12)
+    assert app.class_label == "-"
+
+    app.selector = MusicDrivenSelector(current_class=AnimationClass.GROOVY)
+    assert app.class_label == "GROOVY"
+
+    app.selector.idle_active = True
+    assert app.class_label == "IDLE"
+
+
+def test_simulator_app_mic_tuning_label_formats_values() -> None:
+    app = SimulatorApp(pixel_count=12, mic_target_level=0.5, mic_noise_floor=0.01, idle_enter_frames=42, idle_threshold_scale=1.5)
+    assert app.mic_tuning_label == "MIC: target=0.50 noise=0.010 idle=42f scale=1.50"
 
 
 def test_handle_key_changes_animation_and_exit_state() -> None:
@@ -88,10 +113,11 @@ def test_demo_frame_has_energy() -> None:
 def test_mic_mode_falls_back_to_manual_on_error(monkeypatch) -> None:
     class BrokenAudioInput:
         @classmethod
-        def new(cls) -> AudioFrame:
+        def with_config(cls, config) -> AudioFrame:
+            del config
             raise RuntimeError("no audio input device available")
 
-    monkeypatch.setattr("lumistripe_app.simulator.AudioInput", BrokenAudioInput)
+    monkeypatch.setattr("lumistripe_sim.simulator.AudioInput", BrokenAudioInput)
     app = SimulatorApp(pixel_count=12, mode=SimulatorMode.MIC)
     assert app.mode is SimulatorMode.MANUAL
     assert app.audio_error == "no audio input device available"
@@ -99,9 +125,9 @@ def test_mic_mode_falls_back_to_manual_on_error(monkeypatch) -> None:
 
 
 def test_mic_mode_uses_music_selector(monkeypatch) -> None:
-    from lumistripe import MusicFeatures
-
     class FakeAudioInput:
+        last_config: AudioConfig | None = None
+
         def read(self) -> AudioFrame:
             return AudioFrame(
                 rms=0.95,
@@ -130,15 +156,30 @@ def test_mic_mode_uses_music_selector(monkeypatch) -> None:
             return None
 
         @classmethod
-        def new(cls):
+        def with_config(cls, config):
+            cls.last_config = config
             return cls()
 
-    monkeypatch.setattr("lumistripe_app.simulator.AudioInput", FakeAudioInput)
-    app = SimulatorApp(pixel_count=12, mode=SimulatorMode.MIC)
+    monkeypatch.setattr("lumistripe_sim.simulator.AudioInput", FakeAudioInput)
+    app = SimulatorApp(
+        pixel_count=12,
+        mode=SimulatorMode.MIC,
+        mic_target_level=0.5,
+        mic_noise_floor=0.01,
+        idle_enter_frames=42,
+        idle_threshold_scale=1.5,
+    )
     for _ in range(140):
         app.step()
     assert app.class_label in ("FAST_PARTY", "CHAOTIC")
     assert app.audio_status == "Input: Fake Mic"
+    assert FakeAudioInput.last_config == AudioConfig(
+        smoothing=AudioSmoothing(noise_floor=0.01),
+        normalization=AudioNormalization(target_level=0.5),
+    )
+    assert app.selector is not None
+    assert app.selector.config.idle_enter_frames == 42
+    assert app.selector.config.idle_energy_threshold == pytest.approx(MusicSelectorConfig().idle_energy_threshold * 1.5)
 
 
 def test_step_returns_minimum_frame_time() -> None:
@@ -153,9 +194,74 @@ def test_parser_accepts_audio_device_string() -> None:
     assert args.audio_device == "2"
 
 
+def test_parser_accepts_mic_tuning_flags() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "--mic-target-level",
+            "0.5",
+            "--mic-noise-floor",
+            "0.01",
+            "--idle-enter-frames",
+            "42",
+            "--idle-threshold-scale",
+            "1.5",
+        ]
+    )
+    assert args.mic_target_level == pytest.approx(0.5)
+    assert args.mic_noise_floor == pytest.approx(0.01)
+    assert args.idle_enter_frames == 42
+    assert args.idle_threshold_scale == pytest.approx(1.5)
+
+
+def test_parser_rejects_invalid_mic_tuning_values() -> None:
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--mic-target-level", "0"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--mic-noise-floor", "-0.1"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--idle-enter-frames", "0"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--idle-threshold-scale", "0"])
+
+
+def test_mic_mode_uses_device_specific_audio_config(monkeypatch) -> None:
+    class FakeAudioInput:
+        seen: tuple[str, AudioConfig] | None = None
+
+        def read(self) -> AudioFrame:
+            return AudioFrame()
+
+        def read_features(self) -> MusicFeatures:
+            return MusicFeatures()
+
+        def device_name(self) -> str:
+            return "USB Mic"
+
+        def close(self) -> None:
+            return None
+
+        @classmethod
+        def with_device_config(cls, pattern, config):
+            cls.seen = (pattern, config)
+            return cls()
+
+    monkeypatch.setattr("lumistripe_sim.simulator.AudioInput", FakeAudioInput)
+    app = SimulatorApp(pixel_count=12, mode=SimulatorMode.MIC, audio_device="2")
+    assert app.audio_status == "Input: USB Mic"
+    assert FakeAudioInput.seen == (
+        "2",
+        AudioConfig(
+            smoothing=AudioSmoothing(noise_floor=AudioSmoothing().noise_floor),
+            normalization=AudioNormalization(target_level=AudioNormalization().target_level),
+        ),
+    )
+
+
 def test_main_lists_audio_devices_and_exits(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(
-        "lumistripe_app.simulator.list_input_device_details",
+        "lumistripe_sim.simulator.list_input_device_details",
         lambda: [
             type("Device", (), {"index": 1, "name": "USB Mic"})(),
             type("Device", (), {"index": 2, "name": "Default Input"})(),

@@ -72,7 +72,7 @@ class MusicFeatures:
 @dataclass(frozen=True, slots=True)
 class AudioSmoothing:
     enabled: bool = True
-    noise_floor: float = 0.025
+    noise_floor: float = 0.015
     rms_attack: float = 0.45
     rms_release: float = 0.12
     band_attack: float = 0.4
@@ -84,7 +84,7 @@ class AudioSmoothing:
 class AudioNormalization:
     enabled: bool = True
     dc_block_enabled: bool = True
-    target_level: float = 0.28
+    target_level: float = 0.36
     min_gain: float = 0.35
     max_gain: float = 5.0
     adapt_attack: float = 0.18
@@ -140,6 +140,7 @@ class AudioState:
         self._onset_history = np.zeros(ONSET_HISTORY_SIZE, dtype=np.float32)
         self._onset_idx = 0
         self._prev_rms = 0.0
+        self._prev_feature_bands = np.zeros(NUM_BANDS, dtype=np.float32)
         self._prev_onset = 0.0
         self._smooth_onset = 0.0
         self._last_onset_frame = 0
@@ -204,10 +205,11 @@ class AudioState:
         )
 
         bass = float(gated_bands[0])
-        threshold = max(self._prev_bass_energy * 1.5, smoothing.noise_floor)
-        if bass > threshold and bass > 0.05:
+        bass_rise = bass - self._prev_bass_energy
+        threshold = max(self._prev_bass_energy * 1.12, smoothing.noise_floor + 0.01)
+        if bass > threshold and bass_rise > 0.015:
             beat = True
-            raw_beat_strength = min(bass - self._prev_bass_energy, 1.0)
+            raw_beat_strength = min(bass_rise * 1.6, 1.0)
         else:
             beat = False
             raw_beat_strength = 0.0
@@ -264,8 +266,16 @@ class AudioState:
         self._rms_history[self._rms_idx % RMS_HISTORY_SIZE] = rms
         self._rms_idx += 1
 
-        onset_raw = max(0.0, rms - self._prev_rms) * 2.0
+        band_array = np.asarray(bands, dtype=np.float32)
+        prev_bands = self._prev_feature_bands[: len(bands)]
+        positive_band_changes = np.maximum(band_array - prev_bands, 0.0)
+        band_weights = np.asarray((0.2, 0.3, 0.8, 1.0, 1.15, 1.35, 1.5, 1.6)[: len(bands)], dtype=np.float32)
+        weighted_band_energy = float(np.dot(band_array, band_weights)) if band_weights.size else 0.0
+        raw_flux = float(np.dot(positive_band_changes, band_weights)) if band_weights.size else 0.0
+        spectral_flux = min(1.0, raw_flux / max(weighted_band_energy, 0.08))
+        onset_raw = min(1.0, max(0.0, rms - self._prev_rms) * 0.55 + spectral_flux * 0.85)
         self._prev_rms = rms
+        self._prev_feature_bands[: len(bands)] = band_array
         self._smooth_onset = _smooth_value(self._smooth_onset, onset_raw, attack=0.3, release=0.08)
         self._onset_history[self._onset_idx % ONSET_HISTORY_SIZE] = self._smooth_onset
         self._onset_idx += 1
@@ -285,9 +295,18 @@ class AudioState:
         if total_mag > 1e-9:
             freqs = self._frequencies[: len(magnitudes)]
             centroid = float(np.sum(freqs * magnitudes) / total_mag)
-            self._brightness = centroid / (self._sample_rate / 2.0)
+            centroid_norm = centroid / (self._sample_rate / 2.0)
         else:
-            self._brightness = 0.0
+            centroid_norm = 0.0
+
+        total_band_energy = float(band_array.sum())
+        if total_band_energy > 1e-9:
+            off_bass_share = float(band_array[2:].sum() / total_band_energy)
+            high_share = float(band_array[5:].sum() / total_band_energy)
+        else:
+            off_bass_share = 0.0
+            high_share = 0.0
+        self._brightness = min(1.0, centroid_norm * 0.35 + off_bass_share * 0.75 + high_share * 0.35)
 
         window = min(self._rms_idx, RMS_HISTORY_SIZE)
         if window > 10:
@@ -428,6 +447,7 @@ class AudioInput:
             clone._onset_history = self._state._onset_history.copy()
             clone._onset_idx = self._state._onset_idx
             clone._prev_rms = self._state._prev_rms
+            clone._prev_feature_bands = self._state._prev_feature_bands.copy()
             clone._prev_onset = self._state._prev_onset
             clone._smooth_onset = self._state._smooth_onset
             clone._last_onset_frame = self._state._last_onset_frame

@@ -1,4 +1,7 @@
+import numpy as np
+
 from lumistripe import AnimationClass, AnimationPlayer, AudioFrame, MusicDrivenSelector, MusicFeatures
+from lumistripe.audio import AudioState
 from lumistripe.animation import CLASS_MAP
 
 
@@ -19,8 +22,8 @@ def _fast_party_features() -> MusicFeatures:
 def _quiet_features() -> MusicFeatures:
     return MusicFeatures(
         bpm=60.0,
-        energy=0.02,
-        bass=0.01,
+        energy=0.12,
+        bass=0.03,
         brightness=0.1,
         onset_strength=0.01,
         dynamic_range=0.01,
@@ -28,6 +31,47 @@ def _quiet_features() -> MusicFeatures:
         beat_strength=0.0,
         bands=(0.01, 0.01, 0.02, 0.02, 0.01, 0.01, 0.01, 0.01),
     )
+
+
+def _sustained_bass_led_features(*, beat: bool = False) -> MusicFeatures:
+    return MusicFeatures(
+        bpm=54.0,
+        energy=0.36,
+        bass=0.67,
+        brightness=0.31,
+        onset_strength=0.034,
+        dynamic_range=0.52,
+        beat=beat,
+        beat_strength=0.35 if beat else 0.0,
+        bands=(0.64, 0.70, 0.51, 0.12, 0.05, 0.06, 0.01, 0.0),
+    )
+
+
+def _silence_features() -> MusicFeatures:
+    return MusicFeatures(
+        bpm=60.0,
+        energy=0.0,
+        bass=0.0,
+        brightness=0.0,
+        onset_strength=0.0,
+        dynamic_range=0.0,
+        beat=False,
+        beat_strength=0.0,
+        bands=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+    )
+
+
+def _drop_like_chunk(frame: int, sample_rate: float = 44_100.0) -> np.ndarray:
+    t = np.arange(1024, dtype=np.float32) / sample_rate
+    bass_env = 1.0 if frame % 2 == 0 else 0.72
+    bass = np.sin(2.0 * np.pi * 55.0 * t) * (0.18 * bass_env)
+    sub = np.sin(2.0 * np.pi * 110.0 * t) * 0.08
+    hat_amp = 0.06 if frame % 2 == 0 else 0.02
+    hat = np.sin(2.0 * np.pi * 3_200.0 * t) * hat_amp
+    shimmer = np.sin(2.0 * np.pi * 5_400.0 * t) * (0.03 if frame % 4 == 0 else 0.0)
+    click = np.zeros_like(t)
+    click[:48] = np.linspace(0.16, 0.0, 48, dtype=np.float32)
+    return np.clip(bass + sub + hat + shimmer + click, -1.0, 1.0).astype(np.float32)
 
 
 def test_selector_moves_to_high_energy_class() -> None:
@@ -41,7 +85,7 @@ def test_selector_moves_to_high_energy_class() -> None:
     assert class_ in {AnimationClass.FAST_PARTY, AnimationClass.CHAOTIC}
 
 
-def test_selector_moves_to_ambient_for_low_energy_input() -> None:
+def test_selector_prefers_calm_or_groovy_for_quiet_music() -> None:
     player = AnimationPlayer.party()
     selector = MusicDrivenSelector(current_class=AnimationClass.FAST_PARTY)
     hot = _fast_party_features()
@@ -50,13 +94,10 @@ def test_selector_moves_to_ambient_for_low_energy_input() -> None:
     for _ in range(40):
         selector.update(player, hot)
 
-    seen_ambient = False
     for _ in range(200):
         class_ = selector.update(player, quiet)
-        if class_ is AnimationClass.AMBIENT:
-            seen_ambient = True
 
-    assert seen_ambient is True
+    assert class_ in {AnimationClass.CALM, AnimationClass.GROOVY}
 
 
 def test_selector_stays_in_class_with_consistent_input() -> None:
@@ -80,10 +121,67 @@ def test_selector_stays_in_class_with_consistent_input() -> None:
     assert class_ is AnimationClass.GROOVY
 
 
+def test_selector_keeps_sustained_bass_led_music_out_of_calm() -> None:
+    player = AnimationPlayer.party()
+    selector = MusicDrivenSelector(current_class=AnimationClass.FAST_PARTY)
+    hot = _fast_party_features()
+    sustained = _sustained_bass_led_features()
+
+    for _ in range(40):
+        selector.update(player, hot)
+
+    for _ in range(200):
+        class_ = selector.update(player, sustained)
+
+    assert class_ in {AnimationClass.GROOVY, AnimationClass.FAST_PARTY, AnimationClass.BASS_HEAVY}
+    assert class_ is not AnimationClass.CALM
+
+
+def test_selector_prefers_groovy_or_fast_party_for_sparse_detected_beats() -> None:
+    player = AnimationPlayer.party()
+    selector = MusicDrivenSelector(current_class=AnimationClass.GROOVY)
+    sustained_offbeat = _sustained_bass_led_features(beat=False)
+    sustained_beat = _sustained_bass_led_features(beat=True)
+
+    for frame in range(180):
+        features = sustained_beat if frame % 4 == 0 else sustained_offbeat
+        class_ = selector.update(player, features)
+
+    assert class_ in {AnimationClass.GROOVY, AnimationClass.FAST_PARTY, AnimationClass.BASS_HEAVY}
+
+
+def test_selector_can_switch_fast_party_to_bass_heavy_for_bass_dominant_music() -> None:
+    player = AnimationPlayer.party()
+    selector = MusicDrivenSelector(current_class=AnimationClass.FAST_PARTY)
+    hot = _fast_party_features()
+    sustained = _sustained_bass_led_features()
+
+    for _ in range(40):
+        selector.update(player, hot)
+
+    for _ in range(220):
+        class_ = selector.update(player, sustained)
+
+    assert class_ is AnimationClass.BASS_HEAVY
+
+
+def test_selector_prefers_bass_heavy_when_low_end_clearly_dominates() -> None:
+    player = AnimationPlayer.party()
+    selector = MusicDrivenSelector(current_class=AnimationClass.GROOVY)
+    sustained_offbeat = _sustained_bass_led_features(beat=False)
+    sustained_beat = _sustained_bass_led_features(beat=True)
+
+    for frame in range(220):
+        features = sustained_beat if frame % 5 == 0 else sustained_offbeat
+        class_ = selector.update(player, features)
+
+    assert class_ is AnimationClass.BASS_HEAVY
+
+
 def test_selector_rotation_does_not_repeat_animation_immediately() -> None:
     player = AnimationPlayer.party()
     selector = MusicDrivenSelector(current_class=AnimationClass.AMBIENT)
-    quiet = _quiet_features()
+    quiet = _silence_features()
 
     seen: list[str] = []
     for _ in range(40):
@@ -144,7 +242,7 @@ def test_set_manual_class_stays_even_with_contrary_input() -> None:
     player = AnimationPlayer.party()
     selector = MusicDrivenSelector(current_class=AnimationClass.CHAOTIC)
     selector.set_auto_select(True)
-    quiet = _quiet_features()
+    quiet = _silence_features()
 
     selector.set_manual_class(player, AnimationClass.AMBIENT)
 
@@ -189,3 +287,104 @@ def test_set_manual_animation_invalidates_stale_class_queue() -> None:
 
     assert chosen in hard_drop_names
     assert chosen != "shockwave"
+
+
+def test_selector_enters_idle_on_silence() -> None:
+    player = AnimationPlayer.party()
+    selector = MusicDrivenSelector(current_class=AnimationClass.GROOVY)
+    silence = _silence_features()
+
+    for _ in range(selector.config.idle_enter_frames):
+        selector.update(player, silence)
+
+    assert selector.idle_active is True
+
+
+def test_selector_defaults_match_retuned_idle_baseline() -> None:
+    config = MusicDrivenSelector().config
+    assert config.idle_enter_frames == 60
+    assert config.idle_energy_threshold == 0.03
+    assert config.idle_onset_threshold == 0.025
+    assert config.idle_beat_density_threshold == 0.05
+    assert config.idle_brightness_threshold == 0.08
+
+
+def test_selector_idle_rotates_only_calm_or_ambient_animations() -> None:
+    player = AnimationPlayer.party()
+    selector = MusicDrivenSelector(current_class=AnimationClass.GROOVY)
+    silence = _silence_features()
+
+    for _ in range(selector.config.idle_enter_frames):
+        selector.update(player, silence)
+
+    assert selector.idle_active is True
+
+    seen: set[str] = set()
+    for _ in range(500):
+        selector.update(player, silence)
+        if selector.idle_active and selector.current_animation_name is not None:
+            seen.add(selector.current_animation_name)
+
+    assert seen
+    assert all(
+        AnimationClass.AMBIENT in CLASS_MAP.get(name, ()) or AnimationClass.CALM in CLASS_MAP.get(name, ())
+        for name in seen
+    )
+
+
+def test_selector_exits_idle_immediately_when_music_returns() -> None:
+    player = AnimationPlayer.party()
+    selector = MusicDrivenSelector(current_class=AnimationClass.AMBIENT)
+    silence = _silence_features()
+    active = _fast_party_features()
+
+    for _ in range(selector.config.idle_enter_frames):
+        selector.update(player, silence)
+
+    assert selector.idle_active is True
+
+    selector.update(player, active)
+
+    assert selector.idle_active is False
+
+
+def test_selector_quiet_music_does_not_favor_bass_heavy() -> None:
+    player = AnimationPlayer.party()
+    selector = MusicDrivenSelector(current_class=AnimationClass.BASS_HEAVY)
+    quiet = _quiet_features()
+
+    for _ in range(200):
+        class_ = selector.update(player, quiet)
+
+    assert class_ is not AnimationClass.BASS_HEAVY
+
+
+def test_selector_treats_drop_like_audio_as_groovy_or_higher() -> None:
+    player = AnimationPlayer.party()
+    state = AudioState()
+    active_features: MusicFeatures | None = None
+    best_activity_score = -1.0
+
+    for frame in range(40):
+        state.feed_samples(_drop_like_chunk(frame))
+        features = state.music_features()
+        activity_score = features.brightness + features.onset_strength + (0.25 if features.beat else 0.0)
+        if activity_score > best_activity_score:
+            best_activity_score = activity_score
+            active_features = features
+
+    assert active_features is not None
+
+    selector = MusicDrivenSelector(current_class=AnimationClass.GROOVY)
+    for _ in range(140):
+        class_ = selector.update(player, active_features)
+
+    assert class_ in {
+        AnimationClass.GROOVY,
+        AnimationClass.FAST_PARTY,
+        AnimationClass.CHAOTIC,
+        AnimationClass.HARD_DROP,
+        AnimationClass.BASS_HEAVY,
+        AnimationClass.VOCAL_POP,
+    }
+    assert class_ is not AnimationClass.CALM

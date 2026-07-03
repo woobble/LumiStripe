@@ -96,42 +96,51 @@ class BrightnessController(Controller):
         self._inner.force_flush()
 
 
-class DualController(Controller):
-    def __init__(self, primary: Controller, secondary: Controller) -> None:
-        self._primary = primary
-        self._secondary = secondary
+class MultiController(Controller):
+    def __init__(self, controllers: Sequence[Controller]) -> None:
+        if not controllers:
+            raise ValueError("at least one controller is required")
+        self._controllers = list(controllers)
+        length = self._controllers[0].length
+        if any(controller.length != length for controller in self._controllers[1:]):
+            raise ValueError("all controllers must have the same length")
 
     @property
     def length(self) -> int:
-        return self._primary.length
+        return self._controllers[0].length
 
     def pixels(self) -> PixelBuffer:
-        return self._primary.pixels()
+        return self._controllers[0].pixels()
 
     def pixel(self, index: int) -> Color:
-        return self._primary.pixel(index)
+        return self._controllers[0].pixel(index)
 
     def set_pixel(self, index: int, color: Color) -> None:
-        self._primary.set_pixel(index, color)
-        self._secondary.set_pixel(index, color)
+        for controller in self._controllers:
+            controller.set_pixel(index, color)
 
     def set_pixels(self, colors: Sequence[Color] | npt.ArrayLike) -> None:
         normalized = as_pixel_buffer(colors)
-        self._primary.set_pixels(normalized)
-        self._secondary.set_pixels(normalized)
+        for controller in self._controllers:
+            controller.set_pixels(normalized)
 
     def fill(self, color: Color) -> None:
-        self._primary.fill(color)
-        self._secondary.fill(color)
+        for controller in self._controllers:
+            controller.fill(color)
 
     def clear(self) -> None:
-        self._primary.clear()
-        self._secondary.clear()
+        for controller in self._controllers:
+            controller.clear()
 
     def flush(self) -> None:
-        self._primary.flush()
-        self._secondary.flush()
+        for controller in self._controllers:
+            controller.flush()
 
     def force_flush(self) -> None:
-        self._primary.force_flush()
-        self._secondary.force_flush()
+        for controller in self._controllers:
+            controller.force_flush()
+
+
+class DualController(MultiController):
+    def __init__(self, primary: Controller, secondary: Controller) -> None:
+        super().__init__([primary, secondary])

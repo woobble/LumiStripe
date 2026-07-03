@@ -13,6 +13,7 @@ from lumistripe import (
     LightningStrike,
     PlasmaRave,
     Stripe,
+    Twinkle,
 )
 
 
@@ -245,3 +246,31 @@ def test_drop_explosion_produces_bright_flash_near_drop() -> None:
     for i in range(80):
         anim.tick(i, stripe)
     assert stripe.pixels()[:, 3].max() > 0.5 * 255
+
+
+def test_twinkle_name() -> None:
+    assert Twinkle().name == "twinkle"
+
+
+def test_twinkle_non_audio_produces_soft_glow() -> None:
+    stripe = Stripe(36)
+    anim = Twinkle()
+    anim.tick(24, stripe)
+
+    pixels = stripe.pixels()[:, 3]
+    assert pixels.max() > 0
+    assert pixels.mean() < 80
+
+
+def test_twinkle_audio_reacts_without_dense_burst() -> None:
+    stripe = Stripe(36)
+    anim = Twinkle()
+
+    anim.tick_audio(0, stripe, TEST_AUDIO)
+    beat_pixels = stripe.pixels()[:, 3].copy()
+    anim.tick_audio(20, stripe, QUIET_AUDIO)
+    quiet_pixels = stripe.pixels()[:, 3].copy()
+
+    assert beat_pixels.mean() > quiet_pixels.mean()
+    assert beat_pixels.max() < 160
+    assert quiet_pixels.max() > 0

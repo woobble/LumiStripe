@@ -14,6 +14,19 @@ from lumistripe.audio import (
 )
 
 
+def _drop_like_chunk(frame: int, sample_rate: float = 44_100.0) -> np.ndarray:
+    t = np.arange(1024, dtype=np.float32) / sample_rate
+    bass_env = 1.0 if frame % 2 == 0 else 0.72
+    bass = np.sin(2.0 * np.pi * 55.0 * t) * (0.18 * bass_env)
+    sub = np.sin(2.0 * np.pi * 110.0 * t) * 0.08
+    hat_amp = 0.06 if frame % 2 == 0 else 0.02
+    hat = np.sin(2.0 * np.pi * 3_200.0 * t) * hat_amp
+    shimmer = np.sin(2.0 * np.pi * 5_400.0 * t) * (0.03 if frame % 4 == 0 else 0.0)
+    click = np.zeros_like(t)
+    click[:48] = np.linspace(0.16, 0.0, 48, dtype=np.float32)
+    return np.clip(bass + sub + hat + shimmer + click, -1.0, 1.0).astype(np.float32)
+
+
 def test_audio_state_silence_produces_zeroish_frame() -> None:
     state = AudioState()
     state.feed_samples(np.zeros(1024, dtype=np.float32))
@@ -150,7 +163,7 @@ def test_audio_state_normalizes_hot_and_quiet_inputs() -> None:
 
     hot_frame = hot.frame()
     quiet_frame = quiet.frame()
-    assert abs(hot_frame.rms - quiet_frame.rms) < 0.2
+    assert abs(hot_frame.rms - quiet_frame.rms) < 0.25
     assert abs(hot_frame.bands[0] - quiet_frame.bands[0]) < 0.25
 
 
@@ -189,6 +202,12 @@ def test_audio_state_normalization_respects_gain_limits() -> None:
     assert state._normalization_gain >= 0.5
 
 
+def test_audio_defaults_match_retuned_baseline() -> None:
+    config = AudioConfig()
+    assert config.normalization.target_level == pytest.approx(0.36)
+    assert config.smoothing.noise_floor == pytest.approx(0.015)
+
+
 def test_audio_state_music_threshold_prevents_gain_runaway() -> None:
     normalization = AudioNormalization(target_level=0.4, max_gain=4.0, music_threshold=0.05, music_max_gain=3.0)
     state = AudioState(AudioConfig(normalization=normalization))
@@ -201,6 +220,34 @@ def test_audio_state_music_threshold_prevents_gain_runaway() -> None:
 
     assert state._normalization_gain <= 3.0
     assert state._normalization_gain >= 1.0
+
+
+def test_audio_state_drop_like_input_has_stronger_onset_than_low_tone() -> None:
+    drop_state = AudioState()
+    sample_rate = 44_100.0
+
+    drop_onsets: list[float] = []
+    for frame in range(12):
+        drop_state.feed_samples(_drop_like_chunk(frame, sample_rate))
+        if frame >= 4:
+            drop_onsets.append(drop_state.music_features().onset_strength)
+
+    assert max(drop_onsets) > 0.16
+    assert sum(drop_onsets) / len(drop_onsets) > 0.18
+
+
+def test_audio_state_drop_like_input_has_higher_brightness_than_low_tone() -> None:
+    drop_state = AudioState()
+    low_state = AudioState()
+    sample_rate = 44_100.0
+    low_tone = (np.sin(2.0 * np.pi * 55.0 * np.arange(1024, dtype=np.float32) / sample_rate) * 0.2).astype(np.float32)
+
+    for frame in range(12):
+        drop_state.feed_samples(_drop_like_chunk(frame, sample_rate))
+        low_state.feed_samples(low_tone)
+
+    assert drop_state.music_features().brightness > low_state.music_features().brightness + 0.12
+    assert drop_state.music_features().brightness > 0.12
 
 
 def test_audio_state_raw_config_preserves_dc_bias() -> None:

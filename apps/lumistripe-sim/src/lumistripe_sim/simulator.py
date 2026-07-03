@@ -9,11 +9,15 @@ from typing import Any
 from lumistripe import (
     AnimationClass,
     AnimationPlayer,
+    AudioConfig,
     AudioFrame,
     AudioInput,
+    AudioNormalization,
+    AudioSmoothing,
     CLASS_MAP,
     MusicFeatures,
     MusicDrivenSelector,
+    MusicSelectorConfig,
     Stripe,
     list_input_device_details,
 )
@@ -32,6 +36,7 @@ MIN_FRAME_SECONDS = 0.016
 BUTTON_FONT_SIZE = -22
 HEADER_FONT_SIZE = -16
 DETAIL_FONT_SIZE = -13
+DEFAULT_IDLE_THRESHOLD_SCALE = 1.0
 
 BACKGROUND_COLOR = (26, 26, 26)
 HEADER_COLOR = (35, 35, 35)
@@ -137,6 +142,10 @@ class SimulatorApp:
     pixel_count: int = 80
     mode: SimulatorMode = SimulatorMode.MANUAL
     audio_device: str | None = None
+    mic_target_level: float = field(default_factory=lambda: AudioNormalization().target_level)
+    mic_noise_floor: float = field(default_factory=lambda: AudioSmoothing().noise_floor)
+    idle_enter_frames: int = field(default_factory=lambda: MusicSelectorConfig().idle_enter_frames)
+    idle_threshold_scale: float = DEFAULT_IDLE_THRESHOLD_SCALE
     player: AnimationPlayer = field(init=False)
     stripe: Stripe = field(init=False)
     controls: Controls = field(init=False)
@@ -174,7 +183,18 @@ class SimulatorApp:
     def class_label(self) -> str:
         if self.selector is None:
             return "-"
+        if self.selector.idle_active:
+            return "IDLE"
         return self.selector.current_class.value.upper()
+
+    @property
+    def mic_tuning_label(self) -> str:
+        return (
+            f"MIC: target={self.mic_target_level:0.2f} "
+            f"noise={self.mic_noise_floor:0.3f} "
+            f"idle={self.idle_enter_frames}f "
+            f"scale={self.idle_threshold_scale:0.2f}"
+        )
 
     def handle_key(self, key: str) -> None:
         match key:
@@ -230,10 +250,14 @@ class SimulatorApp:
             return
 
         try:
+            audio_config = _build_audio_config(
+                target_level=self.mic_target_level,
+                noise_floor=self.mic_noise_floor,
+            )
             self.audio_input = (
-                AudioInput.with_device(self.audio_device)
+                AudioInput.with_device_config(self.audio_device, audio_config)
                 if self.audio_device
-                else AudioInput.new()
+                else AudioInput.with_config(audio_config)
             )
         except RuntimeError as exc:
             self.mode = SimulatorMode.MANUAL
@@ -242,7 +266,13 @@ class SimulatorApp:
             return
 
         self.audio_status = f"Input: {self.audio_input.device_name()}"
-        self.selector = MusicDrivenSelector(current_class=AnimationClass.GROOVY)
+        self.selector = MusicDrivenSelector(
+            config=_build_selector_config(
+                idle_enter_frames=self.idle_enter_frames,
+                idle_threshold_scale=self.idle_threshold_scale,
+            ),
+            current_class=AnimationClass.GROOVY,
+        )
         self.selector.set_auto_select(True)
         self.player.set_audio_snapshot(self._mic_snapshot)
 
@@ -459,7 +489,10 @@ class SimulatorApp:
             auto_status = "AUTO: ON" if self.selector is not None and self.selector.auto_select else "AUTO: OFF"
             animation_label.configure(text=f"ANIM: {self.animation_name}")
             mode_label.configure(text=f"MODE: {self.mode_label}  |  {auto_status}")
-            source_label.configure(text=f"SOURCE: {self.audio_status}")
+            source_text = f"SOURCE: {self.audio_status}"
+            if self.mode is SimulatorMode.MIC:
+                source_text = f"{source_text}\n{self.mic_tuning_label}"
+            source_label.configure(text=source_text)
             family_label.configure(text=f"CLASS: {self.class_label}")
             analysis_label.configure(text=self.analysis_text())
             error_label.configure(text=f"ERROR: {self.audio_error}" if self.audio_error else "")
@@ -558,7 +591,7 @@ class SimulatorApp:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="lumistripe")
+    parser = argparse.ArgumentParser(prog="lumistripe-sim")
     parser.add_argument("--pixels", type=int, default=80, help="Number of simulated LEDs")
     parser.add_argument(
         "--mode",
@@ -575,6 +608,30 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="List available audio input devices and exit",
     )
+    parser.add_argument(
+        "--mic-target-level",
+        type=_positive_float,
+        default=AudioNormalization().target_level,
+        help="Normalized input level target for mic mode calibration",
+    )
+    parser.add_argument(
+        "--mic-noise-floor",
+        type=_non_negative_float,
+        default=AudioSmoothing().noise_floor,
+        help="Noise floor threshold for mic mode calibration",
+    )
+    parser.add_argument(
+        "--idle-enter-frames",
+        type=_positive_int,
+        default=MusicSelectorConfig().idle_enter_frames,
+        help="Consecutive low-activity frames before idle activates in mic mode",
+    )
+    parser.add_argument(
+        "--idle-threshold-scale",
+        type=_positive_float,
+        default=DEFAULT_IDLE_THRESHOLD_SCALE,
+        help="Scale factor applied to mic idle activity thresholds",
+    )
     return parser
 
 
@@ -589,6 +646,10 @@ def main(argv: list[str] | None = None) -> None:
         pixel_count=args.pixels,
         mode=args.mode,
         audio_device=args.audio_device,
+        mic_target_level=args.mic_target_level,
+        mic_noise_floor=args.mic_noise_floor,
+        idle_enter_frames=args.idle_enter_frames,
+        idle_threshold_scale=args.idle_threshold_scale,
     ).run()
 
 
@@ -597,6 +658,50 @@ def _parse_mode(value: str) -> SimulatorMode:
         return SimulatorMode(value.lower())
     except ValueError as exc:
         raise argparse.ArgumentTypeError(f"invalid mode: {value}") from exc
+
+
+def _positive_float(value: str) -> float:
+    parsed = float(value)
+    if parsed <= 0.0:
+        raise argparse.ArgumentTypeError("must be > 0")
+    return parsed
+
+
+def _non_negative_float(value: str) -> float:
+    parsed = float(value)
+    if parsed < 0.0:
+        raise argparse.ArgumentTypeError("must be >= 0")
+    return parsed
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be >= 1")
+    return parsed
+
+
+def _build_audio_config(*, target_level: float, noise_floor: float) -> AudioConfig:
+    return AudioConfig(
+        smoothing=AudioSmoothing(noise_floor=noise_floor),
+        normalization=AudioNormalization(target_level=target_level),
+    )
+
+
+def _build_selector_config(*, idle_enter_frames: int, idle_threshold_scale: float) -> MusicSelectorConfig:
+    defaults = MusicSelectorConfig()
+    return MusicSelectorConfig(
+        class_dwell_frames=defaults.class_dwell_frames,
+        animation_dwell_frames=defaults.animation_dwell_frames,
+        confidence_threshold=defaults.confidence_threshold,
+        feature_attack=defaults.feature_attack,
+        feature_release=defaults.feature_release,
+        idle_enter_frames=idle_enter_frames,
+        idle_energy_threshold=defaults.idle_energy_threshold * idle_threshold_scale,
+        idle_onset_threshold=defaults.idle_onset_threshold * idle_threshold_scale,
+        idle_beat_density_threshold=defaults.idle_beat_density_threshold * idle_threshold_scale,
+        idle_brightness_threshold=defaults.idle_brightness_threshold * idle_threshold_scale,
+    )
 
 
 def _load_tkinter() -> Any:

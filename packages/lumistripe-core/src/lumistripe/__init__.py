@@ -62,7 +62,7 @@ from .audio import (
 )
 from .buffers import PixelBuffer, apply_brightness_rgb, clear, fade, fill_rgb, new_pixel_buffer
 from .color import Color, ColorBatch, Hex, Hsl, Hsla, Rgb, Rgba
-from .controller import BrightnessController, Controller, DualController
+from .controller import BrightnessController, Controller, DualController, MultiController
 from .gpio import GPIOStripe
 from .stripe import Config, Stripe, SubStripe
 
@@ -116,6 +116,7 @@ __all__ = [
     "MusicDrivenSelector",
     "MusicFeatures",
     "MusicSelectorConfig",
+    "MultiController",
     "NeonStorm",
     "PeakMirror",
     "PixelBuffer",

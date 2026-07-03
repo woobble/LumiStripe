@@ -1,7 +1,17 @@
 import numpy as np
 import pytest
 
-from lumistripe import BrightnessController, Config, DualController, GPIOStripe, Rgb, Rgba, Stripe, SubStripe
+from lumistripe import (
+    BrightnessController,
+    Config,
+    DualController,
+    GPIOStripe,
+    MultiController,
+    Rgb,
+    Rgba,
+    Stripe,
+    SubStripe,
+)
 
 
 class FakeLineWriter:
@@ -55,6 +65,22 @@ def test_dual_controller_mirrors_writes() -> None:
     dual = DualController(left, right)
     dual.fill(Rgb(1, 2, 3))
     np.testing.assert_array_equal(left.pixels(), right.pixels())
+
+
+def test_multi_controller_mirrors_writes_to_all_children() -> None:
+    stripes = [Stripe(2), Stripe(2), Stripe(2)]
+    mirror = MultiController(stripes)
+    mirror.fill(Rgb(1, 2, 3))
+    for stripe in stripes[1:]:
+        np.testing.assert_array_equal(stripes[0].pixels(), stripe.pixels())
+
+
+def test_multi_controller_rejects_empty_or_mismatched_lengths() -> None:
+    with pytest.raises(ValueError, match="at least one controller"):
+        MultiController([])
+
+    with pytest.raises(ValueError, match="same length"):
+        MultiController([Stripe(2), Stripe(3)])
 
 
 def test_brightness_controller_scales_alpha() -> None:
@@ -151,3 +177,72 @@ def test_gpio_stripe_missing_dependency_raises(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr("lumistripe.gpio.importlib.import_module", raising_import)
     with pytest.raises(RuntimeError, match="install lumistripe-core\\[gpio\\]"):
         GPIOStripe(Config(), 1)
+
+
+def test_gpio_stripe_unsupported_gpiod_api_raises_clean_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeGpiod:
+        class LineSettings:
+            def __init__(self, **kwargs) -> None:
+                self.kwargs = kwargs
+
+        @staticmethod
+        def request_lines(*args, **kwargs):
+            raise AssertionError("should not reach request_lines for unsupported API")
+
+    monkeypatch.setattr("lumistripe.gpio.importlib.import_module", lambda name: FakeGpiod)
+    with pytest.raises(RuntimeError, match="unsupported gpiod Python API"):
+        GPIOStripe(Config(), 1)
+
+
+def test_gpio_stripe_permission_error_raises_clean_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeGpiod:
+        class Direction:
+            OUTPUT = object()
+
+        class Value:
+            ACTIVE = object()
+            INACTIVE = object()
+
+        class LineSettings:
+            def __init__(self, **kwargs) -> None:
+                self.kwargs = kwargs
+
+        class Chip:
+            def __init__(self, path: str) -> None:
+                raise PermissionError(13, "Permission denied", path)
+
+    monkeypatch.setattr("lumistripe.gpio.importlib.import_module", lambda name: FakeGpiod)
+    with pytest.raises(RuntimeError, match='permission denied while opening GPIO chip'):
+        GPIOStripe(Config(), 1)
+
+
+def test_gpio_stripe_supports_nested_line_enums(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeRequest:
+        def __init__(self) -> None:
+            self.values = []
+
+        def set_values(self, values) -> None:
+            self.values.append(values)
+
+    class FakeLineModule:
+        class Direction:
+            OUTPUT = "output"
+
+        class Value:
+            ACTIVE = "active"
+            INACTIVE = "inactive"
+
+    class FakeGpiod:
+        line = FakeLineModule
+
+        class LineSettings:
+            def __init__(self, **kwargs) -> None:
+                self.kwargs = kwargs
+
+        @staticmethod
+        def request_lines(*args, **kwargs):
+            return FakeRequest()
+
+    monkeypatch.setattr("lumistripe.gpio.importlib.import_module", lambda name: FakeGpiod)
+    stripe = GPIOStripe(Config(), 1)
+    stripe.flush()
