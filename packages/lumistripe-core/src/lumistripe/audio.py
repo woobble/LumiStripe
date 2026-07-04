@@ -8,6 +8,8 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
+from lumistripe import _audio
+
 FFT_SIZE = 1024
 NUM_BANDS = 8
 WINDOW_SCALE = FFT_SIZE / 2.0
@@ -113,42 +115,36 @@ class AudioInputDevice:
     name: str
 
 
+def _config_to_dict(config: AudioConfig) -> dict[str, float | int]:
+    return {
+        "noise_floor": config.smoothing.noise_floor,
+        "rms_attack": config.smoothing.rms_attack,
+        "rms_release": config.smoothing.rms_release,
+        "band_attack": config.smoothing.band_attack,
+        "band_release": config.smoothing.band_release,
+        "beat_release": config.smoothing.beat_release,
+        "smoothing_enabled": config.smoothing.enabled,
+        "target_level": config.normalization.target_level,
+        "min_gain": config.normalization.min_gain,
+        "max_gain": config.normalization.max_gain,
+        "adapt_attack": config.normalization.adapt_attack,
+        "adapt_release": config.normalization.adapt_release,
+        "music_threshold": config.normalization.music_threshold,
+        "music_max_gain": config.normalization.music_max_gain,
+        "silence_floor": config.normalization.silence_floor,
+        "normalization_enabled": config.normalization.enabled,
+        "dc_block_enabled": config.normalization.dc_block_enabled,
+    }
+
+
 class AudioState:
     def __init__(self, config: AudioConfig | None = None, sample_rate: float = DEFAULT_SAMPLE_RATE) -> None:
         self._config = config or AudioConfig()
         self._sample_rate = float(sample_rate)
+        self._processor = _audio.AudioProcessor(
+            _config_to_dict(self._config), self._sample_rate)
         self._frame = AudioFrame()
         self._features = MusicFeatures()
-        self._buffer = np.zeros(FFT_SIZE, dtype=np.float32)
-        self._analysis_buffer = np.zeros(FFT_SIZE, dtype=np.float32)
-        self._buffer_pos = 0
-        self._window = np.hanning(FFT_SIZE).astype(np.float32)
-        self._magnitudes = np.zeros(FFT_SIZE // 2, dtype=np.float32)
-        self._frequencies = np.fft.rfftfreq(FFT_SIZE, d=1.0 / self._sample_rate).astype(np.float32)
-        self._band_slices = _build_band_slices(self._sample_rate)
-        self._prev_bass_energy = 0.0
-        self._smoothed_rms = 0.0
-        self._smoothed_bands = np.zeros(NUM_BANDS, dtype=np.float32)
-        self._beat_envelope = 0.0
-        self._level_estimate = 0.0
-        self._normalization_gain = 1.0
-        self.callback_count = 0
-        self.sample_sum = 0.0
-
-        self._rms_history = np.zeros(RMS_HISTORY_SIZE, dtype=np.float32)
-        self._rms_idx = 0
-        self._onset_history = np.zeros(ONSET_HISTORY_SIZE, dtype=np.float32)
-        self._onset_idx = 0
-        self._prev_rms = 0.0
-        self._prev_feature_bands = np.zeros(NUM_BANDS, dtype=np.float32)
-        self._prev_onset = 0.0
-        self._smooth_onset = 0.0
-        self._last_onset_frame = 0
-        self._ioi_buffer: list[float] = []
-        self._bpm = 120.0
-        self._brightness = 0.0
-        self._dynamic_range = 0.0
-        self._fft_call_count = 0
 
     def frame(self) -> AudioFrame:
         return self._frame
@@ -156,220 +152,37 @@ class AudioState:
     def music_features(self) -> MusicFeatures:
         return self._features
 
+    @property
+    def _normalization_gain(self) -> float:
+        return float(self._processor.normalization_gain())
+
     def feed_samples(self, samples: npt.ArrayLike) -> None:
         array = np.asarray(samples, dtype=np.float32).reshape(-1)
         if array.size == 0:
             return
 
-        self.callback_count += 1
-        self.sample_sum += float(np.abs(array).sum())
+        self._processor.feed_samples(array)
 
-        offset = 0
-        while offset < array.size:
-            remaining = FFT_SIZE - self._buffer_pos
-            chunk = min(remaining, array.size - offset)
-            self._buffer[self._buffer_pos : self._buffer_pos + chunk] = array[offset : offset + chunk]
-            self._buffer_pos += chunk
-            offset += chunk
-            if self._buffer_pos >= FFT_SIZE:
-                self._buffer_pos = 0
-                self._process_fft()
-
-    def _process_fft(self) -> None:
-        self._fft_call_count += 1
-        smoothing = self._config.smoothing
-        normalized = self._normalized_buffer()
-        self._analysis_buffer[:] = normalized
-        spectrum = np.fft.rfft(self._analysis_buffer * self._window)
-        magnitudes = (np.abs(spectrum[: FFT_SIZE // 2]) / WINDOW_SCALE).astype(np.float32)
-        self._magnitudes[:] = magnitudes
-
-        raw_rms = min(float(np.sqrt(float(np.square(normalized).mean()))), 1.0)
-
-        raw_bands: list[float] = []
-        power = np.square(magnitudes, dtype=np.float32)
-        for start, end in self._band_slices:
-            actual_end = min(end, FFT_SIZE // 2)
-            band = power[start:actual_end]
-            if band.size == 0:
-                raw_bands.append(0.0)
-                continue
-            value = float(np.sqrt(float(band.mean())))
-            compressed = value / (value + 0.12) if value > 0.0 else 0.0
-            raw_bands.append(min(compressed * 1.2, 1.0))
-
-        gated_rms = _apply_noise_floor(raw_rms, smoothing.noise_floor)
-        gated_bands = np.array(
-            [_apply_noise_floor(value, smoothing.noise_floor) for value in raw_bands],
-            dtype=np.float32,
-        )
-
-        bass = float(gated_bands[0])
-        bass_rise = bass - self._prev_bass_energy
-        threshold = max(self._prev_bass_energy * 1.12, smoothing.noise_floor + 0.01)
-        if bass > threshold and bass_rise > 0.015:
-            beat = True
-            raw_beat_strength = min(bass_rise * 1.6, 1.0)
-        else:
-            beat = False
-            raw_beat_strength = 0.0
-        self._prev_bass_energy = self._prev_bass_energy * 0.9 + bass * 0.1
-
-        if smoothing.enabled:
-            self._smoothed_rms = _smooth_value(
-                self._smoothed_rms,
-                gated_rms,
-                attack=smoothing.rms_attack,
-                release=smoothing.rms_release,
-            )
-            for index, value in enumerate(gated_bands):
-                self._smoothed_bands[index] = _smooth_value(
-                    float(self._smoothed_bands[index]),
-                    float(value),
-                    attack=smoothing.band_attack,
-                    release=smoothing.band_release,
-                )
-            self._beat_envelope = _smooth_value(
-                self._beat_envelope,
-                raw_beat_strength,
-                attack=1.0,
-                release=smoothing.beat_release,
-            )
-            rms = self._smoothed_rms
-            bands = tuple(float(value) for value in self._smoothed_bands)
-            beat_strength = self._beat_envelope
-        else:
-            self._smoothed_rms = gated_rms
-            self._smoothed_bands[:] = gated_bands
-            self._beat_envelope = raw_beat_strength
-            rms = gated_rms
-            bands = tuple(float(value) for value in gated_bands)
-            beat_strength = raw_beat_strength
-
+        rms, bands, beat, beat_strength = self._processor.frame()
         self._frame = AudioFrame(
-            rms=rms,
-            bands=bands,  # type: ignore[arg-type]
-            beat=beat,
-            beat_strength=beat_strength,
+            rms=float(rms),
+            bands=tuple(float(b) for b in bands),
+            beat=bool(beat),
+            beat_strength=float(beat_strength),
         )
-
-        self._compute_music_features(rms, bands, magnitudes, beat, beat_strength)
-
-    def _compute_music_features(
-        self,
-        rms: float,
-        bands: tuple[float, ...],
-        magnitudes: npt.NDArray[np.float32],
-        beat: bool,
-        beat_strength: float,
-    ) -> None:
-        self._rms_history[self._rms_idx % RMS_HISTORY_SIZE] = rms
-        self._rms_idx += 1
-
-        band_array = np.asarray(bands, dtype=np.float32)
-        prev_bands = self._prev_feature_bands[: len(bands)]
-        positive_band_changes = np.maximum(band_array - prev_bands, 0.0)
-        band_weights = np.asarray((0.2, 0.3, 0.8, 1.0, 1.15, 1.35, 1.5, 1.6)[: len(bands)], dtype=np.float32)
-        weighted_band_energy = float(np.dot(band_array, band_weights)) if band_weights.size else 0.0
-        raw_flux = float(np.dot(positive_band_changes, band_weights)) if band_weights.size else 0.0
-        spectral_flux = min(1.0, raw_flux / max(weighted_band_energy, 0.08))
-        onset_raw = min(1.0, max(0.0, rms - self._prev_rms) * 0.55 + spectral_flux * 0.85)
-        self._prev_rms = rms
-        self._prev_feature_bands[: len(bands)] = band_array
-        self._smooth_onset = _smooth_value(self._smooth_onset, onset_raw, attack=0.3, release=0.08)
-        self._onset_history[self._onset_idx % ONSET_HISTORY_SIZE] = self._smooth_onset
-        self._onset_idx += 1
-
-        if self._smooth_onset > ONSET_THRESHOLD and self._smooth_onset > self._prev_onset * 1.4:
-            interval = self._fft_call_count - self._last_onset_frame
-            interval_sec = interval * FFT_SIZE / self._sample_rate
-            if BPM_INTERVAL_MIN < interval_sec < BPM_INTERVAL_MAX:
-                self._ioi_buffer.append(interval_sec)
-                if len(self._ioi_buffer) > MAX_IOI_BUFFER:
-                    self._ioi_buffer.pop(0)
-                self._bpm = 60.0 / float(np.median(self._ioi_buffer))
-            self._last_onset_frame = self._fft_call_count
-        self._prev_onset = self._smooth_onset
-
-        total_mag = float(magnitudes.sum())
-        if total_mag > 1e-9:
-            freqs = self._frequencies[: len(magnitudes)]
-            centroid = float(np.sum(freqs * magnitudes) / total_mag)
-            centroid_norm = centroid / (self._sample_rate / 2.0)
-        else:
-            centroid_norm = 0.0
-
-        total_band_energy = float(band_array.sum())
-        if total_band_energy > 1e-9:
-            off_bass_share = float(band_array[2:].sum() / total_band_energy)
-            high_share = float(band_array[5:].sum() / total_band_energy)
-        else:
-            off_bass_share = 0.0
-            high_share = 0.0
-        self._brightness = min(1.0, centroid_norm * 0.35 + off_bass_share * 0.75 + high_share * 0.35)
-
-        window = min(self._rms_idx, RMS_HISTORY_SIZE)
-        if window > 10:
-            valid = self._rms_history[:window]
-            p95 = float(np.percentile(valid, 95))
-            p10 = float(np.percentile(valid, 10))
-            self._dynamic_range = max(0.0, p95 - p10)
-        else:
-            self._dynamic_range = 0.0
-
-        bass = (bands[0] + bands[1]) * 0.5 if len(bands) >= 2 else 0.0
-
+        (bpm, energy, bass, brightness, onset_strength,
+         dynamic_range, feat_beat, feat_beat_strength, feat_bands) = self._processor.features()
         self._features = MusicFeatures(
-            bpm=float(self._bpm),
-            energy=rms,
-            bass=bass,
-            brightness=float(self._brightness),
-            onset_strength=float(self._smooth_onset),
-            dynamic_range=float(self._dynamic_range),
-            beat=beat,
-            beat_strength=beat_strength,
-            bands=bands,  # type: ignore[arg-type]
+            bpm=float(bpm),
+            energy=float(energy),
+            bass=float(bass),
+            brightness=float(brightness),
+            onset_strength=float(onset_strength),
+            dynamic_range=float(dynamic_range),
+            beat=bool(feat_beat),
+            beat_strength=float(feat_beat_strength),
+            bands=tuple(float(b) for b in feat_bands),
         )
-
-    def _normalized_buffer(self) -> npt.NDArray[np.float32]:
-        normalization = self._config.normalization
-        samples = self._buffer.astype(np.float32, copy=True)
-
-        if normalization.dc_block_enabled and samples.size > 0:
-            samples -= np.float32(float(samples.mean()))
-
-        if not normalization.enabled:
-            return samples
-
-        level = float(np.sqrt(float(np.square(samples).mean()))) if samples.size else 0.0
-        if level > self._level_estimate:
-            level_factor = normalization.adapt_attack
-        else:
-            level_factor = normalization.adapt_release
-        self._level_estimate = _smooth_value(self._level_estimate, level, attack=level_factor, release=level_factor)
-
-        effective_level = max(level, self._level_estimate)
-        if effective_level <= normalization.silence_floor:
-            target_gain = normalization.min_gain
-        else:
-            target_gain = normalization.target_level / effective_level
-            if effective_level >= normalization.music_threshold:
-                target_gain = min(target_gain, normalization.music_max_gain)
-            target_gain = max(normalization.min_gain, min(normalization.max_gain, target_gain))
-
-        if target_gain > self._normalization_gain:
-            gain_factor = normalization.adapt_attack
-        else:
-            gain_factor = normalization.adapt_release
-        self._normalization_gain = _smooth_value(
-            self._normalization_gain,
-            target_gain,
-            attack=gain_factor,
-            release=gain_factor,
-        )
-
-        normalized = samples * np.float32(self._normalization_gain)
-        return np.clip(normalized, -1.0, 1.0).astype(np.float32, copy=False)
 
 
 class AudioInput:
@@ -425,37 +238,12 @@ class AudioInput:
 
     def state(self) -> AudioState:
         with self._lock:
-            clone = AudioState(self._config, sample_rate=self._state._sample_rate)
+            clone: AudioState = object.__new__(AudioState)
+            clone._config = self._config
+            clone._sample_rate = self._state._sample_rate
+            clone._processor = self._state._processor.state_copy()
             clone._frame = self._state.frame()
             clone._features = self._state.music_features()
-            clone._buffer = self._state._buffer.copy()
-            clone._analysis_buffer = self._state._analysis_buffer.copy()
-            clone._buffer_pos = self._state._buffer_pos
-            clone._magnitudes = self._state._magnitudes.copy()
-            clone._frequencies = self._state._frequencies.copy()
-            clone._band_slices = tuple(self._state._band_slices)
-            clone._prev_bass_energy = self._state._prev_bass_energy
-            clone._smoothed_rms = self._state._smoothed_rms
-            clone._smoothed_bands = self._state._smoothed_bands.copy()
-            clone._beat_envelope = self._state._beat_envelope
-            clone._level_estimate = self._state._level_estimate
-            clone._normalization_gain = self._state._normalization_gain
-            clone.callback_count = self._state.callback_count
-            clone.sample_sum = self._state.sample_sum
-            clone._rms_history = self._state._rms_history.copy()
-            clone._rms_idx = self._state._rms_idx
-            clone._onset_history = self._state._onset_history.copy()
-            clone._onset_idx = self._state._onset_idx
-            clone._prev_rms = self._state._prev_rms
-            clone._prev_feature_bands = self._state._prev_feature_bands.copy()
-            clone._prev_onset = self._state._prev_onset
-            clone._smooth_onset = self._state._smooth_onset
-            clone._last_onset_frame = self._state._last_onset_frame
-            clone._ioi_buffer = list(self._state._ioi_buffer)
-            clone._bpm = self._state._bpm
-            clone._brightness = self._state._brightness
-            clone._dynamic_range = self._state._dynamic_range
-            clone._fft_call_count = self._state._fft_call_count
             return clone
 
     def read(self) -> AudioFrame:
