@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from ..audio import AudioFrame
 from ..color import Hsla, Rgba
 from ..controller import Controller
+from .club_utils import trail_profile
 from .base import Animation
 from .reactive import AudioReactive, Decay
 
@@ -17,8 +18,8 @@ def _render_dual_comets(
     for i in range(controller.length):
         dist_a = abs(i - phase)
         dist_b = abs(i - other)
-        tail_a = max(1.0 - dist_a / width, 0.0)
-        tail_b = max(1.0 - dist_b / width, 0.0)
+        tail_a = trail_profile(dist_a, width)
+        tail_b = trail_profile(dist_b, width)
         if tail_a > tail_b and tail_a > 0.0:
             controller.set_pixel(i, Hsla(hue_a, 100, 55, min(tail_a * alpha, 1.0)))
         elif tail_b > 0.0:
@@ -38,25 +39,26 @@ class DualComet(Animation):
         return "dual_comet"
 
     def tick(self, frame: int, controller: Controller) -> None:
-        self.phase += 0.75 * self.direction
+        self.phase += 0.7 * self.direction
         max_pos = float(max(controller.length - 1, 0))
         if self.phase >= max_pos or self.phase <= 0.0:
             self.direction *= -1.0
             self.phase = min(max(self.phase, 0.0), max_pos)
-        _render_dual_comets(controller, self.phase, 6.0, 0.85, 40, 220)
+        width = 5.0 + (frame % 50) * 0.02
+        _render_dual_comets(controller, self.phase, width, 0.85, 40, 220)
 
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
         reactive = AudioReactive.from_frame(audio)
         self.burst.step(reactive.accent, 0.045)
         if audio.beat:
             self.direction *= -1.0
-        self.phase += reactive.speed(0.45, 2.3) * self.direction
+        self.phase += reactive.speed(0.42, 2.1) * self.direction
         max_pos = float(max(controller.length - 1, 0))
         if self.phase >= max_pos or self.phase <= 0.0:
             self.direction *= -1.0
             self.phase = min(max(self.phase, 0.0), max_pos)
         width = 4.0 + reactive.high * 6.0
-        alpha = 0.85
+        alpha = min(0.85 + reactive.beat_pulse(0.0, 0.15), 1.0)
         hue_a = 10 + int(reactive.low * 90.0)
         hue_b = 150 + int(reactive.high * 80.0)
         _render_dual_comets(controller, self.phase, width, alpha, hue_a, hue_b)

@@ -6,6 +6,7 @@ from math import sin
 from ..audio import AudioFrame
 from ..color import Hsl, Rgba
 from ..controller import Controller
+from .club_utils import strip_ratio
 from .base import Animation
 from .reactive import AudioReactive, Decay
 
@@ -28,7 +29,8 @@ class PeakMirror(Animation):
             limit = int(phase * half / 8.0)
             dist = mirrored - band * max(half, 1) // 8
             if dist <= limit:
-                controller.set_pixel(i, Rgba((band * 28) % 256, 255, 220, 0.8))
+                hue = int(40 + strip_ratio(band, 8) * 180.0) % 256
+                controller.set_pixel(i, Rgba(hue, 255, 220, 0.82))
             else:
                 controller.set_pixel(i, Rgba(0, 0, 0, 0.0))
 
@@ -38,22 +40,23 @@ class PeakMirror(Animation):
         decay_rate = 0.15 + reactive.high * 0.10
         raw = [peak.step(audio.bands[band], decay_rate) for band, peak in enumerate(self.peaks)]
         if audio.beat:
-            self._center_flash = reactive.accent
-            raw = [min(v + reactive.accent * 0.4, 1.0) for v in raw]
+            self._center_flash = max(self._center_flash, reactive.beat_pulse(0.0, 0.95))
+            raw = [min(v + reactive.accent * 0.45, 1.0) for v in raw]
         self._center_flash *= 0.92
 
         hue_shift = reactive.hue_shift(frame, 0.4)
         for i in range(controller.length):
             mirrored = min(i, max(controller.length - 1 - i, 0))
-            band = mirrored * 8 // max(half, 1)
+            band = min(mirrored * 8 // max(half, 1), len(raw) - 1)
             band_start = band * max(half, 1) // 8
             band_width = max(max(half, 1) // 8, 1)
             within = mirrored - band_start
             fill = int(raw[band] * band_width)
-            base = audio.bands[band] * 0.45 + reactive.accent * 0.25
+            local = reactive.band_window(audio, i, controller.length, span=1)
+            base = local * 0.5 + reactive.accent * 0.25
             if within < fill:
-                hue = (hue_shift + band * 24) % 256
-                controller.set_pixel(i, Hsl(hue, 100, 55))
+                hue = (hue_shift + band * 24 + int(local * 18.0)) % 256
+                controller.set_pixel(i, Hsl(hue, 100, 54))
             elif within == min(fill, band_width - 1):
                 controller.set_pixel(i, Rgba(255, 255, 255, min(0.3 + base, 1.0)))
             elif mirrored <= 2 and self._center_flash > 0.0:

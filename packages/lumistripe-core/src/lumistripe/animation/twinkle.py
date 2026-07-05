@@ -6,6 +6,7 @@ from math import sin
 from ..audio import AudioFrame
 from ..color import Hsla
 from ..controller import Controller
+from .club_utils import strip_ratio
 from .base import Animation
 from .reactive import AudioReactive
 
@@ -19,8 +20,9 @@ class Twinkle(Animation):
         return "twinkle"
 
     def tick(self, frame: int, controller: Controller) -> None:
+        self._bloom *= 0.96
         for i in range(controller.length):
-            controller.set_pixel(i, self._pixel(frame, i, controller.length, density=2.4, age_speed=1.8, bloom=0.0))
+            controller.set_pixel(i, self._pixel(frame, i, controller.length, density=2.4, age_speed=1.8, bloom=self._bloom))
 
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
         reactive = AudioReactive.from_frame(audio)
@@ -49,18 +51,18 @@ class Twinkle(Animation):
         seed = (frame * 2862933555777941757 + index * 1234567) & 0xFFFFFFFFFFFFFFFF
         twinkle_chance = (seed >> 40) & 0x3F
         age = ((seed + int(frame * age_speed)) >> 24) & 0xFF
-        pos = index / max(length - 1, 1)
+        pos = strip_ratio(index, length)
         drift = sin(frame * 0.018 + pos * 4.2) * 0.5 + 0.5
         base_hue = 154 + int(warmth * 10.0) + int(drift * 8.0)
-        base_alpha = 0.028 + drift * 0.028 + bloom * 0.045
+        base_alpha = 0.028 + drift * 0.028 + bloom * 0.055
         active = twinkle_chance < density
 
         if active:
             life = 1.0 - abs(age - 127.5) / 127.5
             fade = max(0.0, life)
-            alpha = min(base_alpha + fade * fade * (0.22 + shimmer * 0.08) + bloom * 0.07, 0.42)
+            alpha = min(base_alpha + fade * fade * (0.22 + shimmer * 0.08) + bloom * 0.08, 0.44)
             hue = base_hue + int(pos * 10.0) + int(shimmer * 6.0)
             lightness = min(68, 56 + int(fade * 8.0) + int(bloom * 4.0))
             return Hsla(hue % 256, 65, lightness, alpha)
 
-        return Hsla(base_hue % 256, 40, 24 + int(drift * 6.0), min(base_alpha, 0.12))
+        return Hsla(base_hue % 256, 40, 24 + int(drift * 6.0), min(base_alpha, 0.14))

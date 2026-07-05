@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import sin, tau
+from math import cos, pi, sin
 
 from ..audio import AudioFrame
 from ..color import Hsla
@@ -20,21 +20,25 @@ class Pulse(Animation):
         return "pulse"
 
     def tick(self, frame: int, controller: Controller) -> None:
-        hue = (frame * 2) % 256
-        intensity = sin((frame % 60) / 60.0 * tau) * 0.5 + 0.5
-        alpha = 0.2 + intensity * 0.8
+        cycle = (frame % 120) / 120.0
+        intensity = (sin(cycle * pi * 2.0) * 0.5 + 0.5) ** 1.2
+        alpha = 0.22 + intensity * 0.78
+        hue = (frame * 2 + int(intensity * 18.0)) % 256
         for i in range(controller.length):
-            controller.set_pixel(i, Hsla(hue, 80, 50, alpha))
+            light = 46 + int((cos(cycle * pi * 2.0 + i * 0.05) * 0.5 + 0.5) * 5.0)
+            controller.set_pixel(i, Hsla(hue, 82, light, alpha))
 
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
         reactive = AudioReactive.from_frame(audio)
         if audio.beat:
-            self._pulse = 1.0
-            self._hue = (self._hue + 23) % 256
+            self._pulse = min(1.0, self._pulse + 0.55 + reactive.accent * 0.35)
+            self._hue = (self._hue + 23 + int(reactive.mid * 18.0)) % 256
 
-        self._pulse *= 0.92
+        self._pulse = max(self._pulse * 0.92, reactive.beat_pulse(0.0, 0.18))
+        self._hue = (self._hue + int(reactive.low * 1.5)) % 256
 
-        breathe = 0.08 + reactive.rms * 0.30
+        breathe = 0.22 + reactive.rms * 0.2 + reactive.low * 0.08
         alpha = min(max(self._pulse, breathe), 1.0)
+        light = 46 + int(reactive.mid * 12.0 + self._pulse * 10.0)
         for i in range(controller.length):
-            controller.set_pixel(i, Hsla(self._hue, 80, 50, alpha))
+            controller.set_pixel(i, Hsla(self._hue, 82, light, alpha))

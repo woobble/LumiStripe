@@ -16,10 +16,13 @@ class AudioReactive:
 
     @classmethod
     def from_frame(cls, audio: AudioFrame) -> AudioReactive:
-        low = (audio.bands[0] + audio.bands[1]) * 0.5
-        mid = (audio.bands[2] + audio.bands[3] + audio.bands[4]) / 3.0
-        high = (audio.bands[5] + audio.bands[6] + audio.bands[7]) / 3.0
-        accent = max(audio.beat_strength, audio.rms * 0.5) if audio.beat else audio.rms * 0.2
+        bands = list(audio.bands)
+        if len(bands) < 8:
+            bands.extend(0.0 for _ in range(8 - len(bands)))
+        low = (bands[0] + bands[1]) * 0.5
+        mid = (bands[2] + bands[3] + bands[4]) / 3.0
+        high = (bands[5] + bands[6] + bands[7]) / 3.0
+        accent = max(audio.beat_strength, audio.rms * 0.55) if audio.beat else audio.rms * 0.2
         return cls(
             rms=audio.rms,
             accent=max(0.0, min(1.0, accent)),
@@ -40,6 +43,9 @@ class AudioReactive:
     def pulse(self, base: float, amount: float) -> float:
         return max(0.0, min(1.0, base + self.rms * amount * 0.5 + self.accent * amount))
 
+    def beat_pulse(self, floor: float = 0.0, amount: float = 1.0) -> float:
+        return max(0.0, min(1.0, max(floor, self.accent * amount + self.rms * amount * 0.25)))
+
     def hue_shift(self, frame: int, base_rate: float) -> int:
         return int(frame * (base_rate + self.high * 3.0 + self.accent * 6.0)) % 256
 
@@ -49,6 +55,25 @@ class AudioReactive:
             return 0.0
         pos = 0 if length <= 1 else index * bands // length
         return audio.bands[min(pos, bands - 1)]
+
+    def band_window(self, audio: AudioFrame, index: int, length: int, span: int = 1) -> float:
+        bands = len(audio.bands)
+        if bands == 0:
+            return 0.0
+        if length <= 1:
+            return audio.bands[0]
+        pos = index * bands / max(length - 1, 1)
+        center = int(pos)
+        start = max(center - span, 0)
+        end = min(center + span + 1, bands)
+        if start >= end:
+            return audio.bands[min(center, bands - 1)]
+        total = 0.0
+        count = 0
+        for band in audio.bands[start:end]:
+            total += band
+            count += 1
+        return total / max(count, 1)
 
     def vivid(self, hue: int, alpha: float) -> Hsla:
         return Hsla(hue, 100, 50, max(0.0, min(1.0, alpha)))
