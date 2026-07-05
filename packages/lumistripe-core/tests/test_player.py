@@ -3,7 +3,22 @@ from lumistripe import AnimationPlayer, AudioFrame, RgbwTest, Stripe
 
 def test_party_contains_expected_reactive_animations() -> None:
     player = AnimationPlayer.party()
-    for name in ("aurora", "peak_mirror", "shockwave", "dual_comet"):
+    for name in (
+        "aurora",
+        "peak_mirror",
+        "shockwave",
+        "dual_comet",
+        "club_flash",
+        "color_burst",
+        "disco_comet",
+        "rave_scanner",
+        "neon_confetti",
+        "strobe_chase",
+        "center_burst",
+        "mirror_flash",
+        "spectrum_flash",
+        "drop_wave",
+    ):
         assert player.index_of(name) is not None
 
 

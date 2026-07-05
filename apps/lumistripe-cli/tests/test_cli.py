@@ -522,6 +522,31 @@ def test_main_lists_audio_devices_and_exits(monkeypatch: pytest.MonkeyPatch, cap
     assert "2: Default Input" in captured.out
 
 
+def _fake_audio_config(*args: object, **kwargs: object) -> object:
+    class _FakeAudioInput:
+        _device_name = "Fake Mic"
+
+        def device_name(self) -> str:
+            return self._device_name
+
+        def read(self) -> AudioFrame:
+            return AudioFrame()
+
+        def read_features(self) -> MusicFeatures:
+            return MusicFeatures()
+
+        def close(self) -> None:
+            pass
+
+        def __enter__(self) -> "_FakeAudioInput":
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            pass
+
+    return _FakeAudioInput()
+
+
 def test_main_audio_debug_skips_gpio_and_runs_with_in_memory_stripe(monkeypatch: pytest.MonkeyPatch) -> None:
     called: dict[str, object] = {}
 
@@ -537,6 +562,7 @@ def test_main_audio_debug_skips_gpio_and_runs_with_in_memory_stripe(monkeypatch:
 
     monkeypatch.setattr("lumistripe_cli.app.build_output_controller", fail_build)
     monkeypatch.setattr("lumistripe_cli.app.HeadlessApp.run_audio_debug", fake_run)
+    monkeypatch.setattr("lumistripe_cli.app.AudioInput.with_config", _fake_audio_config)
 
     main(["--audio-debug", "--audio-debug-verbose", "--pixels", "16"])
 

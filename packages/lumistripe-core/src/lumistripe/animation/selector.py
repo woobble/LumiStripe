@@ -356,6 +356,16 @@ CLASS_MAP: dict[str, tuple[AnimationClass, ...]] = {
     "electric_storm": (AnimationClass.CHAOTIC, AnimationClass.BASS_HEAVY),
     "glow_rush": (AnimationClass.GROOVY, AnimationClass.AMBIENT),
     "hard_beat": (AnimationClass.BASS_HEAVY, AnimationClass.HARD_DROP, AnimationClass.FAST_PARTY),
+    "club_flash": (AnimationClass.FAST_PARTY, AnimationClass.CHAOTIC),
+    "color_burst": (AnimationClass.FAST_PARTY, AnimationClass.GROOVY),
+    "disco_comet": (AnimationClass.FAST_PARTY, AnimationClass.GROOVY),
+    "rave_scanner": (AnimationClass.FAST_PARTY, AnimationClass.CHAOTIC),
+    "neon_confetti": (AnimationClass.FAST_PARTY, AnimationClass.GROOVY),
+    "strobe_chase": (AnimationClass.FAST_PARTY, AnimationClass.CHAOTIC),
+    "center_burst": (AnimationClass.GROOVY, AnimationClass.BASS_HEAVY),
+    "mirror_flash": (AnimationClass.GROOVY, AnimationClass.BASS_HEAVY),
+    "spectrum_flash": (AnimationClass.FAST_PARTY, AnimationClass.CHAOTIC, AnimationClass.BASS_HEAVY),
+    "drop_wave": (AnimationClass.BASS_HEAVY, AnimationClass.HARD_DROP),
 }
 
 

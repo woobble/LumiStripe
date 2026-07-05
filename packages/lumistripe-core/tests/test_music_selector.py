@@ -1,6 +1,6 @@
 import numpy as np
 
-from lumistripe import AnimationClass, AnimationPlayer, AudioFrame, MusicDrivenSelector, MusicFeatures
+from lumistripe import AnimationClass, AnimationPlayer, MusicDrivenSelector, MusicFeatures
 from lumistripe.audio import AudioState
 from lumistripe.animation import CLASS_MAP
 
@@ -388,3 +388,21 @@ def test_selector_treats_drop_like_audio_as_groovy_or_higher() -> None:
         AnimationClass.VOCAL_POP,
     }
     assert class_ is not AnimationClass.CALM
+
+
+def test_new_club_animations_are_classified_for_selector_rotation() -> None:
+    expected = {
+        "club_flash": (AnimationClass.FAST_PARTY, AnimationClass.CHAOTIC),
+        "color_burst": (AnimationClass.FAST_PARTY, AnimationClass.GROOVY),
+        "disco_comet": (AnimationClass.FAST_PARTY, AnimationClass.GROOVY),
+        "rave_scanner": (AnimationClass.FAST_PARTY, AnimationClass.CHAOTIC),
+        "neon_confetti": (AnimationClass.FAST_PARTY, AnimationClass.GROOVY),
+        "strobe_chase": (AnimationClass.FAST_PARTY, AnimationClass.CHAOTIC),
+        "center_burst": (AnimationClass.GROOVY, AnimationClass.BASS_HEAVY),
+        "mirror_flash": (AnimationClass.GROOVY, AnimationClass.BASS_HEAVY),
+        "spectrum_flash": (AnimationClass.FAST_PARTY, AnimationClass.CHAOTIC, AnimationClass.BASS_HEAVY),
+        "drop_wave": (AnimationClass.BASS_HEAVY, AnimationClass.HARD_DROP),
+    }
+
+    for name, classes in expected.items():
+        assert CLASS_MAP[name] == classes

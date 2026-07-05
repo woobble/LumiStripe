@@ -226,6 +226,7 @@ class HeadlessApp:
             self.music_features = self.audio_input.read_features()
             if self.selector is not None:
                 self.selector.update(self.player, self.music_features)
+                self.player.audio_enabled = not self.selector.idle_active
         delay = max(self.player.step(self.controller), MIN_FRAME_SECONDS)
         if self.mode is RuntimeMode.MANUAL:
             self.audio_frame = AudioFrame()

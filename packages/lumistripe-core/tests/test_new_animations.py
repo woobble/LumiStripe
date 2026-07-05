@@ -5,14 +5,24 @@ from lumistripe import (
     BassDrop,
     BeatExplosion,
     BeatTunnel,
+    CenterBurst,
+    ClubFlash,
+    ColorBurst,
     CometStorm,
+    DiscoComet,
     DiscoSparkle,
     DropExplosion,
+    DropWave,
     FireworkBurst,
     LaserSweep,
     LightningStrike,
+    MirrorFlash,
+    NeonConfetti,
     PlasmaRave,
+    RaveScanner,
     Stripe,
+    SpectrumFlash,
+    StrobeChase,
     Twinkle,
 )
 
@@ -31,6 +41,30 @@ QUIET_AUDIO = AudioFrame(
     beat=False,
     beat_strength=0.0,
 )
+
+
+PUNCH_AUDIO = AudioFrame(
+    rms=0.75,
+    bands=(0.92, 0.78, 0.35, 0.28, 0.22, 0.24, 0.19, 0.12),
+    beat=True,
+    beat_strength=0.9,
+)
+
+
+HIGH_AUDIO = AudioFrame(
+    rms=0.62,
+    bands=(0.18, 0.2, 0.32, 0.34, 0.31, 0.8, 0.86, 0.92),
+    beat=False,
+    beat_strength=0.0,
+)
+
+
+def _max_alpha(stripe: Stripe) -> int:
+    return int(stripe.pixels()[:, 3].max())
+
+
+def _lit_count(stripe: Stripe) -> int:
+    return int(np.sum(stripe.pixels()[:, 3] > 0))
 
 
 def test_beat_explosion_name() -> None:
@@ -274,3 +308,153 @@ def test_twinkle_audio_reacts_without_dense_burst() -> None:
     assert beat_pixels.mean() > quiet_pixels.mean()
     assert beat_pixels.max() < 160
     assert quiet_pixels.max() > 0
+
+
+def test_club_flash_name() -> None:
+    assert ClubFlash().name == "club_flash"
+
+
+def test_club_flash_is_brighter_on_strong_audio() -> None:
+    stripe = Stripe(32)
+    anim = ClubFlash()
+
+    anim.tick_audio(0, stripe, PUNCH_AUDIO)
+    loud = _max_alpha(stripe)
+    anim.tick_audio(1, stripe, QUIET_AUDIO)
+    quiet = _max_alpha(stripe)
+
+    assert loud >= quiet
+    assert loud > 0
+
+
+def test_color_burst_name() -> None:
+    assert ColorBurst().name == "color_burst"
+
+
+def test_color_burst_spawns_a_visible_burst_on_beat() -> None:
+    stripe = Stripe(40)
+    anim = ColorBurst()
+
+    anim.tick_audio(0, stripe, TEST_AUDIO)
+    assert _lit_count(stripe) > 0
+
+
+def test_disco_comet_name() -> None:
+    assert DiscoComet().name == "disco_comet"
+
+
+def test_disco_comet_responds_to_high_frequency_audio() -> None:
+    stripe = Stripe(40)
+    anim = DiscoComet()
+
+    anim.tick_audio(0, stripe, HIGH_AUDIO)
+    assert _lit_count(stripe) > 0
+    assert _max_alpha(stripe) > 0
+
+
+def test_rave_scanner_name() -> None:
+    assert RaveScanner().name == "rave_scanner"
+
+
+def test_rave_scanner_gets_wider_on_bass_heavy_audio() -> None:
+    stripe = Stripe(40)
+    anim = RaveScanner()
+
+    anim.tick_audio(0, stripe, QUIET_AUDIO)
+    quiet_lit = _lit_count(stripe)
+    anim.tick_audio(1, stripe, PUNCH_AUDIO)
+    loud_lit = _lit_count(stripe)
+
+    assert loud_lit >= quiet_lit
+    assert loud_lit > 0
+
+
+def test_neon_confetti_name() -> None:
+    assert NeonConfetti().name == "neon_confetti"
+
+
+def test_neon_confetti_becomes_denser_with_volume() -> None:
+    stripe = Stripe(48)
+    anim = NeonConfetti()
+
+    anim.tick_audio(0, stripe, QUIET_AUDIO)
+    quiet_lit = _lit_count(stripe)
+    anim.tick_audio(1, stripe, PUNCH_AUDIO)
+    loud_lit = _lit_count(stripe)
+
+    assert loud_lit >= quiet_lit
+    assert loud_lit > 0
+
+
+def test_strobe_chase_name() -> None:
+    assert StrobeChase().name == "strobe_chase"
+
+
+def test_strobe_chase_fires_on_strong_hits() -> None:
+    stripe = Stripe(36)
+    anim = StrobeChase()
+
+    anim.tick_audio(0, stripe, PUNCH_AUDIO)
+    assert _max_alpha(stripe) > 0
+
+
+def test_center_burst_name() -> None:
+    assert CenterBurst().name == "center_burst"
+
+
+def test_center_burst_is_symmetric() -> None:
+    stripe = Stripe(20)
+    anim = CenterBurst()
+
+    anim.tick_audio(0, stripe, TEST_AUDIO)
+
+    left = stripe.pixels()[:10, 3]
+    right = stripe.pixels()[10:, 3][::-1]
+    np.testing.assert_array_equal(left, right)
+
+
+def test_mirror_flash_name() -> None:
+    assert MirrorFlash().name == "mirror_flash"
+
+
+def test_mirror_flash_is_symmetric() -> None:
+    stripe = Stripe(24)
+    anim = MirrorFlash()
+
+    anim.tick_audio(0, stripe, TEST_AUDIO)
+
+    left = stripe.pixels()[:12, 3]
+    right = stripe.pixels()[12:, 3][::-1]
+    np.testing.assert_array_equal(left, right)
+
+
+def test_spectrum_flash_name() -> None:
+    assert SpectrumFlash().name == "spectrum_flash"
+
+
+def test_spectrum_flash_produces_band_color_output() -> None:
+    stripe = Stripe(36)
+    anim = SpectrumFlash()
+
+    anim.tick_audio(0, stripe, HIGH_AUDIO)
+    assert _lit_count(stripe) > 0
+    assert _max_alpha(stripe) > 0
+
+
+def test_drop_wave_name() -> None:
+    assert DropWave().name == "drop_wave"
+
+
+def test_drop_wave_builds_then_releases() -> None:
+    stripe = Stripe(32)
+    anim = DropWave()
+
+    for i in range(6):
+        anim.tick_audio(i, stripe, QUIET_AUDIO)
+    pre_drop = _max_alpha(stripe)
+
+    anim.tick_audio(7, stripe, PUNCH_AUDIO)
+    post_drop = _max_alpha(stripe)
+
+    assert post_drop >= pre_drop
+    assert post_drop > 0

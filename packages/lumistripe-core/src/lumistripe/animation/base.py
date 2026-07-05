@@ -38,6 +38,7 @@ class AnimationPlayer:
     frame: int = 0
     brightness: float = 1.0
     random_mode: bool = False
+    audio_enabled: bool = True
     _rng: Random = field(default_factory=Random)
     _audio_snapshot: Callable[[], AudioFrame] | None = None
 
@@ -57,13 +58,18 @@ class AnimationPlayer:
         from .beat_wave import BeatWave
         from .bouncing_ball import BouncingBall
         from .bpm import Bpm
+        from .center_burst import CenterBurst
+        from .club_flash import ClubFlash
+        from .color_burst import ColorBurst
         from .color_wipe import ColorWipe
         from .comet import Comet
         from .comet_storm import CometStorm
         from .confetti import Confetti
         from .dance_floor import DanceFloor
+        from .disco_comet import DiscoComet
         from .disco_sparkle import DiscoSparkle
         from .drop_explosion import DropExplosion
+        from .drop_wave import DropWave
         from .dual_comet import DualComet
         from .dual_laser import DualLaser
         from .electric_storm import ElectricStorm
@@ -74,18 +80,23 @@ class AnimationPlayer:
         from .juggle import Juggle
         from .laser_sweep import LaserSweep
         from .lightning_strike import LightningStrike
+        from .mirror_flash import MirrorFlash
+        from .neon_confetti import NeonConfetti
         from .neon_storm import NeonStorm
         from .peak_mirror import PeakMirror
         from .pixel_explosion import PixelExplosion
         from .plasma_rave import PlasmaRave
         from .police import Police
         from .pulse import Pulse
+        from .rave_scanner import RaveScanner
         from .rainbow import Rainbow
         from .rainbow_cycle import RainbowCycle
         from .rainbow_strobe import RainbowStrobe
         from .rave_pulse import RavePulse
         from .shockwave import Shockwave
+        from .spectrum_flash import SpectrumFlash
         from .sinelon import Sinelon
+        from .strobe_chase import StrobeChase
         from .strobe import Strobe
         from .theater_chase import TheaterChase
         from .twinkle import Twinkle
@@ -133,6 +144,16 @@ class AnimationPlayer:
         player.add(ElectricStorm(), 12, 120)
         player.add(GlowRush(), 16, 200)
         player.add(HardBeat(), 12, 100)
+        player.add(ClubFlash(), 12, 120)
+        player.add(ColorBurst(), 16, 180)
+        player.add(DiscoComet(), 14, 180)
+        player.add(RaveScanner(), 12, 140)
+        player.add(NeonConfetti(), 12, 150)
+        player.add(StrobeChase(), 12, 120)
+        player.add(CenterBurst(), 16, 160)
+        player.add(MirrorFlash(), 14, 140)
+        player.add(SpectrumFlash(), 16, 180)
+        player.add(DropWave(), 18, 180)
         return player
 
     def set_brightness(self, brightness: float) -> None:
@@ -151,7 +172,7 @@ class AnimationPlayer:
         if not self.animations:
             return 0.05
 
-        audio_frame = self._audio_snapshot() if self._audio_snapshot is not None else None
+        audio_frame = self._audio_snapshot() if (self._audio_snapshot is not None and self.audio_enabled) else None
         entry = self.animations[self.index]
         bright = BrightnessController(controller, self.brightness)
         if audio_frame is None:
