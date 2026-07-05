@@ -72,7 +72,14 @@ from .audio import (
 )
 from .buffers import PixelBuffer, apply_brightness_rgb, clear, fade, fill_rgb, new_pixel_buffer
 from .color import Color, ColorBatch, Hex, Hsl, Hsla, Rgb, Rgba
-from .controller import BrightnessController, Controller, DualController, MultiController
+from .controller import (
+    BrightnessController,
+    CompositeController,
+    Controller,
+    DualController,
+    MultiController,
+    ReversedController,
+)
 from .gpio import GPIOStripe
 from .stripe import Config, Stripe, SubStripe
 
@@ -99,6 +106,7 @@ __all__ = [
     "BouncingBall",
     "Bpm",
     "BrightnessController",
+    "CompositeController",
     "Color",
     "ColorBatch",
     "ColorBurst",
@@ -156,6 +164,7 @@ __all__ = [
     "StrobeChase",
     "Stripe",
     "SubStripe",
+    "ReversedController",
     "TheaterChase",
     "Twinkle",
     "Wave",

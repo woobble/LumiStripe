@@ -4,11 +4,13 @@ import pytest
 from lumistripe import (
     BrightnessController,
     Config,
+    CompositeController,
     DualController,
     GPIOStripe,
     MultiController,
     Rgb,
     Rgba,
+    ReversedController,
     Stripe,
     SubStripe,
 )
@@ -81,6 +83,121 @@ def test_multi_controller_rejects_empty_or_mismatched_lengths() -> None:
 
     with pytest.raises(ValueError, match="same length"):
         MultiController([Stripe(2), Stripe(3)])
+
+
+def test_reversed_controller_maps_pixels_from_the_end() -> None:
+    stripe = Stripe(4)
+    reversed_stripe = ReversedController(stripe)
+
+    reversed_stripe.set_pixel(0, Rgb(1, 2, 3))
+    reversed_stripe.set_pixels(
+        np.array(
+            [[4, 5, 6, 255], [7, 8, 9, 255]],
+            dtype=np.uint8,
+        )
+    )
+
+    np.testing.assert_array_equal(
+        stripe.pixels(),
+        np.array(
+            [[0, 0, 0, 255], [0, 0, 0, 255], [7, 8, 9, 255], [4, 5, 6, 255]],
+            dtype=np.uint8,
+        ),
+    )
+
+
+def test_composite_controller_allows_unequal_segment_lengths() -> None:
+    lower = Stripe(2)
+    upper = Stripe(4)
+    controller = CompositeController([lower, ReversedController(upper)])
+
+    controller.set_pixels(
+        np.array(
+            [
+                [10, 0, 0, 255],
+                [20, 0, 0, 255],
+                [30, 0, 0, 255],
+                [40, 0, 0, 255],
+                [50, 0, 0, 255],
+                [60, 0, 0, 255],
+            ],
+            dtype=np.uint8,
+        )
+    )
+
+    np.testing.assert_array_equal(
+        lower.pixels(),
+        np.array([[10, 0, 0, 255], [20, 0, 0, 255]], dtype=np.uint8),
+    )
+    np.testing.assert_array_equal(
+        upper.pixels(),
+        np.array(
+            [[60, 0, 0, 255], [50, 0, 0, 255], [40, 0, 0, 255], [30, 0, 0, 255]],
+            dtype=np.uint8,
+        ),
+    )
+    np.testing.assert_array_equal(
+        controller.pixels(),
+        np.array(
+            [
+                [10, 0, 0, 255],
+                [20, 0, 0, 255],
+                [30, 0, 0, 255],
+                [40, 0, 0, 255],
+                [50, 0, 0, 255],
+                [60, 0, 0, 255],
+            ],
+            dtype=np.uint8,
+        ),
+    )
+
+
+def test_zigzag_layout_drives_both_sides_with_reversed_upper_halves() -> None:
+    left_physical = Stripe(6)
+    right_physical = Stripe(6)
+
+    left = CompositeController(
+        [
+            SubStripe(left_physical, 0, 2),
+            ReversedController(SubStripe(left_physical, 2, 6)),
+        ]
+    )
+    right = CompositeController(
+        [
+            SubStripe(right_physical, 0, 2),
+            ReversedController(SubStripe(right_physical, 2, 6)),
+        ]
+    )
+    layout = MultiController([left, right])
+
+    layout.set_pixels(
+        np.array(
+            [
+                [1, 0, 0, 255],
+                [2, 0, 0, 255],
+                [3, 0, 0, 255],
+                [4, 0, 0, 255],
+                [5, 0, 0, 255],
+                [6, 0, 0, 255],
+            ],
+            dtype=np.uint8,
+        )
+    )
+
+    expected = np.array(
+        [
+            [1, 0, 0, 255],
+            [2, 0, 0, 255],
+            [6, 0, 0, 255],
+            [5, 0, 0, 255],
+            [4, 0, 0, 255],
+            [3, 0, 0, 255],
+        ],
+        dtype=np.uint8,
+    )
+
+    np.testing.assert_array_equal(left_physical.pixels(), expected)
+    np.testing.assert_array_equal(right_physical.pixels(), expected)
 
 
 def test_brightness_controller_scales_alpha() -> None:

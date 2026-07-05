@@ -82,9 +82,11 @@ def test_handle_click_changes_animation() -> None:
 
 def test_mode_switch_to_demo_sets_audio_snapshot() -> None:
     app = SimulatorApp(pixel_count=12)
+    start_index = app.player.current_index()
     app.set_mode(SimulatorMode.DEMO)
     assert app.mode is SimulatorMode.DEMO
     assert app.audio_status == "Using internal demo beat."
+    assert app.player.current_index() == start_index
     delay = app.step()
     assert delay >= MIN_FRAME_SECONDS
     assert app.audio_frame.rms > 0.0
@@ -124,7 +126,7 @@ def test_mic_mode_falls_back_to_manual_on_error(monkeypatch) -> None:
     assert app.audio_status == "Microphone unavailable."
 
 
-def test_mic_mode_uses_music_selector(monkeypatch) -> None:
+def test_mic_mode_keeps_animation_stable(monkeypatch) -> None:
     class FakeAudioInput:
         last_config: AudioConfig | None = None
 
@@ -169,17 +171,55 @@ def test_mic_mode_uses_music_selector(monkeypatch) -> None:
         idle_enter_frames=42,
         idle_threshold_scale=1.5,
     )
+    start_index = app.player.current_index()
     for _ in range(140):
         app.step()
-    assert app.class_label in ("FAST_PARTY", "CHAOTIC")
+    assert app.player.current_index() == start_index
+    assert app.animation_name.startswith(app.player.name_at(start_index).upper())
     assert app.audio_status == "Input: Fake Mic"
     assert FakeAudioInput.last_config == AudioConfig(
         smoothing=AudioSmoothing(noise_floor=0.01),
         normalization=AudioNormalization(target_level=0.5),
     )
     assert app.selector is not None
+    assert app.selector.auto_select is False
     assert app.selector.config.idle_enter_frames == 42
     assert app.selector.config.idle_energy_threshold == pytest.approx(MusicSelectorConfig().idle_energy_threshold * 1.5)
+
+
+def test_mode_switches_do_not_change_current_animation(monkeypatch) -> None:
+    class FakeAudioInput:
+        def read(self) -> AudioFrame:
+            return AudioFrame()
+
+        def read_features(self) -> MusicFeatures:
+            return MusicFeatures()
+
+        def device_name(self) -> str:
+            return "Fake Mic"
+
+        def close(self) -> None:
+            return None
+
+        @classmethod
+        def with_config(cls, config):
+            del config
+            return cls()
+
+    monkeypatch.setattr("lumistripe_sim.simulator.AudioInput", FakeAudioInput)
+    app = SimulatorApp(pixel_count=12)
+    app.player.next()
+    app.player.next()
+    start_index = app.player.current_index()
+
+    app.set_mode(SimulatorMode.DEMO)
+    assert app.player.current_index() == start_index
+
+    app.set_mode(SimulatorMode.MIC)
+    assert app.player.current_index() == start_index
+
+    app.set_mode(SimulatorMode.MANUAL)
+    assert app.player.current_index() == start_index
 
 
 def test_step_returns_minimum_frame_time() -> None:

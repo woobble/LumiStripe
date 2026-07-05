@@ -16,11 +16,13 @@ from lumistripe_cli.app import (
     MIN_FRAME_SECONDS,
     HeadlessApp,
     RuntimeMode,
+    build_runtime_encoder_backend,
     build_output_controller,
     build_parser,
     demo_frame,
     main,
 )
+from lumistripe_cli.encoder import ControlEvent, NullEncoderBackend
 
 
 class FakeGPIOStripe(Stripe):
@@ -52,6 +54,26 @@ def test_parser_accepts_second_stripe_arguments() -> None:
     assert args.pixels == 32
     assert args.data_pin_2 == 16
     assert args.clock_pin_2 == 20
+
+
+def test_parser_accepts_encoder_arguments() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "--encoder-chip",
+            "/dev/gpiochip4",
+            "--encoder1-a",
+            "5",
+            "--encoder1-b",
+            "6",
+            "--encoder1-button",
+            "13",
+        ]
+    )
+    assert args.encoder_chip == "/dev/gpiochip4"
+    assert args.encoder1_a == 5
+    assert args.encoder1_b == 6
+    assert args.encoder1_button == 13
 
 
 def test_parser_accepts_quiet_flag() -> None:
@@ -128,6 +150,40 @@ def test_build_output_controller_rejects_partial_second_stripe(monkeypatch: pyte
     args = build_parser().parse_args(["--pixels", "16", "--data-pin-2", "16"])
     with pytest.raises(ValueError, match="secondary stripe"):
         build_output_controller(args)
+
+
+def test_build_runtime_encoder_backend_returns_null_when_unconfigured() -> None:
+    args = build_parser().parse_args([])
+    backend = build_runtime_encoder_backend(args)
+    assert isinstance(backend, NullEncoderBackend)
+
+
+def test_build_runtime_encoder_backend_rejects_partial_encoder() -> None:
+    args = build_parser().parse_args(["--encoder1-a", "5"])
+    with pytest.raises(ValueError, match="encoder1 requires all"):
+        build_runtime_encoder_backend(args)
+
+
+def test_build_runtime_encoder_backend_uses_encoder_chip(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr("lumistripe_cli.app._ensure_gpio_input_ready", lambda chip: calls.append(chip))
+    sentinel = object()
+    monkeypatch.setattr("lumistripe_cli.app.build_encoder_backend", lambda chip, **kwargs: sentinel)
+    args = build_parser().parse_args(
+        [
+            "--encoder-chip",
+            "/dev/gpiochip5",
+            "--encoder1-a",
+            "5",
+            "--encoder1-b",
+            "6",
+            "--encoder1-button",
+            "13",
+        ]
+    )
+    backend = build_runtime_encoder_backend(args)
+    assert backend is sentinel
+    assert calls == ["/dev/gpiochip5"]
 
 
 def test_build_output_controller_fails_nicely_when_chip_missing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -231,6 +287,7 @@ def test_headless_app_status_block_includes_error_when_present() -> None:
     app.audio_error = "problem"
     block = app._status_block()
     assert "ERROR: problem" in block
+    assert "OUT: 1.00" in block
 
 
 def test_headless_app_status_block_includes_mic_tuning_in_mic_mode() -> None:
@@ -252,6 +309,46 @@ def test_headless_app_status_block_includes_mic_tuning_in_mic_mode() -> None:
 def test_headless_app_status_block_omits_mic_tuning_outside_mic_mode() -> None:
     app = HeadlessApp(controller=Stripe(12), pixel_count=12, quiet=True)
     assert "MIC:" not in app._status_block()
+
+
+def test_headless_app_encoder_controls_update_runtime_state() -> None:
+    app = HeadlessApp(controller=Stripe(12), pixel_count=12, animation_name="pulse", quiet=True)
+    initial_name = app.player.name_at(app.player.current_index())
+
+    app.apply_control_event(ControlEvent(kind="rotate", source="encoder2", value=-3))
+    assert app.player.brightness == pytest.approx(0.85)
+
+    app.apply_control_event(ControlEvent(kind="press", source="encoder2"))
+    assert "AUTO: OFF" in app._status_block()
+
+    app.apply_control_event(ControlEvent(kind="press", source="encoder1"))
+    assert app.mode is RuntimeMode.DEMO
+
+    app.apply_control_event(ControlEvent(kind="rotate", source="encoder1", value=1))
+    assert app.player.name_at(app.player.current_index()) != initial_name
+    assert "AUTO: OFF" in app._status_block()
+
+
+def test_headless_app_run_consumes_encoder_events() -> None:
+    class FakeEncoderBackend:
+        def __init__(self) -> None:
+            self.closed = False
+            self.calls = 0
+
+        def read_events(self) -> list[ControlEvent]:
+            self.calls += 1
+            if self.calls == 1:
+                return [ControlEvent(kind="rotate", source="encoder2", value=-2)]
+            return []
+
+        def close(self) -> None:
+            self.closed = True
+
+    backend = FakeEncoderBackend()
+    app = HeadlessApp(controller=Stripe(12), pixel_count=12, quiet=True, encoder_backend=backend)
+    app.run(frame_limit=1)
+    assert app.player.brightness == pytest.approx(0.9)
+    assert backend.closed is True
 
 
 def test_headless_app_debug_header_and_line_include_metrics() -> None:

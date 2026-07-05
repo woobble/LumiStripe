@@ -1,4 +1,11 @@
-from lumistripe import AnimationPlayer, AudioFrame, GPIOStripe, Stripe
+from lumistripe import (
+    AnimationPlayer,
+    AudioFrame,
+    CompositeController,
+    GPIOStripe,
+    ReversedController,
+    Stripe,
+)
 
 
 def test_package_exports_are_importable() -> None:
@@ -10,6 +17,8 @@ def test_package_exports_are_importable() -> None:
     assert player.index_of("pulse") is not None
     assert frame.bands == (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     assert GPIOStripe is not None
+    assert CompositeController is not None
+    assert ReversedController is not None
 
 
 def test_animation_star_import_exports_reactive_helpers() -> None:

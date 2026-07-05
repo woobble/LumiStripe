@@ -234,6 +234,7 @@ class SimulatorApp:
     def set_mode(self, mode: SimulatorMode) -> None:
         self._close_audio_input()
         self.player.clear_audio_snapshot()
+        self.player.audio_enabled = True
         self.mode = mode
         self.audio_error = None
         self.audio_frame = AudioFrame()
@@ -266,14 +267,16 @@ class SimulatorApp:
             return
 
         self.audio_status = f"Input: {self.audio_input.device_name()}"
+        current_name = self.player.name_at(self.player.current_index())
+        current_classes = CLASS_MAP.get(current_name or "", ())
         self.selector = MusicDrivenSelector(
             config=_build_selector_config(
                 idle_enter_frames=self.idle_enter_frames,
                 idle_threshold_scale=self.idle_threshold_scale,
             ),
-            current_class=AnimationClass.GROOVY,
+            current_class=current_classes[0] if current_classes else AnimationClass.GROOVY,
         )
-        self.selector.set_auto_select(True)
+        self.selector.set_auto_select(False)
         self.player.set_audio_snapshot(self._mic_snapshot)
 
     def _demo_snapshot(self) -> AudioFrame:

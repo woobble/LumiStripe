@@ -29,10 +29,12 @@ from lumistripe import (
     Stripe,
     list_input_device_details,
 )
+from .encoder import ControlEvent, EncoderBackend, EncoderPins, NullEncoderBackend, build_encoder_backend
 
 MIN_FRAME_SECONDS = 0.016
 STATUS_INTERVAL_SECONDS = 0.25
 DEFAULT_IDLE_THRESHOLD_SCALE = 1.0
+BRIGHTNESS_STEP = 0.05
 
 
 class RuntimeMode(str, Enum):
@@ -91,6 +93,7 @@ class HeadlessApp:
     audio_debug_verbose: bool = False
     animation_name: str | None = None
     quiet: bool = False
+    encoder_backend: EncoderBackend = field(default_factory=NullEncoderBackend)
     player: AnimationPlayer = field(init=False)
     running: bool = field(init=False, default=True)
     audio_input: AudioInput | None = field(init=False, default=None)
@@ -105,9 +108,11 @@ class HeadlessApp:
     _status_lines: int = field(init=False, default=0)
     _last_status_at: float = field(init=False, default=0.0)
     _last_debug_class: str = field(init=False, default="-")
+    _auto_select_enabled: bool = field(init=False, default=True)
 
     def __post_init__(self) -> None:
         self.player = AnimationPlayer.party()
+        self.player.set_brightness(1.0)
         if self.animation_name is not None:
             index = self.player.index_of(self.animation_name)
             if index is None:
@@ -159,6 +164,10 @@ class HeadlessApp:
             f"scale={self.idle_threshold_scale:0.2f}"
         )
 
+    @property
+    def brightness_label(self) -> str:
+        return f"{self.player.brightness:0.2f}"
+
     def set_mode(self, mode: RuntimeMode) -> None:
         self._close_audio_input()
         self.player.clear_audio_snapshot()
@@ -202,7 +211,7 @@ class HeadlessApp:
             ),
             current_class=AnimationClass.GROOVY,
         )
-        self.selector.set_auto_select(True)
+        self.selector.set_auto_select(self._auto_select_enabled)
         self.player.set_audio_snapshot(self._mic_snapshot)
 
     def _demo_snapshot(self) -> AudioFrame:
@@ -233,11 +242,51 @@ class HeadlessApp:
             self.music_features = MusicFeatures()
         return delay
 
+    def apply_control_events(self, events: list[ControlEvent]) -> None:
+        for event in events:
+            self.apply_control_event(event)
+
+    def apply_control_event(self, event: ControlEvent) -> None:
+        if event.kind == "rotate" and event.source == "encoder1":
+            self._handle_animation_rotation(event.value)
+            return
+        if event.kind == "rotate" and event.source == "encoder2":
+            self.player.set_brightness(self.player.brightness + (BRIGHTNESS_STEP * event.value))
+            return
+        if event.kind == "press" and event.source == "encoder1":
+            self._cycle_mode()
+            return
+        if event.kind == "press" and event.source == "encoder2":
+            self._set_auto_select(not self._auto_select_enabled)
+
+    def _handle_animation_rotation(self, step: int) -> None:
+        self._set_auto_select(False)
+        if step > 0:
+            for _ in range(step):
+                self.player.next()
+            return
+        for _ in range(abs(step)):
+            self.player.prev()
+
+    def _cycle_mode(self) -> None:
+        if self.mode is RuntimeMode.MANUAL:
+            self.set_mode(RuntimeMode.DEMO)
+        elif self.mode is RuntimeMode.DEMO:
+            self.set_mode(RuntimeMode.MIC)
+        else:
+            self.set_mode(RuntimeMode.MANUAL)
+
+    def _set_auto_select(self, enabled: bool) -> None:
+        self._auto_select_enabled = enabled
+        if self.selector is not None:
+            self.selector.set_auto_select(enabled)
+
     def run(self, *, frame_limit: int | None = None) -> None:
         frames_run = 0
         next_frame_at = time.monotonic()
         try:
             while self.running:
+                self.apply_control_events(self.encoder_backend.read_events())
                 now = time.monotonic()
                 if now < next_frame_at:
                     time.sleep(next_frame_at - now)
@@ -253,6 +302,7 @@ class HeadlessApp:
             self.controller.clear()
             self.controller.force_flush()
             self._finish_status()
+            self.encoder_backend.close()
             self._close_audio_input()
 
     def _render_status(self, now: float) -> None:
@@ -268,10 +318,10 @@ class HeadlessApp:
         self._last_status_at = now
 
     def _status_block(self) -> str:
-        auto_status = "ON" if self.selector is not None and self.selector.auto_select else "OFF"
+        auto_status = "ON" if self._auto_select_enabled else "OFF"
         lines = [
             f"ANIM: {self.current_animation_label}",
-            f"MODE: {self.mode_label}  |  AUTO: {auto_status}",
+            f"MODE: {self.mode_label}  |  AUTO: {auto_status}  |  OUT: {self.brightness_label}",
             f"SOURCE: {self.audio_status}",
             f"CLASS: {self.class_label}",
             self.analysis_text(),
@@ -404,6 +454,7 @@ class HeadlessApp:
         finally:
             self.controller.clear()
             self.controller.force_flush()
+            self.encoder_backend.close()
             self._close_audio_input()
 
 
@@ -467,6 +518,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--chip-2", help="Secondary GPIO chip path")
     parser.add_argument("--data-pin-2", type=int, help="Secondary stripe data pin")
     parser.add_argument("--clock-pin-2", type=int, help="Secondary stripe clock pin")
+    parser.add_argument("--encoder-chip", help="GPIO chip path for encoder inputs")
+    parser.add_argument("--encoder1-a", type=int, help="Encoder 1 A phase input pin")
+    parser.add_argument("--encoder1-b", type=int, help="Encoder 1 B phase input pin")
+    parser.add_argument("--encoder1-button", type=int, help="Encoder 1 button input pin")
+    parser.add_argument("--encoder2-a", type=int, help="Encoder 2 A phase input pin")
+    parser.add_argument("--encoder2-b", type=int, help="Encoder 2 B phase input pin")
+    parser.add_argument("--encoder2-button", type=int, help="Encoder 2 button input pin")
     return parser
 
 
@@ -494,6 +552,20 @@ def build_output_controller(args: argparse.Namespace) -> Controller:
     return MultiController([primary, secondary])
 
 
+def build_runtime_encoder_backend(args: argparse.Namespace) -> EncoderBackend:
+    encoder1 = _encoder_pins_from_args(args, "encoder1")
+    encoder2 = _encoder_pins_from_args(args, "encoder2")
+    if encoder1 is None and encoder2 is None:
+        return NullEncoderBackend()
+    encoder_chip = args.encoder_chip or args.chip
+    _ensure_gpio_input_ready(encoder_chip)
+    return build_encoder_backend(
+        encoder_chip,
+        encoder1=encoder1,
+        encoder2=encoder2,
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -519,6 +591,7 @@ def main(argv: list[str] | None = None) -> None:
             app.run_audio_debug()
             return
         controller = build_output_controller(args)
+        encoder_backend = build_runtime_encoder_backend(args)
         HeadlessApp(
             controller=controller,
             pixel_count=args.pixels,
@@ -530,6 +603,7 @@ def main(argv: list[str] | None = None) -> None:
             idle_threshold_scale=args.idle_threshold_scale,
             animation_name=args.animation,
             quiet=args.quiet,
+            encoder_backend=encoder_backend,
         ).run()
     except (RuntimeError, ValueError) as exc:
         raise SystemExit(f"error: {exc}") from exc
@@ -548,6 +622,21 @@ def _ensure_gpio_ready(chip: str) -> None:
     if not chip_path.is_char_device():
         raise RuntimeError(f'GPIO chip "{chip}" is not a character device. Check the configured GPIO chip path.')
     if not os.access(chip_path, os.R_OK | os.W_OK):
+        raise RuntimeError(
+            f'permission denied for GPIO chip "{chip}". '
+            "Add your user to the gpio group or run with appropriate permissions."
+        )
+
+
+def _ensure_gpio_input_ready(chip: str) -> None:
+    if importlib.util.find_spec("gpiod") is None:
+        raise RuntimeError("GPIO runtime unavailable: install lumistripe-core[gpio] to use the headless CLI")
+    chip_path = Path(chip)
+    if not chip_path.exists():
+        raise RuntimeError(f'GPIO chip "{chip}" was not found. Check that GPIO is enabled and the device path is correct.')
+    if not chip_path.is_char_device():
+        raise RuntimeError(f'GPIO chip "{chip}" is not a character device. Check the configured GPIO chip path.')
+    if not os.access(chip_path, os.R_OK):
         raise RuntimeError(
             f'permission denied for GPIO chip "{chip}". '
             "Add your user to the gpio group or run with appropriate permissions."
@@ -580,6 +669,17 @@ def _positive_int(value: str) -> int:
     if parsed < 1:
         raise argparse.ArgumentTypeError("must be >= 1")
     return parsed
+
+
+def _encoder_pins_from_args(args: argparse.Namespace, prefix: str) -> EncoderPins | None:
+    a = getattr(args, f"{prefix}_a")
+    b = getattr(args, f"{prefix}_b")
+    button = getattr(args, f"{prefix}_button")
+    if a is None and b is None and button is None:
+        return None
+    if a is None or b is None or button is None:
+        raise ValueError(f"{prefix} requires all of --{prefix}-a, --{prefix}-b, and --{prefix}-button")
+    return EncoderPins(a=a, b=b, button=button)
 
 
 def _build_audio_config(*, target_level: float, noise_floor: float) -> AudioConfig:
