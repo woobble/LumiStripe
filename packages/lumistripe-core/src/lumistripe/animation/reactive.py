@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..audio import AudioFrame
+from ..audio import AudioFrame, AudioSnapshot
 from ..color import Hsla
 
 
@@ -13,6 +13,10 @@ class AudioReactive:
     low: float
     mid: float
     high: float
+    onset: float = 0.0
+    brightness: float = 0.0
+    bpm: float = 120.0
+    activity_level: float = 0.0
 
     @classmethod
     def from_frame(cls, audio: AudioFrame) -> AudioReactive:
@@ -23,12 +27,30 @@ class AudioReactive:
         mid = (bands[2] + bands[3] + bands[4]) / 3.0
         high = (bands[5] + bands[6] + bands[7]) / 3.0
         accent = max(audio.beat_strength, audio.rms * 0.55) if audio.beat else audio.rms * 0.2
+        drive = max(0.0, min(1.0, audio.rms * 0.5 + low * 0.3 + mid * 0.2))
         return cls(
             rms=audio.rms,
             accent=max(0.0, min(1.0, accent)),
             low=max(0.0, min(1.0, low)),
             mid=max(0.0, min(1.0, mid)),
             high=max(0.0, min(1.0, high)),
+            onset=max(0.0, min(1.0, audio.beat_strength if audio.beat else audio.rms * 0.18)),
+            brightness=max(0.0, min(1.0, high * 0.55 + audio.rms * 0.25)),
+            activity_level=max(0.0, min(1.0, drive * 0.65 + accent * 0.25 + high * 0.1)),
+        )
+
+    @classmethod
+    def from_snapshot(cls, snapshot: AudioSnapshot) -> AudioReactive:
+        return cls(
+            rms=snapshot.features.energy,
+            accent=snapshot.accent,
+            low=snapshot.low,
+            mid=snapshot.mid,
+            high=snapshot.high,
+            onset=snapshot.onset_strength,
+            brightness=snapshot.brightness,
+            bpm=snapshot.bpm,
+            activity_level=snapshot.activity,
         )
 
     def drive(self) -> float:
@@ -36,6 +58,20 @@ class AudioReactive:
 
     def shimmer(self) -> float:
         return max(0.0, min(1.0, self.high * 0.6 + self.mid * 0.2 + self.accent * 0.2))
+
+    def activity(self) -> float:
+        if self.activity_level > 0.0:
+            return max(0.0, min(1.0, self.activity_level))
+        return max(0.0, min(1.0, self.drive() * 0.6 + self.accent * 0.25 + self.shimmer() * 0.15))
+
+    def bass_hit(self, threshold: float = 0.55) -> bool:
+        return self.low >= threshold or (self.accent >= 0.62 and self.low >= threshold * 0.55)
+
+    def high_hit(self, threshold: float = 0.5) -> bool:
+        return self.high >= threshold or self.shimmer() >= threshold
+
+    def drop_hit(self, *, beat: bool, low_threshold: float = 0.34, accent_threshold: float = 0.72) -> bool:
+        return beat and (self.low > low_threshold or self.accent > accent_threshold or self.onset > 0.58 or self.rms > 0.8)
 
     def speed(self, base: float, range_: float) -> float:
         return base + self.drive() * range_ + self.accent * range_ * 0.35

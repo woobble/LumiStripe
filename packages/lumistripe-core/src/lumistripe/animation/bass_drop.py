@@ -34,8 +34,7 @@ class BassDrop(Animation):
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
         reactive = AudioReactive.from_frame(audio)
         flash = self.flash.step(reactive.accent, 0.035)
-        bass_energy = (audio.bands[0] + audio.bands[1]) * 0.5
-        if audio.beat and bass_energy > 0.3:
+        if reactive.drop_hit(beat=audio.beat, low_threshold=0.3, accent_threshold=0.7):
             self.flash.value = 1.0
             self.charge = 0.0
         self.charge = min(self.charge + 0.006 + reactive.low * 0.012, 1.0)

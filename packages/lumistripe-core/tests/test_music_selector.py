@@ -1,8 +1,10 @@
 import numpy as np
+import pytest
 
 from lumistripe import AnimationClass, AnimationPlayer, MusicDrivenSelector, MusicFeatures
 from lumistripe.audio import AudioState
 from lumistripe.animation import CLASS_MAP
+from lumistripe.animation.selector import IDLE_ANIMATION_NAMES
 
 
 def _fast_party_features() -> MusicFeatures:
@@ -307,6 +309,33 @@ def test_selector_defaults_match_retuned_idle_baseline() -> None:
     assert config.idle_onset_threshold == 0.025
     assert config.idle_beat_density_threshold == 0.05
     assert config.idle_brightness_threshold == 0.08
+    assert config.class_stickiness == pytest.approx(0.04)
+    assert config.chaotic_release_bias == pytest.approx(0.03)
+    assert config.bass_heavy_stickiness == pytest.approx(0.05)
+
+
+def test_selector_bass_heavy_stickiness_blocks_borderline_switch() -> None:
+    selector = MusicDrivenSelector(current_class=AnimationClass.BASS_HEAVY)
+    selector.frame_count = selector.config.class_dwell_frames
+    scores = {
+        AnimationClass.BASS_HEAVY: 1.0,
+        AnimationClass.FAST_PARTY: 1.07,
+        AnimationClass.GROOVY: 0.3,
+    }
+
+    assert selector._should_switch_class(AnimationClass.FAST_PARTY, scores) is False
+
+
+def test_selector_chaotic_release_bias_allows_faster_exit() -> None:
+    selector = MusicDrivenSelector(current_class=AnimationClass.CHAOTIC)
+    selector.frame_count = selector.config.class_dwell_frames
+    scores = {
+        AnimationClass.CHAOTIC: 1.0,
+        AnimationClass.FAST_PARTY: 1.07,
+        AnimationClass.GROOVY: 0.3,
+    }
+
+    assert selector._should_switch_class(AnimationClass.FAST_PARTY, scores) is True
 
 
 def test_selector_idle_rotates_only_calm_or_ambient_animations() -> None:
@@ -326,10 +355,18 @@ def test_selector_idle_rotates_only_calm_or_ambient_animations() -> None:
             seen.add(selector.current_animation_name)
 
     assert seen
-    assert all(
-        AnimationClass.AMBIENT in CLASS_MAP.get(name, ()) or AnimationClass.CALM in CLASS_MAP.get(name, ())
-        for name in seen
-    )
+    assert seen <= set(IDLE_ANIMATION_NAMES)
+
+
+def test_idle_animation_pool_excludes_wild_mixed_class_animations() -> None:
+    player = AnimationPlayer.party()
+    selector = MusicDrivenSelector(current_class=AnimationClass.GROOVY)
+
+    idle_names = set(selector._idle_animation_names(player))
+
+    assert idle_names == {"aurora", "wave", "rainbow", "bouncing_ball", "sinelon", "glow_rush"}
+    assert "plasma_rave" not in idle_names
+    assert "twinkle" not in idle_names
 
 
 def test_selector_exits_idle_immediately_when_music_returns() -> None:

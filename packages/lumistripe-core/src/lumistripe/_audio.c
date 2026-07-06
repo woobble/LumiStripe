@@ -4,9 +4,10 @@
 #include <string.h>
 #include <math.h>
 #include <stdlib.h>
-#include "kiss_fft.h"
+#include "kiss_fftr.h"
 
 #define FFT_SIZE 1024
+#define FFT_HOP_SIZE (FFT_SIZE / 2)
 #define NUM_BANDS 8
 #define RMS_HISTORY_SIZE 200
 #define ONSET_HISTORY_SIZE 512
@@ -33,7 +34,8 @@ typedef struct {
     float beat_envelope;
     float level_estimate;
     float normalization_gain;
-    int callback_count;
+    int feed_count;
+    long long samples_seen;
     float sample_sum;
 
     float buffer[FFT_SIZE];
@@ -78,7 +80,7 @@ typedef struct {
 typedef struct {
     PyObject_HEAD
     AudioProcessorState s;
-    kiss_fft_cfg fft_cfg;
+    kiss_fftr_cfg fft_cfg;
 } AudioProcessor;
 
 static int _cmp_float(const void *a, const void *b) {
@@ -314,13 +316,12 @@ static void _process_fft(AudioProcessor *self) {
     float raw_rms = sqrtf(sq_sum / (float)FFT_SIZE);
     if (raw_rms > 1.0f) raw_rms = 1.0f;
 
-    kiss_fft_cpx fft_in[FFT_SIZE];
-    kiss_fft_cpx fft_out[FFT_SIZE];
+    kiss_fft_scalar fft_in[FFT_SIZE];
+    kiss_fft_cpx fft_out[FFT_SIZE / 2 + 1];
     for (int i = 0; i < FFT_SIZE; i++) {
-        fft_in[i].r = normalized[i] * s->window[i];
-        fft_in[i].i = 0.0f;
+        fft_in[i] = normalized[i] * s->window[i];
     }
-    kiss_fft(self->fft_cfg, fft_in, fft_out);
+    kiss_fftr(self->fft_cfg, fft_in, fft_out);
 
     float mags[FFT_SIZE / 2];
     for (int i = 0; i < half; i++) {
@@ -464,7 +465,7 @@ static int AudioProcessor_init(AudioProcessor *self, PyObject *args, PyObject *k
     }
     _compute_band_slices(self);
 
-    self->fft_cfg = kiss_fft_alloc(FFT_SIZE, 0, NULL, NULL);
+    self->fft_cfg = kiss_fftr_alloc(FFT_SIZE, 0, NULL, NULL);
     if (!self->fft_cfg) {
         PyErr_NoMemory();
         return -1;
@@ -475,7 +476,7 @@ static int AudioProcessor_init(AudioProcessor *self, PyObject *args, PyObject *k
 
 static void AudioProcessor_dealloc(AudioProcessor *self) {
     if (self->fft_cfg) {
-        kiss_fft_free(self->fft_cfg);
+        kiss_fftr_free(self->fft_cfg);
         self->fft_cfg = NULL;
     }
     Py_TYPE(self)->tp_free((PyObject *)self);
@@ -511,7 +512,8 @@ static PyObject* AudioProcessor_feed_samples(AudioProcessor *self, PyObject *arg
         Py_RETURN_NONE;
     }
 
-    self->s.callback_count++;
+    self->s.feed_count++;
+    self->s.samples_seen += (long long)size;
 
     float abs_sum = 0.0f;
     for (Py_ssize_t i = 0; i < size; i++) abs_sum += fabsf(samples[i]);
@@ -526,8 +528,9 @@ static PyObject* AudioProcessor_feed_samples(AudioProcessor *self, PyObject *arg
         self->s.buffer_pos += chunk;
         offset += chunk;
         if (self->s.buffer_pos >= FFT_SIZE) {
-            self->s.buffer_pos = 0;
             _process_fft(self);
+            memmove(self->s.buffer, self->s.buffer + FFT_HOP_SIZE, sizeof(float) * FFT_HOP_SIZE);
+            self->s.buffer_pos = FFT_HOP_SIZE;
         }
     }
 
@@ -556,16 +559,19 @@ static PyObject* AudioProcessor_frame(AudioProcessor *self, PyObject *Py_UNUSED(
     if (!b) { Py_DECREF(r); Py_DECREF(bands_tuple); return NULL; }
     PyObject *s = PyFloat_FromDouble((double)self->s.frame_beat_strength);
     if (!s) { Py_DECREF(r); Py_DECREF(bands_tuple); Py_DECREF(b); return NULL; }
+    PyObject *seq = PyLong_FromLong((long)self->s.fft_call_count);
+    if (!seq) { Py_DECREF(r); Py_DECREF(bands_tuple); Py_DECREF(b); Py_DECREF(s); return NULL; }
 
-    PyObject *result = PyTuple_New(4);
+    PyObject *result = PyTuple_New(5);
     if (!result) {
-        Py_DECREF(r); Py_DECREF(bands_tuple); Py_DECREF(b); Py_DECREF(s);
+        Py_DECREF(r); Py_DECREF(bands_tuple); Py_DECREF(b); Py_DECREF(s); Py_DECREF(seq);
         return NULL;
     }
     PyTuple_SET_ITEM(result, 0, r);
     PyTuple_SET_ITEM(result, 1, bands_tuple);
     PyTuple_SET_ITEM(result, 2, b);
     PyTuple_SET_ITEM(result, 3, s);
+    PyTuple_SET_ITEM(result, 4, seq);
     return result;
 }
 
@@ -609,7 +615,7 @@ static PyObject* AudioProcessor_state_copy(AudioProcessor *self, PyObject *Py_UN
 
     clone->s = self->s;
 
-    clone->fft_cfg = kiss_fft_alloc(FFT_SIZE, 0, NULL, NULL);
+    clone->fft_cfg = kiss_fftr_alloc(FFT_SIZE, 0, NULL, NULL);
     if (!clone->fft_cfg) {
         Py_DECREF(clone);
         return PyErr_NoMemory();
@@ -651,6 +657,17 @@ static PyObject* AudioProcessor_normalization_gain(AudioProcessor *self, PyObjec
     return PyFloat_FromDouble((double)self->s.normalization_gain);
 }
 
+static PyObject* AudioProcessor_stats(AudioProcessor *self, PyObject *Py_UNUSED(ignored)) {
+    return Py_BuildValue(
+        "(iLifd)",
+        self->s.feed_count,
+        self->s.samples_seen,
+        self->s.fft_call_count,
+        (double)self->s.sample_sum,
+        (double)self->s.normalization_gain
+    );
+}
+
 static PyMethodDef AudioProcessor_methods[] = {
     {"feed_samples", (PyCFunction)AudioProcessor_feed_samples, METH_VARARGS, "Feed audio samples"},
     {"frame", (PyCFunction)AudioProcessor_frame, METH_NOARGS, "Get current AudioFrame as tuple"},
@@ -658,6 +675,7 @@ static PyMethodDef AudioProcessor_methods[] = {
     {"state_copy", (PyCFunction)AudioProcessor_state_copy, METH_NOARGS, "Deep clone state"},
     {"reset", (PyCFunction)AudioProcessor_reset, METH_NOARGS, "Reset state to initial values"},
     {"normalization_gain", (PyCFunction)AudioProcessor_normalization_gain, METH_NOARGS, "Current AGC gain value"},
+    {"stats", (PyCFunction)AudioProcessor_stats, METH_NOARGS, "Get processor counters and gain"},
     {NULL, NULL, 0, NULL},
 };
 

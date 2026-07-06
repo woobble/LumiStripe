@@ -17,6 +17,7 @@ from lumistripe import (
     AudioFrame,
     AudioInput,
     AudioNormalization,
+    AudioSnapshot,
     AudioSmoothing,
     CLASS_MAP,
     Config,
@@ -27,6 +28,7 @@ from lumistripe import (
     MusicFeatures,
     MusicSelectorConfig,
     Stripe,
+    features_from_frame,
     list_input_device_details,
 )
 from .encoder import ControlEvent, EncoderBackend, EncoderPins, NullEncoderBackend, build_encoder_backend
@@ -77,7 +79,7 @@ def demo_frame(frame: int) -> AudioFrame:
     rms = min((sum(bands) / len(bands)) ** 0.5, 1.0)
     beat = beat_idx == 0
     beat_strength = 0.7 + kick * 0.3 if beat else 0.0
-    return AudioFrame(rms=rms, bands=bands, beat=beat, beat_strength=beat_strength)
+    return AudioFrame(rms=rms, bands=bands, beat=beat, beat_strength=beat_strength, sequence=frame + 1, timestamp=time.monotonic(), fresh=True)
 
 
 @dataclass(slots=True)
@@ -101,6 +103,7 @@ class HeadlessApp:
     audio_error: str | None = field(init=False, default=None)
     audio_frame: AudioFrame = field(init=False, default_factory=AudioFrame)
     music_features: MusicFeatures = field(init=False, default_factory=MusicFeatures)
+    audio_snapshot: AudioSnapshot = field(init=False, default_factory=AudioSnapshot.silence)
     demo_tick: int = field(init=False, default=0)
     selector: MusicDrivenSelector | None = field(init=False, default=None)
     _status_enabled: bool = field(init=False, default=False)
@@ -175,6 +178,7 @@ class HeadlessApp:
         self.audio_error = None
         self.audio_frame = AudioFrame()
         self.music_features = MusicFeatures()
+        self.audio_snapshot = AudioSnapshot.silence()
         self.selector = None
 
         if mode is RuntimeMode.MANUAL:
@@ -218,10 +222,12 @@ class HeadlessApp:
         frame = demo_frame(self.demo_tick)
         self.demo_tick += 1
         self.audio_frame = frame
+        self.music_features = features_from_frame(frame)
+        self.audio_snapshot = AudioSnapshot.from_parts(frame, self.music_features)
         return frame
 
     def _mic_snapshot(self) -> AudioFrame:
-        return self.audio_frame
+        return self.audio_snapshot.frame
 
     def _close_audio_input(self) -> None:
         if self.audio_input is None:
@@ -231,15 +237,23 @@ class HeadlessApp:
 
     def step(self) -> float:
         if self.mode is RuntimeMode.MIC and self.audio_input is not None:
-            self.audio_frame = self.audio_input.read()
-            self.music_features = self.audio_input.read_features()
+            audio_frame = self.audio_input.read()
+            health = self._audio_health()
+            self.audio_frame = audio_frame
+            self.music_features = self.audio_input.read_features() if audio_frame.fresh else MusicFeatures()
+            self.audio_snapshot = (
+                AudioSnapshot.from_parts(audio_frame, self.music_features, health)
+                if audio_frame.fresh
+                else AudioSnapshot.silence(frame=audio_frame, health=health)
+            )
             if self.selector is not None:
-                self.selector.update(self.player, self.music_features)
+                self.selector.update(self.player, self.audio_snapshot.features)
                 self.player.audio_enabled = not self.selector.idle_active
         delay = max(self.player.step(self.controller), MIN_FRAME_SECONDS)
         if self.mode is RuntimeMode.MANUAL:
             self.audio_frame = AudioFrame()
             self.music_features = MusicFeatures()
+            self.audio_snapshot = AudioSnapshot.silence()
         return delay
 
     def apply_control_events(self, events: list[ControlEvent]) -> None:
@@ -328,6 +342,9 @@ class HeadlessApp:
         ]
         if self.mode is RuntimeMode.MIC:
             lines.insert(4, f"MIC: {self.mic_tuning_label}")
+            health = self._audio_health_summary()
+            if health:
+                lines.insert(5, f"HEALTH: {health}")
         if self.audio_error:
             lines.append(f"ERROR: {self.audio_error}")
         return "\n".join(lines)
@@ -403,11 +420,20 @@ class HeadlessApp:
     def debug_log_line(self, elapsed: float) -> str:
         frame = self.audio_frame
         feat = self.music_features
+        snapshot = self.audio_snapshot
         beat = "YES" if frame.beat else "NO"
+        fresh = "YES" if frame.fresh else "NO"
         idle = "YES" if self.selector is not None and self.selector.idle_active else "NO"
         auto = "ON" if self.selector is not None and self.selector.auto_select else "OFF"
         anim = self.player.name_at(self.player.current_index()) or "?"
         bands = ",".join(f"{value:0.2f}" for value in frame.bands)
+        health = self._audio_health()
+        age = health.last_frame_age if health is not None else None
+        stats = health.processor if health is not None else None
+        age_text = "-" if age is None else f"{age:0.3f}"
+        fft_count = stats.fft_count if stats is not None else 0
+        gain = stats.normalization_gain if stats is not None else 1.0
+        status_count = health.status_count if health is not None else 0
         line = (
             f"t={elapsed:0.2f}s "
             f"SRC={self.audio_status} "
@@ -415,6 +441,18 @@ class HeadlessApp:
             f"ANIM={anim.upper()} "
             f"AUTO={auto} "
             f"IDLE={idle} "
+            f"FRESH={fresh} "
+            f"AGE={age_text} "
+            f"SEQ={frame.sequence} "
+            f"FFT={fft_count} "
+            f"GAIN={gain:0.2f} "
+            f"STATUS={status_count} "
+            f"LOW={snapshot.low:0.2f} "
+            f"MID={snapshot.mid:0.2f} "
+            f"HIGH={snapshot.high:0.2f} "
+            f"DRIVE={snapshot.drive:0.2f} "
+            f"ACCENT={snapshot.accent:0.2f} "
+            f"ACTIVITY={snapshot.activity:0.2f} "
             f"RMS={frame.rms:0.3f} "
             f"BEAT={beat} "
             f"BPM={feat.bpm:0.0f} "
@@ -427,6 +465,24 @@ class HeadlessApp:
         if self.audio_debug_verbose:
             line = f"{line} {self._selector_verbose_summary()}"
         return line
+
+    def _audio_health(self):
+        if self.audio_input is None or not hasattr(self.audio_input, "health"):
+            return None
+        return self.audio_input.health()
+
+    def _audio_health_summary(self) -> str:
+        health = self._audio_health()
+        if health is None:
+            return ""
+        age = "-" if health.last_frame_age is None else f"{health.last_frame_age:0.3f}s"
+        callback_age = "-" if health.last_callback_age is None else f"{health.last_callback_age:0.3f}s"
+        return (
+            f"fresh={'YES' if self.audio_frame.fresh else 'NO'} "
+            f"age={age} cb_age={callback_age} "
+            f"seq={self.audio_frame.sequence} fft={health.processor.fft_count} "
+            f"gain={health.processor.normalization_gain:0.2f} status={health.status_count}"
+        )
 
     def run_audio_debug(self, *, frame_limit: int | None = None) -> None:
         started_at = time.monotonic()

@@ -13,6 +13,7 @@ ext_audio = Extension(
     sources=[
         "src/lumistripe/_audio.c",
         "src/lumistripe/kissfft/kiss_fft.c",
+        "src/lumistripe/kissfft/kiss_fftr.c",
     ],
     include_dirs=[numpy.get_include(), "src/lumistripe/kissfft"],
     libraries=["m"],

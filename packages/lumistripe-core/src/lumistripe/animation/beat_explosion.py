@@ -32,7 +32,7 @@ class BeatExplosion(Animation):
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
         center = max(controller.length - 1, 0) * 0.5
         reactive = AudioReactive.from_frame(audio)
-        hit = self.burst.step(reactive.accent, 0.06)
+        hit = self.burst.step(max(reactive.accent, reactive.activity() * 0.35), 0.06)
         if audio.beat:
             self.radius = 0.0
         else:

@@ -26,7 +26,7 @@ class SpectrumFlash(Animation):
         self._step(frame, controller, reactive, audio, beat=audio.beat)
 
     def _step(self, frame: int, controller: Controller, reactive: AudioReactive, audio: AudioFrame, *, beat: bool) -> None:
-        if beat and reactive.rms > 0.65 or reactive.rms > 0.82:
+        if reactive.drop_hit(beat=beat, low_threshold=0.45, accent_threshold=0.68) or reactive.rms > 0.82:
             self.flash.value = 1.0
 
         flash = self.flash.step(0.0, 0.08)

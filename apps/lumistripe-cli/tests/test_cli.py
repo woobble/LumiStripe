@@ -4,7 +4,10 @@ from lumistripe import (
     AnimationClass,
     AudioConfig,
     AudioFrame,
+    AudioInputHealth,
     AudioNormalization,
+    AudioProcessorStats,
+    AudioSnapshot,
     AudioSmoothing,
     MultiController,
     MusicDrivenSelector,
@@ -407,6 +410,47 @@ def test_headless_app_debug_log_line_includes_verbose_selector_details() -> None
     assert "SCORES=" in line
 
 
+def test_headless_app_debug_log_line_includes_audio_health() -> None:
+    class FakeAudioInput:
+        def health(self) -> AudioInputHealth:
+            return AudioInputHealth(
+                callback_count=3,
+                status_count=1,
+                last_frame_age=0.042,
+                processor=AudioProcessorStats(fft_count=9, normalization_gain=1.7),
+            )
+
+    app = HeadlessApp(controller=Stripe(12), pixel_count=12, quiet=True)
+    app.mode = RuntimeMode.MIC
+    app.audio_input = FakeAudioInput()
+    app.audio_frame = AudioFrame(sequence=4, fresh=True)
+    app.audio_snapshot = AudioSnapshot.from_parts(
+        AudioFrame(
+            rms=0.5,
+            bands=(0.4, 0.5, 0.3, 0.3, 0.3, 0.2, 0.2, 0.2),
+            beat=True,
+            beat_strength=0.8,
+            sequence=4,
+            fresh=True,
+        )
+    )
+
+    line = app.debug_log_line(1.25)
+
+    assert "FRESH=YES" in line
+    assert "AGE=0.042" in line
+    assert "SEQ=4" in line
+    assert "FFT=9" in line
+    assert "GAIN=1.70" in line
+    assert "STATUS=1" in line
+    assert "LOW=0.45" in line
+    assert "MID=0.30" in line
+    assert "HIGH=0.20" in line
+    assert "DRIVE=" in line
+    assert "ACCENT=" in line
+    assert "ACTIVITY=" in line
+
+
 def test_headless_app_debug_transition_line_includes_score_snapshot() -> None:
     app = HeadlessApp(controller=Stripe(12), pixel_count=12, quiet=True)
     app.selector = MusicDrivenSelector(current_class=AnimationClass.GROOVY)
@@ -521,6 +565,8 @@ def test_headless_app_mic_mode_uses_music_selector(monkeypatch: pytest.MonkeyPat
                 bands=(0.9, 0.85, 0.75, 0.72, 0.7, 0.88, 0.9, 0.92),
                 beat=True,
                 beat_strength=1.0,
+                sequence=1,
+                fresh=True,
             )
 
         def read_features(self) -> MusicFeatures:
@@ -568,6 +614,43 @@ def test_headless_app_mic_mode_uses_music_selector(monkeypatch: pytest.MonkeyPat
     )
     assert app.selector.config.idle_enter_frames == 42
     assert app.selector.config.idle_energy_threshold == pytest.approx(MusicSelectorConfig().idle_energy_threshold * 1.5)
+
+
+def test_headless_app_mic_mode_stale_audio_updates_selector_with_silence(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeAudioInput:
+        def read(self) -> AudioFrame:
+            return AudioFrame(
+                rms=0.95,
+                bands=(0.9, 0.85, 0.75, 0.72, 0.7, 0.88, 0.9, 0.92),
+                beat=True,
+                beat_strength=1.0,
+                sequence=1,
+                fresh=False,
+            )
+
+        def read_features(self) -> MusicFeatures:
+            raise AssertionError("stale audio features should not be read")
+
+        def device_name(self) -> str:
+            return "Fake Mic"
+
+        def close(self) -> None:
+            return None
+
+        @classmethod
+        def with_config(cls, config):
+            del config
+            return cls()
+
+    monkeypatch.setattr("lumistripe_cli.app.AudioInput", FakeAudioInput)
+    app = HeadlessApp(controller=Stripe(12), pixel_count=12, mode=RuntimeMode.MIC)
+
+    app.step()
+
+    assert app.music_features == MusicFeatures()
+    assert app.audio_frame.fresh is False
+    assert app.audio_snapshot.features == MusicFeatures()
+    assert app._mic_snapshot() == AudioFrame(sequence=1, fresh=False)
 
 
 def test_headless_app_mic_mode_uses_device_specific_audio_config(monkeypatch: pytest.MonkeyPatch) -> None:

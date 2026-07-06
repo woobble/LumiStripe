@@ -31,6 +31,9 @@ class MusicSelectorConfig:
     idle_onset_threshold: float = 0.025
     idle_beat_density_threshold: float = 0.05
     idle_brightness_threshold: float = 0.08
+    class_stickiness: float = 0.04
+    chaotic_release_bias: float = 0.03
+    bass_heavy_stickiness: float = 0.05
 
 
 @dataclass(slots=True)
@@ -226,7 +229,14 @@ class MusicDrivenSelector:
             return False
         sorted_scores = sorted(scores.values(), reverse=True)
         confidence = sorted_scores[0] - sorted_scores[1] if len(sorted_scores) > 1 else sorted_scores[0]
-        return confidence >= self.config.confidence_threshold
+        hysteresis = self.config.class_stickiness
+        if self.current_class is AnimationClass.BASS_HEAVY:
+            hysteresis += self.config.bass_heavy_stickiness
+        if self.current_class is AnimationClass.CHAOTIC:
+            hysteresis = max(0.0, hysteresis - self.config.chaotic_release_bias)
+        current_score = scores.get(self.current_class, 0.0)
+        target_score = scores.get(target_class, 0.0)
+        return confidence >= self.config.confidence_threshold and target_score >= current_score + hysteresis
 
     def _should_rotate_animation(self) -> bool:
         if self.current_animation_name is None:
@@ -291,9 +301,9 @@ class MusicDrivenSelector:
 
     def _idle_animation_names(self, player: AnimationPlayer) -> list[str]:
         names: list[str] = []
+        idle_safe = set(IDLE_ANIMATION_NAMES)
         for entry in player.animations:
-            classes = CLASS_MAP.get(entry.animation.name, ())
-            if AnimationClass.AMBIENT in classes or AnimationClass.CALM in classes:
+            if entry.animation.name in idle_safe:
                 names.append(entry.animation.name)
         return names
 
@@ -367,6 +377,15 @@ CLASS_MAP: dict[str, tuple[AnimationClass, ...]] = {
     "spectrum_flash": (AnimationClass.FAST_PARTY, AnimationClass.CHAOTIC, AnimationClass.BASS_HEAVY),
     "drop_wave": (AnimationClass.BASS_HEAVY, AnimationClass.HARD_DROP),
 }
+
+IDLE_ANIMATION_NAMES: tuple[str, ...] = (
+    "aurora",
+    "wave",
+    "rainbow",
+    "bouncing_ball",
+    "sinelon",
+    "glow_rush",
+)
 
 
 def _smooth(current: float, target: float, attack: float, release: float) -> float:

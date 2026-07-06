@@ -48,10 +48,10 @@ class ClubFlash(Animation):
         high: float,
         accent: float,
         beat: bool,
-    ) -> None:
+        ) -> None:
         length = max(controller.length, 1)
         seed = frame * 131 + length * 17 + int(drive * 100.0) + int(low * 80.0)
-        strong_hit = beat and low > 0.24 or accent > 0.74 or low > 0.78 or drive > 0.82
+        strong_hit = (beat and low > 0.24) or accent > 0.74 or low > 0.78 or drive > 0.82
         trigger_prob = 0.03 + drive * 0.08 + accent * 0.07 + low * 0.05
 
         if strong_hit or (seed % 1000) < int(trigger_prob * 1000.0):

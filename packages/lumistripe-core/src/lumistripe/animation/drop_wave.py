@@ -33,7 +33,7 @@ class DropWave(Animation):
         length = max(controller.length, 1)
         self.charge = min(1.0, self.charge + 0.006 + reactive.low * 0.018 + reactive.mid * 0.01)
 
-        drop_hit = beat and (reactive.low > 0.34 or reactive.accent > 0.72 or reactive.rms > 0.8)
+        drop_hit = reactive.drop_hit(beat=beat)
         if drop_hit:
             self.wave.value = 1.0
             self.radius = 0.0

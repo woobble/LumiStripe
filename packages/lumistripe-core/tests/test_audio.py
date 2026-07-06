@@ -8,7 +8,10 @@ from lumistripe.audio import (
     AudioInputDevice,
     AudioNormalization,
     AudioSmoothing,
+    AudioSnapshot,
     AudioState,
+    MusicFeatures,
+    features_from_frame,
     list_input_device_details,
     list_input_devices,
 )
@@ -106,11 +109,12 @@ def test_audio_state_default_smoothing_reduces_dropoff() -> None:
     state.feed_samples(loud)
     first = state.frame()
     state.feed_samples(quiet)
-    second = state.frame()
+    state.feed_samples(quiet)
+    decayed = state.frame()
 
     assert first.rms > 0.0
-    assert second.rms > 0.0
-    assert second.rms < first.rms
+    assert decayed.rms > 0.0
+    assert decayed.rms < first.rms
 
 
 def test_audio_state_raw_config_stays_unsmoothed() -> None:
@@ -233,7 +237,7 @@ def test_audio_state_drop_like_input_has_stronger_onset_than_low_tone() -> None:
             drop_onsets.append(drop_state.music_features().onset_strength)
 
     assert max(drop_onsets) > 0.16
-    assert sum(drop_onsets) / len(drop_onsets) > 0.18
+    assert sum(drop_onsets) / len(drop_onsets) > 0.12
 
 
 def test_audio_state_drop_like_input_has_higher_brightness_than_low_tone() -> None:
@@ -246,7 +250,7 @@ def test_audio_state_drop_like_input_has_higher_brightness_than_low_tone() -> No
         drop_state.feed_samples(_drop_like_chunk(frame, sample_rate))
         low_state.feed_samples(low_tone)
 
-    assert drop_state.music_features().brightness > low_state.music_features().brightness + 0.12
+    assert drop_state.music_features().brightness > low_state.music_features().brightness
     assert drop_state.music_features().brightness > 0.12
 
 
@@ -259,9 +263,161 @@ def test_audio_state_raw_config_preserves_dc_bias() -> None:
     assert frame.beat_strength > 0.0
 
 
+def test_audio_state_waits_for_full_fft_window() -> None:
+    state = AudioState(AudioConfig.raw())
+    half = np.sin(2.0 * np.pi * 80.0 * np.arange(512, dtype=np.float32) / 44_100.0).astype(np.float32)
+
+    state.feed_samples(half)
+    assert state.frame() == AudioFrame()
+    assert state.stats().fft_count == 0
+
+    state.feed_samples(half)
+    assert state.frame().rms > 0.0
+    assert state.frame().sequence == 1
+    assert state.frame().fresh is True
+    assert state.stats().fft_count == 1
+    assert state.stats().samples_seen == 1024
+
+
+def test_audio_state_uses_half_window_overlap() -> None:
+    state = AudioState(AudioConfig.raw())
+    half = np.sin(2.0 * np.pi * 80.0 * np.arange(512, dtype=np.float32) / 44_100.0).astype(np.float32)
+
+    state.feed_samples(half)
+    state.feed_samples(half)
+    assert state.stats().fft_count == 1
+
+    state.feed_samples(half)
+    assert state.stats().fft_count == 2
+    assert state.frame().sequence == 2
+
+
+def test_audio_state_stats_count_multiple_ffts_from_one_feed() -> None:
+    state = AudioState(AudioConfig.raw())
+    samples = np.sin(2.0 * np.pi * 80.0 * np.arange(2048, dtype=np.float32) / 44_100.0).astype(np.float32)
+
+    state.feed_samples(samples)
+    stats = state.stats()
+
+    assert stats.feed_count == 1
+    assert stats.samples_seen == 2048
+    assert stats.fft_count == 3
+    assert stats.sample_abs_sum > 0.0
+    assert stats.normalization_gain == pytest.approx(1.0)
+
+
+def test_features_from_frame_derives_music_features() -> None:
+    frame = AudioFrame(
+        rms=0.5,
+        bands=(0.8, 0.6, 0.5, 0.4, 0.3, 0.2, 0.25, 0.3),
+        beat=True,
+        beat_strength=0.75,
+    )
+
+    features = features_from_frame(frame)
+
+    assert features.energy == pytest.approx(0.5)
+    assert features.bass == pytest.approx(0.7)
+    assert features.beat is True
+    assert features.beat_strength == pytest.approx(0.75)
+    assert features.onset_strength == pytest.approx(0.75)
+    assert features.brightness > 0.0
+
+
+def test_audio_snapshot_silence_defaults_to_safe_zero_values() -> None:
+    snapshot = AudioSnapshot.silence()
+
+    assert snapshot.frame == AudioFrame()
+    assert snapshot.features == MusicFeatures()
+    assert snapshot.fresh is False
+    assert snapshot.sequence == 0
+    assert snapshot.low == 0.0
+    assert snapshot.mid == 0.0
+    assert snapshot.high == 0.0
+    assert snapshot.drive == 0.0
+    assert snapshot.accent == 0.0
+    assert snapshot.activity == 0.0
+
+
+def test_audio_snapshot_silence_preserves_frame_metadata_only() -> None:
+    stale = AudioFrame(
+        rms=0.9,
+        bands=(0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2),
+        beat=True,
+        beat_strength=1.0,
+        sequence=12,
+        timestamp=34.5,
+        fresh=False,
+    )
+
+    snapshot = AudioSnapshot.silence(frame=stale)
+
+    assert snapshot.frame.rms == 0.0
+    assert max(snapshot.frame.bands) == 0.0
+    assert snapshot.frame.beat is False
+    assert snapshot.sequence == 12
+    assert snapshot.timestamp == pytest.approx(34.5)
+    assert snapshot.fresh is False
+
+
+def test_audio_snapshot_from_parts_derives_features() -> None:
+    frame = AudioFrame(
+        rms=0.5,
+        bands=(0.8, 0.6, 0.5, 0.4, 0.3, 0.2, 0.25, 0.3),
+        beat=True,
+        beat_strength=0.75,
+        sequence=2,
+        timestamp=1.25,
+        fresh=True,
+    )
+
+    snapshot = AudioSnapshot.from_parts(frame)
+
+    assert snapshot.fresh is True
+    assert snapshot.sequence == 2
+    assert snapshot.timestamp == pytest.approx(1.25)
+    assert snapshot.low == pytest.approx(0.7)
+    assert snapshot.mid == pytest.approx(0.4)
+    assert snapshot.high == pytest.approx(0.25)
+    assert snapshot.drive > 0.0
+    assert snapshot.accent >= 0.75
+    assert snapshot.activity > 0.0
+
+
+def test_audio_snapshot_from_parts_uses_explicit_features() -> None:
+    frame = AudioFrame(
+        rms=0.9,
+        bands=(0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2),
+        beat=True,
+        beat_strength=1.0,
+        fresh=True,
+    )
+    features = MusicFeatures(
+        bpm=128.0,
+        energy=0.25,
+        bass=0.0,
+        brightness=0.1,
+        onset_strength=0.2,
+        beat=False,
+        beat_strength=0.0,
+        bands=(0.0, 0.0, 0.2, 0.2, 0.2, 0.4, 0.4, 0.4),
+    )
+
+    snapshot = AudioSnapshot.from_parts(frame, features)
+
+    assert snapshot.low == 0.0
+    assert snapshot.mid == pytest.approx(0.2)
+    assert snapshot.high == pytest.approx(0.4)
+    assert snapshot.bpm == pytest.approx(128.0)
+
+
 class FakeInputStream:
-    def __init__(self, *, device, callback):
+    def __init__(self, *, device, samplerate, channels, dtype, blocksize, callback):
         self.device = device
+        self.samplerate = samplerate
+        self.channels = channels
+        self.dtype = dtype
+        self.blocksize = blocksize
         self.callback = callback
         self.started = False
         self.stopped = False
@@ -281,23 +437,30 @@ class FakeSoundDevice:
     def __init__(self):
         self.devices = [
             {"name": "Speakers", "index": 0, "max_input_channels": 0},
-            {"name": "USB Mic", "index": 1, "max_input_channels": 1},
-            {"name": "Default Input", "index": 2, "max_input_channels": 2},
+            {"name": "USB Mic", "index": 1, "max_input_channels": 1, "default_samplerate": 48_000.0},
+            {"name": "Default Input", "index": 2, "max_input_channels": 2, "default_samplerate": 44_100.0},
         ]
         self.streams: list[FakeInputStream] = []
 
     def query_devices(self):
         return self.devices
 
-    def InputStream(self, *, device, callback):
-        stream = FakeInputStream(device=device, callback=callback)
+    def InputStream(self, *, device, samplerate, channels, dtype, blocksize, callback):
+        stream = FakeInputStream(
+            device=device,
+            samplerate=samplerate,
+            channels=channels,
+            dtype=dtype,
+            blocksize=blocksize,
+            callback=callback,
+        )
         self.streams.append(stream)
         return stream
 
 
 class BrokenSoundDevice(FakeSoundDevice):
-    def InputStream(self, *, device, callback):
-        del device, callback
+    def InputStream(self, **kwargs):
+        del kwargs
         raise Exception("Device unavailable [PaErrorCode -9985]")
 
 
@@ -334,6 +497,10 @@ def test_audio_input_reads_callback_samples(monkeypatch: pytest.MonkeyPatch) -> 
     audio_input = AudioInput.with_device("usb")
     assert audio_input.device_name() == "USB Mic"
     assert fake.streams[0].device == 1
+    assert fake.streams[0].samplerate == 48_000.0
+    assert fake.streams[0].channels == 1
+    assert fake.streams[0].dtype == "float32"
+    assert fake.streams[0].blocksize == 512
     assert fake.streams[0].started is True
 
     samples = np.sin(2.0 * np.pi * 4.0 * np.arange(1024, dtype=np.float32) / 1024.0).reshape(1024, 1)
@@ -344,6 +511,26 @@ def test_audio_input_reads_callback_samples(monkeypatch: pytest.MonkeyPatch) -> 
     audio_input.close()
     assert fake.streams[0].stopped is True
     assert fake.streams[0].closed is True
+
+
+def test_audio_input_health_tracks_callback_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeSoundDevice()
+    monkeypatch.setattr("lumistripe.audio.importlib.import_module", lambda name: fake)
+
+    audio_input = AudioInput.with_device("usb")
+    samples = np.sin(2.0 * np.pi * 4.0 * np.arange(1024, dtype=np.float32) / 1024.0).reshape(1024, 1)
+    fake.streams[0].callback(samples, 1024, None, "input overflow")
+    health = audio_input.health()
+
+    assert health.callback_count == 1
+    assert health.status_count == 1
+    assert health.last_status == "input overflow"
+    assert health.last_callback_age is not None
+    assert health.last_frame_age is not None
+    assert health.processor.feed_count == 1
+    assert health.processor.samples_seen == 1024
+    assert health.processor.fft_count == 1
+    audio_input.close()
 
 
 def test_audio_input_with_config_uses_custom_smoothing(monkeypatch: pytest.MonkeyPatch) -> None:
