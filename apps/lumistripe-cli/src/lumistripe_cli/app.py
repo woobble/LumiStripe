@@ -14,6 +14,7 @@ from lumistripe import (
     AnimationClass,
     AnimationPlayer,
     AudioConfig,
+    AudioCalibrationResult,
     AudioFrame,
     AudioInput,
     AudioNormalization,
@@ -28,6 +29,7 @@ from lumistripe import (
     MusicFeatures,
     MusicSelectorConfig,
     Stripe,
+    calibrate_audio_input,
     features_from_frame,
     list_input_device_details,
 )
@@ -93,6 +95,7 @@ class HeadlessApp:
     idle_enter_frames: int = field(default_factory=lambda: MusicSelectorConfig().idle_enter_frames)
     idle_threshold_scale: float = DEFAULT_IDLE_THRESHOLD_SCALE
     audio_debug_verbose: bool = False
+    audio_calibration: AudioCalibrationResult | None = None
     animation_name: str | None = None
     quiet: bool = False
     encoder_backend: EncoderBackend = field(default_factory=NullEncoderBackend)
@@ -160,12 +163,15 @@ class HeadlessApp:
 
     @property
     def mic_tuning_label(self) -> str:
-        return (
+        label = (
             f"target={self.mic_target_level:0.2f} "
             f"noise={self.mic_noise_floor:0.3f} "
             f"idle={self.idle_enter_frames}f "
             f"scale={self.idle_threshold_scale:0.2f}"
         )
+        if self.audio_calibration is not None:
+            label = f"{label} calibrated={self.audio_calibration.samples}f"
+        return label
 
     @property
     def brightness_label(self) -> str:
@@ -544,6 +550,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Include selector internals and full class scores in audio debug logs",
     )
     parser.add_argument(
+        "--calibrate-audio",
+        type=_positive_float,
+        metavar="SECONDS",
+        help="Measure the selected audio input and print recommended mic tuning flags",
+    )
+    parser.add_argument(
+        "--auto-calibrate-audio",
+        type=_positive_float,
+        metavar="SECONDS",
+        help="Measure the selected audio input and apply recommended mic tuning before mic mode starts",
+    )
+    parser.add_argument(
         "--mic-target-level",
         type=_positive_float,
         default=AudioNormalization().target_level,
@@ -630,6 +648,14 @@ def main(argv: list[str] | None = None) -> None:
             print(f"{device.index}: {device.name}")
         return
     try:
+        if args.calibrate_audio is not None:
+            result = calibrate_audio_input(duration=args.calibrate_audio, device_pattern=args.audio_device)
+            print(_calibration_text(result))
+            return
+        calibration = None
+        if args.auto_calibrate_audio is not None and (args.audio_debug or args.mode is RuntimeMode.MIC):
+            calibration = calibrate_audio_input(duration=args.auto_calibrate_audio, device_pattern=args.audio_device)
+            _apply_calibration(args, calibration)
         if args.audio_debug:
             app = HeadlessApp(
                 controller=Stripe(args.pixels),
@@ -641,6 +667,7 @@ def main(argv: list[str] | None = None) -> None:
                 idle_enter_frames=args.idle_enter_frames,
                 idle_threshold_scale=args.idle_threshold_scale,
                 audio_debug_verbose=args.audio_debug_verbose,
+                audio_calibration=calibration,
                 animation_name=args.animation,
                 quiet=True,
             )
@@ -657,6 +684,7 @@ def main(argv: list[str] | None = None) -> None:
             mic_noise_floor=args.mic_noise_floor,
             idle_enter_frames=args.idle_enter_frames,
             idle_threshold_scale=args.idle_threshold_scale,
+            audio_calibration=calibration,
             animation_name=args.animation,
             quiet=args.quiet,
             encoder_backend=encoder_backend,
@@ -725,6 +753,27 @@ def _positive_int(value: str) -> int:
     if parsed < 1:
         raise argparse.ArgumentTypeError("must be >= 1")
     return parsed
+
+
+def _apply_calibration(args: argparse.Namespace, result: AudioCalibrationResult) -> None:
+    args.mic_target_level = result.recommended_target_level
+    args.mic_noise_floor = result.recommended_noise_floor
+    args.idle_threshold_scale = result.recommended_idle_threshold_scale
+
+
+def _calibration_text(result: AudioCalibrationResult) -> str:
+    return "\n".join(
+        [
+            "Audio calibration complete.",
+            f"  samples: {result.samples}",
+            f"  measured floor: {result.measured_floor:0.4f}",
+            f"  measured peak: {result.measured_peak:0.4f}",
+            "Recommended flags:",
+            f"  --mic-noise-floor {result.recommended_noise_floor:0.4f}",
+            f"  --mic-target-level {result.recommended_target_level:0.3f}",
+            f"  --idle-threshold-scale {result.recommended_idle_threshold_scale:0.2f}",
+        ]
+    )
 
 
 def _encoder_pins_from_args(args: argparse.Namespace, prefix: str) -> EncoderPins | None:

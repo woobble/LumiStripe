@@ -2,6 +2,7 @@ import pytest
 
 from lumistripe import (
     AnimationClass,
+    AudioCalibrationResult,
     AudioConfig,
     AudioFrame,
     AudioInputHealth,
@@ -97,6 +98,13 @@ def test_parser_accepts_audio_debug_verbose_flag() -> None:
     assert args.audio_debug_verbose is True
 
 
+def test_parser_accepts_audio_calibration_flags() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["--calibrate-audio", "2.5", "--auto-calibrate-audio", "3"])
+    assert args.calibrate_audio == pytest.approx(2.5)
+    assert args.auto_calibrate_audio == pytest.approx(3.0)
+
+
 def test_parser_accepts_mic_tuning_flags() -> None:
     parser = build_parser()
     args = parser.parse_args(
@@ -127,6 +135,10 @@ def test_parser_rejects_invalid_mic_tuning_values() -> None:
         parser.parse_args(["--idle-enter-frames", "0"])
     with pytest.raises(SystemExit):
         parser.parse_args(["--idle-threshold-scale", "0"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--calibrate-audio", "0"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--auto-calibrate-audio", "0"])
 
 
 def test_build_output_controller_returns_single_stripe(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -701,6 +713,36 @@ def test_main_lists_audio_devices_and_exits(monkeypatch: pytest.MonkeyPatch, cap
     assert "2: Default Input" in captured.out
 
 
+def test_main_calibrate_audio_prints_recommended_flags(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    result = AudioCalibrationResult(
+        duration=2.0,
+        samples=5,
+        measured_floor=0.01,
+        measured_peak=0.2,
+        recommended_noise_floor=0.02,
+        recommended_target_level=0.3,
+        recommended_idle_threshold_scale=1.4,
+    )
+    seen: dict[str, object] = {}
+
+    def fake_calibrate(*, duration: float, device_pattern: str | None = None):
+        seen["duration"] = duration
+        seen["device_pattern"] = device_pattern
+        return result
+
+    monkeypatch.setattr("lumistripe_cli.app.calibrate_audio_input", fake_calibrate)
+
+    main(["--calibrate-audio", "2", "--audio-device", "usb"])
+
+    captured = capsys.readouterr()
+    assert seen == {"duration": 2.0, "device_pattern": "usb"}
+    assert "--mic-noise-floor 0.0200" in captured.out
+    assert "--mic-target-level 0.300" in captured.out
+    assert "--idle-threshold-scale 1.40" in captured.out
+
+
 def _fake_audio_config(*args: object, **kwargs: object) -> object:
     class _FakeAudioInput:
         _device_name = "Fake Mic"
@@ -749,3 +791,34 @@ def test_main_audio_debug_skips_gpio_and_runs_with_in_memory_stripe(monkeypatch:
     assert called["mode"] is RuntimeMode.MIC
     assert called["quiet"] is True
     assert called["audio_debug_verbose"] is True
+
+
+def test_main_auto_calibrate_audio_applies_runtime_tuning(monkeypatch: pytest.MonkeyPatch) -> None:
+    result = AudioCalibrationResult(
+        duration=3.0,
+        samples=7,
+        measured_floor=0.01,
+        measured_peak=0.25,
+        recommended_noise_floor=0.025,
+        recommended_target_level=0.42,
+        recommended_idle_threshold_scale=1.8,
+    )
+    called: dict[str, object] = {}
+
+    monkeypatch.setattr("lumistripe_cli.app.calibrate_audio_input", lambda **kwargs: result)
+    monkeypatch.setattr("lumistripe_cli.app.AudioInput.with_config", _fake_audio_config)
+
+    def fake_run(self):
+        called["target"] = self.mic_target_level
+        called["noise"] = self.mic_noise_floor
+        called["scale"] = self.idle_threshold_scale
+        called["calibration"] = self.audio_calibration
+
+    monkeypatch.setattr("lumistripe_cli.app.HeadlessApp.run_audio_debug", fake_run)
+
+    main(["--audio-debug", "--auto-calibrate-audio", "3"])
+
+    assert called["target"] == pytest.approx(0.42)
+    assert called["noise"] == pytest.approx(0.025)
+    assert called["scale"] == pytest.approx(1.8)
+    assert called["calibration"] is result

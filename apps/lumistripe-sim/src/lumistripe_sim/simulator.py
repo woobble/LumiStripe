@@ -10,6 +10,7 @@ from lumistripe import (
     AnimationClass,
     AnimationPlayer,
     AudioConfig,
+    AudioCalibrationResult,
     AudioFrame,
     AudioInput,
     AudioNormalization,
@@ -19,6 +20,7 @@ from lumistripe import (
     MusicDrivenSelector,
     MusicSelectorConfig,
     Stripe,
+    calibrate_audio_input,
     list_input_device_details,
 )
 
@@ -78,6 +80,7 @@ class Controls:
     demo: Rect
     mic: Rect
     auto_sel: Rect
+    calibrate: Rect
 
 
 def pixel_pitch() -> int:
@@ -96,7 +99,8 @@ def layout_controls() -> Controls:
     demo = Rect(x=manual.x + manual.w + BUTTON_GAP, y=mode_y, w=MODE_BUTTON_W, h=BUTTON_H)
     mic = Rect(x=demo.x + demo.w + BUTTON_GAP, y=mode_y, w=MODE_BUTTON_W, h=BUTTON_H)
     auto_sel = Rect(x=mic.x + mic.w + BUTTON_GAP, y=mode_y, w=148, h=BUTTON_H)
-    return Controls(prev=prev, next=next_rect, manual=manual, demo=demo, mic=mic, auto_sel=auto_sel)
+    calibrate = Rect(x=auto_sel.x + auto_sel.w + BUTTON_GAP, y=mode_y, w=148, h=BUTTON_H)
+    return Controls(prev=prev, next=next_rect, manual=manual, demo=demo, mic=mic, auto_sel=auto_sel, calibrate=calibrate)
 
 
 def demo_frame(frame: int) -> AudioFrame:
@@ -146,6 +150,7 @@ class SimulatorApp:
     mic_noise_floor: float = field(default_factory=lambda: AudioSmoothing().noise_floor)
     idle_enter_frames: int = field(default_factory=lambda: MusicSelectorConfig().idle_enter_frames)
     idle_threshold_scale: float = DEFAULT_IDLE_THRESHOLD_SCALE
+    auto_calibrate_audio: float | None = None
     player: AnimationPlayer = field(init=False)
     stripe: Stripe = field(init=False)
     controls: Controls = field(init=False)
@@ -155,6 +160,7 @@ class SimulatorApp:
     audio_error: str | None = field(init=False, default=None)
     audio_frame: AudioFrame = field(init=False, default_factory=AudioFrame)
     music_features: MusicFeatures = field(init=False, default_factory=MusicFeatures)
+    audio_calibration: AudioCalibrationResult | None = field(init=False, default=None)
     demo_tick: int = field(init=False, default=0)
     selector: MusicDrivenSelector | None = field(init=False, default=None)
 
@@ -163,7 +169,17 @@ class SimulatorApp:
         self.stripe = Stripe(self.pixel_count)
         self.controls = layout_controls()
         self.running = True
+        calibration_error: str | None = None
+        if self.auto_calibrate_audio is not None:
+            try:
+                self._apply_calibration_result(
+                    calibrate_audio_input(duration=self.auto_calibrate_audio, device_pattern=self.audio_device)
+                )
+            except RuntimeError as exc:
+                calibration_error = str(exc)
         self.set_mode(self.mode)
+        if calibration_error is not None:
+            self.audio_error = calibration_error
 
     @property
     def animation_name(self) -> str:
@@ -194,6 +210,7 @@ class SimulatorApp:
             f"noise={self.mic_noise_floor:0.3f} "
             f"idle={self.idle_enter_frames}f "
             f"scale={self.idle_threshold_scale:0.2f}"
+            f"{' calibrated=' + str(self.audio_calibration.samples) + 'f' if self.audio_calibration else ''}"
         )
 
     def handle_key(self, key: str) -> None:
@@ -210,6 +227,8 @@ class SimulatorApp:
                 self.set_mode(SimulatorMode.MIC)
             case "s":
                 self._toggle_auto_select()
+            case "c":
+                self.calibrate_audio()
             case "escape":
                 self.running = False
 
@@ -230,6 +249,25 @@ class SimulatorApp:
             self.set_mode(SimulatorMode.MIC)
         elif self.controls.auto_sel.contains(x, y):
             self._toggle_auto_select()
+        elif self.controls.calibrate.contains(x, y):
+            self.calibrate_audio()
+
+    def calibrate_audio(self, duration: float = 3.0) -> AudioCalibrationResult | None:
+        try:
+            result = calibrate_audio_input(duration=duration, device_pattern=self.audio_device)
+        except RuntimeError as exc:
+            self.audio_error = str(exc)
+            return None
+        self._apply_calibration_result(result)
+        if self.mode is SimulatorMode.MIC:
+            self.set_mode(SimulatorMode.MIC)
+        return result
+
+    def _apply_calibration_result(self, result: AudioCalibrationResult) -> None:
+        self.audio_calibration = result
+        self.mic_noise_floor = result.recommended_noise_floor
+        self.mic_target_level = result.recommended_target_level
+        self.idle_threshold_scale = result.recommended_idle_threshold_scale
 
     def set_mode(self, mode: SimulatorMode) -> None:
         self._close_audio_input()
@@ -385,6 +423,15 @@ class SimulatorApp:
         )
         auto_sel_button.pack(side="left", padx=(BUTTON_GAP, 0))
 
+        calibrate_button = self._make_button(
+            tkinter,
+            mode_buttons_frame,
+            "CAL",
+            self.calibrate_audio,
+            button_font,
+        )
+        calibrate_button.pack(side="left", padx=(BUTTON_GAP, 0))
+
         animation_label = tkinter.Label(
             header,
             text="",
@@ -465,6 +512,7 @@ class SimulatorApp:
         root.bind("d", lambda _event: self.handle_key("d"))
         root.bind("a", lambda _event: self.handle_key("a"))
         root.bind("s", lambda _event: self.handle_key("s"))
+        root.bind("c", lambda _event: self.handle_key("c"))
         root.bind("<Button-1>", lambda event: self.handle_click(event.x, event.y))
         root.protocol("WM_DELETE_WINDOW", lambda: self.handle_key("escape"))
 
@@ -640,6 +688,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_IDLE_THRESHOLD_SCALE,
         help="Scale factor applied to mic idle activity thresholds",
     )
+    parser.add_argument(
+        "--auto-calibrate-audio",
+        type=_positive_float,
+        metavar="SECONDS",
+        help="Measure the selected audio input and apply recommended mic tuning before startup",
+    )
     return parser
 
 
@@ -658,6 +712,7 @@ def main(argv: list[str] | None = None) -> None:
         mic_noise_floor=args.mic_noise_floor,
         idle_enter_frames=args.idle_enter_frames,
         idle_threshold_scale=args.idle_threshold_scale,
+        auto_calibrate_audio=args.auto_calibrate_audio,
     ).run()
 
 

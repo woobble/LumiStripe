@@ -14,6 +14,7 @@ from lumistripe.audio import (
     features_from_frame,
     list_input_device_details,
     list_input_devices,
+    recommend_audio_calibration,
 )
 
 
@@ -210,6 +211,35 @@ def test_audio_defaults_match_retuned_baseline() -> None:
     config = AudioConfig()
     assert config.normalization.target_level == pytest.approx(0.36)
     assert config.smoothing.noise_floor == pytest.approx(0.015)
+
+
+def test_audio_calibration_recommends_from_measured_frames() -> None:
+    frames = [
+        AudioFrame(rms=0.004),
+        AudioFrame(rms=0.006),
+        AudioFrame(rms=0.05),
+        AudioFrame(rms=0.2),
+    ]
+    features = [
+        MusicFeatures(energy=0.004),
+        MusicFeatures(energy=0.006),
+        MusicFeatures(energy=0.05),
+        MusicFeatures(energy=0.2),
+    ]
+
+    result = recommend_audio_calibration(frames, features, duration=1.5)
+
+    assert result.samples == 4
+    assert result.duration == pytest.approx(1.5)
+    assert result.recommended_noise_floor > result.measured_floor
+    assert 0.24 <= result.recommended_target_level <= 0.62
+    assert result.audio_config().smoothing.noise_floor == pytest.approx(result.recommended_noise_floor)
+    assert result.audio_config().normalization.target_level == pytest.approx(result.recommended_target_level)
+
+
+def test_audio_calibration_requires_frames() -> None:
+    with pytest.raises(ValueError, match="at least one frame"):
+        recommend_audio_calibration([])
 
 
 def test_audio_state_music_threshold_prevents_gain_runaway() -> None:

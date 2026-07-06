@@ -2,6 +2,7 @@ import pytest
 
 from lumistripe import (
     AnimationClass,
+    AudioCalibrationResult,
     AudioConfig,
     AudioFrame,
     AudioNormalization,
@@ -35,6 +36,7 @@ def test_layout_controls_are_clickable() -> None:
     assert controls.manual.contains(48, 116)
     assert controls.demo.contains(216, 116)
     assert controls.mic.contains(384, 116)
+    assert controls.calibrate.contains(721, 116)
     assert not controls.next.contains(10, 10)
 
 
@@ -222,6 +224,72 @@ def test_mode_switches_do_not_change_current_animation(monkeypatch) -> None:
     assert app.player.current_index() == start_index
 
 
+def test_calibrate_audio_applies_recommended_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    result = AudioCalibrationResult(
+        duration=2.0,
+        samples=6,
+        measured_floor=0.01,
+        measured_peak=0.2,
+        recommended_noise_floor=0.03,
+        recommended_target_level=0.4,
+        recommended_idle_threshold_scale=1.7,
+    )
+
+    monkeypatch.setattr("lumistripe_sim.simulator.calibrate_audio_input", lambda **kwargs: result)
+
+    app = SimulatorApp(pixel_count=12)
+    assert app.calibrate_audio(2.0) is result
+    assert app.audio_calibration is result
+    assert app.mic_noise_floor == pytest.approx(0.03)
+    assert app.mic_target_level == pytest.approx(0.4)
+    assert app.idle_threshold_scale == pytest.approx(1.7)
+    assert "calibrated=6f" in app.mic_tuning_label
+
+
+def test_startup_auto_calibration_applies_before_mic_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    result = AudioCalibrationResult(
+        duration=2.0,
+        samples=6,
+        measured_floor=0.01,
+        measured_peak=0.2,
+        recommended_noise_floor=0.03,
+        recommended_target_level=0.4,
+        recommended_idle_threshold_scale=1.7,
+    )
+
+    class FakeAudioInput:
+        seen: AudioConfig | None = None
+
+        def read(self) -> AudioFrame:
+            return AudioFrame()
+
+        def read_features(self) -> MusicFeatures:
+            return MusicFeatures()
+
+        def device_name(self) -> str:
+            return "USB Mic"
+
+        def close(self) -> None:
+            return None
+
+        @classmethod
+        def with_config(cls, config):
+            cls.seen = config
+            return cls()
+
+    monkeypatch.setattr("lumistripe_sim.simulator.calibrate_audio_input", lambda **kwargs: result)
+    monkeypatch.setattr("lumistripe_sim.simulator.AudioInput", FakeAudioInput)
+
+    app = SimulatorApp(pixel_count=12, mode=SimulatorMode.MIC, auto_calibrate_audio=2.0)
+
+    assert app.audio_calibration is result
+    assert app.audio_status == "Input: USB Mic"
+    assert FakeAudioInput.seen == AudioConfig(
+        smoothing=AudioSmoothing(noise_floor=0.03),
+        normalization=AudioNormalization(target_level=0.4),
+    )
+
+
 def test_step_returns_minimum_frame_time() -> None:
     app = SimulatorApp(pixel_count=12)
     delay = app.step()
@@ -254,6 +322,12 @@ def test_parser_accepts_mic_tuning_flags() -> None:
     assert args.idle_threshold_scale == pytest.approx(1.5)
 
 
+def test_parser_accepts_auto_calibration_flag() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["--auto-calibrate-audio", "2.5"])
+    assert args.auto_calibrate_audio == pytest.approx(2.5)
+
+
 def test_parser_rejects_invalid_mic_tuning_values() -> None:
     parser = build_parser()
     with pytest.raises(SystemExit):
@@ -264,6 +338,8 @@ def test_parser_rejects_invalid_mic_tuning_values() -> None:
         parser.parse_args(["--idle-enter-frames", "0"])
     with pytest.raises(SystemExit):
         parser.parse_args(["--idle-threshold-scale", "0"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--auto-calibrate-audio", "0"])
 
 
 def test_mic_mode_uses_device_specific_audio_config(monkeypatch) -> None:

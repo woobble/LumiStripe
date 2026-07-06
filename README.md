@@ -93,7 +93,24 @@ Keyboard shortcuts:
 - `d` — DEMO mode (synthetic beat)
 - `a` — MIC mode (live microphone)
 - `s` — Toggle auto-select
+- `c` — Calibrate microphone levels
 - `Escape` — Quit
+
+## Audio Calibration
+
+Measure the selected microphone and print recommended tuning flags:
+
+```bash
+lumistripe --calibrate-audio 3 --audio-device usb
+```
+
+Apply calibration automatically before starting MIC mode:
+
+```bash
+lumistripe --mode mic --auto-calibrate-audio 3
+lumistripe --audio-debug --auto-calibrate-audio 3
+lumistripe-sim --mode mic --auto-calibrate-audio 3
+```
 
 ## Development
 

@@ -59,6 +59,7 @@ from .animation import (
     Wave,
 )
 from .audio import (
+    AudioCalibrationResult,
     AudioConfig,
     AudioFrame,
     AudioInput,
@@ -70,9 +71,11 @@ from .audio import (
     AudioSmoothing,
     AudioState,
     MusicFeatures,
+    calibrate_audio_input,
     features_from_frame,
     list_input_device_details,
     list_input_devices,
+    recommend_audio_calibration,
 )
 from .buffers import PixelBuffer, apply_brightness_rgb, clear, fade, fill_rgb, new_pixel_buffer
 from .color import Color, ColorBatch, Hex, Hsl, Hsla, Rgb, Rgba
@@ -93,6 +96,7 @@ __all__ = [
     "AnimationPlayer",
     "CLASS_MAP",
     "AudioConfig",
+    "AudioCalibrationResult",
     "AudioFrame",
     "AudioInput",
     "AudioInputDevice",
@@ -146,6 +150,7 @@ __all__ = [
     "MirrorFlash",
     "MusicDrivenSelector",
     "MusicFeatures",
+    "calibrate_audio_input",
     "features_from_frame",
     "MusicSelectorConfig",
     "MultiController",
@@ -183,4 +188,5 @@ __all__ = [
     "list_input_device_details",
     "list_input_devices",
     "new_pixel_buffer",
+    "recommend_audio_calibration",
 ]
