@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import timedelta
 import importlib
-from typing import Protocol
+from typing import Protocol, SupportsInt, cast
 
 
 BUTTON_DEBOUNCE_NS = 150_000_000
@@ -152,7 +152,7 @@ class GPIODEncoderBackend:
 
     def _value_to_bit(self, value: object) -> int:
         raw = getattr(value, "value", value)
-        return 1 if int(raw) else 0
+        return 1 if int(cast(SupportsInt, raw)) else 0
 
     def _edge_enum(self):
         line = getattr(self._gpiod, "line", None)

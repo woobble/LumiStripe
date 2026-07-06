@@ -297,7 +297,6 @@ def test_headless_app_status_block_includes_mic_tuning_in_mic_mode() -> None:
     app = HeadlessApp(
         controller=Stripe(12),
         pixel_count=12,
-        mode=RuntimeMode.MIC,
         mic_target_level=0.5,
         mic_noise_floor=0.01,
         idle_enter_frames=42,

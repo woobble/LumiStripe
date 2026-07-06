@@ -4,7 +4,7 @@ import importlib
 import threading
 import time
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -13,6 +13,7 @@ from lumistripe import _audio
 
 FFT_SIZE = 1024
 NUM_BANDS = 8
+BandTuple = tuple[float, float, float, float, float, float, float, float]
 WINDOW_SCALE = FFT_SIZE / 2.0
 DEFAULT_SAMPLE_RATE = 44_100.0
 BAND_LIMITS_HZ: tuple[tuple[float, float], ...] = (
@@ -323,7 +324,7 @@ class AudioState:
             self._last_sequence = sequence
         self._frame = AudioFrame(
             rms=float(rms),
-            bands=tuple(float(b) for b in bands),
+            bands=cast(BandTuple, tuple(float(b) for b in bands)),
             beat=bool(beat),
             beat_strength=float(beat_strength),
             sequence=sequence,
@@ -341,7 +342,7 @@ class AudioState:
             dynamic_range=float(dynamic_range),
             beat=bool(feat_beat),
             beat_strength=float(feat_beat_strength),
-            bands=tuple(float(b) for b in feat_bands),
+            bands=cast(BandTuple, tuple(float(b) for b in feat_bands)),
         )
 
 

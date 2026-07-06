@@ -1,7 +1,7 @@
 [project]
 name = "lumistripe-core"
 version = "0.1.0"
-description = "Add your description here"
+description = "LED stripe animation engine with audio-reactive effects and GPIO output"
 readme = "README.md"
 license = "MIT"
 authors = [

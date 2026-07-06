@@ -105,6 +105,6 @@ uv sync
 uv run pytest -q
 
 # Lint and type-check
-uv run ruff check packages/lumistripe-core/src/lumistripe/ apps/lumistripe-app/src/lumistripe_app/
-uv run mypy packages/lumistripe-core/src/lumistripe/ apps/lumistripe-app/src/lumistripe_app/
+uv run ruff check .
+uv run mypy packages/lumistripe-core/src/lumistripe apps/lumistripe-cli/src/lumistripe_cli apps/lumistripe-sim/src/lumistripe_sim
 ```

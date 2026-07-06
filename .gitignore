@@ -218,6 +218,9 @@ poetry.toml
 # ruff
 .ruff_cache/
 
+# Graphify local analysis output
+graphify-out/
+
 # LSP config files
 pyrightconfig.json
 
