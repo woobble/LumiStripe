@@ -75,6 +75,16 @@ class MusicFeatures:
         0.0,
         0.0,
     )
+    bass_energy: float = 0.0
+    mid_energy: float = 0.0
+    treble_energy: float = 0.0
+    spectral_centroid: float = 0.0
+    spectral_flux: float = 0.0
+    beat_confidence: float = 0.0
+    rolling_loudness: float = 0.0
+    silence: bool = False
+    drop_detected: bool = False
+    section_change: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,23 +167,32 @@ class AudioInputHealth:
     processor: AudioProcessorStats = field(default_factory=AudioProcessorStats)
 
 
+class _AudioSnapshotSilence:
+    def __get__(self, obj: AudioSnapshot | None, owner: type[AudioSnapshot]):
+        if obj is not None:
+            return obj.features.silence
+
+        def create(*, frame: AudioFrame | None = None, health: AudioInputHealth | None = None) -> AudioSnapshot:
+            if frame is None:
+                return owner(health=health)
+            silent = replace(
+                AudioFrame(),
+                sequence=frame.sequence,
+                timestamp=frame.timestamp,
+                fresh=False,
+            )
+            return owner(frame=silent, health=health)
+
+        return create
+
+
 @dataclass(frozen=True, slots=True)
 class AudioSnapshot:
     frame: AudioFrame = field(default_factory=AudioFrame)
     features: MusicFeatures = field(default_factory=MusicFeatures)
     health: AudioInputHealth | None = None
 
-    @classmethod
-    def silence(cls, *, frame: AudioFrame | None = None, health: AudioInputHealth | None = None) -> AudioSnapshot:
-        if frame is None:
-            return cls(health=health)
-        silent = replace(
-            AudioFrame(),
-            sequence=frame.sequence,
-            timestamp=frame.timestamp,
-            fresh=False,
-        )
-        return cls(frame=silent, health=health)
+    silence = _AudioSnapshotSilence()
 
     @classmethod
     def from_parts(
@@ -198,15 +217,15 @@ class AudioSnapshot:
 
     @property
     def low(self) -> float:
-        return _clamp01(self.features.bass)
+        return _clamp01(self.features.bass_energy or self.features.bass)
 
     @property
     def mid(self) -> float:
-        return _clamp01(_low_mid_high(self.features.bands)[1])
+        return _clamp01(self.features.mid_energy or _low_mid_high(self.features.bands)[1])
 
     @property
     def high(self) -> float:
-        return _clamp01(_low_mid_high(self.features.bands)[2])
+        return _clamp01(self.features.treble_energy or _low_mid_high(self.features.bands)[2])
 
     @property
     def drive(self) -> float:
@@ -235,11 +254,48 @@ class AudioSnapshot:
     def activity(self) -> float:
         return _clamp01(self.drive * 0.5 + self.accent * 0.24 + self.brightness * 0.16 + self.high * 0.1)
 
+    @property
+    def bass_energy(self) -> float:
+        return self.low
+
+    @property
+    def mid_energy(self) -> float:
+        return self.mid
+
+    @property
+    def treble_energy(self) -> float:
+        return self.high
+
+    @property
+    def spectral_centroid(self) -> float:
+        return _clamp01(self.features.spectral_centroid)
+
+    @property
+    def spectral_flux(self) -> float:
+        return _clamp01(self.features.spectral_flux)
+
+    @property
+    def beat_confidence(self) -> float:
+        return _clamp01(self.features.beat_confidence)
+
+    @property
+    def rolling_loudness(self) -> float:
+        return _clamp01(self.features.rolling_loudness)
+
+    @property
+    def drop_detected(self) -> bool:
+        return self.features.drop_detected
+
+    @property
+    def section_change(self) -> bool:
+        return self.features.section_change
+
 
 def features_from_frame(frame: AudioFrame) -> MusicFeatures:
-    low, _, high = _low_mid_high(frame.bands)
+    low, mid, high = _low_mid_high(frame.bands)
     brightness = _clamp01(high * 0.55 + frame.rms * 0.25 + (1.0 - low) * high * 0.2)
     onset = _clamp01(frame.beat_strength if frame.beat else frame.rms * 0.18)
+    silence = frame.rms <= 0.003 and max(frame.bands, default=0.0) <= 0.003
     return MusicFeatures(
         energy=frame.rms,
         bass=low,
@@ -249,6 +305,16 @@ def features_from_frame(frame: AudioFrame) -> MusicFeatures:
         beat=frame.beat,
         beat_strength=frame.beat_strength,
         bands=frame.bands,
+        bass_energy=low,
+        mid_energy=mid,
+        treble_energy=high,
+        spectral_centroid=brightness,
+        spectral_flux=onset,
+        beat_confidence=frame.beat_strength,
+        rolling_loudness=frame.rms,
+        silence=silence,
+        drop_detected=frame.beat and low > 0.75 and onset > 0.55,
+        section_change=False,
     )
 
 
@@ -423,8 +489,27 @@ class AudioState:
             timestamp=timestamp,
             fresh=fresh,
         )
-        (bpm, energy, bass, brightness, onset_strength,
-         dynamic_range, feat_beat, feat_beat_strength, feat_bands) = self._processor.features()
+        (
+            bpm,
+            energy,
+            bass,
+            brightness,
+            onset_strength,
+            dynamic_range,
+            feat_beat,
+            feat_beat_strength,
+            feat_bands,
+            bass_energy,
+            mid_energy,
+            treble_energy,
+            spectral_centroid,
+            spectral_flux,
+            beat_confidence,
+            rolling_loudness,
+            silence,
+            drop_detected,
+            section_change,
+        ) = self._processor.features()
         self._features = MusicFeatures(
             bpm=float(bpm),
             energy=float(energy),
@@ -435,6 +520,16 @@ class AudioState:
             beat=bool(feat_beat),
             beat_strength=float(feat_beat_strength),
             bands=cast(BandTuple, tuple(float(b) for b in feat_bands)),
+            bass_energy=float(bass_energy),
+            mid_energy=float(mid_energy),
+            treble_energy=float(treble_energy),
+            spectral_centroid=float(spectral_centroid),
+            spectral_flux=float(spectral_flux),
+            beat_confidence=float(beat_confidence),
+            rolling_loudness=float(rolling_loudness),
+            silence=bool(silence),
+            drop_detected=bool(drop_detected),
+            section_change=bool(section_change),
         )
 
 

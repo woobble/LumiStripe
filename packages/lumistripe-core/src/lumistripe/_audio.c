@@ -75,6 +75,24 @@ typedef struct {
     int features_beat;
     float features_beat_strength;
     float features_bands[NUM_BANDS];
+    float features_bass_energy;
+    float features_mid_energy;
+    float features_treble_energy;
+    float features_spectral_centroid;
+    float features_spectral_flux;
+    float features_beat_confidence;
+    float features_rolling_loudness;
+    int features_silence;
+    int features_drop_detected;
+    int features_section_change;
+    int silence_frames;
+    int drop_cooldown_frames;
+    int section_cooldown_frames;
+    float prev_drop_bass;
+    float section_energy;
+    float section_mid;
+    float section_treble;
+    float section_brightness;
 } AudioProcessorState;
 
 typedef struct {
@@ -94,6 +112,12 @@ static float _smooth(float current, float target, float attack, float release) {
     if (factor < 0.0f) factor = 0.0f;
     if (factor > 1.0f) factor = 1.0f;
     return current + (target - current) * factor;
+}
+
+static float _clamp01f(float value) {
+    if (value < 0.0f) return 0.0f;
+    if (value > 1.0f) return 1.0f;
+    return value;
 }
 
 static float _apply_noise_floor(float value, float floor) {
@@ -254,6 +278,60 @@ static void _compute_features(AudioProcessor *self, float rms, float *bands,
     }
 
     float bass = (bands[0] + bands[1]) * 0.5f;
+    float mid = (bands[2] + bands[3] + bands[4]) / 3.0f;
+    float treble = (bands[5] + bands[6] + bands[7]) / 3.0f;
+    float bass_delta = bass - s->prev_drop_bass;
+
+    s->features_rolling_loudness = _smooth(s->features_rolling_loudness, rms, 0.08f, 0.025f);
+
+    float silence_threshold = fmaxf(s->silence_floor * 3.0f, fmaxf(s->noise_floor * 0.8f, 0.012f));
+    if (s->features_rolling_loudness <= silence_threshold && rms <= silence_threshold * 1.4f) {
+        s->silence_frames++;
+    } else {
+        s->silence_frames = 0;
+    }
+    s->features_silence = s->silence_frames >= 8;
+
+    if (s->drop_cooldown_frames > 0) s->drop_cooldown_frames--;
+    s->features_drop_detected = 0;
+    if (
+        s->drop_cooldown_frames == 0
+        && bass > 0.45f
+        && bass_delta > 0.16f
+        && s->smooth_onset > 0.12f
+        && (beat || beat_strength > 0.08f || s->features_rolling_loudness < rms * 0.85f)
+    ) {
+        s->features_drop_detected = 1;
+        s->drop_cooldown_frames = 24;
+    }
+    s->prev_drop_bass = _smooth(s->prev_drop_bass, bass, 0.18f, 0.06f);
+
+    if (s->fft_call_count == 1) {
+        s->section_energy = rms;
+        s->section_mid = mid;
+        s->section_treble = treble;
+        s->section_brightness = s->brightness;
+    }
+    if (s->section_cooldown_frames > 0) s->section_cooldown_frames--;
+    float section_delta =
+        fabsf(rms - s->section_energy) * 0.9f
+        + fabsf(mid - s->section_mid) * 0.45f
+        + fabsf(treble - s->section_treble) * 0.45f
+        + fabsf(s->brightness - s->section_brightness) * 0.35f;
+    s->features_section_change = 0;
+    if (s->fft_call_count > 20 && s->section_cooldown_frames == 0 && section_delta > 0.42f && s->smooth_onset > 0.08f) {
+        s->features_section_change = 1;
+        s->section_cooldown_frames = 60;
+        s->section_energy = rms;
+        s->section_mid = mid;
+        s->section_treble = treble;
+        s->section_brightness = s->brightness;
+    } else {
+        s->section_energy = _smooth(s->section_energy, rms, 0.018f, 0.018f);
+        s->section_mid = _smooth(s->section_mid, mid, 0.018f, 0.018f);
+        s->section_treble = _smooth(s->section_treble, treble, 0.018f, 0.018f);
+        s->section_brightness = _smooth(s->section_brightness, s->brightness, 0.018f, 0.018f);
+    }
 
     s->features_bpm = s->bpm;
     s->features_energy = rms;
@@ -264,6 +342,12 @@ static void _compute_features(AudioProcessor *self, float rms, float *bands,
     s->features_beat = beat;
     s->features_beat_strength = beat_strength;
     memcpy(s->features_bands, bands, sizeof(float) * NUM_BANDS);
+    s->features_bass_energy = bass;
+    s->features_mid_energy = mid;
+    s->features_treble_energy = treble;
+    s->features_spectral_centroid = _clamp01f(centroid_norm);
+    s->features_spectral_flux = _clamp01f(spectral_flux);
+    s->features_beat_confidence = _clamp01f(fmaxf(beat_strength, s->smooth_onset * 0.55f));
 }
 
 static void _process_fft(AudioProcessor *self) {
@@ -579,7 +663,7 @@ static PyObject* AudioProcessor_features(AudioProcessor *self, PyObject *Py_UNUS
     PyObject *bands_tuple = _make_bands_tuple(self->s.features_bands);
     if (!bands_tuple) return NULL;
 
-    PyObject *items[9];
+    PyObject *items[19];
     items[0] = PyFloat_FromDouble((double)self->s.features_bpm);
     items[1] = PyFloat_FromDouble((double)self->s.features_energy);
     items[2] = PyFloat_FromDouble((double)self->s.features_bass);
@@ -589,22 +673,32 @@ static PyObject* AudioProcessor_features(AudioProcessor *self, PyObject *Py_UNUS
     items[6] = PyBool_FromLong((long)self->s.features_beat);
     items[7] = PyFloat_FromDouble((double)self->s.features_beat_strength);
     items[8] = bands_tuple;  // already created, no INCREF needed
+    items[9] = PyFloat_FromDouble((double)self->s.features_bass_energy);
+    items[10] = PyFloat_FromDouble((double)self->s.features_mid_energy);
+    items[11] = PyFloat_FromDouble((double)self->s.features_treble_energy);
+    items[12] = PyFloat_FromDouble((double)self->s.features_spectral_centroid);
+    items[13] = PyFloat_FromDouble((double)self->s.features_spectral_flux);
+    items[14] = PyFloat_FromDouble((double)self->s.features_beat_confidence);
+    items[15] = PyFloat_FromDouble((double)self->s.features_rolling_loudness);
+    items[16] = PyBool_FromLong((long)self->s.features_silence);
+    items[17] = PyBool_FromLong((long)self->s.features_drop_detected);
+    items[18] = PyBool_FromLong((long)self->s.features_section_change);
 
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 19; i++) {
         if (!items[i]) {
-            for (int j = 0; j < i; j++) Py_DECREF(items[j]);
-            Py_DECREF(bands_tuple);
+            for (int j = 0; j < 19; j++) {
+                if (items[j]) Py_DECREF(items[j]);
+            }
             return NULL;
         }
     }
 
-    PyObject *result = PyTuple_New(9);
+    PyObject *result = PyTuple_New(19);
     if (!result) {
-        for (int i = 0; i < 8; i++) Py_DECREF(items[i]);
-        Py_DECREF(bands_tuple);
+        for (int i = 0; i < 19; i++) Py_DECREF(items[i]);
         return NULL;
     }
-    for (int i = 0; i < 9; i++) PyTuple_SET_ITEM(result, i, items[i]);
+    for (int i = 0; i < 19; i++) PyTuple_SET_ITEM(result, i, items[i]);
     return result;
 }
 

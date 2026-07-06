@@ -33,12 +33,16 @@ def _drop_like_chunk(frame: int, sample_rate: float = 44_100.0) -> np.ndarray:
 
 def test_audio_state_silence_produces_zeroish_frame() -> None:
     state = AudioState()
-    state.feed_samples(np.zeros(1024, dtype=np.float32))
+    for _ in range(8):
+        state.feed_samples(np.zeros(1024, dtype=np.float32))
     frame = state.frame()
+    features = state.music_features()
 
     assert frame.rms == pytest.approx(0.0, abs=1e-6)
     assert frame.beat is False
     assert len(frame.bands) == 8
+    assert features.silence is True
+    assert features.rolling_loudness == pytest.approx(0.0, abs=1e-6)
 
 
 def test_audio_state_low_frequency_pulse_drives_first_bands() -> None:
@@ -284,6 +288,66 @@ def test_audio_state_drop_like_input_has_higher_brightness_than_low_tone() -> No
     assert drop_state.music_features().brightness > 0.12
 
 
+def test_audio_state_exposes_richer_band_and_spectral_features() -> None:
+    low_state = AudioState()
+    bright_state = AudioState()
+    sample_rate = 44_100.0
+    low_tone = (np.sin(2.0 * np.pi * 55.0 * np.arange(1024, dtype=np.float32) / sample_rate) * 0.2).astype(np.float32)
+    rng = np.random.default_rng(0)
+    low_flux: list[float] = []
+    bright_flux: list[float] = []
+
+    for frame in range(12):
+        low_state.feed_samples(low_tone)
+        bright_noise = rng.normal(0.0, 0.12, 1024).astype(np.float32)
+        bright_state.feed_samples(bright_noise)
+        low_flux.append(low_state.music_features().spectral_flux)
+        bright_flux.append(bright_state.music_features().spectral_flux)
+
+    low = low_state.music_features()
+    bright = bright_state.music_features()
+
+    assert bright.bass_energy >= 0.0
+    assert bright.mid_energy >= 0.0
+    assert bright.treble_energy >= 0.0
+    assert bright.spectral_centroid > low.spectral_centroid
+    assert max(bright_flux[1:]) > max(low_flux[1:])
+
+
+def test_audio_state_can_detect_bass_drop_event() -> None:
+    state = AudioState()
+    sample_rate = 44_100.0
+    quiet = np.zeros(1024, dtype=np.float32)
+    drop = _drop_like_chunk(0, sample_rate) * 2.0
+
+    for _ in range(8):
+        state.feed_samples(quiet)
+
+    seen_drop = False
+    for _ in range(12):
+        state.feed_samples(drop)
+        seen_drop = seen_drop or state.music_features().drop_detected
+
+    assert seen_drop is True
+
+
+def test_audio_state_steady_tone_does_not_trigger_semantic_events() -> None:
+    state = AudioState()
+    sample_rate = 44_100.0
+    tone = (np.sin(2.0 * np.pi * 220.0 * np.arange(1024, dtype=np.float32) / sample_rate) * 0.18).astype(np.float32)
+
+    seen_drop = False
+    seen_section = False
+    for _ in range(30):
+        state.feed_samples(tone)
+        features = state.music_features()
+        seen_drop = seen_drop or features.drop_detected
+        seen_section = seen_section or features.section_change
+
+    assert seen_drop is False
+    assert seen_section is False
+
+
 def test_audio_state_raw_config_preserves_dc_bias() -> None:
     state = AudioState(AudioConfig.raw())
     state.feed_samples(np.full(1024, 0.6, dtype=np.float32))
@@ -352,6 +416,13 @@ def test_features_from_frame_derives_music_features() -> None:
     assert features.beat_strength == pytest.approx(0.75)
     assert features.onset_strength == pytest.approx(0.75)
     assert features.brightness > 0.0
+    assert features.bass_energy == pytest.approx(0.7)
+    assert features.mid_energy == pytest.approx(0.4)
+    assert features.treble_energy == pytest.approx(0.25)
+    assert features.spectral_centroid > 0.0
+    assert features.spectral_flux == pytest.approx(0.75)
+    assert features.beat_confidence == pytest.approx(0.75)
+    assert features.rolling_loudness == pytest.approx(0.5)
 
 
 def test_audio_snapshot_silence_defaults_to_safe_zero_values() -> None:
@@ -367,6 +438,9 @@ def test_audio_snapshot_silence_defaults_to_safe_zero_values() -> None:
     assert snapshot.drive == 0.0
     assert snapshot.accent == 0.0
     assert snapshot.activity == 0.0
+    assert snapshot.silence is False
+    assert snapshot.drop_detected is False
+    assert snapshot.section_change is False
 
 
 def test_audio_snapshot_silence_preserves_frame_metadata_only() -> None:
@@ -439,6 +513,35 @@ def test_audio_snapshot_from_parts_uses_explicit_features() -> None:
     assert snapshot.mid == pytest.approx(0.2)
     assert snapshot.high == pytest.approx(0.4)
     assert snapshot.bpm == pytest.approx(128.0)
+
+
+def test_audio_snapshot_exposes_semantic_feature_properties() -> None:
+    frame = AudioFrame(fresh=True)
+    features = MusicFeatures(
+        bass_energy=0.8,
+        mid_energy=0.4,
+        treble_energy=0.2,
+        spectral_centroid=0.3,
+        spectral_flux=0.7,
+        beat_confidence=0.9,
+        rolling_loudness=0.5,
+        silence=True,
+        drop_detected=True,
+        section_change=True,
+    )
+
+    snapshot = AudioSnapshot.from_parts(frame, features)
+
+    assert snapshot.bass_energy == pytest.approx(0.8)
+    assert snapshot.mid_energy == pytest.approx(0.4)
+    assert snapshot.treble_energy == pytest.approx(0.2)
+    assert snapshot.spectral_centroid == pytest.approx(0.3)
+    assert snapshot.spectral_flux == pytest.approx(0.7)
+    assert snapshot.beat_confidence == pytest.approx(0.9)
+    assert snapshot.rolling_loudness == pytest.approx(0.5)
+    assert snapshot.silence is True
+    assert snapshot.drop_detected is True
+    assert snapshot.section_change is True
 
 
 class FakeInputStream:

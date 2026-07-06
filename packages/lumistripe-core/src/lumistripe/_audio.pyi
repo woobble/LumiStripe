@@ -20,6 +20,16 @@ class AudioProcessor:
         bool,
         float,
         tuple[float, float, float, float, float, float, float, float],
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        bool,
+        bool,
+        bool,
     ]: ...
     def state_copy(self) -> AudioProcessor: ...
     def reset(self) -> None: ...

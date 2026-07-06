@@ -296,6 +296,13 @@ def test_headless_app_formats_status_like_simulator() -> None:
         beat=True,
         beat_strength=0.9,
         bands=(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8),
+        bass_energy=0.15,
+        mid_energy=0.40,
+        treble_energy=0.70,
+        spectral_centroid=0.62,
+        spectral_flux=0.31,
+        rolling_loudness=0.44,
+        drop_detected=True,
     )
     assert "PULSE" in app.current_animation_label
     assert app.mode_label == "MANUAL"
@@ -402,6 +409,13 @@ def test_headless_app_debug_header_and_line_include_metrics() -> None:
         beat=True,
         beat_strength=0.9,
         bands=(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8),
+        bass_energy=0.15,
+        mid_energy=0.40,
+        treble_energy=0.70,
+        spectral_centroid=0.62,
+        spectral_flux=0.31,
+        rolling_loudness=0.44,
+        drop_detected=True,
     )
     app.selector = MusicDrivenSelector(current_class=AnimationClass.GROOVY)
     assert "AUDIO-DEBUG SOURCE=Input: Fake Mic" in app.debug_header()
@@ -412,6 +426,15 @@ def test_headless_app_debug_header_and_line_include_metrics() -> None:
     assert "IDLE=NO" in line
     assert "RMS=0.500" in line
     assert "BPM=128" in line
+    assert "BASS=0.15" in line
+    assert "MID=0.40" in line
+    assert "TREBLE=0.70" in line
+    assert "CENTROID=0.62" in line
+    assert "FLUX=0.31" in line
+    assert "LOUD=0.44" in line
+    assert "SILENCE=NO" in line
+    assert "DROP=YES" in line
+    assert "SECTION=NO" in line
     assert "BANDS=0.10,0.20,0.30,0.40,0.50,0.60,0.70,0.80" in line
     assert "TOP=" in line
 
@@ -462,6 +485,7 @@ def test_headless_app_debug_log_line_includes_audio_health() -> None:
             fresh=True,
         )
     )
+    app.music_features = app.audio_snapshot.features
 
     line = app.debug_log_line(1.25)
 
@@ -471,9 +495,9 @@ def test_headless_app_debug_log_line_includes_audio_health() -> None:
     assert "FFT=9" in line
     assert "GAIN=1.70" in line
     assert "STATUS=1" in line
-    assert "LOW=0.45" in line
+    assert "BASS=0.45" in line
     assert "MID=0.30" in line
-    assert "HIGH=0.20" in line
+    assert "TREBLE=0.20" in line
     assert "DRIVE=" in line
     assert "ACCENT=" in line
     assert "ACTIVITY=" in line

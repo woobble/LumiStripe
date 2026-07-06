@@ -102,10 +102,18 @@ def test_analysis_text_formats_audio_values() -> None:
         beat=True,
         beat_strength=0.9,
     )
+    app.music_features = MusicFeatures(
+        rolling_loudness=0.44,
+        spectral_flux=0.31,
+        drop_detected=True,
+    )
     text = app.analysis_text()
     assert "RMS: 0.500" in text
     assert "BEAT: YES" in text
     assert "BPM" in text
+    assert "LOUD: 0.44" in text
+    assert "FLUX: 0.31" in text
+    assert "DROP: YES" in text
 
 
 def test_demo_frame_has_energy() -> None:

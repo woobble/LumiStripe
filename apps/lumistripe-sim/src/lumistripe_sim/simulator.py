@@ -572,10 +572,14 @@ class SimulatorApp:
         frame = self.audio_frame
         feat = self.music_features
         beat = "YES" if frame.beat else "NO"
+        silence = "YES" if feat.silence else "NO"
+        drop = "YES" if feat.drop_detected else "NO"
+        section = "YES" if feat.section_change else "NO"
         bands = " ".join(f"{value:0.2f}" for value in frame.bands)
         return (
             f"RMS: {frame.rms:0.3f}    BEAT: {beat}    BPM: {feat.bpm:3.0f}\n"
             f"BRIGHT: {feat.brightness:0.2f}    ONSET: {feat.onset_strength:0.3f}    DYN: {feat.dynamic_range:0.3f}\n"
+            f"LOUD: {feat.rolling_loudness:0.2f}    FLUX: {feat.spectral_flux:0.2f}    SILENCE: {silence}    DROP: {drop}    SECTION: {section}\n"
             f"BANDS: {bands}"
         )
 
