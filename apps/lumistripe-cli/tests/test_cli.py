@@ -1,7 +1,12 @@
+import json
+from pathlib import Path
+
 import pytest
 
 from lumistripe import (
     AnimationClass,
+    AutoSelectorConfig,
+    AudioAnalysis,
     AudioCalibrationResult,
     AudioConfig,
     AudioFrame,
@@ -17,9 +22,11 @@ from lumistripe import (
     Stripe,
 )
 from lumistripe_cli.app import (
+    AudioDebugRecorder,
     MIN_FRAME_SECONDS,
     HeadlessApp,
     RuntimeMode,
+    analyze_audio_debug,
     build_runtime_encoder_backend,
     build_output_controller,
     build_parser,
@@ -101,6 +108,49 @@ def test_parser_accepts_audio_debug_verbose_flag() -> None:
     assert args.audio_debug_verbose is True
 
 
+def test_parser_accepts_audio_debug_recording_flags() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "--audio-debug",
+            "--audio-debug-record",
+            "captures/song.jsonl",
+            "--audio-debug-duration",
+            "60",
+            "--audio-debug-label",
+            "test song",
+            "--analyze-audio-debug",
+            "captures/song.jsonl",
+        ]
+    )
+    assert args.audio_debug_record == Path("captures/song.jsonl")
+    assert args.audio_debug_duration == pytest.approx(60.0)
+    assert args.audio_debug_label == "test song"
+    assert args.analyze_audio_debug == [Path("captures/song.jsonl")]
+
+
+def test_parser_accepts_dj_mode_and_selector_flags() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "--mode",
+            "dj",
+            "--debug-selector",
+            "--dj-min-duration",
+            "3",
+            "--dj-max-duration",
+            "30",
+            "--dj-seed",
+            "7",
+        ]
+    )
+    assert args.mode is RuntimeMode.DJ
+    assert args.debug_selector is True
+    assert args.dj_min_duration == pytest.approx(3.0)
+    assert args.dj_max_duration == pytest.approx(30.0)
+    assert args.dj_seed == 7
+
+
 def test_parser_accepts_audio_calibration_flags() -> None:
     parser = build_parser()
     args = parser.parse_args(["--calibrate-audio", "2.5", "--auto-calibrate-audio", "3"])
@@ -116,6 +166,10 @@ def test_parser_accepts_mic_tuning_flags() -> None:
             "0.5",
             "--mic-noise-floor",
             "0.01",
+            "--mic-profile",
+            "pcm2902",
+            "--write-mic-profile",
+            "profile.json",
             "--idle-enter-frames",
             "42",
             "--idle-threshold-scale",
@@ -124,6 +178,8 @@ def test_parser_accepts_mic_tuning_flags() -> None:
     )
     assert args.mic_target_level == pytest.approx(0.5)
     assert args.mic_noise_floor == pytest.approx(0.01)
+    assert args.mic_profile == "pcm2902"
+    assert args.write_mic_profile == Path("profile.json")
     assert args.idle_enter_frames == 42
     assert args.idle_threshold_scale == pytest.approx(1.5)
 
@@ -495,12 +551,110 @@ def test_headless_app_debug_log_line_includes_audio_health() -> None:
     assert "FFT=9" in line
     assert "GAIN=1.70" in line
     assert "STATUS=1" in line
-    assert "BASS=0.45" in line
-    assert "MID=0.30" in line
-    assert "TREBLE=0.20" in line
-    assert "DRIVE=" in line
-    assert "ACCENT=" in line
-    assert "ACTIVITY=" in line
+
+
+def test_headless_app_audio_debug_record_includes_structured_metrics() -> None:
+    app = HeadlessApp(controller=Stripe(12), pixel_count=12, quiet=True)
+    app.mode = RuntimeMode.MIC
+    app.audio_status = "Input: Fake Mic"
+    app.audio_frame = AudioFrame(
+        rms=0.5,
+        bands=(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8),
+        beat=True,
+        beat_strength=0.9,
+        sequence=9,
+        fresh=True,
+    )
+    app.music_features = MusicFeatures(
+        bpm=128.0,
+        energy=0.5,
+        bass_energy=0.15,
+        mid_energy=0.40,
+        treble_energy=0.70,
+        spectral_centroid=0.62,
+        spectral_flux=0.31,
+        drop_detected=True,
+    )
+
+    row = app.audio_debug_record(1.25)
+
+    assert row["elapsed_s"] == pytest.approx(1.25)
+    assert row["source"] == "Input: Fake Mic"
+    assert row["mode"] == "mic"
+    assert row["animation"]
+    assert row["fresh"] is True
+    assert row["sequence"] == 9
+    assert row["rms"] == pytest.approx(0.5)
+    assert row["beat"] is True
+    assert row["bpm"] == pytest.approx(128.0)
+    assert row["bass_energy"] == pytest.approx(0.15)
+    assert row["bands"] == [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
+    assert row["drop_detected"] is True
+    assert isinstance(row["selector_scores"], dict)
+
+
+def test_audio_debug_recorder_writes_jsonl_with_label(tmp_path: Path) -> None:
+    path = tmp_path / "capture.jsonl"
+
+    with AudioDebugRecorder(path, label="test song") as recorder:
+        recorder.write({"elapsed_s": 1.0, "rms": 0.2})
+
+    row = json.loads(path.read_text(encoding="utf-8"))
+    assert row == {"label": "test song", "elapsed_s": 1.0, "rms": 0.2}
+
+
+def test_analyze_audio_debug_reports_recommended_flags_and_warnings(tmp_path: Path) -> None:
+    path = tmp_path / "capture.jsonl"
+    idle_rows = [
+        {
+            "label": "room-idle",
+            "rms": 0.001,
+            "energy": 0.001,
+            "rolling_loudness": 0.001,
+            "fresh": True,
+            "beat": False,
+            "drop_detected": False,
+            "section_change": False,
+            "silence": True,
+            "normalization_gain": 2.0,
+            "bpm": 120,
+        }
+        for _ in range(8)
+    ]
+    active_rows = [
+        {
+            "label": "get-lucky",
+            "rms": 0.22,
+            "energy": 0.30,
+            "rolling_loudness": 0.24,
+            "fresh": True,
+            "beat": True,
+            "drop_detected": index == 0,
+            "section_change": False,
+            "silence": False,
+            "normalization_gain": 5.0,
+            "bpm": 118,
+            "bass_energy": 0.7,
+            "mid_energy": 0.3,
+            "treble_energy": 0.04,
+            "spectral_flux": 0.05,
+        }
+        for index in range(12)
+    ]
+    rows = idle_rows + active_rows
+    path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+
+    text = analyze_audio_debug([path])
+
+    assert "Audio debug rows: 20" in text
+    assert "Labels: get-lucky, room-idle" in text
+    assert "Classified labels: active=1 idle=1 quiet=0" in text
+    assert "room-idle: class=idle" in text
+    assert "get-lucky: class=active" in text
+    assert "--mic-noise-floor" in text
+    assert "--mic-target-level" in text
+    assert "--idle-threshold-scale" in text
+    assert "active-capture normalization gain is often near maximum" in text
 
 
 def test_headless_app_debug_transition_line_includes_score_snapshot() -> None:
@@ -668,6 +822,66 @@ def test_headless_app_mic_mode_uses_music_selector(monkeypatch: pytest.MonkeyPat
     assert app.selector.config.idle_energy_threshold == pytest.approx(MusicSelectorConfig().idle_energy_threshold * 1.5)
 
 
+def test_headless_app_dj_mode_uses_dj_selector(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeAudioInput:
+        def read(self) -> AudioFrame:
+            return AudioFrame(
+                rms=0.95,
+                bands=(0.9, 0.85, 0.75, 0.72, 0.7, 0.88, 0.9, 0.92),
+                beat=True,
+                beat_strength=1.0,
+                sequence=1,
+                fresh=True,
+            )
+
+        def read_features(self) -> MusicFeatures:
+            return MusicFeatures(
+                bpm=128.0,
+                bpm_confidence=0.8,
+                energy=0.95,
+                volume=0.95,
+                energy_level=0.95,
+                bass=0.9,
+                bass_energy=0.9,
+                mid_energy=0.3,
+                treble_energy=0.2,
+                beat=True,
+                beat_strength=0.9,
+                beat_confidence=0.9,
+                drop_detected=True,
+            )
+
+        def device_name(self) -> str:
+            return "Fake Mic"
+
+        def close(self) -> None:
+            return None
+
+        @classmethod
+        def with_config(cls, config):
+            del config
+            return cls()
+
+    monkeypatch.setattr("lumistripe_cli.app.AudioInput", FakeAudioInput)
+    app = HeadlessApp(
+        controller=Stripe(12),
+        pixel_count=12,
+        mode=RuntimeMode.DJ,
+        auto_selector_config=AutoSelectorConfig(randomness=0.0, min_duration_s=0.1, switch_cooldown_s=0.1),
+        quiet=True,
+    )
+
+    app.step()
+    assert app.dj_selector is not None
+    app.dj_selector.last_switch_at_s -= 1.0
+    app.step()
+
+    assert app.selector is None
+    assert app.dj_selector.last_decision.scores
+    assert app.class_label == "DJ"
+    assert "TOP=" in app.debug_log_line(1.0)
+
+
 def test_headless_app_mic_mode_stale_audio_updates_selector_with_silence(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeAudioInput:
         def read(self) -> AudioFrame:
@@ -784,6 +998,22 @@ def test_main_calibrate_audio_prints_recommended_flags(
     assert "--idle-threshold-scale 1.40" in captured.out
 
 
+def test_main_analyzes_audio_debug_and_exits(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    called: dict[str, object] = {}
+
+    def fake_analyze(paths: list[Path]) -> str:
+        called["paths"] = paths
+        return "analysis output"
+
+    monkeypatch.setattr("lumistripe_cli.app.analyze_audio_debug", fake_analyze)
+
+    main(["--analyze-audio-debug", "capture.jsonl"])
+
+    captured = capsys.readouterr()
+    assert called["paths"] == [Path("capture.jsonl")]
+    assert "analysis output" in captured.out
+
+
 def _fake_audio_config(*args: object, **kwargs: object) -> object:
     class _FakeAudioInput:
         _device_name = "Fake Mic"
@@ -832,6 +1062,59 @@ def test_main_audio_debug_skips_gpio_and_runs_with_in_memory_stripe(monkeypatch:
     assert called["mode"] is RuntimeMode.MIC
     assert called["quiet"] is True
     assert called["audio_debug_verbose"] is True
+
+
+def test_main_applies_auto_mic_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    called: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "lumistripe_cli.app.list_input_device_details",
+        lambda: [type("Device", (), {"index": 1, "name": "Texas Instruments PCM2902 Audio Codec"})()],
+    )
+    monkeypatch.setattr("lumistripe_cli.app.AudioInput.with_config", _fake_audio_config)
+
+    def fake_run(self):
+        called["target"] = self.mic_target_level
+        called["noise"] = self.mic_noise_floor
+        called["scale"] = self.idle_threshold_scale
+        called["analysis"] = self.audio_analysis
+
+    monkeypatch.setattr("lumistripe_cli.app.HeadlessApp.run_audio_debug", fake_run)
+
+    main(["--audio-debug", "--mic-profile", "auto"])
+
+    assert called["target"] == pytest.approx(0.403)
+    assert called["noise"] == pytest.approx(0.0137)
+    assert called["scale"] == pytest.approx(0.92)
+    assert isinstance(called["analysis"], AudioAnalysis)
+
+
+def test_main_explicit_mic_flags_override_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    called: dict[str, object] = {}
+
+    monkeypatch.setattr("lumistripe_cli.app.AudioInput.with_config", _fake_audio_config)
+    monkeypatch.setattr(
+        "lumistripe_cli.app.HeadlessApp.run_audio_debug",
+        lambda self: called.update({"noise": self.mic_noise_floor, "target": self.mic_target_level}),
+    )
+
+    main(["--audio-debug", "--mic-profile", "pcm2902", "--mic-noise-floor", "0.02"])
+
+    assert called["noise"] == pytest.approx(0.02)
+    assert called["target"] == pytest.approx(0.403)
+
+
+def test_main_writes_effective_mic_profile(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    path = tmp_path / "profile.json"
+
+    main(["--mic-profile", "pcm2902", "--mic-target-level", "0.5", "--write-mic-profile", str(path)])
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    captured = capsys.readouterr()
+    assert "Wrote mic profile" in captured.out
+    assert data["mic_noise_floor"] == pytest.approx(0.0137)
+    assert data["mic_target_level"] == pytest.approx(0.5)
+    assert data["idle_threshold_scale"] == pytest.approx(0.92)
 
 
 def test_main_auto_calibrate_audio_applies_runtime_tuning(monkeypatch: pytest.MonkeyPatch) -> None:

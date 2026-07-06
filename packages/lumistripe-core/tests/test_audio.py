@@ -2,7 +2,9 @@ import numpy as np
 import pytest
 
 from lumistripe.audio import (
+    AudioAnalysis,
     AudioConfig,
+    AudioFeatures,
     AudioFrame,
     AudioInput,
     AudioInputDevice,
@@ -331,6 +333,48 @@ def test_audio_state_can_detect_bass_drop_event() -> None:
     assert seen_drop is True
 
 
+def test_audio_state_drop_threshold_is_configurable() -> None:
+    sample_rate = 44_100.0
+    quiet = np.zeros(1024, dtype=np.float32)
+    drop = _drop_like_chunk(0, sample_rate) * 2.0
+    strict = AudioState(AudioConfig(analysis=AudioAnalysis(drop_bass_threshold=0.98)))
+
+    for _ in range(8):
+        strict.feed_samples(quiet)
+
+    seen_drop = False
+    for _ in range(12):
+        strict.feed_samples(drop)
+        seen_drop = seen_drop or strict.music_features().drop_detected
+
+    assert seen_drop is False
+
+
+def test_audio_state_silence_suppresses_beat_features() -> None:
+    config = AudioConfig(
+        smoothing=AudioSmoothing(noise_floor=0.0),
+        normalization=AudioNormalization(enabled=False),
+    )
+    state = AudioState(config)
+    sample_rate = 44_100.0
+    quiet_bass = (np.sin(2.0 * np.pi * 55.0 * np.arange(1024, dtype=np.float32) / sample_rate) * 0.012).astype(
+        np.float32
+    )
+
+    for _ in range(12):
+        state.feed_samples(quiet_bass)
+
+    frame = state.frame()
+    features = state.music_features()
+    assert features.silence is True
+    assert features.beat is False
+    assert features.beat_strength == pytest.approx(0.0)
+    assert features.drop_detected is False
+    assert features.section_change is False
+    assert frame.beat is False
+    assert frame.beat_strength == pytest.approx(0.0)
+
+
 def test_audio_state_steady_tone_does_not_trigger_semantic_events() -> None:
     state = AudioState()
     sample_rate = 44_100.0
@@ -423,6 +467,25 @@ def test_features_from_frame_derives_music_features() -> None:
     assert features.spectral_flux == pytest.approx(0.75)
     assert features.beat_confidence == pytest.approx(0.75)
     assert features.rolling_loudness == pytest.approx(0.5)
+
+
+def test_audio_features_alias_exposes_requested_field_names() -> None:
+    features = AudioFeatures(
+        volume=0.4,
+        energy_level=0.5,
+        bpm=128.0,
+        bpm_confidence=0.7,
+        beat=True,
+        beat_confidence=0.8,
+        drop_detected=True,
+    )
+
+    assert isinstance(features, MusicFeatures)
+    assert features.volume == pytest.approx(0.4)
+    assert features.energy_level == pytest.approx(0.5)
+    assert features.bpm_confidence == pytest.approx(0.7)
+    assert features.beat_detected is True
+    assert features.drop_detected is True
 
 
 def test_audio_snapshot_silence_defaults_to_safe_zero_values() -> None:

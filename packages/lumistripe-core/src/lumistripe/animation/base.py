@@ -22,6 +22,12 @@ class Animation(ABC):
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
         self.tick(frame, controller)
 
+    @property
+    def metadata(self):
+        from ..selector import animation_metadata
+
+        return animation_metadata(self.name)
+
 
 @dataclass(slots=True)
 class _AnimationEntry:

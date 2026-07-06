@@ -26,6 +26,8 @@ typedef struct {
     float adapt_attack, adapt_release;
     float music_threshold, music_max_gain, silence_floor;
     int normalization_enabled, dc_block_enabled;
+    float drop_bass_threshold, drop_bass_delta_threshold, drop_onset_threshold;
+    float section_change_threshold, section_onset_threshold;
     float sample_rate;
 
     float prev_bass_energy;
@@ -227,7 +229,14 @@ static void _compute_features(AudioProcessor *self, float rms, float *bands,
     s->onset_history[s->onset_idx % ONSET_HISTORY_SIZE] = s->smooth_onset;
     s->onset_idx++;
 
-    if (s->smooth_onset > ONSET_THRESHOLD && s->smooth_onset > s->prev_onset * 1.4f) {
+    s->features_rolling_loudness = _smooth(s->features_rolling_loudness, rms, 0.08f, 0.025f);
+    float silence_threshold = fmaxf(s->silence_floor * 3.0f, fmaxf(s->noise_floor * 0.8f, 0.012f));
+    int silent_now = (
+        s->features_rolling_loudness <= silence_threshold
+        && rms <= silence_threshold * 1.4f
+    );
+
+    if (!silent_now && s->smooth_onset > ONSET_THRESHOLD && s->smooth_onset > s->prev_onset * 1.4f) {
         int interval = s->fft_call_count - s->last_onset_frame;
         float interval_sec = (float)interval * (float)FFT_SIZE / s->sample_rate;
         if (interval_sec > BPM_INTERVAL_MIN && interval_sec < BPM_INTERVAL_MAX) {
@@ -282,10 +291,7 @@ static void _compute_features(AudioProcessor *self, float rms, float *bands,
     float treble = (bands[5] + bands[6] + bands[7]) / 3.0f;
     float bass_delta = bass - s->prev_drop_bass;
 
-    s->features_rolling_loudness = _smooth(s->features_rolling_loudness, rms, 0.08f, 0.025f);
-
-    float silence_threshold = fmaxf(s->silence_floor * 3.0f, fmaxf(s->noise_floor * 0.8f, 0.012f));
-    if (s->features_rolling_loudness <= silence_threshold && rms <= silence_threshold * 1.4f) {
+    if (silent_now) {
         s->silence_frames++;
     } else {
         s->silence_frames = 0;
@@ -296,9 +302,10 @@ static void _compute_features(AudioProcessor *self, float rms, float *bands,
     s->features_drop_detected = 0;
     if (
         s->drop_cooldown_frames == 0
-        && bass > 0.45f
-        && bass_delta > 0.16f
-        && s->smooth_onset > 0.12f
+        && !s->features_silence
+        && bass > s->drop_bass_threshold
+        && bass_delta > s->drop_bass_delta_threshold
+        && s->smooth_onset > s->drop_onset_threshold
         && (beat || beat_strength > 0.08f || s->features_rolling_loudness < rms * 0.85f)
     ) {
         s->features_drop_detected = 1;
@@ -319,7 +326,13 @@ static void _compute_features(AudioProcessor *self, float rms, float *bands,
         + fabsf(treble - s->section_treble) * 0.45f
         + fabsf(s->brightness - s->section_brightness) * 0.35f;
     s->features_section_change = 0;
-    if (s->fft_call_count > 20 && s->section_cooldown_frames == 0 && section_delta > 0.42f && s->smooth_onset > 0.08f) {
+    if (
+        s->fft_call_count > 20
+        && s->section_cooldown_frames == 0
+        && !s->features_silence
+        && section_delta > s->section_change_threshold
+        && s->smooth_onset > s->section_onset_threshold
+    ) {
         s->features_section_change = 1;
         s->section_cooldown_frames = 60;
         s->section_energy = rms;
@@ -339,15 +352,15 @@ static void _compute_features(AudioProcessor *self, float rms, float *bands,
     s->features_brightness = s->brightness;
     s->features_onset_strength = s->smooth_onset;
     s->features_dynamic_range = s->dynamic_range;
-    s->features_beat = beat;
-    s->features_beat_strength = beat_strength;
+    s->features_beat = s->features_silence ? 0 : beat;
+    s->features_beat_strength = s->features_silence ? 0.0f : beat_strength;
     memcpy(s->features_bands, bands, sizeof(float) * NUM_BANDS);
     s->features_bass_energy = bass;
     s->features_mid_energy = mid;
     s->features_treble_energy = treble;
     s->features_spectral_centroid = _clamp01f(centroid_norm);
     s->features_spectral_flux = _clamp01f(spectral_flux);
-    s->features_beat_confidence = _clamp01f(fmaxf(beat_strength, s->smooth_onset * 0.55f));
+    s->features_beat_confidence = s->features_silence ? 0.0f : _clamp01f(fmaxf(beat_strength, s->smooth_onset * 0.55f));
 }
 
 static void _process_fft(AudioProcessor *self) {
@@ -461,10 +474,10 @@ static void _process_fft(AudioProcessor *self) {
 
     s->frame_rms = rms;
     memcpy(s->frame_bands, bands, sizeof(float) * NUM_BANDS);
-    s->frame_beat = beat;
-    s->frame_beat_strength = beat_strength;
 
     _compute_features(self, rms, bands, mags, beat, beat_strength);
+    s->frame_beat = s->features_beat;
+    s->frame_beat_strength = s->features_beat_strength;
 }
 
 static int AudioProcessor_init(AudioProcessor *self, PyObject *args, PyObject *kwds) {
@@ -499,6 +512,11 @@ static int AudioProcessor_init(AudioProcessor *self, PyObject *args, PyObject *k
     s->silence_floor = 0.003f;
     s->normalization_enabled = 1;
     s->dc_block_enabled = 1;
+    s->drop_bass_threshold = 0.45f;
+    s->drop_bass_delta_threshold = 0.16f;
+    s->drop_onset_threshold = 0.12f;
+    s->section_change_threshold = 0.42f;
+    s->section_onset_threshold = 0.08f;
 
     PyObject *key, *value;
     Py_ssize_t pos = 0;
@@ -536,6 +554,11 @@ static int AudioProcessor_init(AudioProcessor *self, PyObject *args, PyObject *k
         SET_FLOAT(silence_floor);
         SET_INT(normalization_enabled);
         SET_INT(dc_block_enabled);
+        SET_FLOAT(drop_bass_threshold);
+        SET_FLOAT(drop_bass_delta_threshold);
+        SET_FLOAT(drop_onset_threshold);
+        SET_FLOAT(section_change_threshold);
+        SET_FLOAT(section_onset_threshold);
 
         #undef SET_FLOAT
         #undef SET_INT
@@ -741,6 +764,11 @@ static PyObject* AudioProcessor_reset(AudioProcessor *self, PyObject *Py_UNUSED(
     self->s.silence_floor = saved.silence_floor;
     self->s.normalization_enabled = saved.normalization_enabled;
     self->s.dc_block_enabled = saved.dc_block_enabled;
+    self->s.drop_bass_threshold = saved.drop_bass_threshold;
+    self->s.drop_bass_delta_threshold = saved.drop_bass_delta_threshold;
+    self->s.drop_onset_threshold = saved.drop_onset_threshold;
+    self->s.section_change_threshold = saved.section_change_threshold;
+    self->s.section_onset_threshold = saved.section_onset_threshold;
     memcpy(self->s.window, saved.window, sizeof(float) * FFT_SIZE);
     memcpy(self->s.frequencies, saved.frequencies, sizeof(float) * (FFT_SIZE / 2));
     memcpy(self->s.band_slices, saved.band_slices, sizeof(int) * NUM_BANDS * 2);

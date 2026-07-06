@@ -3,16 +3,20 @@ from __future__ import annotations
 import argparse
 import importlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 import sys
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TextIO
 
 from lumistripe import (
     AnimationClass,
     AnimationPlayer,
+    AutoSelectorConfig,
+    AudioAnalysis,
     AudioConfig,
     AudioCalibrationResult,
     AudioFrame,
@@ -24,14 +28,18 @@ from lumistripe import (
     Config,
     Controller,
     GPIOStripe,
+    DJModeSelector,
     MultiController,
     MusicDrivenSelector,
     MusicFeatures,
     MusicSelectorConfig,
+    MicProfile,
     Stripe,
     calibrate_audio_input,
     features_from_frame,
     list_input_device_details,
+    load_mic_profile,
+    write_mic_profile,
 )
 from .encoder import ControlEvent, EncoderBackend, EncoderPins, NullEncoderBackend, build_encoder_backend
 
@@ -41,10 +49,58 @@ DEFAULT_IDLE_THRESHOLD_SCALE = 1.0
 BRIGHTNESS_STEP = 0.05
 
 
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def _percentile(values: list[float], percentile: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    rank = (len(ordered) - 1) * (percentile / 100.0)
+    lower = int(rank)
+    upper = min(lower + 1, len(ordered) - 1)
+    fraction = rank - lower
+    return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction
+
+
+class AudioDebugRecorder:
+    def __init__(self, path: Path, *, label: str | None = None) -> None:
+        self.path = path
+        self.label = label
+        self._file: TextIO | None = None
+
+    def __enter__(self) -> AudioDebugRecorder:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._file = self.path.open("w", encoding="utf-8")
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    def write(self, row: dict[str, object]) -> None:
+        if self._file is None:
+            raise RuntimeError("audio debug recorder is not open")
+        if self.label:
+            row = {"label": self.label, **row}
+        self._file.write(json.dumps(row, sort_keys=True, separators=(",", ":")))
+        self._file.write("\n")
+        self._file.flush()
+
+    def close(self) -> None:
+        if self._file is None:
+            return
+        self._file.close()
+        self._file = None
+
+
 class RuntimeMode(str, Enum):
     MANUAL = "manual"
     DEMO = "demo"
     MIC = "mic"
+    DJ = "dj"
 
 
 def demo_frame(frame: int) -> AudioFrame:
@@ -92,6 +148,7 @@ class HeadlessApp:
     audio_device: str | None = None
     mic_target_level: float = field(default_factory=lambda: AudioNormalization().target_level)
     mic_noise_floor: float = field(default_factory=lambda: AudioSmoothing().noise_floor)
+    audio_analysis: AudioAnalysis = field(default_factory=AudioAnalysis)
     idle_enter_frames: int = field(default_factory=lambda: MusicSelectorConfig().idle_enter_frames)
     idle_threshold_scale: float = DEFAULT_IDLE_THRESHOLD_SCALE
     audio_debug_verbose: bool = False
@@ -99,6 +156,8 @@ class HeadlessApp:
     animation_name: str | None = None
     quiet: bool = False
     gpio_backend_label: str | None = None
+    auto_selector_config: AutoSelectorConfig = field(default_factory=AutoSelectorConfig)
+    debug_selector: bool = False
     encoder_backend: EncoderBackend = field(default_factory=NullEncoderBackend)
     player: AnimationPlayer = field(init=False)
     running: bool = field(init=False, default=True)
@@ -110,6 +169,7 @@ class HeadlessApp:
     audio_snapshot: AudioSnapshot = field(init=False, default_factory=AudioSnapshot.silence)
     demo_tick: int = field(init=False, default=0)
     selector: MusicDrivenSelector | None = field(init=False, default=None)
+    dj_selector: DJModeSelector | None = field(init=False, default=None)
     _status_enabled: bool = field(init=False, default=False)
     _status_tty: bool = field(init=False, default=False)
     _status_lines: int = field(init=False, default=0)
@@ -146,7 +206,7 @@ class HeadlessApp:
     @property
     def class_label(self) -> str:
         if self.selector is None:
-            return "-"
+            return "DJ" if self.dj_selector is not None else "-"
         if self.selector.idle_active:
             return "IDLE"
         return self.selector.current_class.value.upper()
@@ -187,6 +247,7 @@ class HeadlessApp:
         self.music_features = MusicFeatures()
         self.audio_snapshot = AudioSnapshot.silence()
         self.selector = None
+        self.dj_selector = None
 
         if mode is RuntimeMode.MANUAL:
             self.audio_status = "No audio source active."
@@ -202,6 +263,7 @@ class HeadlessApp:
             audio_config = _build_audio_config(
                 target_level=self.mic_target_level,
                 noise_floor=self.mic_noise_floor,
+                analysis=self.audio_analysis,
             )
             self.audio_input = (
                 AudioInput.with_device_config(self.audio_device, audio_config)
@@ -215,14 +277,17 @@ class HeadlessApp:
             return
 
         self.audio_status = f"Input: {self.audio_input.device_name()}"
-        self.selector = MusicDrivenSelector(
-            config=_build_selector_config(
-                idle_enter_frames=self.idle_enter_frames,
-                idle_threshold_scale=self.idle_threshold_scale,
-            ),
-            current_class=AnimationClass.GROOVY,
-        )
-        self.selector.set_auto_select(self._auto_select_enabled)
+        if mode is RuntimeMode.DJ:
+            self.dj_selector = DJModeSelector(self.auto_selector_config)
+        else:
+            self.selector = MusicDrivenSelector(
+                config=_build_selector_config(
+                    idle_enter_frames=self.idle_enter_frames,
+                    idle_threshold_scale=self.idle_threshold_scale,
+                ),
+                current_class=AnimationClass.GROOVY,
+            )
+            self.selector.set_auto_select(self._auto_select_enabled)
         self.player.set_audio_snapshot(self._mic_snapshot)
 
     def _demo_snapshot(self) -> AudioFrame:
@@ -243,7 +308,7 @@ class HeadlessApp:
         self.audio_input = None
 
     def step(self) -> float:
-        if self.mode is RuntimeMode.MIC and self.audio_input is not None:
+        if self.mode in {RuntimeMode.MIC, RuntimeMode.DJ} and self.audio_input is not None:
             audio_frame = self.audio_input.read()
             health = self._audio_health()
             self.audio_frame = audio_frame
@@ -256,6 +321,9 @@ class HeadlessApp:
             if self.selector is not None:
                 self.selector.update(self.player, self.audio_snapshot.features)
                 self.player.audio_enabled = not self.selector.idle_active
+            if self.dj_selector is not None:
+                self.dj_selector.update(self.player, self.audio_snapshot.features, now_s=time.monotonic())
+                self.player.audio_enabled = not self.audio_snapshot.silence
         delay = max(self.player.step(self.controller), MIN_FRAME_SECONDS)
         if self.mode is RuntimeMode.MANUAL:
             self.audio_frame = AudioFrame()
@@ -294,6 +362,8 @@ class HeadlessApp:
             self.set_mode(RuntimeMode.DEMO)
         elif self.mode is RuntimeMode.DEMO:
             self.set_mode(RuntimeMode.MIC)
+        elif self.mode is RuntimeMode.MIC:
+            self.set_mode(RuntimeMode.DJ)
         else:
             self.set_mode(RuntimeMode.MANUAL)
 
@@ -349,11 +419,13 @@ class HeadlessApp:
         ]
         if self.gpio_backend_label:
             lines.insert(3, f"GPIO: {self.gpio_backend_label}")
-        if self.mode is RuntimeMode.MIC:
+        if self.mode in {RuntimeMode.MIC, RuntimeMode.DJ}:
             lines.insert(4, f"MIC: {self.mic_tuning_label}")
             health = self._audio_health_summary()
             if health:
                 lines.insert(5, f"HEALTH: {health}")
+        if self.dj_selector is not None and self.dj_selector.last_decision.scores:
+            lines.append(f"SELECTOR: {self._selector_top_summary()} reason={self.dj_selector.last_decision.reason}")
         if self.audio_error:
             lines.append(f"ERROR: {self.audio_error}")
         return "\n".join(lines)
@@ -384,6 +456,8 @@ class HeadlessApp:
         return f"AUDIO-DEBUG SOURCE={self.audio_status} MIC={self.mic_tuning_label}{verbose}"
 
     def _selector_scores(self) -> dict[str, float]:
+        if self.dj_selector is not None:
+            return {score.name: score.score for score in self.dj_selector.last_decision.scores}
         if self.selector is None:
             return {}
         return {class_.value: score for class_, score in self.selector._class_scores().items()}
@@ -398,6 +472,13 @@ class HeadlessApp:
 
     def _selector_verbose_summary(self) -> str:
         if self.selector is None:
+            if self.dj_selector is not None:
+                decision = self.dj_selector.last_decision
+                reasons = ";".join(
+                    f"{score.name}:{score.score:0.2f}[{'/'.join(score.reasons[:3])}]"
+                    for score in decision.scores
+                )
+                return f"SEL=reason:{decision.reason},switch:{decision.should_switch} SCORES={reasons or '-'}"
             return "SEL=-"
         sel = self.selector
         scores = ",".join(
@@ -433,7 +514,7 @@ class HeadlessApp:
         beat = "YES" if frame.beat else "NO"
         fresh = "YES" if frame.fresh else "NO"
         idle = "YES" if self.selector is not None and self.selector.idle_active else "NO"
-        auto = "ON" if self.selector is not None and self.selector.auto_select else "OFF"
+        auto = "DJ" if self.dj_selector is not None else ("ON" if self.selector is not None and self.selector.auto_select else "OFF")
         anim = self.player.name_at(self.player.current_index()) or "?"
         bands = ",".join(f"{value:0.2f}" for value in frame.bands)
         silence = "YES" if feat.silence else "NO"
@@ -480,9 +561,61 @@ class HeadlessApp:
             f"BANDS={bands} "
             f"{self._selector_top_summary()}"
         )
-        if self.audio_debug_verbose:
+        if self.audio_debug_verbose or self.debug_selector:
             line = f"{line} {self._selector_verbose_summary()}"
         return line
+
+    def audio_debug_record(self, elapsed: float) -> dict[str, object]:
+        frame = self.audio_frame
+        feat = self.music_features
+        snapshot = self.audio_snapshot
+        health = self._audio_health()
+        stats = health.processor if health is not None else None
+        decision = self.dj_selector.last_decision if self.dj_selector is not None else None
+        return {
+            "elapsed_s": round(elapsed, 6),
+            "source": self.audio_status,
+            "mode": self.mode.value,
+            "class": self.class_label,
+            "animation": self.player.name_at(self.player.current_index()) or "",
+            "auto": "dj" if self.dj_selector is not None else ("on" if self.selector is not None and self.selector.auto_select else "off"),
+            "fresh": frame.fresh,
+            "age_s": None if health is None else health.last_frame_age,
+            "callback_age_s": None if health is None else health.last_callback_age,
+            "sequence": frame.sequence,
+            "fft_count": 0 if stats is None else stats.fft_count,
+            "status_count": 0 if health is None else health.status_count,
+            "normalization_gain": 1.0 if stats is None else stats.normalization_gain,
+            "rms": frame.rms,
+            "beat": frame.beat,
+            "beat_strength": frame.beat_strength,
+            "bpm": feat.bpm,
+            "bpm_confidence": feat.bpm_confidence,
+            "energy": feat.energy,
+            "volume": feat.volume,
+            "energy_level": feat.energy_level,
+            "bass": feat.bass,
+            "brightness": feat.brightness,
+            "onset_strength": feat.onset_strength,
+            "dynamic_range": feat.dynamic_range,
+            "bands": list(frame.bands),
+            "bass_energy": feat.bass_energy,
+            "mid_energy": feat.mid_energy,
+            "treble_energy": feat.treble_energy,
+            "spectral_centroid": feat.spectral_centroid,
+            "spectral_flux": feat.spectral_flux,
+            "beat_confidence": feat.beat_confidence,
+            "rolling_loudness": feat.rolling_loudness,
+            "silence": feat.silence,
+            "drop_detected": feat.drop_detected,
+            "section_change": feat.section_change,
+            "drive": snapshot.drive,
+            "accent": snapshot.accent,
+            "activity": snapshot.activity,
+            "selector_reason": "" if decision is None else decision.reason,
+            "selector_should_switch": False if decision is None else decision.should_switch,
+            "selector_scores": self._selector_scores(),
+        }
 
     def _audio_health(self):
         if self.audio_input is None or not hasattr(self.audio_input, "health"):
@@ -502,7 +635,13 @@ class HeadlessApp:
             f"gain={health.processor.normalization_gain:0.2f} status={health.status_count}"
         )
 
-    def run_audio_debug(self, *, frame_limit: int | None = None) -> None:
+    def run_audio_debug(
+        self,
+        *,
+        frame_limit: int | None = None,
+        duration_s: float | None = None,
+        recorder: AudioDebugRecorder | None = None,
+    ) -> None:
         started_at = time.monotonic()
         frames_run = 0
         next_frame_at = started_at
@@ -519,9 +658,14 @@ class HeadlessApp:
                 if current_class != self._last_debug_class:
                     print(self.debug_transition_line(now - started_at, self._last_debug_class, current_class), flush=True)
                     self._last_debug_class = current_class
-                print(self.debug_log_line(now - started_at), flush=True)
+                elapsed = now - started_at
+                print(self.debug_log_line(elapsed), flush=True)
+                if recorder is not None:
+                    recorder.write(self.audio_debug_record(elapsed))
                 frames_run += 1
                 if frame_limit is not None and frames_run >= frame_limit:
+                    break
+                if duration_s is not None and elapsed >= duration_s:
                     break
         except KeyboardInterrupt:
             self.running = False
@@ -539,7 +683,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--mode",
         type=_parse_mode,
         default=RuntimeMode.MANUAL,
-        help="Startup mode: manual, demo, or mic",
+        help="Startup mode: manual, demo, mic, or dj",
+    )
+    parser.add_argument(
+        "--auto-selector",
+        choices=("dj",),
+        help="Enable an automatic selector mode; currently equivalent to --mode dj",
     )
     parser.add_argument("--animation", help="Startup animation name for manual mode")
     parser.add_argument(
@@ -560,6 +709,34 @@ def build_parser() -> argparse.ArgumentParser:
         "--audio-debug-verbose",
         action="store_true",
         help="Include selector internals and full class scores in audio debug logs",
+    )
+    parser.add_argument(
+        "--audio-debug-record",
+        type=Path,
+        metavar="PATH",
+        help="Write structured audio debug rows as JSONL",
+    )
+    parser.add_argument(
+        "--audio-debug-duration",
+        type=_positive_float,
+        metavar="SECONDS",
+        help="Stop audio debug capture after the given duration",
+    )
+    parser.add_argument(
+        "--audio-debug-label",
+        help="Attach a song or test label to recorded audio debug rows",
+    )
+    parser.add_argument(
+        "--analyze-audio-debug",
+        type=Path,
+        nargs="+",
+        metavar="PATH",
+        help="Analyze one or more JSONL audio debug recordings and print tuning suggestions",
+    )
+    parser.add_argument(
+        "--debug-selector",
+        action="store_true",
+        help="Include selector decision details in runtime/debug output",
     )
     parser.add_argument(
         "--calibrate-audio",
@@ -586,6 +763,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Noise floor threshold for mic mode calibration",
     )
     parser.add_argument(
+        "--mic-profile",
+        help='Mic profile name, JSON path, or "auto" for device-name matching',
+    )
+    parser.add_argument(
+        "--write-mic-profile",
+        type=Path,
+        metavar="PATH",
+        help="Write the effective mic tuning/profile to a JSON file and exit",
+    )
+    parser.add_argument(
         "--idle-enter-frames",
         type=_positive_int,
         default=MusicSelectorConfig().idle_enter_frames,
@@ -597,6 +784,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_IDLE_THRESHOLD_SCALE,
         help="Scale factor applied to mic idle activity thresholds",
     )
+    parser.add_argument("--dj-min-duration", type=_positive_float, default=AutoSelectorConfig().min_duration_s)
+    parser.add_argument("--dj-max-duration", type=_positive_float, default=AutoSelectorConfig().max_duration_s)
+    parser.add_argument("--dj-switch-cooldown", type=_positive_float, default=AutoSelectorConfig().switch_cooldown_s)
+    parser.add_argument("--dj-drop-cooldown", type=_positive_float, default=AutoSelectorConfig().drop_cooldown_s)
+    parser.add_argument("--dj-randomness", type=_non_negative_float, default=AutoSelectorConfig().randomness)
+    parser.add_argument("--dj-history-size", type=_positive_int, default=AutoSelectorConfig().history_size)
+    parser.add_argument("--dj-seed", type=int)
     parser.add_argument("--quiet", action="store_true", help="Disable runtime status output")
     parser.add_argument("--chip", default="/dev/gpiochip0", help="Primary GPIO chip path")
     parser.add_argument("--data-pin", type=int, default=14, help="Primary stripe data pin")
@@ -662,8 +856,15 @@ def build_runtime_encoder_backend(args: argparse.Namespace) -> EncoderBackend:
 
 
 def main(argv: list[str] | None = None) -> None:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
     args = parser.parse_args(argv)
+    args.audio_analysis = AudioAnalysis()
+    if args.auto_selector == "dj":
+        args.mode = RuntimeMode.DJ
+    if args.analyze_audio_debug:
+        print(analyze_audio_debug(args.analyze_audio_debug))
+        return
     if args.list_audio_devices:
         for device in list_input_device_details():
             print(f"{device.index}: {device.name}")
@@ -673,26 +874,42 @@ def main(argv: list[str] | None = None) -> None:
             result = calibrate_audio_input(duration=args.calibrate_audio, device_pattern=args.audio_device)
             print(_calibration_text(result))
             return
+        if args.mic_profile is not None:
+            profile = _load_mic_profile_for_args(args)
+            _apply_mic_profile(args, profile, raw_argv)
         calibration = None
-        if args.auto_calibrate_audio is not None and (args.audio_debug or args.mode is RuntimeMode.MIC):
+        if args.auto_calibrate_audio is not None and (args.audio_debug or args.mode in {RuntimeMode.MIC, RuntimeMode.DJ}):
             calibration = calibrate_audio_input(duration=args.auto_calibrate_audio, device_pattern=args.audio_device)
             _apply_calibration(args, calibration)
+        if args.write_mic_profile is not None:
+            write_mic_profile(args.write_mic_profile, _effective_mic_profile(args))
+            print(f"Wrote mic profile: {args.write_mic_profile}")
+            return
         if args.audio_debug:
             app = HeadlessApp(
                 controller=Stripe(args.pixels),
                 pixel_count=args.pixels,
-                mode=RuntimeMode.MIC,
+                mode=args.mode if args.mode is RuntimeMode.DJ else RuntimeMode.MIC,
                 audio_device=args.audio_device,
                 mic_target_level=args.mic_target_level,
                 mic_noise_floor=args.mic_noise_floor,
+                audio_analysis=args.audio_analysis,
                 idle_enter_frames=args.idle_enter_frames,
                 idle_threshold_scale=args.idle_threshold_scale,
                 audio_debug_verbose=args.audio_debug_verbose,
                 audio_calibration=calibration,
                 animation_name=args.animation,
                 quiet=True,
+                auto_selector_config=_build_auto_selector_config(args),
+                debug_selector=args.debug_selector,
             )
-            app.run_audio_debug()
+            if args.audio_debug_record is None and args.audio_debug_duration is None:
+                app.run_audio_debug()
+            elif args.audio_debug_record is None:
+                app.run_audio_debug(duration_s=args.audio_debug_duration)
+            else:
+                with AudioDebugRecorder(args.audio_debug_record, label=args.audio_debug_label) as recorder:
+                    app.run_audio_debug(duration_s=args.audio_debug_duration, recorder=recorder)
             return
         controller = build_output_controller(args)
         encoder_backend = build_runtime_encoder_backend(args)
@@ -703,12 +920,15 @@ def main(argv: list[str] | None = None) -> None:
             audio_device=args.audio_device,
             mic_target_level=args.mic_target_level,
             mic_noise_floor=args.mic_noise_floor,
+            audio_analysis=args.audio_analysis,
             idle_enter_frames=args.idle_enter_frames,
             idle_threshold_scale=args.idle_threshold_scale,
             audio_calibration=calibration,
             animation_name=args.animation,
             quiet=args.quiet,
             gpio_backend_label=gpio_backend_label(controller),
+            auto_selector_config=_build_auto_selector_config(args),
+            debug_selector=args.debug_selector,
             encoder_backend=encoder_backend,
         ).run()
     except (RuntimeError, ValueError) as exc:
@@ -783,6 +1003,62 @@ def _apply_calibration(args: argparse.Namespace, result: AudioCalibrationResult)
     args.idle_threshold_scale = result.recommended_idle_threshold_scale
 
 
+def _load_mic_profile_for_args(args: argparse.Namespace) -> MicProfile:
+    device_name = _selected_audio_device_name(args.audio_device) if args.mic_profile == "auto" else None
+    return load_mic_profile(args.mic_profile, device_name=device_name)
+
+
+def _selected_audio_device_name(pattern: str | None) -> str | None:
+    try:
+        devices = list_input_device_details()
+    except RuntimeError:
+        return None
+    if not devices:
+        return None
+    if pattern is None:
+        return devices[0].name
+    pattern_text = str(pattern)
+    if pattern_text.isdigit():
+        index = int(pattern_text)
+        for device in devices:
+            if device.index == index:
+                return device.name
+        return None
+    lowered = pattern_text.casefold()
+    for device in devices:
+        if lowered in device.name.casefold():
+            return device.name
+    return None
+
+
+def _apply_mic_profile(args: argparse.Namespace, profile: MicProfile, raw_argv: list[str]) -> None:
+    args.audio_analysis = profile.analysis
+    if profile.mic_target_level is not None and not _option_provided(raw_argv, "--mic-target-level"):
+        args.mic_target_level = profile.mic_target_level
+    if profile.mic_noise_floor is not None and not _option_provided(raw_argv, "--mic-noise-floor"):
+        args.mic_noise_floor = profile.mic_noise_floor
+    if profile.idle_threshold_scale is not None and not _option_provided(raw_argv, "--idle-threshold-scale"):
+        args.idle_threshold_scale = profile.idle_threshold_scale
+
+
+def _option_provided(argv: list[str], option: str) -> bool:
+    prefix = f"{option}="
+    return any(value == option or value.startswith(prefix) for value in argv)
+
+
+def _effective_mic_profile(args: argparse.Namespace) -> MicProfile:
+    device_name = _selected_audio_device_name(args.audio_device)
+    patterns = (device_name,) if device_name else ()
+    return MicProfile(
+        name="custom",
+        device_patterns=patterns,
+        mic_noise_floor=args.mic_noise_floor,
+        mic_target_level=args.mic_target_level,
+        idle_threshold_scale=args.idle_threshold_scale,
+        analysis=args.audio_analysis,
+    )
+
+
 def _calibration_text(result: AudioCalibrationResult) -> str:
     return "\n".join(
         [
@@ -798,6 +1074,155 @@ def _calibration_text(result: AudioCalibrationResult) -> str:
     )
 
 
+def _read_audio_debug_rows(paths: list[Path]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for path in paths:
+        with path.open("r", encoding="utf-8") as file:
+            for line_number, line in enumerate(file, start=1):
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    row = json.loads(stripped)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"{path}:{line_number}: invalid JSONL audio debug row") from exc
+                if not isinstance(row, dict):
+                    raise ValueError(f"{path}:{line_number}: audio debug row must be an object")
+                rows.append(row)
+    return rows
+
+
+def _float_field(rows: list[dict[str, object]], name: str) -> list[float]:
+    values: list[float] = []
+    for row in rows:
+        value = row.get(name)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int | float):
+            values.append(float(value))
+    return values
+
+
+def _bool_rate(rows: list[dict[str, object]], name: str) -> float:
+    if not rows:
+        return 0.0
+    return sum(1 for row in rows if row.get(name) is True) / len(rows)
+
+
+def _audio_debug_label(row: dict[str, object]) -> str:
+    label = row.get("label")
+    return str(label) if label else "-"
+
+
+def _audio_debug_classification(rows: list[dict[str, object]]) -> str:
+    rms = [_clamp(value, 0.0, 1.0) for value in _float_field(rows, "rms")]
+    silence_rate = _bool_rate(rows, "silence")
+    rms_p80 = _percentile(rms, 80.0)
+    if silence_rate >= 0.8 and rms_p80 < 0.01:
+        return "idle"
+    if silence_rate <= 0.5 and rms_p80 >= 0.02:
+        return "active"
+    return "quiet"
+
+
+def _format_audio_debug_summary(label: str, rows: list[dict[str, object]]) -> str:
+    rms = [_clamp(value, 0.0, 1.0) for value in _float_field(rows, "rms")]
+    gains = _float_field(rows, "normalization_gain")
+    bpm_values = [value for value in _float_field(rows, "bpm") if value > 0.0]
+    classification = _audio_debug_classification(rows)
+    return (
+        f"  {label}: class={classification} rows={len(rows)} "
+        f"rms20={_percentile(rms, 20.0):0.4f} rms80={_percentile(rms, 80.0):0.4f} "
+        f"gain50={_percentile(gains, 50.0):0.2f} gain95={_percentile(gains, 95.0):0.2f} "
+        f"silence={_bool_rate(rows, 'silence'):0.1%} beat={_bool_rate(rows, 'beat'):0.1%} "
+        f"drop={_bool_rate(rows, 'drop_detected'):0.1%} section={_bool_rate(rows, 'section_change'):0.1%} "
+        f"bass80={_percentile(_float_field(rows, 'bass_energy'), 80.0):0.3f} "
+        f"mid80={_percentile(_float_field(rows, 'mid_energy'), 80.0):0.3f} "
+        f"treble80={_percentile(_float_field(rows, 'treble_energy'), 80.0):0.3f} "
+        f"flux80={_percentile(_float_field(rows, 'spectral_flux'), 80.0):0.3f} "
+        f"bpm50={_percentile(bpm_values, 50.0):0.0f}"
+    )
+
+
+def analyze_audio_debug(paths: list[Path]) -> str:
+    rows = _read_audio_debug_rows(paths)
+    if not rows:
+        raise ValueError("audio debug analysis requires at least one recorded row")
+
+    groups: dict[str, list[dict[str, object]]] = {}
+    for row in rows:
+        groups.setdefault(_audio_debug_label(row), []).append(row)
+
+    classified = {label: _audio_debug_classification(label_rows) for label, label_rows in groups.items()}
+    idle_rows = [row for label, label_rows in groups.items() if classified[label] == "idle" for row in label_rows]
+    active_rows = [row for label, label_rows in groups.items() if classified[label] == "active" for row in label_rows]
+    recommendation_rows = active_rows or rows
+
+    rms = [_clamp(value, 0.0, 1.0) for value in _float_field(recommendation_rows, "rms")]
+    noise_rms = [_clamp(value, 0.0, 1.0) for value in _float_field(idle_rows or rows, "rms")]
+    energy = [_clamp(value, 0.0, 1.0) for value in _float_field(recommendation_rows, "energy")]
+    loudness = [_clamp(value, 0.0, 1.0) for value in _float_field(recommendation_rows, "rolling_loudness")]
+    gains = _float_field(recommendation_rows, "normalization_gain")
+    all_gains = _float_field(rows, "normalization_gain")
+    bpm_values = [value for value in _float_field(rows, "bpm") if value > 0.0]
+
+    floor = _percentile(noise_rms, 99.0) if idle_rows else _percentile(rms, 20.0)
+    active_source = energy or loudness or rms
+    active_threshold = max(floor * 1.8, 0.01)
+    active = [value for value in active_source if value >= active_threshold]
+    active_level = _percentile(active or active_source, 80.0)
+    peak = max(_float_field(rows, "rms") + _float_field(rows, "energy") + _float_field(rows, "rolling_loudness"), default=0.0)
+
+    noise_floor = _clamp((floor * 2.0 + 0.004) if idle_rows else (floor * 1.6 + 0.004), 0.003, 0.12)
+    target_level = _clamp(max(active_level * 1.25, 0.24), 0.24, 0.62)
+    idle_scale = _clamp(max(noise_floor / AudioSmoothing().noise_floor, 0.5), 0.5, 4.0)
+
+    stale_rate = sum(1 for row in rows if row.get("fresh") is False) / len(rows)
+    silence_rate = _bool_rate(rows, "silence")
+    beat_rate = _bool_rate(rows, "beat")
+    drop_rate = _bool_rate(rows, "drop_detected")
+    section_rate = _bool_rate(rows, "section_change")
+
+    warnings: list[str] = []
+    if stale_rate > 0.1:
+        warnings.append(f"{stale_rate:.0%} stale frames; check audio device stability or callback load")
+    if silence_rate > 0.8:
+        warnings.append(f"{silence_rate:.0%} silence frames; mic may be too quiet or noise floor too high")
+    if beat_rate < 0.005 and peak > 0.05:
+        warnings.append("almost no beats detected despite active audio")
+    if gains and _percentile(gains, 95.0) >= AudioNormalization().max_gain * 0.95:
+        warnings.append("active-capture normalization gain is often near maximum; input may still be quiet")
+    if all_gains and _percentile(all_gains, 5.0) <= AudioNormalization().min_gain * 1.05:
+        warnings.append("some captures have normalization gain near minimum; check for clipping or abrupt loud input")
+    if drop_rate > 0.08:
+        warnings.append(f"{drop_rate:.0%} drop frames; drop detection may be too sensitive for this setup")
+
+    labels = sorted({str(row["label"]) for row in rows if row.get("label")})
+    label_text = ", ".join(labels) if labels else "-"
+    lines = [
+        f"Audio debug rows: {len(rows)}",
+        f"Labels: {label_text}",
+        f"Classified labels: active={sum(1 for value in classified.values() if value == 'active')} "
+        f"idle={sum(1 for value in classified.values() if value == 'idle')} "
+        f"quiet={sum(1 for value in classified.values() if value == 'quiet')}",
+        f"RMS floor/p80/peak: {floor:0.4f} / {_percentile(rms, 80.0):0.4f} / {peak:0.4f}",
+        f"Beat/drop/section/silence rates: {beat_rate:0.1%} / {drop_rate:0.1%} / {section_rate:0.1%} / {silence_rate:0.1%}",
+        f"BPM median: {_percentile(bpm_values, 50.0):0.0f}" if bpm_values else "BPM median: -",
+        "Per-label summary:",
+        *(_format_audio_debug_summary(label, groups[label]) for label in sorted(groups)),
+        "Recommended flags:",
+        f"  --mic-noise-floor {noise_floor:0.4f}",
+        f"  --mic-target-level {target_level:0.3f}",
+        f"  --idle-threshold-scale {idle_scale:0.2f}",
+    ]
+    if warnings:
+        lines.append("Warnings:")
+        lines.extend(f"  - {warning}" for warning in warnings)
+    else:
+        lines.append("Warnings: none")
+    return "\n".join(lines)
+
+
 def _encoder_pins_from_args(args: argparse.Namespace, prefix: str) -> EncoderPins | None:
     a = getattr(args, f"{prefix}_a")
     b = getattr(args, f"{prefix}_b")
@@ -809,10 +1234,23 @@ def _encoder_pins_from_args(args: argparse.Namespace, prefix: str) -> EncoderPin
     return EncoderPins(a=a, b=b, button=button)
 
 
-def _build_audio_config(*, target_level: float, noise_floor: float) -> AudioConfig:
+def _build_audio_config(*, target_level: float, noise_floor: float, analysis: AudioAnalysis | None = None) -> AudioConfig:
     return AudioConfig(
         smoothing=AudioSmoothing(noise_floor=noise_floor),
         normalization=AudioNormalization(target_level=target_level),
+        analysis=analysis or AudioAnalysis(),
+    )
+
+
+def _build_auto_selector_config(args: argparse.Namespace) -> AutoSelectorConfig:
+    return AutoSelectorConfig(
+        min_duration_s=args.dj_min_duration,
+        max_duration_s=args.dj_max_duration,
+        switch_cooldown_s=args.dj_switch_cooldown,
+        drop_cooldown_s=args.dj_drop_cooldown,
+        randomness=args.dj_randomness,
+        history_size=args.dj_history_size,
+        seed=args.dj_seed,
     )
 
 

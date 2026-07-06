@@ -1,6 +1,7 @@
 from .animation import (
     Animation,
     AnimationClass,
+    AnimationMetadata,
     AnimationPlayer,
     Aurora,
     BassDrop,
@@ -60,7 +61,9 @@ from .animation import (
 )
 from .audio import (
     AudioCalibrationResult,
+    AudioAnalysis,
     AudioConfig,
+    AudioFeatures,
     AudioFrame,
     AudioInput,
     AudioInputDevice,
@@ -76,6 +79,23 @@ from .audio import (
     list_input_device_details,
     list_input_devices,
     recommend_audio_calibration,
+)
+from .mic_profile import (
+    BUILTIN_MIC_PROFILES,
+    PCM2902_PROFILE,
+    MicProfile,
+    load_mic_profile,
+    match_builtin_mic_profile,
+    mic_profile_from_dict,
+    write_mic_profile,
+)
+from .selector import (
+    AnimationScore,
+    AnimationScoringEngine,
+    AutoSelectorConfig,
+    DJModeSelector,
+    SelectorDecision,
+    animation_metadata,
 )
 from .buffers import PixelBuffer, apply_brightness_rgb, clear, fade, fill_rgb, new_pixel_buffer
 from .color import Color, ColorBatch, Hex, Hsl, Hsla, Rgb, Rgba
@@ -93,10 +113,13 @@ from .stripe import Config, Stripe, SubStripe
 __all__ = [
     "Animation",
     "AnimationClass",
+    "AnimationMetadata",
     "AnimationPlayer",
     "CLASS_MAP",
     "AudioConfig",
     "AudioCalibrationResult",
+    "AudioAnalysis",
+    "AudioFeatures",
     "AudioFrame",
     "AudioInput",
     "AudioInputDevice",
@@ -107,6 +130,7 @@ __all__ = [
     "AudioSmoothing",
     "AudioState",
     "Aurora",
+    "BUILTIN_MIC_PROFILES",
     "BassDrop",
     "BeatExplosion",
     "BeatRipple",
@@ -148,8 +172,15 @@ __all__ = [
     "LaserSweep",
     "LightningStrike",
     "MirrorFlash",
+    "AnimationScore",
+    "AnimationScoringEngine",
+    "AutoSelectorConfig",
+    "DJModeSelector",
     "MusicDrivenSelector",
     "MusicFeatures",
+    "MicProfile",
+    "SelectorDecision",
+    "animation_metadata",
     "calibrate_audio_input",
     "features_from_frame",
     "MusicSelectorConfig",
@@ -157,6 +188,7 @@ __all__ = [
     "NeonConfetti",
     "NeonStorm",
     "PeakMirror",
+    "PCM2902_PROFILE",
     "PixelBuffer",
     "PixelExplosion",
     "PlasmaRave",
@@ -187,6 +219,10 @@ __all__ = [
     "fill_rgb",
     "list_input_device_details",
     "list_input_devices",
+    "load_mic_profile",
+    "match_builtin_mic_profile",
+    "mic_profile_from_dict",
     "new_pixel_buffer",
     "recommend_audio_calibration",
+    "write_mic_profile",
 ]

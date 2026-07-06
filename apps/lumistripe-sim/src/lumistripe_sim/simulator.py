@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -9,6 +10,8 @@ from typing import Any
 from lumistripe import (
     AnimationClass,
     AnimationPlayer,
+    AutoSelectorConfig,
+    AudioAnalysis,
     AudioConfig,
     AudioCalibrationResult,
     AudioFrame,
@@ -16,12 +19,14 @@ from lumistripe import (
     AudioNormalization,
     AudioSmoothing,
     CLASS_MAP,
+    DJModeSelector,
     MusicFeatures,
     MusicDrivenSelector,
     MusicSelectorConfig,
     Stripe,
     calibrate_audio_input,
     list_input_device_details,
+    load_mic_profile,
 )
 
 SUB_BAR_W = 8
@@ -55,6 +60,7 @@ class SimulatorMode(str, Enum):
     MANUAL = "manual"
     DEMO = "demo"
     MIC = "mic"
+    DJ = "dj"
 
     @property
     def label(self) -> str:
@@ -148,9 +154,11 @@ class SimulatorApp:
     audio_device: str | None = None
     mic_target_level: float = field(default_factory=lambda: AudioNormalization().target_level)
     mic_noise_floor: float = field(default_factory=lambda: AudioSmoothing().noise_floor)
+    audio_analysis: AudioAnalysis = field(default_factory=AudioAnalysis)
     idle_enter_frames: int = field(default_factory=lambda: MusicSelectorConfig().idle_enter_frames)
     idle_threshold_scale: float = DEFAULT_IDLE_THRESHOLD_SCALE
     auto_calibrate_audio: float | None = None
+    auto_selector_config: AutoSelectorConfig = field(default_factory=AutoSelectorConfig)
     player: AnimationPlayer = field(init=False)
     stripe: Stripe = field(init=False)
     controls: Controls = field(init=False)
@@ -163,6 +171,7 @@ class SimulatorApp:
     audio_calibration: AudioCalibrationResult | None = field(init=False, default=None)
     demo_tick: int = field(init=False, default=0)
     selector: MusicDrivenSelector | None = field(init=False, default=None)
+    dj_selector: DJModeSelector | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         self.player = AnimationPlayer.party()
@@ -198,7 +207,7 @@ class SimulatorApp:
     @property
     def class_label(self) -> str:
         if self.selector is None:
-            return "-"
+            return "DJ" if self.dj_selector is not None else "-"
         if self.selector.idle_active:
             return "IDLE"
         return self.selector.current_class.value.upper()
@@ -225,6 +234,8 @@ class SimulatorApp:
                 self.set_mode(SimulatorMode.DEMO)
             case "a":
                 self.set_mode(SimulatorMode.MIC)
+            case "j":
+                self.set_mode(SimulatorMode.DJ)
             case "s":
                 self._toggle_auto_select()
             case "c":
@@ -277,6 +288,7 @@ class SimulatorApp:
         self.audio_error = None
         self.audio_frame = AudioFrame()
         self.selector = None
+        self.dj_selector = None
 
         if mode is SimulatorMode.MANUAL:
             self.audio_status = "No audio source active."
@@ -292,6 +304,7 @@ class SimulatorApp:
             audio_config = _build_audio_config(
                 target_level=self.mic_target_level,
                 noise_floor=self.mic_noise_floor,
+                analysis=self.audio_analysis,
             )
             self.audio_input = (
                 AudioInput.with_device_config(self.audio_device, audio_config)
@@ -307,14 +320,17 @@ class SimulatorApp:
         self.audio_status = f"Input: {self.audio_input.device_name()}"
         current_name = self.player.name_at(self.player.current_index())
         current_classes = CLASS_MAP.get(current_name or "", ())
-        self.selector = MusicDrivenSelector(
-            config=_build_selector_config(
-                idle_enter_frames=self.idle_enter_frames,
-                idle_threshold_scale=self.idle_threshold_scale,
-            ),
-            current_class=current_classes[0] if current_classes else AnimationClass.GROOVY,
-        )
-        self.selector.set_auto_select(False)
+        if mode is SimulatorMode.DJ:
+            self.dj_selector = DJModeSelector(self.auto_selector_config)
+        else:
+            self.selector = MusicDrivenSelector(
+                config=_build_selector_config(
+                    idle_enter_frames=self.idle_enter_frames,
+                    idle_threshold_scale=self.idle_threshold_scale,
+                ),
+                current_class=current_classes[0] if current_classes else AnimationClass.GROOVY,
+            )
+            self.selector.set_auto_select(False)
         self.player.set_audio_snapshot(self._mic_snapshot)
 
     def _demo_snapshot(self) -> AudioFrame:
@@ -333,12 +349,15 @@ class SimulatorApp:
         self.audio_input = None
 
     def step(self) -> float:
-        if self.mode is SimulatorMode.MIC and self.audio_input is not None:
+        if self.mode in {SimulatorMode.MIC, SimulatorMode.DJ} and self.audio_input is not None:
             self.audio_frame = self.audio_input.read()
             self.music_features = self.audio_input.read_features()
             if self.selector is not None:
                 self.selector.update(self.player, self.music_features)
                 self.player.audio_enabled = not self.selector.idle_active
+            if self.dj_selector is not None:
+                self.dj_selector.update(self.player, self.music_features, now_s=time.monotonic())
+                self.player.audio_enabled = not self.music_features.silence
         delay = max(self.player.step(self.stripe), MIN_FRAME_SECONDS)
         if self.mode is SimulatorMode.MANUAL:
             self.audio_frame = AudioFrame()
@@ -581,7 +600,17 @@ class SimulatorApp:
             f"BRIGHT: {feat.brightness:0.2f}    ONSET: {feat.onset_strength:0.3f}    DYN: {feat.dynamic_range:0.3f}\n"
             f"LOUD: {feat.rolling_loudness:0.2f}    FLUX: {feat.spectral_flux:0.2f}    SILENCE: {silence}    DROP: {drop}    SECTION: {section}\n"
             f"BANDS: {bands}"
+            f"{self._dj_summary_text()}"
         )
+
+    def _dj_summary_text(self) -> str:
+        if self.dj_selector is None or not self.dj_selector.last_decision.scores:
+            return ""
+        top = ",".join(
+            f"{score.name}:{score.score:0.2f}"
+            for score in self.dj_selector.last_decision.scores[:3]
+        )
+        return f"\nDJ: {top} reason={self.dj_selector.last_decision.reason}"
 
     def render(self, canvas: Any, width: int, height: int) -> None:
         canvas.delete("all")
@@ -657,7 +686,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--mode",
         type=_parse_mode,
         default=SimulatorMode.MANUAL,
-        help="Startup mode: manual, demo, or mic",
+        help="Startup mode: manual, demo, mic, or dj",
     )
     parser.add_argument(
         "--audio-device",
@@ -681,6 +710,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Noise floor threshold for mic mode calibration",
     )
     parser.add_argument(
+        "--mic-profile",
+        help='Mic profile name, JSON path, or "auto" for device-name matching',
+    )
+    parser.add_argument(
         "--idle-enter-frames",
         type=_positive_int,
         default=MusicSelectorConfig().idle_enter_frames,
@@ -698,25 +731,38 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help="Measure the selected audio input and apply recommended mic tuning before startup",
     )
+    parser.add_argument("--dj-min-duration", type=_positive_float, default=AutoSelectorConfig().min_duration_s)
+    parser.add_argument("--dj-max-duration", type=_positive_float, default=AutoSelectorConfig().max_duration_s)
+    parser.add_argument("--dj-switch-cooldown", type=_positive_float, default=AutoSelectorConfig().switch_cooldown_s)
+    parser.add_argument("--dj-drop-cooldown", type=_positive_float, default=AutoSelectorConfig().drop_cooldown_s)
+    parser.add_argument("--dj-randomness", type=_non_negative_float, default=AutoSelectorConfig().randomness)
+    parser.add_argument("--dj-history-size", type=_positive_int, default=AutoSelectorConfig().history_size)
+    parser.add_argument("--dj-seed", type=int)
     return parser
 
 
 def main(argv: list[str] | None = None) -> None:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
     args = parser.parse_args(argv)
+    args.audio_analysis = AudioAnalysis()
     if args.list_audio_devices:
         for device in list_input_device_details():
             print(f"{device.index}: {device.name}")
         return
+    if args.mic_profile is not None:
+        _apply_mic_profile(args, raw_argv)
     SimulatorApp(
         pixel_count=args.pixels,
         mode=args.mode,
         audio_device=args.audio_device,
         mic_target_level=args.mic_target_level,
         mic_noise_floor=args.mic_noise_floor,
+        audio_analysis=args.audio_analysis,
         idle_enter_frames=args.idle_enter_frames,
         idle_threshold_scale=args.idle_threshold_scale,
         auto_calibrate_audio=args.auto_calibrate_audio,
+        auto_selector_config=_build_auto_selector_config(args),
     ).run()
 
 
@@ -748,10 +794,62 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
-def _build_audio_config(*, target_level: float, noise_floor: float) -> AudioConfig:
+def _apply_mic_profile(args: argparse.Namespace, raw_argv: list[str]) -> None:
+    device_name = _selected_audio_device_name(args.audio_device) if args.mic_profile == "auto" else None
+    profile = load_mic_profile(args.mic_profile, device_name=device_name)
+    args.audio_analysis = profile.analysis
+    if profile.mic_target_level is not None and not _option_provided(raw_argv, "--mic-target-level"):
+        args.mic_target_level = profile.mic_target_level
+    if profile.mic_noise_floor is not None and not _option_provided(raw_argv, "--mic-noise-floor"):
+        args.mic_noise_floor = profile.mic_noise_floor
+    if profile.idle_threshold_scale is not None and not _option_provided(raw_argv, "--idle-threshold-scale"):
+        args.idle_threshold_scale = profile.idle_threshold_scale
+
+
+def _selected_audio_device_name(pattern: str | None) -> str | None:
+    try:
+        devices = list_input_device_details()
+    except RuntimeError:
+        return None
+    if not devices:
+        return None
+    if pattern is None:
+        return devices[0].name
+    if pattern.isdigit():
+        index = int(pattern)
+        for device in devices:
+            if device.index == index:
+                return device.name
+        return None
+    lowered = pattern.casefold()
+    for device in devices:
+        if lowered in device.name.casefold():
+            return device.name
+    return None
+
+
+def _option_provided(argv: list[str], option: str) -> bool:
+    prefix = f"{option}="
+    return any(value == option or value.startswith(prefix) for value in argv)
+
+
+def _build_audio_config(*, target_level: float, noise_floor: float, analysis: AudioAnalysis | None = None) -> AudioConfig:
     return AudioConfig(
         smoothing=AudioSmoothing(noise_floor=noise_floor),
         normalization=AudioNormalization(target_level=target_level),
+        analysis=analysis or AudioAnalysis(),
+    )
+
+
+def _build_auto_selector_config(args: argparse.Namespace) -> AutoSelectorConfig:
+    return AutoSelectorConfig(
+        min_duration_s=args.dj_min_duration,
+        max_duration_s=args.dj_max_duration,
+        switch_cooldown_s=args.dj_switch_cooldown,
+        drop_cooldown_s=args.dj_drop_cooldown,
+        randomness=args.dj_randomness,
+        history_size=args.dj_history_size,
+        seed=args.dj_seed,
     )
 
 

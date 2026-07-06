@@ -2,6 +2,8 @@ import pytest
 
 from lumistripe import (
     AnimationClass,
+    AutoSelectorConfig,
+    AudioAnalysis,
     AudioCalibrationResult,
     AudioConfig,
     AudioFrame,
@@ -10,6 +12,7 @@ from lumistripe import (
     MusicDrivenSelector,
     MusicFeatures,
     MusicSelectorConfig,
+    DJModeSelector,
 )
 from lumistripe_sim.simulator import (
     MIN_FRAME_SECONDS,
@@ -114,6 +117,17 @@ def test_analysis_text_formats_audio_values() -> None:
     assert "LOUD: 0.44" in text
     assert "FLUX: 0.31" in text
     assert "DROP: YES" in text
+
+
+def test_analysis_text_includes_dj_summary() -> None:
+    app = SimulatorApp(pixel_count=12)
+    app.dj_selector = DJModeSelector(AutoSelectorConfig(randomness=0.0))
+    app.dj_selector.update(app.player, MusicFeatures(), now_s=0.0)
+
+    text = app.analysis_text()
+
+    assert "DJ:" in text
+    assert "reason=initial_hold" in text
 
 
 def test_demo_frame_has_energy() -> None:
@@ -310,6 +324,14 @@ def test_parser_accepts_audio_device_string() -> None:
     assert args.audio_device == "2"
 
 
+def test_parser_accepts_dj_mode_and_selector_flags() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["--mode", "dj", "--dj-min-duration", "3", "--dj-seed", "9"])
+    assert args.mode is SimulatorMode.DJ
+    assert args.dj_min_duration == pytest.approx(3.0)
+    assert args.dj_seed == 9
+
+
 def test_parser_accepts_mic_tuning_flags() -> None:
     parser = build_parser()
     args = parser.parse_args(
@@ -318,6 +340,8 @@ def test_parser_accepts_mic_tuning_flags() -> None:
             "0.5",
             "--mic-noise-floor",
             "0.01",
+            "--mic-profile",
+            "pcm2902",
             "--idle-enter-frames",
             "42",
             "--idle-threshold-scale",
@@ -326,6 +350,7 @@ def test_parser_accepts_mic_tuning_flags() -> None:
     )
     assert args.mic_target_level == pytest.approx(0.5)
     assert args.mic_noise_floor == pytest.approx(0.01)
+    assert args.mic_profile == "pcm2902"
     assert args.idle_enter_frames == 42
     assert args.idle_threshold_scale == pytest.approx(1.5)
 
@@ -397,3 +422,29 @@ def test_main_lists_audio_devices_and_exits(monkeypatch: pytest.MonkeyPatch, cap
     captured = capsys.readouterr()
     assert "1: USB Mic" in captured.out
     assert "2: Default Input" in captured.out
+
+
+def test_main_applies_auto_mic_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    called: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "lumistripe_sim.simulator.list_input_device_details",
+        lambda: [type("Device", (), {"index": 1, "name": "Texas Instruments PCM2902 Audio Codec"})()],
+    )
+
+    class FakeSimulatorApp:
+        def __init__(self, **kwargs) -> None:
+            called.update(kwargs)
+
+        def run(self) -> None:
+            called["ran"] = True
+
+    monkeypatch.setattr("lumistripe_sim.simulator.SimulatorApp", FakeSimulatorApp)
+
+    main(["--mode", "mic", "--mic-profile", "auto"])
+
+    assert called["mic_target_level"] == pytest.approx(0.403)
+    assert called["mic_noise_floor"] == pytest.approx(0.0137)
+    assert called["idle_threshold_scale"] == pytest.approx(0.92)
+    assert isinstance(called["audio_analysis"], AudioAnalysis)
+    assert called["ran"] is True

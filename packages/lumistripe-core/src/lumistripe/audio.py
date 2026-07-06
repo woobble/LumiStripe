@@ -58,7 +58,10 @@ class AudioFrame:
 @dataclass(frozen=True, slots=True)
 class MusicFeatures:
     bpm: float = 120.0
+    bpm_confidence: float = 0.0
     energy: float = 0.0
+    volume: float = 0.0
+    energy_level: float = 0.0
     bass: float = 0.0
     brightness: float = 0.0
     onset_strength: float = 0.0
@@ -85,6 +88,13 @@ class MusicFeatures:
     silence: bool = False
     drop_detected: bool = False
     section_change: bool = False
+
+    @property
+    def beat_detected(self) -> bool:
+        return self.beat
+
+
+AudioFeatures = MusicFeatures
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,15 +123,26 @@ class AudioNormalization:
 
 
 @dataclass(frozen=True, slots=True)
+class AudioAnalysis:
+    drop_bass_threshold: float = 0.45
+    drop_bass_delta_threshold: float = 0.16
+    drop_onset_threshold: float = 0.12
+    section_change_threshold: float = 0.42
+    section_onset_threshold: float = 0.08
+
+
+@dataclass(frozen=True, slots=True)
 class AudioConfig:
     smoothing: AudioSmoothing = field(default_factory=AudioSmoothing)
     normalization: AudioNormalization = field(default_factory=AudioNormalization)
+    analysis: AudioAnalysis = field(default_factory=AudioAnalysis)
 
     @classmethod
     def raw(cls) -> AudioConfig:
         return cls(
             smoothing=AudioSmoothing(enabled=False),
             normalization=AudioNormalization(enabled=False, dc_block_enabled=False),
+            analysis=AudioAnalysis(),
         )
 
 
@@ -297,7 +318,11 @@ def features_from_frame(frame: AudioFrame) -> MusicFeatures:
     onset = _clamp01(frame.beat_strength if frame.beat else frame.rms * 0.18)
     silence = frame.rms <= 0.003 and max(frame.bands, default=0.0) <= 0.003
     return MusicFeatures(
+        bpm=120.0,
+        bpm_confidence=0.0,
         energy=frame.rms,
+        volume=frame.rms,
+        energy_level=frame.rms,
         bass=low,
         brightness=brightness,
         onset_strength=onset,
@@ -426,6 +451,11 @@ def _config_to_dict(config: AudioConfig) -> dict[str, float | int]:
         "silence_floor": config.normalization.silence_floor,
         "normalization_enabled": config.normalization.enabled,
         "dc_block_enabled": config.normalization.dc_block_enabled,
+        "drop_bass_threshold": config.analysis.drop_bass_threshold,
+        "drop_bass_delta_threshold": config.analysis.drop_bass_delta_threshold,
+        "drop_onset_threshold": config.analysis.drop_onset_threshold,
+        "section_change_threshold": config.analysis.section_change_threshold,
+        "section_onset_threshold": config.analysis.section_onset_threshold,
     }
 
 
@@ -512,7 +542,10 @@ class AudioState:
         ) = self._processor.features()
         self._features = MusicFeatures(
             bpm=float(bpm),
+            bpm_confidence=_clamp01(float(beat_confidence) * 0.6 + min(1.0, max(0.0, (float(bpm) - 40.0) / 200.0)) * 0.4),
             energy=float(energy),
+            volume=float(energy),
+            energy_level=float(energy),
             bass=float(bass),
             brightness=float(brightness),
             onset_strength=float(onset_strength),

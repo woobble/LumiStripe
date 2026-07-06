@@ -45,6 +45,7 @@ from .rave_pulse import RavePulse
 from .reactive import AudioReactive, Decay
 from .rgbw_test import RgbwTest
 from .selector import AnimationClass, CLASS_MAP, MusicDrivenSelector, MusicSelectorConfig
+from ..selector import AnimationMetadata
 from .shockwave import Shockwave
 from .spectrum_flash import SpectrumFlash
 from .sinelon import Sinelon
@@ -58,6 +59,7 @@ __all__ = [
     "Animation",
     "AnimationClass",
     "AnimationPlayer",
+    "AnimationMetadata",
     "CLASS_MAP",
     "AudioReactive",
     "Decay",
