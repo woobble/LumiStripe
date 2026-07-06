@@ -226,6 +226,10 @@ class MultiController(Controller):
     def length(self) -> int:
         return self._controllers[0].length
 
+    @property
+    def controllers(self) -> tuple[Controller, ...]:
+        return tuple(self._controllers)
+
     def pixels(self) -> PixelBuffer:
         return self._controllers[0].pixels()
 

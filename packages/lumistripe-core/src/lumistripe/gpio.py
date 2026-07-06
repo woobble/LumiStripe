@@ -14,6 +14,8 @@ class _LineWriter(Protocol):
 
 
 class _GPIODLineWriter:
+    backend_label = "libgpiod"
+
     def __init__(self, config: Config) -> None:
         try:
             gpiod = importlib.import_module("gpiod")
@@ -110,6 +112,8 @@ class _GPIODLineWriter:
 
 
 class _GPIOMemLineWriter:
+    backend_label = "gpiomem"
+
     def __init__(self, config: Config) -> None:
         try:
             from lumistripe._gpiomem import GPIOMem as _GPIOMem
@@ -153,13 +157,20 @@ class GPIOStripe(Stripe):
 
         if _line_writer is not None:
             self._line_writer = _line_writer
+            self._gpio_backend_label = getattr(_line_writer, "backend_label", "custom")
         elif _prefer_gpiomem:
             try:
                 self._line_writer = _GPIOMemLineWriter(config)
             except RuntimeError:
                 self._line_writer = _GPIODLineWriter(config)
+            self._gpio_backend_label = self._line_writer.backend_label
         else:
             self._line_writer = _GPIODLineWriter(config)
+            self._gpio_backend_label = self._line_writer.backend_label
+
+    @property
+    def gpio_backend_label(self) -> str:
+        return self._gpio_backend_label
 
     def flush(self) -> None:
         if not bool(np.any(self._dirty)):

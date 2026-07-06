@@ -8,6 +8,7 @@
 #include <time.h>
 #include <errno.h>
 #include <string.h>
+#include <stdlib.h>
 
 #define GPIO_MEM_PATH "/dev/gpiomem"
 
@@ -33,6 +34,7 @@ typedef struct {
     int clock_pin;
     int fd;
     double ns_per_iter;
+    int flushing;
 } GPIOMem;
 
 static void gpio_set(volatile uint32_t *gpio, int pin, int value) {
@@ -74,6 +76,29 @@ static void pulse(GPIOMem *self, int data) {
     busy_wait_ns(self, 500);
 }
 
+static void flush_rgb_frame(GPIOMem *self, const uint8_t *rgb, npy_intp num_pixels) {
+    for (int i = 0; i < 50; i++)
+        pulse(self, 0);
+
+    for (npy_intp i = 0; i < num_pixels; i++) {
+        uint8_t sr = rgb[i * 3 + 0];
+        uint8_t sg = rgb[i * 3 + 1];
+        uint8_t sb = rgb[i * 3 + 2];
+
+        pulse(self, 1);
+
+        for (int bit = 7; bit >= 0; bit--)
+            pulse(self, (sr >> bit) & 1);
+        for (int bit = 7; bit >= 0; bit--)
+            pulse(self, (sg >> bit) & 1);
+        for (int bit = 7; bit >= 0; bit--)
+            pulse(self, (sb >> bit) & 1);
+    }
+
+    for (npy_intp i = 0; i < num_pixels; i++)
+        pulse(self, 0);
+}
+
 static int GPIOMem_init(GPIOMem *self, PyObject *args, PyObject *kwds) {
     static char *kwlist[] = {"data_pin", "clock_pin", NULL};
     int data_pin, clock_pin;
@@ -84,6 +109,7 @@ static int GPIOMem_init(GPIOMem *self, PyObject *args, PyObject *kwds) {
     self->gpio_mem = NULL;
     self->data_pin = data_pin;
     self->clock_pin = clock_pin;
+    self->flushing = 0;
 
     if (data_pin < 0 || data_pin > 53 || clock_pin < 0 || clock_pin > 53) {
         PyErr_SetString(PyExc_ValueError, "GPIO pin must be 0-53");
@@ -143,6 +169,10 @@ static PyObject *GPIOMem_set_values(GPIOMem *self, PyObject *args) {
     int data, clock;
     if (!PyArg_ParseTuple(args, "pp", &data, &clock))
         return NULL;
+    if (self->gpio_mem == NULL) {
+        PyErr_SetString(PyExc_RuntimeError, "GPIOMem is closed");
+        return NULL;
+    }
     gpio_set(self->gpio_mem, self->data_pin, data);
     gpio_set(self->gpio_mem, self->clock_pin, clock);
     Py_RETURN_NONE;
@@ -150,6 +180,10 @@ static PyObject *GPIOMem_set_values(GPIOMem *self, PyObject *args) {
 
 static PyObject *GPIOMem_close(GPIOMem *self, PyObject *args) {
     (void)args;
+    if (self->flushing) {
+        PyErr_SetString(PyExc_RuntimeError, "cannot close GPIOMem while flush is active");
+        return NULL;
+    }
     if (self->gpio_mem != NULL) {
         munmap((void *)self->gpio_mem, GPIO_MAP_BYTES);
         self->gpio_mem = NULL;
@@ -176,12 +210,26 @@ static PyObject *GPIOMem_flush(GPIOMem *self, PyObject *args) {
                         "pixels must have dtype uint8");
         return NULL;
     }
+    if (self->gpio_mem == NULL) {
+        PyErr_SetString(PyExc_RuntimeError, "GPIOMem is closed");
+        return NULL;
+    }
 
     npy_intp num_pixels = PyArray_DIM(pixels, 0);
     uint8_t *data = (uint8_t *)PyArray_DATA(pixels);
+    uint8_t *rgb = NULL;
 
-    for (int i = 0; i < 50; i++)
-        pulse(self, 0);
+    if (num_pixels > 0) {
+        if (num_pixels > PY_SSIZE_T_MAX / 3) {
+            PyErr_SetString(PyExc_MemoryError, "pixel buffer is too large");
+            return NULL;
+        }
+        rgb = (uint8_t *)malloc((size_t)num_pixels * 3u);
+        if (rgb == NULL) {
+            PyErr_NoMemory();
+            return NULL;
+        }
+    }
 
     for (npy_intp i = 0; i < num_pixels; i++) {
         uint32_t r = data[i * 4 + 0];
@@ -189,22 +237,18 @@ static PyObject *GPIOMem_flush(GPIOMem *self, PyObject *args) {
         uint32_t b = data[i * 4 + 2];
         uint32_t a = data[i * 4 + 3];
 
-        uint8_t sr = (uint8_t)(r * a / 255);
-        uint8_t sg = (uint8_t)(g * a / 255);
-        uint8_t sb = (uint8_t)(b * a / 255);
-
-        pulse(self, 1);
-
-        for (int bit = 7; bit >= 0; bit--)
-            pulse(self, (sr >> bit) & 1);
-        for (int bit = 7; bit >= 0; bit--)
-            pulse(self, (sg >> bit) & 1);
-        for (int bit = 7; bit >= 0; bit--)
-            pulse(self, (sb >> bit) & 1);
+        rgb[i * 3 + 0] = (uint8_t)(r * a / 255);
+        rgb[i * 3 + 1] = (uint8_t)(g * a / 255);
+        rgb[i * 3 + 2] = (uint8_t)(b * a / 255);
     }
 
-    for (npy_intp i = 0; i < num_pixels; i++)
-        pulse(self, 0);
+    self->flushing = 1;
+    Py_BEGIN_ALLOW_THREADS
+    flush_rgb_frame(self, rgb, num_pixels);
+    Py_END_ALLOW_THREADS
+    self->flushing = 0;
+
+    free(rgb);
 
     Py_RETURN_NONE;
 }

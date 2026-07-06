@@ -98,6 +98,7 @@ class HeadlessApp:
     audio_calibration: AudioCalibrationResult | None = None
     animation_name: str | None = None
     quiet: bool = False
+    gpio_backend_label: str | None = None
     encoder_backend: EncoderBackend = field(default_factory=NullEncoderBackend)
     player: AnimationPlayer = field(init=False)
     running: bool = field(init=False, default=True)
@@ -346,6 +347,8 @@ class HeadlessApp:
             f"CLASS: {self.class_label}",
             self.analysis_text(),
         ]
+        if self.gpio_backend_label:
+            lines.insert(3, f"GPIO: {self.gpio_backend_label}")
         if self.mode is RuntimeMode.MIC:
             lines.insert(4, f"MIC: {self.mic_tuning_label}")
             health = self._audio_health_summary()
@@ -626,6 +629,15 @@ def build_output_controller(args: argparse.Namespace) -> Controller:
     return MultiController([primary, secondary])
 
 
+def gpio_backend_label(controller: Controller) -> str | None:
+    if isinstance(controller, MultiController):
+        labels = [gpio_backend_label(child) for child in controller.controllers]
+        compact = [label for label in labels if label]
+        return ", ".join(compact) if compact else None
+    label = getattr(controller, "gpio_backend_label", None)
+    return str(label) if label else None
+
+
 def build_runtime_encoder_backend(args: argparse.Namespace) -> EncoderBackend:
     encoder1 = _encoder_pins_from_args(args, "encoder1")
     encoder2 = _encoder_pins_from_args(args, "encoder2")
@@ -687,6 +699,7 @@ def main(argv: list[str] | None = None) -> None:
             audio_calibration=calibration,
             animation_name=args.animation,
             quiet=args.quiet,
+            gpio_backend_label=gpio_backend_label(controller),
             encoder_backend=encoder_backend,
         ).run()
     except (RuntimeError, ValueError) as exc:

@@ -24,12 +24,15 @@ from lumistripe_cli.app import (
     build_output_controller,
     build_parser,
     demo_frame,
+    gpio_backend_label,
     main,
 )
 from lumistripe_cli.encoder import ControlEvent, NullEncoderBackend
 
 
 class FakeGPIOStripe(Stripe):
+    gpio_backend_label = "fake-gpio"
+
     def __init__(self, config, length: int) -> None:
         super().__init__(length)
         self.config = config
@@ -157,6 +160,14 @@ def test_build_output_controller_returns_multi_controller(monkeypatch: pytest.Mo
     controller = build_output_controller(args)
     assert isinstance(controller, MultiController)
     assert controller.length == 16
+
+
+def test_gpio_backend_label_reports_single_and_multi_controller() -> None:
+    primary = FakeGPIOStripe(None, 4)
+    secondary = FakeGPIOStripe(None, 4)
+    assert gpio_backend_label(primary) == "fake-gpio"
+    assert gpio_backend_label(MultiController([primary, secondary])) == "fake-gpio, fake-gpio"
+    assert gpio_backend_label(Stripe(4)) is None
 
 
 def test_build_output_controller_rejects_partial_second_stripe(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -303,6 +314,12 @@ def test_headless_app_status_block_includes_error_when_present() -> None:
     block = app._status_block()
     assert "ERROR: problem" in block
     assert "OUT: 1.00" in block
+
+
+def test_headless_app_status_block_includes_gpio_backend_when_present() -> None:
+    app = HeadlessApp(controller=Stripe(12), pixel_count=12, quiet=True, gpio_backend_label="gpiomem")
+    block = app._status_block()
+    assert "GPIO: gpiomem" in block
 
 
 def test_headless_app_status_block_includes_mic_tuning_in_mic_mode() -> None:

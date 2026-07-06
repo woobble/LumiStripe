@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+import lumistripe.gpio as gpio_module
 
 from lumistripe import (
     BrightnessController,
@@ -243,6 +244,45 @@ def test_gpio_stripe_flush_writes_expected_frame_shape() -> None:
     pulse_count = 50 + (2 * 25) + 2
     assert writer.writes[0] == (False, False)
     assert len(writer.writes) == 1 + pulse_count * 3
+
+
+def test_gpio_stripe_custom_writer_reports_custom_backend() -> None:
+    stripe = GPIOStripe(Config(), 1, _line_writer=FakeLineWriter())
+    assert stripe.gpio_backend_label == "custom"
+
+
+def test_gpio_stripe_custom_writer_can_report_backend_label() -> None:
+    class LabeledWriter(FakeLineWriter):
+        backend_label = "test-writer"
+
+    stripe = GPIOStripe(Config(), 1, _line_writer=LabeledWriter())
+    assert stripe.gpio_backend_label == "test-writer"
+
+
+def test_gpio_stripe_reports_gpiomem_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeGPIOMemLineWriter(FakeLineWriter):
+        backend_label = "gpiomem"
+
+        def flush_pixels(self, pixels: np.ndarray) -> None:
+            del pixels
+
+    monkeypatch.setattr(gpio_module, "_GPIOMemLineWriter", lambda config: FakeGPIOMemLineWriter())
+    stripe = GPIOStripe(Config(), 1)
+    assert stripe.gpio_backend_label == "gpiomem"
+
+
+def test_gpio_stripe_reports_libgpiod_fallback_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeGPIODLineWriter(FakeLineWriter):
+        backend_label = "libgpiod"
+
+    def fail_gpiomem(config: Config) -> FakeLineWriter:
+        del config
+        raise RuntimeError("no gpiomem")
+
+    monkeypatch.setattr(gpio_module, "_GPIOMemLineWriter", fail_gpiomem)
+    monkeypatch.setattr(gpio_module, "_GPIODLineWriter", lambda config: FakeGPIODLineWriter())
+    stripe = GPIOStripe(Config(), 1)
+    assert stripe.gpio_backend_label == "libgpiod"
 
 
 def test_gpio_stripe_skip_flush_when_clean() -> None:
