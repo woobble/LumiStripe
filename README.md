@@ -119,7 +119,10 @@ lumistripe-sim --mode mic --auto-calibrate-audio 3
 uv sync
 
 # Run tests
-uv run pytest -q
+uv run python -m pytest -q
+
+# Run tests with coverage report
+uv run python -m pytest -q --cov-report=term-missing --cov-report=xml
 
 # Lint and type-check
 uv run ruff check .

@@ -24,12 +24,37 @@ lumistripe-sim = { workspace = true }
 [dependency-groups]
 dev = [
     "pytest>=9.1",
+    "pytest-cov>=7.1",
     "ruff>=0.15",
     "mypy>=2.1",
 ]
 
 [tool.pytest.ini_options]
 python_files = ["test_*.py"]
+addopts = [
+    "--cov=lumistripe",
+    "--cov=lumistripe_cli",
+    "--cov=lumistripe_sim",
+    "--cov-report=term-missing",
+    "--cov-report=xml",
+]
+
+[tool.coverage.run]
+branch = true
+source = [
+    "lumistripe",
+    "lumistripe_cli",
+    "lumistripe_sim",
+]
+omit = [
+    "*/tests/*",
+    "*/build/*",
+    "third_party/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
 
 [tool.mypy]
 exclude = [
