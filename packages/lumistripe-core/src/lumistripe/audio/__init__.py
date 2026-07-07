@@ -707,7 +707,7 @@ def list_input_device_details() -> list[AudioInputDevice]:
 def _load_sounddevice() -> Any:
     try:
         return importlib.import_module("sounddevice")
-    except ImportError as exc:
+    except (ImportError, OSError) as exc:
         raise RuntimeError(
             "sounddevice is required for AudioInput; install lumistripe-core[audio]"
         ) from exc

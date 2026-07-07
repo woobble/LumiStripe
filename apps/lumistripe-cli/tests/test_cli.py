@@ -1104,8 +1104,34 @@ def test_main_explicit_mic_flags_override_profile(monkeypatch: pytest.MonkeyPatc
     assert called["target"] == pytest.approx(0.403)
 
 
-def test_main_writes_effective_mic_profile(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_main_writes_effective_mic_profile(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
     path = tmp_path / "profile.json"
+
+    def unavailable_devices() -> list[object]:
+        raise RuntimeError("sounddevice is required for AudioInput; install lumistripe-core[audio]")
+
+    monkeypatch.setattr("lumistripe_cli.app.list_input_device_details", unavailable_devices)
+    main(["--mic-profile", "pcm2902", "--mic-target-level", "0.5", "--write-mic-profile", str(path)])
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    captured = capsys.readouterr()
+    assert "Wrote mic profile" in captured.out
+    assert data["mic_noise_floor"] == pytest.approx(0.0137)
+    assert data["mic_target_level"] == pytest.approx(0.5)
+    assert data["idle_threshold_scale"] == pytest.approx(0.92)
+
+
+def test_main_writes_effective_mic_profile_with_audio_devices(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "profile.json"
+
+    monkeypatch.setattr(
+        "lumistripe_cli.app.list_input_device_details",
+        lambda: [type("Device", (), {"index": 1, "name": "USB Mic"})()],
+    )
 
     main(["--mic-profile", "pcm2902", "--mic-target-level", "0.5", "--write-mic-profile", str(path)])
 
@@ -1115,6 +1141,7 @@ def test_main_writes_effective_mic_profile(tmp_path: Path, capsys: pytest.Captur
     assert data["mic_noise_floor"] == pytest.approx(0.0137)
     assert data["mic_target_level"] == pytest.approx(0.5)
     assert data["idle_threshold_scale"] == pytest.approx(0.92)
+    assert data["device_patterns"] == ["USB Mic"]
 
 
 def test_main_auto_calibrate_audio_applies_runtime_tuning(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -671,6 +671,19 @@ def test_audio_input_missing_dependency_raises(monkeypatch: pytest.MonkeyPatch) 
         AudioInput.new()
 
 
+def test_audio_input_missing_native_backend_raises_runtime_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def raising_import(name: str):
+        if name == "sounddevice":
+            raise OSError("PortAudio library not found")
+        return __import__(name)
+
+    monkeypatch.setattr("lumistripe.audio.importlib.import_module", raising_import)
+    with pytest.raises(RuntimeError, match="lumistripe-core\\[audio\\]"):
+        AudioInput.new()
+
+
 def test_list_input_devices_uses_sounddevice(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = FakeSoundDevice()
     monkeypatch.setattr("lumistripe.audio.importlib.import_module", lambda name: fake)
