@@ -265,7 +265,7 @@ static PyMethodDef GPIOMem_methods[] = {
 
 static PyTypeObject GPIOMemType = {
     PyVarObject_HEAD_INIT(NULL, 0)
-    .tp_name        = "lumistripe._gpiomem.GPIOMem",
+    .tp_name        = "lumistripe.gpio._gpiomem.GPIOMem",
     .tp_doc         = "Raspberry Pi /dev/gpiomem GPIO fast writer",
     .tp_basicsize   = sizeof(GPIOMem),
     .tp_itemsize    = 0,
@@ -278,7 +278,7 @@ static PyTypeObject GPIOMemType = {
 
 static struct PyModuleDef moduledef = {
     PyModuleDef_HEAD_INIT,
-    .m_name = "_gpiomem",
+    .m_name = "lumistripe.gpio._gpiomem",
     .m_doc  = "GPIO bit-banging via /dev/gpiomem direct register access",
     .m_size = -1,
 };

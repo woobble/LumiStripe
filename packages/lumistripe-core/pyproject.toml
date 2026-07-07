@@ -30,3 +30,5 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 lumistripe = ["*.pyi"]
+"lumistripe.audio" = ["*.pyi"]
+"lumistripe.gpio" = ["*.pyi"]

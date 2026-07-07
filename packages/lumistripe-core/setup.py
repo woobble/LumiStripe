@@ -2,20 +2,20 @@ from setuptools import setup, Extension
 import numpy
 
 ext_gpio = Extension(
-    "lumistripe._gpiomem",
-    sources=["src/lumistripe/_gpiomem.c"],
+    "lumistripe.gpio._gpiomem",
+    sources=["src/lumistripe/gpio/_gpiomem.c"],
     include_dirs=[numpy.get_include()],
     extra_compile_args=["-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-O2"],
 )
 
 ext_audio = Extension(
-    "lumistripe._audio",
+    "lumistripe.audio._audio",
     sources=[
-        "src/lumistripe/_audio.c",
-        "src/lumistripe/kissfft/kiss_fft.c",
-        "src/lumistripe/kissfft/kiss_fftr.c",
+        "src/lumistripe/audio/_audio.c",
+        "src/lumistripe/audio/kissfft/kiss_fft.c",
+        "src/lumistripe/audio/kissfft/kiss_fftr.c",
     ],
-    include_dirs=[numpy.get_include(), "src/lumistripe/kissfft"],
+    include_dirs=[numpy.get_include(), "src/lumistripe/audio/kissfft"],
     libraries=["m"],
     extra_compile_args=[
         "-std=c11", "-Wall", "-Wextra", "-Wpedantic",

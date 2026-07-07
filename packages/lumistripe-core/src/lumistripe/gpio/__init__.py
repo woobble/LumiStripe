@@ -5,8 +5,8 @@ from typing import Protocol
 
 import numpy as np
 
-from .color import Rgba
-from .stripe import Config, Stripe, SubStripe
+from ..color import Rgba
+from ..stripe import Config, Stripe, SubStripe
 
 
 class _LineWriter(Protocol):
@@ -116,7 +116,7 @@ class _GPIOMemLineWriter:
 
     def __init__(self, config: Config) -> None:
         try:
-            from lumistripe._gpiomem import GPIOMem as _GPIOMem
+            from ._gpiomem import GPIOMem as _GPIOMem
         except ImportError as exc:
             raise RuntimeError(
                 "gpiomem extension not available; install lumistripe-core on a Raspberry Pi"

@@ -9,7 +9,7 @@ from typing import Any, cast
 import numpy as np
 import numpy.typing as npt
 
-from lumistripe import _audio
+from . import _audio
 
 FFT_SIZE = 1024
 NUM_BANDS = 8

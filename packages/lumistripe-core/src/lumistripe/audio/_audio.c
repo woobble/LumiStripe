@@ -803,7 +803,7 @@ static PyMethodDef AudioProcessor_methods[] = {
 
 static PyTypeObject AudioProcessorType = {
     PyVarObject_HEAD_INIT(NULL, 0)
-    .tp_name = "lumistripe._audio.AudioProcessor",
+    .tp_name = "lumistripe.audio._audio.AudioProcessor",
     .tp_basicsize = sizeof(AudioProcessor),
     .tp_itemsize = 0,
     .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
@@ -819,7 +819,7 @@ static PyMethodDef module_methods[] = {
 
 static struct PyModuleDef audiomodule = {
     PyModuleDef_HEAD_INIT,
-    "lumistripe._audio",
+    "lumistripe.audio._audio",
     NULL,
     -1,
     module_methods,
