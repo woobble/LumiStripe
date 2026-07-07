@@ -272,4 +272,7 @@ $RECYCLE.BIN/
 # uv
 .uv-cache/
 
+# Custom
+captures/
+
 # End of https://www.toptal.com/developers/gitignore/api/visualstudiocode,windows,linux,macos,python
