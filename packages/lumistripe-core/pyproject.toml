@@ -10,7 +10,7 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "typing-extensions>=4.16",
-    "numpy>=2.5",
+    "numpy>=2.5.1",
 ]
 
 [project.optional-dependencies]
@@ -22,7 +22,7 @@ gpio = [
 ]
 
 [build-system]
-requires = ["setuptools>=83.0.0", "numpy>=2.5"]
+requires = ["setuptools>=83.0.0", "numpy>=2.5.1"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
