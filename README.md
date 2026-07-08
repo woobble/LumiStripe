@@ -1,5 +1,7 @@
 # LumiStripe
 
+[![codecov](https://codecov.io/github/woobble/LumiStripe/graph/badge.svg?token=2ZJDBFMOOW)](https://codecov.io/github/woobble/LumiStripe)
+
 **Python-powered LED animation engine with audio-reactive lighting.**
 
 LumiStripe drives 2-wire addressable LED strips from a Raspberry Pi or other Linux single-board computer via GPIO bit-banging, and provides a rich animation engine with **38+ built-in effects**, real-time **FFT audio analysis**, **music-driven animation selection**, and a cross-platform **Tkinter GUI simulator**.
