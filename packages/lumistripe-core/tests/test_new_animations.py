@@ -6,10 +6,13 @@ from lumistripe import (
     BeatExplosion,
     BeatRipple,
     BeatTunnel,
+    BeatWave,
     CenterBurst,
     ClubFlash,
     ColorBurst,
     CometStorm,
+    Bpm,
+    DanceFloor,
     DiscoComet,
     DiscoSparkle,
     DropExplosion,
@@ -17,14 +20,25 @@ from lumistripe import (
     DualLaser,
     ElectricStorm,
     FireworkBurst,
+    GlowRush,
+    HardBeat,
     Juggle,
     LaserSweep,
     LightningStrike,
     MirrorFlash,
     NeonConfetti,
+    NeonStorm,
+    PixelExplosion,
     PlasmaRave,
+    Police,
+    RainbowStrobe,
+    RavePulse,
     RaveScanner,
+    Rgba,
+    RgbwTest,
+    Sinelon,
     Stripe,
+    Strobe,
     SpectrumFlash,
     StrobeChase,
     Twinkle,
@@ -312,6 +326,359 @@ def test_juggle_audio_beat_scales_speeds_and_lights_pixels() -> None:
     assert _lit_count(stripe) > 0
 
 
+def test_beat_wave_name() -> None:
+    assert BeatWave().name == "beat_wave"
+
+
+def test_beat_wave_non_audio_clears_pixels() -> None:
+    stripe = Stripe(24)
+    anim = BeatWave()
+
+    stripe.fill(Rgba(1, 2, 3, 1.0))
+    anim.tick(0, stripe)
+
+    assert _max_alpha(stripe) == 0
+
+
+def test_beat_wave_audio_beat_creates_wave_and_lights_pixels() -> None:
+    stripe = Stripe(32)
+    anim = BeatWave()
+
+    anim.tick_audio(0, stripe, PUNCH_AUDIO)
+
+    assert len(anim.waves) == 1
+    assert anim._hue == 17
+    assert _max_alpha(stripe) > 0
+
+
+def test_bpm_name() -> None:
+    assert Bpm().name == "bpm"
+
+
+def test_bpm_non_audio_produces_pulse() -> None:
+    stripe = Stripe(16)
+    anim = Bpm()
+
+    anim.tick(10, stripe)
+
+    assert _max_alpha(stripe) > 0
+
+
+def test_bpm_audio_beat_updates_flash_and_hue() -> None:
+    stripe = Stripe(16)
+    anim = Bpm()
+
+    anim.tick_audio(0, stripe, TEST_AUDIO)
+
+    assert anim._hue == 31
+    assert anim._flash > 0.0
+    assert _max_alpha(stripe) > 0
+
+
+def test_dance_floor_name() -> None:
+    assert DanceFloor().name == "dance_floor"
+
+
+def test_dance_floor_non_audio_fills_segments() -> None:
+    stripe = Stripe(32)
+    anim = DanceFloor()
+
+    anim.tick(10, stripe)
+
+    assert _lit_count(stripe) == stripe.length
+
+
+def test_dance_floor_audio_beat_fills_segments() -> None:
+    stripe = Stripe(32)
+    anim = DanceFloor()
+
+    anim.tick_audio(10, stripe, TEST_AUDIO)
+
+    assert _lit_count(stripe) == stripe.length
+    assert _max_alpha(stripe) > 0
+
+
+def test_glow_rush_name() -> None:
+    assert GlowRush().name == "glow_rush"
+
+
+def test_glow_rush_non_audio_advances_and_lights_pixels() -> None:
+    stripe = Stripe(32)
+    anim = GlowRush()
+
+    anim.tick(4, stripe)
+
+    assert anim.position > 0.0
+    assert anim.hue == 8
+    assert _lit_count(stripe) > 0
+
+
+def test_glow_rush_audio_advances_and_lights_pixels() -> None:
+    stripe = Stripe(32)
+    anim = GlowRush()
+
+    anim.tick_audio(4, stripe, HIGH_AUDIO)
+
+    assert anim.position > 0.0
+    assert _lit_count(stripe) > 0
+
+
+def test_hard_beat_name() -> None:
+    assert HardBeat().name == "hard_beat"
+
+
+def test_hard_beat_non_audio_flashes_then_clears() -> None:
+    stripe = Stripe(12)
+    anim = HardBeat()
+
+    anim.tick(0, stripe)
+    lit_alpha = _max_alpha(stripe)
+    anim.tick(4, stripe)
+
+    assert lit_alpha > 0
+    assert _max_alpha(stripe) == 0
+
+
+def test_hard_beat_audio_beat_updates_flash_and_hue() -> None:
+    stripe = Stripe(12)
+    anim = HardBeat()
+
+    anim.tick_audio(0, stripe, TEST_AUDIO)
+
+    assert anim.hue == 43
+    assert anim.flash.value > 0.0
+    assert _max_alpha(stripe) > 0
+
+
+def test_neon_storm_name() -> None:
+    assert NeonStorm().name == "neon_storm"
+
+
+def test_neon_storm_non_audio_produces_deterministic_pixels() -> None:
+    stripe = Stripe(48)
+    anim = NeonStorm()
+
+    anim.tick(2, stripe)
+
+    assert _lit_count(stripe) > 0
+
+
+def test_neon_storm_non_audio_draws_streak_branch() -> None:
+    stripe = Stripe(24)
+    anim = NeonStorm()
+
+    anim.tick(8, stripe)
+
+    assert _lit_count(stripe) > 10
+
+
+def test_neon_storm_audio_drive_lights_pixels() -> None:
+    stripe = Stripe(48)
+    anim = NeonStorm()
+
+    anim.tick_audio(2, stripe, TEST_AUDIO)
+
+    assert _lit_count(stripe) > 0
+    assert _max_alpha(stripe) > 0
+
+
+def test_neon_storm_audio_quiet_draws_trails_and_dark_pixels() -> None:
+    stripe = Stripe(24)
+    anim = NeonStorm()
+
+    anim.tick_audio(1, stripe, QUIET_AUDIO)
+
+    assert _lit_count(stripe) > 0
+    assert _lit_count(stripe) < stripe.length
+
+
+def test_pixel_explosion_name() -> None:
+    assert PixelExplosion().name == "pixel_explosion"
+
+
+def test_pixel_explosion_non_audio_spawns_burst() -> None:
+    stripe = Stripe(32)
+    anim = PixelExplosion()
+    anim._rng.seed(1)
+
+    anim.tick(0, stripe)
+
+    assert len(anim.bursts) == 1
+    assert anim.bursts[0].radius > 0.0
+    assert _max_alpha(stripe) > 0
+
+
+def test_pixel_explosion_audio_beat_spawns_bursts() -> None:
+    stripe = Stripe(32)
+    anim = PixelExplosion()
+    anim._rng.seed(1)
+
+    anim.tick_audio(0, stripe, TEST_AUDIO)
+
+    assert len(anim.bursts) > 1
+    assert _max_alpha(stripe) > 0
+
+
+def test_police_name() -> None:
+    assert Police().name == "police"
+
+
+def test_police_non_audio_alternates_halves() -> None:
+    stripe = Stripe(4)
+    anim = Police()
+
+    anim.tick(0, stripe)
+    np.testing.assert_array_equal(
+        stripe.pixels(),
+        np.array(
+            [[255, 0, 0, 255], [255, 0, 0, 255], [0, 0, 255, 255], [0, 0, 255, 255]],
+            dtype=np.uint8,
+        ),
+    )
+
+    anim.tick(8, stripe)
+    np.testing.assert_array_equal(
+        stripe.pixels(),
+        np.array(
+            [[0, 0, 255, 255], [0, 0, 255, 255], [255, 0, 0, 255], [255, 0, 0, 255]],
+            dtype=np.uint8,
+        ),
+    )
+
+
+def test_police_audio_beat_flashes_white() -> None:
+    stripe = Stripe(4)
+    anim = Police()
+
+    anim.tick_audio(0, stripe, TEST_AUDIO)
+
+    np.testing.assert_array_equal(
+        stripe.pixels(),
+        np.array(
+            [[255, 255, 255, 255], [255, 255, 255, 255], [255, 255, 255, 255], [255, 255, 255, 255]],
+            dtype=np.uint8,
+        ),
+    )
+
+
+def test_rainbow_strobe_name() -> None:
+    assert RainbowStrobe().name == "rainbow_strobe"
+
+
+def test_rainbow_strobe_non_audio_covers_on_and_off_frames() -> None:
+    stripe = Stripe(8)
+    anim = RainbowStrobe()
+
+    anim.tick(0, stripe)
+    on_alpha = _max_alpha(stripe)
+    anim.tick(4, stripe)
+
+    assert on_alpha > 0
+    assert _max_alpha(stripe) == 0
+
+
+def test_rainbow_strobe_audio_beat_turns_on() -> None:
+    stripe = Stripe(8)
+    anim = RainbowStrobe()
+
+    anim.tick_audio(20, stripe, TEST_AUDIO)
+
+    assert _max_alpha(stripe) > 0
+
+
+def test_rave_pulse_name() -> None:
+    assert RavePulse().name == "rave_pulse"
+
+
+def test_rave_pulse_non_audio_pulses_pixels() -> None:
+    stripe = Stripe(10)
+    anim = RavePulse()
+
+    anim.tick(10, stripe)
+
+    assert _max_alpha(stripe) > 0
+
+
+def test_rave_pulse_audio_beat_updates_flash_and_hue() -> None:
+    stripe = Stripe(10)
+    anim = RavePulse()
+
+    anim.tick_audio(0, stripe, TEST_AUDIO)
+
+    assert anim.hue == 37
+    assert anim.flash.value > 0.0
+    assert _max_alpha(stripe) > 0
+
+
+def test_sinelon_name() -> None:
+    assert Sinelon().name == "sinelon"
+
+
+def test_sinelon_non_audio_draws_trail() -> None:
+    stripe = Stripe(24)
+    anim = Sinelon()
+
+    anim.tick(10, stripe)
+
+    assert _max_alpha(stripe) > 0
+
+
+def test_sinelon_audio_draws_reactive_trail() -> None:
+    stripe = Stripe(24)
+    anim = Sinelon()
+
+    anim.tick_audio(10, stripe, HIGH_AUDIO)
+
+    assert _max_alpha(stripe) > 0
+
+
+def test_strobe_name() -> None:
+    assert Strobe().name == "strobe"
+
+
+def test_strobe_non_audio_covers_on_and_off_frames() -> None:
+    stripe = Stripe(8)
+    anim = Strobe()
+
+    anim.tick(0, stripe)
+    on_alpha = _max_alpha(stripe)
+    anim.tick(4, stripe)
+
+    assert on_alpha > 0
+    assert _max_alpha(stripe) == 0
+
+
+def test_strobe_audio_beat_turns_on() -> None:
+    stripe = Stripe(8)
+    anim = Strobe()
+
+    anim.tick_audio(20, stripe, TEST_AUDIO)
+
+    assert _max_alpha(stripe) > 0
+
+
+def test_rgbw_test_name() -> None:
+    assert RgbwTest().name == "rgbw_test"
+
+
+def test_rgbw_test_cycles_primary_colors() -> None:
+    stripe = Stripe(2)
+    anim = RgbwTest()
+
+    anim.tick(0, stripe)
+    np.testing.assert_array_equal(
+        stripe.pixels(),
+        np.array([[255, 0, 0, 255], [255, 0, 0, 255]], dtype=np.uint8),
+    )
+
+    anim.tick(500, stripe)
+    np.testing.assert_array_equal(
+        stripe.pixels(),
+        np.array([[0, 0, 255, 255], [0, 0, 255, 255]], dtype=np.uint8),
+    )
+    assert anim.last_idx == 2
+
+
 def test_lightning_strike_name() -> None:
     assert LightningStrike().name == "lightning_strike"
 
@@ -391,6 +758,26 @@ def test_drop_explosion_produces_bright_flash_near_drop() -> None:
     for i in range(80):
         anim.tick(i, stripe)
     assert stripe.pixels()[:, 3].max() > 0.5 * 255
+
+
+def test_drop_explosion_non_audio_draws_charging_preview() -> None:
+    stripe = Stripe(30)
+    anim = DropExplosion(charge=0.8)
+
+    anim.tick(8, stripe)
+
+    assert _max_alpha(stripe) > 0
+    assert anim.charge > 0.8
+
+
+def test_drop_explosion_audio_charges_without_drop() -> None:
+    stripe = Stripe(30)
+    anim = DropExplosion(charge=0.4)
+
+    anim.tick_audio(10, stripe, HIGH_AUDIO)
+
+    assert anim.charge > 0.4
+    assert _max_alpha(stripe) > 0
 
 
 def test_twinkle_name() -> None:
