@@ -4,6 +4,7 @@ from lumistripe import (
     AudioFrame,
     BassDrop,
     BeatExplosion,
+    BeatRipple,
     BeatTunnel,
     CenterBurst,
     ClubFlash,
@@ -13,7 +14,10 @@ from lumistripe import (
     DiscoSparkle,
     DropExplosion,
     DropWave,
+    DualLaser,
+    ElectricStorm,
     FireworkBurst,
+    Juggle,
     LaserSweep,
     LightningStrike,
     MirrorFlash,
@@ -199,6 +203,113 @@ def test_beat_tunnel_non_audio_produces_pixels() -> None:
     anim = BeatTunnel()
     anim.tick(20, stripe)
     assert stripe.pixels()[:, 3].max() > 0
+
+
+def test_beat_ripple_name() -> None:
+    assert BeatRipple().name == "beat_ripple"
+
+
+def test_beat_ripple_non_audio_produces_mirrored_ring() -> None:
+    stripe = Stripe(24)
+    anim = BeatRipple()
+
+    anim.tick(10, stripe)
+
+    assert _lit_count(stripe) > 0
+    assert anim.radius > 0.0
+    assert anim.hue == 30
+
+
+def test_beat_ripple_audio_beat_resets_radius_and_lights_pixels() -> None:
+    stripe = Stripe(24)
+    anim = BeatRipple(radius=5.0, hue=10)
+
+    anim.tick_audio(0, stripe, TEST_AUDIO)
+
+    assert anim.radius == 0.0
+    assert anim.hue == 41
+    assert _max_alpha(stripe) > 0
+
+
+def test_dual_laser_name() -> None:
+    assert DualLaser().name == "dual_laser"
+
+
+def test_dual_laser_non_audio_moves_and_renders_beams() -> None:
+    stripe = Stripe(32)
+    anim = DualLaser()
+
+    anim.tick(3, stripe)
+
+    assert anim.beam_a.position > -2.0
+    assert anim.beam_b.hue == (anim.beam_a.hue + 140) % 256
+    assert _lit_count(stripe) > 0
+
+
+def test_dual_laser_audio_beat_reverses_directions_and_bursts() -> None:
+    stripe = Stripe(32)
+    anim = DualLaser()
+
+    anim.tick_audio(8, stripe, TEST_AUDIO)
+
+    assert anim.beam_a.direction == -1.0
+    assert anim.beam_b.direction == -1.0
+    assert anim.burst.value < 1.0
+    assert _max_alpha(stripe) > 0
+
+
+def test_electric_storm_name() -> None:
+    assert ElectricStorm().name == "electric_storm"
+
+
+def test_electric_storm_non_audio_spawns_streak_and_flash() -> None:
+    stripe = Stripe(24)
+    anim = ElectricStorm()
+    anim._rng.seed(1)
+
+    anim.tick(0, stripe)
+
+    assert len(anim.streaks) == 1
+    assert anim.flash.value < 1.0
+    assert _lit_count(stripe) > 0
+
+
+def test_electric_storm_audio_beat_adds_flash_and_streak() -> None:
+    stripe = Stripe(24)
+    anim = ElectricStorm()
+    anim._rng.seed(1)
+
+    anim.tick_audio(0, stripe, TEST_AUDIO)
+
+    assert len(anim.streaks) == 1
+    assert anim.flash.value > 0.0
+    assert _max_alpha(stripe) > 0
+
+
+def test_juggle_name() -> None:
+    assert Juggle().name == "juggle"
+
+
+def test_juggle_non_audio_moves_and_lights_pixels() -> None:
+    stripe = Stripe(80)
+    anim = Juggle()
+    positions = list(anim.positions)
+
+    anim.tick(0, stripe)
+
+    assert anim.positions != positions
+    assert _lit_count(stripe) > 0
+
+
+def test_juggle_audio_beat_scales_speeds_and_lights_pixels() -> None:
+    stripe = Stripe(80)
+    anim = Juggle()
+    speeds = list(anim.speeds)
+
+    anim.tick_audio(0, stripe, PUNCH_AUDIO)
+
+    assert all(abs(after) > abs(before) for before, after in zip(speeds, anim.speeds, strict=True))
+    assert _lit_count(stripe) > 0
 
 
 def test_lightning_strike_name() -> None:
