@@ -278,6 +278,7 @@ def test_dynamic_mode_selects_animation(monkeypatch) -> None:
                 bands=(0.9, 0.85, 0.75, 0.72, 0.7, 0.88, 0.9, 0.92),
                 beat=True,
                 beat_strength=1.0,
+                fresh=True,
             )
 
         def read_features(self) -> MusicFeatures:
@@ -312,6 +313,7 @@ def test_dynamic_mode_selects_animation(monkeypatch) -> None:
         mic_noise_floor=0.01,
         idle_enter_frames=42,
         idle_threshold_scale=1.5,
+        music_activation_delay=0.0,
     )
     start_index = app.player.current_index()
     for _ in range(140):

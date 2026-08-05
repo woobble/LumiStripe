@@ -8,6 +8,7 @@ from random import Random
 
 from .animation.base import AnimationPlayer
 from .audio import AudioFrame, AudioSnapshot, MusicFeatures, features_from_frame
+from .color import Color, Rgb, Rgba
 from .controller import Controller
 from .selector import DynamicSelector, DynamicSelectorConfig, SelectorDecision
 
@@ -22,6 +23,12 @@ class AudioSource(str, Enum):
     OFF = "off"
     MIC = "mic"
     DEMO = "demo"
+
+
+class MusicGateState(str, Enum):
+    IDLE = "idle"
+    CANDIDATE = "candidate"
+    MUSIC = "music"
 
 
 class CycleOrder(str, Enum):
@@ -49,16 +56,22 @@ class CyclingConfig:
 @dataclass(frozen=True, slots=True)
 class MusicActivityConfig:
     idle_enter_frames: int = 60
+    activation_delay_s: float = 0.75
     feature_attack: float = 0.28
     feature_release: float = 0.08
     energy_threshold: float = 0.03
     onset_threshold: float = 0.025
     beat_density_threshold: float = 0.05
     brightness_threshold: float = 0.08
+    spectral_balance_ratio: float = 0.35
 
     def __post_init__(self) -> None:
         if self.idle_enter_frames <= 0:
             raise ValueError("idle_enter_frames must be greater than zero")
+        if self.activation_delay_s < 0.0:
+            raise ValueError("activation_delay_s must not be negative")
+        if not 0.0 <= self.spectral_balance_ratio <= 1.0:
+            raise ValueError("spectral_balance_ratio must be between zero and one")
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +80,12 @@ class PlaybackConfig:
     cycling: CyclingConfig = field(default_factory=CyclingConfig)
     dynamic: DynamicSelectorConfig = field(default_factory=DynamicSelectorConfig)
     activity: MusicActivityConfig = field(default_factory=MusicActivityConfig)
+    idle_color: Color = field(default_factory=lambda: Rgb(32, 96, 255))
+    idle_brightness: float = 0.08
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.idle_brightness <= 1.0:
+            raise ValueError("idle_brightness must be between zero and one")
 
 
 @dataclass(slots=True)
@@ -78,6 +97,15 @@ class MusicActivityDetector:
     onset: float = 0.0
     beat_density: float = 0.0
     brightness: float = 0.0
+    candidate_since_s: float | None = None
+
+    @property
+    def state(self) -> MusicGateState:
+        if self.active:
+            return MusicGateState.MUSIC
+        if self.candidate_since_s is not None:
+            return MusicGateState.CANDIDATE
+        return MusicGateState.IDLE
 
     def reset(self) -> None:
         self.active = False
@@ -86,9 +114,11 @@ class MusicActivityDetector:
         self.onset = 0.0
         self.beat_density = 0.0
         self.brightness = 0.0
+        self.candidate_since_s = None
 
-    def update(self, features: MusicFeatures) -> bool:
+    def update(self, features: MusicFeatures, *, now_s: float | None = None) -> bool:
         cfg = self.config
+        now = time.monotonic() if now_s is None else now_s
         self.energy = _smooth(
             self.energy, features.energy, cfg.feature_attack, cfg.feature_release
         )
@@ -109,21 +139,34 @@ class MusicActivityDetector:
         )
 
         signal = self.energy >= cfg.energy_threshold
-        musical_detail = any(
-            (
-                self.onset >= cfg.onset_threshold,
-                self.beat_density >= cfg.beat_density_threshold,
-                self.brightness >= cfg.brightness_threshold,
-            )
+        rhythmic = self.beat_density >= cfg.beat_density_threshold
+        spectral_floor = features.mid_energy * cfg.spectral_balance_ratio
+        broadband = (
+            features.bass_energy >= cfg.energy_threshold
+            and features.treble_energy >= cfg.brightness_threshold
+            and min(features.bass_energy, features.treble_energy) >= spectral_floor
         )
-        detected = not features.silence and signal and musical_detail
-        if detected:
-            self.active = True
-            self.inactive_frames = 0
-        else:
+        detected = not features.silence and signal and (rhythmic or broadband)
+
+        if self.active:
+            self.candidate_since_s = None
+            if detected:
+                self.inactive_frames = 0
+                return True
             self.inactive_frames += 1
             if self.inactive_frames >= cfg.idle_enter_frames:
                 self.active = False
+            return self.active
+
+        self.inactive_frames = 0
+        if not detected:
+            self.candidate_since_s = None
+            return False
+        if self.candidate_since_s is None:
+            self.candidate_since_s = now
+        if now - self.candidate_since_s >= cfg.activation_delay_s:
+            self.active = True
+            self.candidate_since_s = None
         return self.active
 
 
@@ -137,6 +180,7 @@ class PlaybackEngine:
     last_decision: SelectorDecision | None = field(init=False, default=None)
     _cycle_started_at_s: float | None = field(init=False, default=None)
     _music_active: bool = field(init=False, default=False)
+    _idle_rendered: bool = field(init=False, default=False)
     _rng: Random = field(init=False)
 
     def __post_init__(self) -> None:
@@ -149,12 +193,17 @@ class PlaybackEngine:
     def music_active(self) -> bool:
         return self._music_active
 
+    @property
+    def music_gate_state(self) -> MusicGateState:
+        return self.activity_detector.state
+
     def set_mode(self, mode: PlaybackMode, *, now_s: float | None = None) -> None:
         self.mode = mode
         self._cycle_started_at_s = time.monotonic() if now_s is None else now_s
         self.player.frame = 0
         self.last_decision = None
         self._music_active = False
+        self._idle_rendered = False
         self.activity_detector.reset()
         if mode is PlaybackMode.DYNAMIC:
             self.dynamic_selector.reset()
@@ -197,12 +246,36 @@ class PlaybackEngine:
                 else MusicFeatures(silence=True)
             )
             was_active = self._music_active
-            self._music_active = self.activity_detector.update(features)
+            self._music_active = self.activity_detector.update(features, now_s=now)
+            if not self._music_active:
+                self.player.audio_enabled = False
+                self.last_decision = SelectorDecision(
+                    None,
+                    0.0,
+                    self.player.name_at(self.player.current_index()),
+                    False,
+                    self.music_gate_state.value,
+                )
+                if not self._idle_rendered:
+                    red, green, blue, alpha = self.config.idle_color.to_rgba()
+                    controller.fill(
+                        Rgba(
+                            red,
+                            green,
+                            blue,
+                            alpha * self.config.idle_brightness,
+                        )
+                    )
+                    controller.flush()
+                    self._idle_rendered = True
+                return 0.05
+
+            self._idle_rendered = False
             self.last_decision = self.dynamic_selector.update(
                 self.player,
                 features,
                 now_s=now,
-                quiet=not self._music_active,
+                quiet=False,
                 force_switch=was_active != self._music_active,
             )
             if self._music_active and snapshot is not None:

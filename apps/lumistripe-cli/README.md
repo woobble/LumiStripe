@@ -29,3 +29,10 @@ lumistripe-cli --mode static --animation aurora
 lumistripe-cli --mode cycling --cycle-order shuffle --cycle-timing fixed --cycle-interval 30
 lumistripe-cli --mode dynamic --audio-source mic
 ```
+
+Dynamic holds a steady soft-blue idle color until music is confirmed. Tune the
+gate delay or idle brightness when needed:
+
+```bash
+lumistripe-cli --mode dynamic --music-activation-delay 0.75 --dynamic-idle-brightness 0.08
+```

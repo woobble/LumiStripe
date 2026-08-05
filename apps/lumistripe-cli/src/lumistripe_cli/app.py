@@ -117,6 +117,12 @@ class HeadlessApp:
     audio_analysis: AudioAnalysis = field(default_factory=AudioAnalysis)
     idle_enter_frames: int = field(default_factory=lambda: MusicActivityConfig().idle_enter_frames)
     idle_threshold_scale: float = DEFAULT_IDLE_THRESHOLD_SCALE
+    music_activation_delay: float = field(
+        default_factory=lambda: MusicActivityConfig().activation_delay_s
+    )
+    dynamic_idle_brightness: float = field(
+        default_factory=lambda: PlaybackConfig().idle_brightness
+    )
     audio_debug_verbose: bool = False
     audio_calibration: AudioCalibrationResult | None = None
     animation_name: str | None = None
@@ -153,7 +159,9 @@ class HeadlessApp:
                 activity=_build_activity_config(
                     idle_enter_frames=self.idle_enter_frames,
                     idle_threshold_scale=self.idle_threshold_scale,
+                    activation_delay_s=self.music_activation_delay,
                 ),
+                idle_brightness=self.dynamic_idle_brightness,
             ),
         )
         self.player.set_brightness(1.0)
@@ -199,7 +207,8 @@ class HeadlessApp:
             f"target={self.mic_target_level:0.2f} "
             f"noise={self.mic_noise_floor:0.3f} "
             f"idle={self.idle_enter_frames}f "
-            f"scale={self.idle_threshold_scale:0.2f}"
+            f"scale={self.idle_threshold_scale:0.2f} "
+            f"enter={self.music_activation_delay:0.2f}s"
         )
         if self.audio_calibration is not None:
             label = f"{label} calibrated={self.audio_calibration.samples}f"
@@ -456,6 +465,7 @@ class HeadlessApp:
             f"CLASS={self.class_label} "
             f"ANIM={anim.upper()} "
             f"MODE={self.mode.value} "
+            f"GATE={self.playback.music_gate_state.value.upper()} "
             f"IDLE={idle} "
             f"FRESH={fresh} "
             f"AGE={age_text} "
@@ -502,6 +512,7 @@ class HeadlessApp:
             "class": self.class_label,
             "animation": self.player.name_at(self.player.current_index()) or "",
             "music_active": self.playback.music_active,
+            "music_gate": self.playback.music_gate_state.value,
             "fresh": frame.fresh,
             "age_s": None if health is None else health.last_frame_age,
             "callback_age_s": None if health is None else health.last_callback_age,
@@ -710,6 +721,20 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_IDLE_THRESHOLD_SCALE,
         help="Scale factor applied to mic idle activity thresholds",
     )
+    parser.add_argument(
+        "--music-activation-delay",
+        type=_non_negative_float,
+        default=MusicActivityConfig().activation_delay_s,
+        metavar="SECONDS",
+        help="Continuous music evidence required before Dynamic starts reacting",
+    )
+    parser.add_argument(
+        "--dynamic-idle-brightness",
+        type=_unit_float,
+        default=PlaybackConfig().idle_brightness,
+        metavar="LEVEL",
+        help="Steady Dynamic idle brightness from 0 to 1",
+    )
     parser.add_argument("--dynamic-min-duration", type=_positive_float, default=DynamicSelectorConfig().min_duration_s)
     parser.add_argument("--dynamic-max-duration", type=_positive_float, default=DynamicSelectorConfig().max_duration_s)
     parser.add_argument("--dynamic-switch-cooldown", type=_positive_float, default=DynamicSelectorConfig().switch_cooldown_s)
@@ -824,6 +849,8 @@ def main(argv: list[str] | None = None) -> None:
                 audio_analysis=args.audio_analysis,
                 idle_enter_frames=args.idle_enter_frames,
                 idle_threshold_scale=args.idle_threshold_scale,
+                music_activation_delay=args.music_activation_delay,
+                dynamic_idle_brightness=args.dynamic_idle_brightness,
                 audio_debug_verbose=args.audio_debug_verbose,
                 audio_calibration=calibration,
                 animation_name=args.animation,
@@ -853,6 +880,8 @@ def main(argv: list[str] | None = None) -> None:
             audio_analysis=args.audio_analysis,
             idle_enter_frames=args.idle_enter_frames,
             idle_threshold_scale=args.idle_threshold_scale,
+            music_activation_delay=args.music_activation_delay,
+            dynamic_idle_brightness=args.dynamic_idle_brightness,
             audio_calibration=calibration,
             animation_name=args.animation,
             quiet=args.quiet,
@@ -925,6 +954,13 @@ def _non_negative_float(value: str) -> float:
     parsed = float(value)
     if parsed < 0.0:
         raise argparse.ArgumentTypeError("must be >= 0")
+    return parsed
+
+
+def _unit_float(value: str) -> float:
+    parsed = float(value)
+    if not 0.0 <= parsed <= 1.0:
+        raise argparse.ArgumentTypeError("must be between 0 and 1")
     return parsed
 
 
@@ -1203,12 +1239,18 @@ def _build_dynamic_selector_config(args: argparse.Namespace) -> DynamicSelectorC
     )
 
 
-def _build_activity_config(*, idle_enter_frames: int, idle_threshold_scale: float) -> MusicActivityConfig:
+def _build_activity_config(
+    *,
+    idle_enter_frames: int,
+    idle_threshold_scale: float,
+    activation_delay_s: float,
+) -> MusicActivityConfig:
     defaults = MusicActivityConfig()
     return MusicActivityConfig(
         feature_attack=defaults.feature_attack,
         feature_release=defaults.feature_release,
         idle_enter_frames=idle_enter_frames,
+        activation_delay_s=activation_delay_s,
         energy_threshold=defaults.energy_threshold * idle_threshold_scale,
         onset_threshold=defaults.onset_threshold * idle_threshold_scale,
         beat_density_threshold=defaults.beat_density_threshold * idle_threshold_scale,

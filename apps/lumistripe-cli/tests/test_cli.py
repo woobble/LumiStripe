@@ -171,6 +171,10 @@ def test_parser_accepts_mic_tuning_flags() -> None:
             "42",
             "--idle-threshold-scale",
             "1.5",
+            "--music-activation-delay",
+            "0.75",
+            "--dynamic-idle-brightness",
+            "0.08",
         ]
     )
     assert args.mic_target_level == pytest.approx(0.5)
@@ -179,6 +183,8 @@ def test_parser_accepts_mic_tuning_flags() -> None:
     assert args.write_mic_profile == Path("profile.json")
     assert args.idle_enter_frames == 42
     assert args.idle_threshold_scale == pytest.approx(1.5)
+    assert args.music_activation_delay == pytest.approx(0.75)
+    assert args.dynamic_idle_brightness == pytest.approx(0.08)
 
 
 def test_parser_rejects_invalid_mic_tuning_values() -> None:
@@ -195,6 +201,10 @@ def test_parser_rejects_invalid_mic_tuning_values() -> None:
         parser.parse_args(["--calibrate-audio", "0"])
     with pytest.raises(SystemExit):
         parser.parse_args(["--auto-calibrate-audio", "0"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--music-activation-delay", "-0.1"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--dynamic-idle-brightness", "1.1"])
 
 
 def test_build_output_controller_returns_single_stripe(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -476,6 +486,7 @@ def test_headless_app_debug_header_and_line_include_metrics() -> None:
     assert "t=1.25s" in line
     assert "CLASS=MUSIC" in line
     assert "MODE=dynamic" in line
+    assert "GATE=" in line
     assert "IDLE=NO" in line
     assert "RMS=0.500" in line
     assert "BPM=128" in line
@@ -578,6 +589,7 @@ def test_headless_app_audio_debug_record_includes_structured_metrics() -> None:
     assert row["elapsed_s"] == pytest.approx(1.25)
     assert row["source"] == "Input: Fake Mic"
     assert row["mode"] == "dynamic"
+    assert row["music_gate"] == "idle"
     assert row["animation"]
     assert row["fresh"] is True
     assert row["sequence"] == 9
@@ -806,6 +818,7 @@ def test_headless_app_dynamic_mode_uses_shared_playback(monkeypatch: pytest.Monk
         mic_noise_floor=0.01,
         idle_enter_frames=42,
         idle_threshold_scale=1.5,
+        music_activation_delay=0.0,
     )
     for _ in range(140):
         app.step()
@@ -865,6 +878,7 @@ def test_headless_app_dynamic_mode_scores_animations(monkeypatch: pytest.MonkeyP
         controller=Stripe(12),
         pixel_count=12,
         mode=PlaybackMode.DYNAMIC,
+        music_activation_delay=0.0,
         dynamic_selector_config=DynamicSelectorConfig(randomness=0.0, min_duration_s=0.1, switch_cooldown_s=0.1),
         quiet=True,
     )
@@ -1049,17 +1063,32 @@ def test_main_audio_debug_skips_gpio_and_runs_with_in_memory_stripe(monkeypatch:
         called["mode"] = self.mode
         called["quiet"] = self.quiet
         called["audio_debug_verbose"] = self.audio_debug_verbose
+        called["activation_delay"] = self.playback.config.activity.activation_delay_s
+        called["idle_brightness"] = self.playback.config.idle_brightness
 
     monkeypatch.setattr("lumistripe_cli.app.build_output_controller", fail_build)
     monkeypatch.setattr("lumistripe_cli.app.HeadlessApp.run_audio_debug", fake_run)
     monkeypatch.setattr("lumistripe_cli.app.AudioInput.with_config", _fake_audio_config)
 
-    main(["--audio-debug", "--audio-debug-verbose", "--pixels", "16"])
+    main(
+        [
+            "--audio-debug",
+            "--audio-debug-verbose",
+            "--pixels",
+            "16",
+            "--music-activation-delay",
+            "1.25",
+            "--dynamic-idle-brightness",
+            "0.12",
+        ]
+    )
 
     assert isinstance(called["controller"], Stripe)
     assert called["mode"] is PlaybackMode.DYNAMIC
     assert called["quiet"] is True
     assert called["audio_debug_verbose"] is True
+    assert called["activation_delay"] == pytest.approx(1.25)
+    assert called["idle_brightness"] == pytest.approx(0.12)
 
 
 def test_main_applies_auto_mic_profile(monkeypatch: pytest.MonkeyPatch) -> None:

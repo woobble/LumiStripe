@@ -111,6 +111,9 @@ class SimulatorApp:
     audio_analysis: AudioAnalysis = field(default_factory=AudioAnalysis)
     idle_enter_frames: int = field(default_factory=lambda: MusicActivityConfig().idle_enter_frames)
     idle_threshold_scale: float = DEFAULT_IDLE_THRESHOLD_SCALE
+    music_activation_delay: float = field(
+        default_factory=lambda: MusicActivityConfig().activation_delay_s
+    )
     auto_calibrate_audio: float | None = None
     cycling_config: CyclingConfig = field(default_factory=CyclingConfig)
     dynamic_selector_config: DynamicSelectorConfig = field(default_factory=DynamicSelectorConfig)
@@ -139,6 +142,7 @@ class SimulatorApp:
                 activity=_build_activity_config(
                     idle_enter_frames=self.idle_enter_frames,
                     idle_threshold_scale=self.idle_threshold_scale,
+                    activation_delay_s=self.music_activation_delay,
                 ),
             ),
         )
@@ -805,12 +809,18 @@ def _build_dynamic_selector_config(args: argparse.Namespace) -> DynamicSelectorC
     )
 
 
-def _build_activity_config(*, idle_enter_frames: int, idle_threshold_scale: float) -> MusicActivityConfig:
+def _build_activity_config(
+    *,
+    idle_enter_frames: int,
+    idle_threshold_scale: float,
+    activation_delay_s: float,
+) -> MusicActivityConfig:
     defaults = MusicActivityConfig()
     return MusicActivityConfig(
         feature_attack=defaults.feature_attack,
         feature_release=defaults.feature_release,
         idle_enter_frames=idle_enter_frames,
+        activation_delay_s=activation_delay_s,
         energy_threshold=defaults.energy_threshold * idle_threshold_scale,
         onset_threshold=defaults.onset_threshold * idle_threshold_scale,
         beat_density_threshold=defaults.beat_density_threshold * idle_threshold_scale,
