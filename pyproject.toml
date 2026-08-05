@@ -25,7 +25,7 @@ lumistripe-sim = { workspace = true }
 dev = [
     "pytest>=9.1",
     "pytest-cov>=7.1",
-    "ruff>=0.15.21",
+    "ruff>=0.16.0",
     "mypy>=2.3.0",
 ]
 
