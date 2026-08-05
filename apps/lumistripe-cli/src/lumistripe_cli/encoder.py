@@ -34,6 +34,12 @@ class EncoderBackend(Protocol):
     def close(self) -> None: ...
 
 
+class _EdgeEvent(Protocol):
+    line_offset: int
+    timestamp_ns: int
+    event_type: object
+
+
 class NullEncoderBackend:
     def read_events(self) -> list[ControlEvent]:
         return []
@@ -100,7 +106,7 @@ class GPIODEncoderBackend:
     def close(self) -> None:
         self._request.release()
 
-    def _decode_event(self, edge_event: object) -> list[ControlEvent]:
+    def _decode_event(self, edge_event: _EdgeEvent) -> list[ControlEvent]:
         offset = int(edge_event.line_offset)
         timestamp_ns = int(edge_event.timestamp_ns)
         event_type = edge_event.event_type
