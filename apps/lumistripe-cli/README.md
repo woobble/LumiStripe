@@ -2,15 +2,6 @@
 
 Headless GPIO runtime for Lumistripe on Raspberry Pi.
 
-Run the DJ selector on a 42-pixel stripe with a PCM2902 audio device:
-
-```bash
-uv run lumistripe --pixels 42 --mode dj --audio-device 1 \
-    --data-pin 15 --clock-pin 14 \
-    --mic-profile pcm2902 \
-    --debug-selector
-```
-
 For live mic tuning without GPIO, run audio debug mode:
 
 ```bash

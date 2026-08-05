@@ -148,29 +148,6 @@ def test_parser_accepts_dynamic_mode_and_selector_flags() -> None:
     assert args.dynamic_seed == 7
 
 
-def test_parser_accepts_dj_as_dynamic_mode_alias() -> None:
-    parser = build_parser()
-    args = parser.parse_args(
-        [
-            "--pixels",
-            "42",
-            "--mode",
-            "dj",
-            "--audio-device",
-            "1",
-            "--data-pin",
-            "15",
-            "--clock-pin",
-            "14",
-            "--mic-profile",
-            "pcm2902",
-            "--debug-selector",
-        ]
-    )
-
-    assert args.mode is PlaybackMode.DYNAMIC
-
-
 def test_parser_accepts_audio_calibration_flags() -> None:
     parser = build_parser()
     args = parser.parse_args(["--calibrate-audio", "2.5", "--auto-calibrate-audio", "3"])

@@ -606,7 +606,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--mode",
         type=_parse_mode,
         default=PlaybackMode.STATIC,
-        help="Playback mode: static, cycling, dynamic, or dj (alias for dynamic)",
+        help="Playback mode: static, cycling, or dynamic",
     )
     parser.add_argument(
         "--audio-source",
@@ -901,11 +901,8 @@ def _ensure_gpio_input_ready(chip: str) -> None:
 
 
 def _parse_mode(value: str) -> PlaybackMode:
-    normalized = value.lower()
-    if normalized == "dj":
-        normalized = PlaybackMode.DYNAMIC.value
     try:
-        return PlaybackMode(normalized)
+        return PlaybackMode(value.lower())
     except ValueError as exc:
         raise argparse.ArgumentTypeError(f"invalid mode: {value}") from exc
 
