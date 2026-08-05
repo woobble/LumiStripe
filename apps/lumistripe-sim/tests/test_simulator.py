@@ -3,33 +3,29 @@ import builtins
 
 import numpy as np
 import pytest
-
 from lumistripe import (
-    AnimationClass,
-    AutoSelectorConfig,
     AudioAnalysis,
     AudioCalibrationResult,
     AudioConfig,
     AudioFrame,
     AudioNormalization,
     AudioSmoothing,
-    MusicDrivenSelector,
+    AudioSource,
+    MusicActivityConfig,
     MusicFeatures,
-    MusicSelectorConfig,
-    DJModeSelector,
+    PlaybackMode,
+    demo_snapshot,
 )
 from lumistripe_sim.simulator import (
     MIN_FRAME_SECONDS,
     SimulatorApp,
-    SimulatorMode,
-    _build_auto_selector_config,
+    _build_dynamic_selector_config,
     _load_tkfont,
     _load_tkinter,
     _option_provided,
     _parse_mode,
     _selected_audio_device_name,
     build_parser,
-    demo_frame,
     layout_controls,
     main,
     pixel_pitch,
@@ -74,10 +70,10 @@ def test_layout_controls_are_clickable() -> None:
     controls = layout_controls()
     assert controls.prev.contains(48, 32)
     assert controls.next.contains(253, 40)
-    assert controls.manual.contains(48, 116)
-    assert controls.demo.contains(216, 116)
-    assert controls.mic.contains(384, 116)
-    assert controls.calibrate.contains(721, 116)
+    assert controls.static.contains(48, 116)
+    assert controls.cycling.contains(216, 116)
+    assert controls.dynamic.contains(384, 116)
+    assert controls.calibrate.contains(552, 116)
     assert not controls.next.contains(10, 10)
 
 
@@ -85,7 +81,7 @@ def test_simulator_app_initial_state() -> None:
     app = SimulatorApp(pixel_count=12)
     assert app.pixel_count == 12
     assert app.animation_name
-    assert app.mode_label == "MANUAL"
+    assert app.mode_label == "STATIC"
     assert app.audio_status == "No audio source active."
 
 
@@ -93,11 +89,10 @@ def test_simulator_app_class_label_reflects_selector_idle_state() -> None:
     app = SimulatorApp(pixel_count=12)
     assert app.class_label == "-"
 
-    app.selector = MusicDrivenSelector(current_class=AnimationClass.GROOVY)
-    assert app.class_label == "GROOVY"
-
-    app.selector.idle_active = True
-    assert app.class_label == "IDLE"
+    app.mode = PlaybackMode.DYNAMIC
+    assert app.class_label == "CALM"
+    app.playback._music_active = True
+    assert app.class_label == "MUSIC"
 
 
 def test_simulator_app_mic_tuning_label_formats_values() -> None:
@@ -148,19 +143,14 @@ def test_handle_key_switches_modes_and_calibrates(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr("lumistripe_sim.simulator.calibrate_audio_input", lambda **kwargs: calibration)
 
     app = SimulatorApp(pixel_count=12)
-    app.handle_key("d")
-    assert app.mode is SimulatorMode.DEMO
-    app.handle_key("m")
-    assert app.mode is SimulatorMode.MANUAL
-    app.handle_key("a")
-    assert app.mode is SimulatorMode.MIC
-    app.handle_key("s")
-    assert app.selector is not None
-    assert app.selector.auto_select is True
-    app.handle_key("j")
-    assert app.mode is SimulatorMode.DJ
-    assert app.dj_selector is not None
     app.handle_key("c")
+    assert app.mode is PlaybackMode.CYCLING
+    app.handle_key("s")
+    assert app.mode is PlaybackMode.STATIC
+    app.handle_key("d")
+    assert app.mode is PlaybackMode.DYNAMIC
+    assert app.playback.dynamic_selector is not None
+    app.handle_key("k")
     assert app.audio_calibration is calibration
 
 
@@ -203,25 +193,22 @@ def test_handle_click_routes_mode_auto_and_calibration(monkeypatch: pytest.Monke
     monkeypatch.setattr("lumistripe_sim.simulator.calibrate_audio_input", lambda **kwargs: calibration)
 
     app = SimulatorApp(pixel_count=12)
-    app.handle_click(app.controls.demo.x + 1, app.controls.demo.y + 1)
-    assert app.mode is SimulatorMode.DEMO
-    app.handle_click(app.controls.manual.x + 1, app.controls.manual.y + 1)
-    assert app.mode is SimulatorMode.MANUAL
-    app.handle_click(app.controls.mic.x + 1, app.controls.mic.y + 1)
-    assert app.mode is SimulatorMode.MIC
+    app.handle_click(app.controls.cycling.x + 1, app.controls.cycling.y + 1)
+    assert app.mode is PlaybackMode.CYCLING
+    app.handle_click(app.controls.static.x + 1, app.controls.static.y + 1)
+    assert app.mode is PlaybackMode.STATIC
+    app.handle_click(app.controls.dynamic.x + 1, app.controls.dynamic.y + 1)
+    assert app.mode is PlaybackMode.DYNAMIC
 
-    app.handle_click(app.controls.auto_sel.x + 1, app.controls.auto_sel.y + 1)
-    assert app.selector is not None
-    assert app.selector.auto_select is True
     app.handle_click(app.controls.calibrate.x + 1, app.controls.calibrate.y + 1)
     assert app.audio_calibration is calibration
 
 
-def test_mode_switch_to_demo_sets_audio_snapshot() -> None:
-    app = SimulatorApp(pixel_count=12)
+def test_demo_audio_source_sets_audio_snapshot() -> None:
+    app = SimulatorApp(pixel_count=12, audio_source=AudioSource.DEMO)
     start_index = app.player.current_index()
-    app.set_mode(SimulatorMode.DEMO)
-    assert app.mode is SimulatorMode.DEMO
+    app.set_mode(PlaybackMode.CYCLING)
+    assert app.mode is PlaybackMode.CYCLING
     assert app.audio_status == "Using internal demo beat."
     assert app.player.current_index() == start_index
     delay = app.step()
@@ -253,22 +240,21 @@ def test_analysis_text_formats_audio_values() -> None:
 
 def test_analysis_text_includes_dj_summary() -> None:
     app = SimulatorApp(pixel_count=12)
-    app.dj_selector = DJModeSelector(AutoSelectorConfig(randomness=0.0))
-    app.dj_selector.update(app.player, MusicFeatures(), now_s=0.0)
+    app.playback.last_decision = app.playback.dynamic_selector.update(app.player, MusicFeatures(), now_s=0.0)
 
     text = app.analysis_text()
 
-    assert "DJ:" in text
-    assert "reason=initial_hold" in text
+    assert "DYNAMIC:" in text
+    assert "reason=" in text
 
 
 def test_demo_frame_has_energy() -> None:
-    frame = demo_frame(0)
+    frame = demo_snapshot(0).frame
     assert frame.rms > 0.0
     assert frame.beat is True
 
 
-def test_mic_mode_falls_back_to_manual_on_error(monkeypatch) -> None:
+def test_dynamic_mode_falls_back_to_static_on_mic_error(monkeypatch) -> None:
     class BrokenAudioInput:
         @classmethod
         def with_config(cls, config) -> AudioFrame:
@@ -276,13 +262,13 @@ def test_mic_mode_falls_back_to_manual_on_error(monkeypatch) -> None:
             raise RuntimeError("no audio input device available")
 
     monkeypatch.setattr("lumistripe_sim.simulator.AudioInput", BrokenAudioInput)
-    app = SimulatorApp(pixel_count=12, mode=SimulatorMode.MIC)
-    assert app.mode is SimulatorMode.MANUAL
+    app = SimulatorApp(pixel_count=12, mode=PlaybackMode.DYNAMIC)
+    assert app.mode is PlaybackMode.STATIC
     assert app.audio_error == "no audio input device available"
     assert app.audio_status == "Microphone unavailable."
 
 
-def test_mic_mode_keeps_animation_stable(monkeypatch) -> None:
+def test_dynamic_mode_selects_animation(monkeypatch) -> None:
     class FakeAudioInput:
         last_config: AudioConfig | None = None
 
@@ -321,7 +307,7 @@ def test_mic_mode_keeps_animation_stable(monkeypatch) -> None:
     monkeypatch.setattr("lumistripe_sim.simulator.AudioInput", FakeAudioInput)
     app = SimulatorApp(
         pixel_count=12,
-        mode=SimulatorMode.MIC,
+        mode=PlaybackMode.DYNAMIC,
         mic_target_level=0.5,
         mic_noise_floor=0.01,
         idle_enter_frames=42,
@@ -330,17 +316,16 @@ def test_mic_mode_keeps_animation_stable(monkeypatch) -> None:
     start_index = app.player.current_index()
     for _ in range(140):
         app.step()
-    assert app.player.current_index() == start_index
-    assert app.animation_name.startswith(app.player.name_at(start_index).upper())
+    assert app.player.current_index() != start_index
+    assert app.animation_name
     assert app.audio_status == "Input: Fake Mic"
     assert FakeAudioInput.last_config == AudioConfig(
         smoothing=AudioSmoothing(noise_floor=0.01),
         normalization=AudioNormalization(target_level=0.5),
     )
-    assert app.selector is not None
-    assert app.selector.auto_select is False
-    assert app.selector.config.idle_enter_frames == 42
-    assert app.selector.config.idle_energy_threshold == pytest.approx(MusicSelectorConfig().idle_energy_threshold * 1.5)
+    assert app.playback.last_decision is not None
+    assert app.playback.activity_detector.config.idle_enter_frames == 42
+    assert app.playback.activity_detector.config.energy_threshold == pytest.approx(MusicActivityConfig().energy_threshold * 1.5)
 
 
 def test_mode_switches_do_not_change_current_animation(monkeypatch) -> None:
@@ -368,13 +353,13 @@ def test_mode_switches_do_not_change_current_animation(monkeypatch) -> None:
     app.player.next()
     start_index = app.player.current_index()
 
-    app.set_mode(SimulatorMode.DEMO)
+    app.set_mode(PlaybackMode.CYCLING)
     assert app.player.current_index() == start_index
 
-    app.set_mode(SimulatorMode.MIC)
+    app.set_mode(PlaybackMode.DYNAMIC)
     assert app.player.current_index() == start_index
 
-    app.set_mode(SimulatorMode.MANUAL)
+    app.set_mode(PlaybackMode.STATIC)
     assert app.player.current_index() == start_index
 
 
@@ -448,7 +433,7 @@ def test_startup_auto_calibration_applies_before_mic_mode(monkeypatch: pytest.Mo
     monkeypatch.setattr("lumistripe_sim.simulator.calibrate_audio_input", lambda **kwargs: result)
     monkeypatch.setattr("lumistripe_sim.simulator.AudioInput", FakeAudioInput)
 
-    app = SimulatorApp(pixel_count=12, mode=SimulatorMode.MIC, auto_calibrate_audio=2.0)
+    app = SimulatorApp(pixel_count=12, mode=PlaybackMode.DYNAMIC, auto_calibrate_audio=2.0)
 
     assert app.audio_calibration is result
     assert app.audio_status == "Input: USB Mic"
@@ -470,12 +455,12 @@ def test_parser_accepts_audio_device_string() -> None:
     assert args.audio_device == "2"
 
 
-def test_parser_accepts_dj_mode_and_selector_flags() -> None:
+def test_parser_accepts_dynamic_mode_and_selector_flags() -> None:
     parser = build_parser()
-    args = parser.parse_args(["--mode", "dj", "--dj-min-duration", "3", "--dj-seed", "9"])
-    assert args.mode is SimulatorMode.DJ
-    assert args.dj_min_duration == pytest.approx(3.0)
-    assert args.dj_seed == 9
+    args = parser.parse_args(["--mode", "dynamic", "--dynamic-min-duration", "3", "--dynamic-seed", "9"])
+    assert args.mode is PlaybackMode.DYNAMIC
+    assert args.dynamic_min_duration == pytest.approx(3.0)
+    assert args.dynamic_seed == 9
 
 
 def test_parser_accepts_mic_tuning_flags() -> None:
@@ -532,27 +517,27 @@ def test_option_provided_detects_space_and_equals_forms() -> None:
     assert not _option_provided(["--mic-noise-floor", "0.1"], "--mic-target-level")
 
 
-def test_build_auto_selector_config_maps_parser_args() -> None:
+def test_build_dynamic_selector_config_maps_parser_args() -> None:
     args = build_parser().parse_args(
         [
-            "--dj-min-duration",
+            "--dynamic-min-duration",
             "3",
-            "--dj-max-duration",
+            "--dynamic-max-duration",
             "9",
-            "--dj-switch-cooldown",
+            "--dynamic-switch-cooldown",
             "1.5",
-            "--dj-drop-cooldown",
+            "--dynamic-drop-cooldown",
             "2.5",
-            "--dj-randomness",
+            "--dynamic-randomness",
             "0.2",
-            "--dj-history-size",
+            "--dynamic-history-size",
             "7",
-            "--dj-seed",
+            "--dynamic-seed",
             "123",
         ]
     )
 
-    config = _build_auto_selector_config(args)
+    config = _build_dynamic_selector_config(args)
 
     assert config.min_duration_s == pytest.approx(3.0)
     assert config.max_duration_s == pytest.approx(9.0)
@@ -585,7 +570,7 @@ def test_mic_mode_uses_device_specific_audio_config(monkeypatch) -> None:
             return cls()
 
     monkeypatch.setattr("lumistripe_sim.simulator.AudioInput", FakeAudioInput)
-    app = SimulatorApp(pixel_count=12, mode=SimulatorMode.MIC, audio_device="2")
+    app = SimulatorApp(pixel_count=12, mode=PlaybackMode.DYNAMIC, audio_device="2")
     assert app.audio_status == "Input: USB Mic"
     assert FakeAudioInput.seen == (
         "2",
@@ -615,7 +600,7 @@ def test_selected_audio_device_name_matches_defaults_and_patterns(
 def test_selected_audio_device_name_handles_empty_or_unavailable_devices(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("lumistripe_sim.simulator.list_input_device_details", lambda: [])
+    monkeypatch.setattr("lumistripe_sim.simulator.list_input_device_details", list)
     assert _selected_audio_device_name(None) is None
 
     def fail() -> list[object]:
@@ -658,7 +643,7 @@ def test_main_applies_auto_mic_profile(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("lumistripe_sim.simulator.SimulatorApp", FakeSimulatorApp)
 
-    main(["--mode", "mic", "--mic-profile", "auto"])
+    main(["--mode", "dynamic", "--mic-profile", "auto"])
 
     assert called["mic_target_level"] == pytest.approx(0.403)
     assert called["mic_noise_floor"] == pytest.approx(0.0137)

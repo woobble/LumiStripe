@@ -92,20 +92,20 @@ class _GPIODLineWriter:
 
     def _direction_enum(self, gpiod: object):
         if hasattr(gpiod, "Direction"):
-            return getattr(gpiod, "Direction")
+            return gpiod.Direction
         line = getattr(gpiod, "line", None)
         if line is not None and hasattr(line, "Direction"):
-            return getattr(line, "Direction")
+            return line.Direction
         raise RuntimeError(
             "unsupported gpiod Python API; expected libgpiod 2.x bindings with Direction/Value enums"
         )
 
     def _value_enum(self, gpiod: object):
         if hasattr(gpiod, "Value"):
-            return getattr(gpiod, "Value")
+            return gpiod.Value
         line = getattr(gpiod, "line", None)
         if line is not None and hasattr(line, "Value"):
-            return getattr(line, "Value")
+            return line.Value
         raise RuntimeError(
             "unsupported gpiod Python API; expected libgpiod 2.x bindings with Direction/Value enums"
         )

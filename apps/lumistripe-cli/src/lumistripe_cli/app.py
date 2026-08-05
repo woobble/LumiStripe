@@ -5,43 +5,52 @@ import importlib
 import importlib.util
 import json
 import os
-from pathlib import Path
 import sys
 import time
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import TextIO
+from pathlib import Path
+from typing import Self, TextIO
 
 from lumistripe import (
-    AnimationClass,
     AnimationPlayer,
-    AutoSelectorConfig,
     AudioAnalysis,
-    AudioConfig,
     AudioCalibrationResult,
+    AudioConfig,
     AudioFrame,
     AudioInput,
     AudioNormalization,
-    AudioSnapshot,
     AudioSmoothing,
-    CLASS_MAP,
+    AudioSnapshot,
+    AudioSource,
     Config,
     Controller,
+    CycleOrder,
+    CycleTiming,
+    CyclingConfig,
+    DynamicSelectorConfig,
     GPIOStripe,
-    DJModeSelector,
-    MultiController,
-    MusicDrivenSelector,
-    MusicFeatures,
-    MusicSelectorConfig,
     MicProfile,
+    MultiController,
+    MusicActivityConfig,
+    MusicFeatures,
+    PlaybackConfig,
+    PlaybackEngine,
+    PlaybackMode,
     Stripe,
     calibrate_audio_input,
-    features_from_frame,
+    demo_snapshot,
     list_input_device_details,
     load_mic_profile,
     write_mic_profile,
 )
-from .encoder import ControlEvent, EncoderBackend, EncoderPins, NullEncoderBackend, build_encoder_backend
+
+from .encoder import (
+    ControlEvent,
+    EncoderBackend,
+    EncoderPins,
+    NullEncoderBackend,
+    build_encoder_backend,
+)
 
 MIN_FRAME_SECONDS = 0.016
 STATUS_INTERVAL_SECONDS = 0.25
@@ -72,7 +81,7 @@ class AudioDebugRecorder:
         self.label = label
         self._file: TextIO | None = None
 
-    def __enter__(self) -> AudioDebugRecorder:
+    def __enter__(self) -> Self:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._file = self.path.open("w", encoding="utf-8")
         return self
@@ -96,70 +105,29 @@ class AudioDebugRecorder:
         self._file = None
 
 
-class RuntimeMode(str, Enum):
-    MANUAL = "manual"
-    DEMO = "demo"
-    MIC = "mic"
-    DJ = "dj"
-
-
-def demo_frame(frame: int) -> AudioFrame:
-    frames_per_beat = 25
-    frames_per_measure = frames_per_beat * 4
-
-    measure_pos = frame % frames_per_measure
-    beat_idx = measure_pos // frames_per_beat
-    phase = (measure_pos % frames_per_beat) / frames_per_beat
-
-    decay = pow(2.718281828, -phase * 5.0)
-    fast = pow(2.718281828, -phase * 12.0)
-    slow = pow(2.718281828, -phase * 2.0)
-
-    kick = fast if beat_idx in (0, 2) else 0.001
-    snare = decay * 0.8 if beat_idx in (1, 3) else 0.001
-    bass_harmonic = (1.0, 1.0, 1.0, 0.75)[(frame // frames_per_measure) % 4]
-    bass = slow * 0.6 * bass_harmonic
-
-    pos_in_beat = measure_pos % frames_per_beat
-    hat = 0.35 if pos_in_beat < 2 or 12 <= pos_in_beat < 14 else 0.001
-    accent = 0.2 if 62 <= measure_pos < 64 else 0.0
-
-    bands = (
-        min(kick, 1.0),
-        min(bass, 1.0),
-        min(snare * 0.3 + kick * 0.15, 1.0),
-        min(snare, 1.0),
-        min(snare * 0.5 + hat * 0.3, 1.0),
-        min(hat + accent, 1.0),
-        min((hat + accent) * 0.4, 1.0),
-        min((hat + accent) * 0.15, 1.0),
-    )
-    rms = min((sum(bands) / len(bands)) ** 0.5, 1.0)
-    beat = beat_idx == 0
-    beat_strength = 0.7 + kick * 0.3 if beat else 0.0
-    return AudioFrame(rms=rms, bands=bands, beat=beat, beat_strength=beat_strength, sequence=frame + 1, timestamp=time.monotonic(), fresh=True)
-
-
 @dataclass(slots=True)
 class HeadlessApp:
     controller: Controller
     pixel_count: int
-    mode: RuntimeMode = RuntimeMode.MANUAL
+    mode: PlaybackMode = PlaybackMode.STATIC
+    audio_source: AudioSource | None = None
     audio_device: str | None = None
     mic_target_level: float = field(default_factory=lambda: AudioNormalization().target_level)
     mic_noise_floor: float = field(default_factory=lambda: AudioSmoothing().noise_floor)
     audio_analysis: AudioAnalysis = field(default_factory=AudioAnalysis)
-    idle_enter_frames: int = field(default_factory=lambda: MusicSelectorConfig().idle_enter_frames)
+    idle_enter_frames: int = field(default_factory=lambda: MusicActivityConfig().idle_enter_frames)
     idle_threshold_scale: float = DEFAULT_IDLE_THRESHOLD_SCALE
     audio_debug_verbose: bool = False
     audio_calibration: AudioCalibrationResult | None = None
     animation_name: str | None = None
     quiet: bool = False
     gpio_backend_label: str | None = None
-    auto_selector_config: AutoSelectorConfig = field(default_factory=AutoSelectorConfig)
+    cycling_config: CyclingConfig = field(default_factory=CyclingConfig)
+    dynamic_selector_config: DynamicSelectorConfig = field(default_factory=DynamicSelectorConfig)
     debug_selector: bool = False
     encoder_backend: EncoderBackend = field(default_factory=NullEncoderBackend)
     player: AnimationPlayer = field(init=False)
+    playback: PlaybackEngine = field(init=False)
     running: bool = field(init=False, default=True)
     audio_input: AudioInput | None = field(init=False, default=None)
     audio_status: str = field(init=False, default="No audio source active.")
@@ -168,17 +136,26 @@ class HeadlessApp:
     music_features: MusicFeatures = field(init=False, default_factory=MusicFeatures)
     audio_snapshot: AudioSnapshot = field(init=False, default_factory=AudioSnapshot.silence)
     demo_tick: int = field(init=False, default=0)
-    selector: MusicDrivenSelector | None = field(init=False, default=None)
-    dj_selector: DJModeSelector | None = field(init=False, default=None)
     _status_enabled: bool = field(init=False, default=False)
     _status_tty: bool = field(init=False, default=False)
     _status_lines: int = field(init=False, default=0)
     _last_status_at: float = field(init=False, default=0.0)
     _last_debug_class: str = field(init=False, default="-")
-    _auto_select_enabled: bool = field(init=False, default=True)
 
     def __post_init__(self) -> None:
         self.player = AnimationPlayer.party()
+        self.playback = PlaybackEngine(
+            self.player,
+            PlaybackConfig(
+                mode=self.mode,
+                cycling=self.cycling_config,
+                dynamic=self.dynamic_selector_config,
+                activity=_build_activity_config(
+                    idle_enter_frames=self.idle_enter_frames,
+                    idle_threshold_scale=self.idle_threshold_scale,
+                ),
+            ),
+        )
         self.player.set_brightness(1.0)
         if self.animation_name is not None:
             index = self.player.index_of(self.animation_name)
@@ -192,12 +169,8 @@ class HeadlessApp:
     @property
     def current_animation_label(self) -> str:
         raw = self.player.name_at(self.player.current_index()) or "?"
-        classes = CLASS_MAP.get(raw, ())
-        label = raw.upper()
-        if classes:
-            tags = ", ".join(c.value.upper() for c in classes)
-            label = f"{label}  [{tags}]"
-        return label
+        metadata = self.player.animations[self.player.current_index()].animation.metadata
+        return f"{raw.upper()}  [{metadata.mood.upper()}]"
 
     @property
     def mode_label(self) -> str:
@@ -205,11 +178,9 @@ class HeadlessApp:
 
     @property
     def class_label(self) -> str:
-        if self.selector is None:
-            return "DJ" if self.dj_selector is not None else "-"
-        if self.selector.idle_active:
-            return "IDLE"
-        return self.selector.current_class.value.upper()
+        if self.mode is not PlaybackMode.DYNAMIC:
+            return "-"
+        return "MUSIC" if self.playback.music_active else "CALM"
 
     def analysis_text(self) -> str:
         frame = self.audio_frame
@@ -238,25 +209,24 @@ class HeadlessApp:
     def brightness_label(self) -> str:
         return f"{self.player.brightness:0.2f}"
 
-    def set_mode(self, mode: RuntimeMode) -> None:
+    def set_mode(self, mode: PlaybackMode) -> None:
         self._close_audio_input()
         self.player.clear_audio_snapshot()
         self.mode = mode
+        self.playback.set_mode(mode)
         self.audio_error = None
         self.audio_frame = AudioFrame()
         self.music_features = MusicFeatures()
         self.audio_snapshot = AudioSnapshot.silence()
-        self.selector = None
-        self.dj_selector = None
-
-        if mode is RuntimeMode.MANUAL:
+        source = self.audio_source or (AudioSource.MIC if mode is PlaybackMode.DYNAMIC else AudioSource.OFF)
+        if mode is PlaybackMode.DYNAMIC and source is AudioSource.OFF:
+            raise ValueError("dynamic mode requires mic or demo audio")
+        if source is AudioSource.OFF:
             self.audio_status = "No audio source active."
             return
-
-        if mode is RuntimeMode.DEMO:
+        if source is AudioSource.DEMO:
             self.demo_tick = 0
             self.audio_status = "Using internal demo beat."
-            self.player.set_audio_snapshot(self._demo_snapshot)
             return
 
         try:
@@ -271,35 +241,13 @@ class HeadlessApp:
                 else AudioInput.with_config(audio_config)
             )
         except RuntimeError as exc:
-            self.mode = RuntimeMode.MANUAL
+            self.mode = PlaybackMode.STATIC
+            self.playback.set_mode(PlaybackMode.STATIC)
             self.audio_error = str(exc)
             self.audio_status = "Microphone unavailable."
             return
 
         self.audio_status = f"Input: {self.audio_input.device_name()}"
-        if mode is RuntimeMode.DJ:
-            self.dj_selector = DJModeSelector(self.auto_selector_config)
-        else:
-            self.selector = MusicDrivenSelector(
-                config=_build_selector_config(
-                    idle_enter_frames=self.idle_enter_frames,
-                    idle_threshold_scale=self.idle_threshold_scale,
-                ),
-                current_class=AnimationClass.GROOVY,
-            )
-            self.selector.set_auto_select(self._auto_select_enabled)
-        self.player.set_audio_snapshot(self._mic_snapshot)
-
-    def _demo_snapshot(self) -> AudioFrame:
-        frame = demo_frame(self.demo_tick)
-        self.demo_tick += 1
-        self.audio_frame = frame
-        self.music_features = features_from_frame(frame)
-        self.audio_snapshot = AudioSnapshot.from_parts(frame, self.music_features)
-        return frame
-
-    def _mic_snapshot(self) -> AudioFrame:
-        return self.audio_snapshot.frame
 
     def _close_audio_input(self) -> None:
         if self.audio_input is None:
@@ -308,7 +256,8 @@ class HeadlessApp:
         self.audio_input = None
 
     def step(self) -> float:
-        if self.mode in {RuntimeMode.MIC, RuntimeMode.DJ} and self.audio_input is not None:
+        source = self.audio_source or (AudioSource.MIC if self.mode is PlaybackMode.DYNAMIC else AudioSource.OFF)
+        if source is AudioSource.MIC and self.audio_input is not None:
             audio_frame = self.audio_input.read()
             health = self._audio_health()
             self.audio_frame = audio_frame
@@ -318,14 +267,13 @@ class HeadlessApp:
                 if audio_frame.fresh
                 else AudioSnapshot.silence(frame=audio_frame, health=health)
             )
-            if self.selector is not None:
-                self.selector.update(self.player, self.audio_snapshot.features)
-                self.player.audio_enabled = not self.selector.idle_active
-            if self.dj_selector is not None:
-                self.dj_selector.update(self.player, self.audio_snapshot.features, now_s=time.monotonic())
-                self.player.audio_enabled = not self.audio_snapshot.silence
-        delay = max(self.player.step(self.controller), MIN_FRAME_SECONDS)
-        if self.mode is RuntimeMode.MANUAL:
+        elif source is AudioSource.DEMO:
+            self.audio_snapshot = demo_snapshot(self.demo_tick)
+            self.demo_tick += 1
+            self.audio_frame = self.audio_snapshot.frame
+            self.music_features = self.audio_snapshot.features
+        delay = max(self.playback.step(self.controller, snapshot=None if source is AudioSource.OFF else self.audio_snapshot), MIN_FRAME_SECONDS)
+        if source is AudioSource.OFF:
             self.audio_frame = AudioFrame()
             self.music_features = MusicFeatures()
             self.audio_snapshot = AudioSnapshot.silence()
@@ -346,31 +294,25 @@ class HeadlessApp:
             self._cycle_mode()
             return
         if event.kind == "press" and event.source == "encoder2":
-            self._set_auto_select(not self._auto_select_enabled)
+            return
 
     def _handle_animation_rotation(self, step: int) -> None:
-        self._set_auto_select(False)
         if step > 0:
             for _ in range(step):
-                self.player.next()
+                self.playback.next_animation()
+            self.mode = self.playback.mode
             return
         for _ in range(abs(step)):
-            self.player.prev()
+            self.playback.previous_animation()
+        self.mode = self.playback.mode
 
     def _cycle_mode(self) -> None:
-        if self.mode is RuntimeMode.MANUAL:
-            self.set_mode(RuntimeMode.DEMO)
-        elif self.mode is RuntimeMode.DEMO:
-            self.set_mode(RuntimeMode.MIC)
-        elif self.mode is RuntimeMode.MIC:
-            self.set_mode(RuntimeMode.DJ)
+        if self.mode is PlaybackMode.STATIC:
+            self.set_mode(PlaybackMode.CYCLING)
+        elif self.mode is PlaybackMode.CYCLING:
+            self.set_mode(PlaybackMode.DYNAMIC)
         else:
-            self.set_mode(RuntimeMode.MANUAL)
-
-    def _set_auto_select(self, enabled: bool) -> None:
-        self._auto_select_enabled = enabled
-        if self.selector is not None:
-            self.selector.set_auto_select(enabled)
+            self.set_mode(PlaybackMode.STATIC)
 
     def run(self, *, frame_limit: int | None = None) -> None:
         frames_run = 0
@@ -409,23 +351,23 @@ class HeadlessApp:
         self._last_status_at = now
 
     def _status_block(self) -> str:
-        auto_status = "ON" if self._auto_select_enabled else "OFF"
         lines = [
             f"ANIM: {self.current_animation_label}",
-            f"MODE: {self.mode_label}  |  AUTO: {auto_status}  |  OUT: {self.brightness_label}",
+            f"MODE: {self.mode_label}  |  OUT: {self.brightness_label}",
             f"SOURCE: {self.audio_status}",
             f"CLASS: {self.class_label}",
             self.analysis_text(),
         ]
         if self.gpio_backend_label:
             lines.insert(3, f"GPIO: {self.gpio_backend_label}")
-        if self.mode in {RuntimeMode.MIC, RuntimeMode.DJ}:
+        source = self.audio_source or (AudioSource.MIC if self.mode is PlaybackMode.DYNAMIC else AudioSource.OFF)
+        if source is AudioSource.MIC:
             lines.insert(4, f"MIC: {self.mic_tuning_label}")
             health = self._audio_health_summary()
             if health:
                 lines.insert(5, f"HEALTH: {health}")
-        if self.dj_selector is not None and self.dj_selector.last_decision.scores:
-            lines.append(f"SELECTOR: {self._selector_top_summary()} reason={self.dj_selector.last_decision.reason}")
+        if self.playback.last_decision is not None and self.playback.last_decision.scores:
+            lines.append(f"SELECTOR: {self._selector_top_summary()} reason={self.playback.last_decision.reason}")
         if self.audio_error:
             lines.append(f"ERROR: {self.audio_error}")
         return "\n".join(lines)
@@ -456,11 +398,9 @@ class HeadlessApp:
         return f"AUDIO-DEBUG SOURCE={self.audio_status} MIC={self.mic_tuning_label}{verbose}"
 
     def _selector_scores(self) -> dict[str, float]:
-        if self.dj_selector is not None:
-            return {score.name: score.score for score in self.dj_selector.last_decision.scores}
-        if self.selector is None:
+        if self.playback.last_decision is None:
             return {}
-        return {class_.value: score for class_, score in self.selector._class_scores().items()}
+        return {score.name: score.score for score in self.playback.last_decision.scores}
 
     def _selector_top_summary(self) -> str:
         scores = self._selector_scores()
@@ -471,30 +411,14 @@ class HeadlessApp:
         return f"TOP={formatted}"
 
     def _selector_verbose_summary(self) -> str:
-        if self.selector is None:
-            if self.dj_selector is not None:
-                decision = self.dj_selector.last_decision
-                reasons = ";".join(
-                    f"{score.name}:{score.score:0.2f}[{'/'.join(score.reasons[:3])}]"
-                    for score in decision.scores
-                )
-                return f"SEL=reason:{decision.reason},switch:{decision.should_switch} SCORES={reasons or '-'}"
+        decision = self.playback.last_decision
+        if decision is None:
             return "SEL=-"
-        sel = self.selector
-        scores = ",".join(
-            f"{name}:{score:0.2f}" for name, score in sorted(self._selector_scores().items(), key=lambda item: item[0])
+        reasons = ";".join(
+            f"{score.name}:{score.score:0.2f}[{'/'.join(score.reasons[:3])}]"
+            for score in decision.scores
         )
-        return (
-            f"SEL=energy_short:{sel.energy_short:0.3f},"
-            f"energy_long:{sel.energy_long:0.3f},"
-            f"beat_density:{sel.beat_density:0.3f},"
-            f"brightness:{sel.brightness_smooth:0.3f},"
-            f"onset:{sel.onset_smooth:0.3f},"
-            f"bass:{sel.bass_short:0.3f},"
-            f"mid:{sel.mid_short:0.3f},"
-            f"high:{sel.high_short:0.3f} "
-            f"SCORES={scores}"
-        )
+        return f"SEL=reason:{decision.reason},switch:{decision.should_switch} SCORES={reasons or '-'}"
 
     def debug_transition_line(self, elapsed: float, previous_class: str, current_class: str) -> str:
         score_snapshot = ",".join(
@@ -513,8 +437,7 @@ class HeadlessApp:
         snapshot = self.audio_snapshot
         beat = "YES" if frame.beat else "NO"
         fresh = "YES" if frame.fresh else "NO"
-        idle = "YES" if self.selector is not None and self.selector.idle_active else "NO"
-        auto = "DJ" if self.dj_selector is not None else ("ON" if self.selector is not None and self.selector.auto_select else "OFF")
+        idle = "NO" if self.playback.music_active else "YES"
         anim = self.player.name_at(self.player.current_index()) or "?"
         bands = ",".join(f"{value:0.2f}" for value in frame.bands)
         silence = "YES" if feat.silence else "NO"
@@ -532,7 +455,7 @@ class HeadlessApp:
             f"SRC={self.audio_status} "
             f"CLASS={self.class_label} "
             f"ANIM={anim.upper()} "
-            f"AUTO={auto} "
+            f"MODE={self.mode.value} "
             f"IDLE={idle} "
             f"FRESH={fresh} "
             f"AGE={age_text} "
@@ -571,14 +494,14 @@ class HeadlessApp:
         snapshot = self.audio_snapshot
         health = self._audio_health()
         stats = health.processor if health is not None else None
-        decision = self.dj_selector.last_decision if self.dj_selector is not None else None
+        decision = self.playback.last_decision
         return {
             "elapsed_s": round(elapsed, 6),
             "source": self.audio_status,
             "mode": self.mode.value,
             "class": self.class_label,
             "animation": self.player.name_at(self.player.current_index()) or "",
-            "auto": "dj" if self.dj_selector is not None else ("on" if self.selector is not None and self.selector.auto_select else "off"),
+            "music_active": self.playback.music_active,
             "fresh": frame.fresh,
             "age_s": None if health is None else health.last_frame_age,
             "callback_age_s": None if health is None else health.last_callback_age,
@@ -682,18 +605,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--mode",
         type=_parse_mode,
-        default=RuntimeMode.MANUAL,
-        help="Startup mode: manual, demo, mic, or dj",
+        default=PlaybackMode.STATIC,
+        help="Playback mode: static, cycling, dynamic, or dj (alias for dynamic)",
     )
     parser.add_argument(
-        "--auto-selector",
-        choices=("dj",),
-        help="Enable an automatic selector mode; currently equivalent to --mode dj",
+        "--audio-source",
+        type=_parse_audio_source,
+        help="Audio source: off, mic, or demo (defaults to mic for dynamic and off otherwise)",
     )
-    parser.add_argument("--animation", help="Startup animation name for manual mode")
+    parser.add_argument("--animation", help="Startup animation name")
+    parser.add_argument("--cycle-order", type=CycleOrder, choices=tuple(CycleOrder), default=CycleOrder.SEQUENTIAL)
+    parser.add_argument("--cycle-timing", type=CycleTiming, choices=tuple(CycleTiming), default=CycleTiming.PER_ANIMATION)
+    parser.add_argument("--cycle-interval", type=_positive_float, default=30.0, metavar="SECONDS")
     parser.add_argument(
         "--audio-device",
-        help="Input device index or substring match for the device name when using mic mode",
+        help="Input device index or substring match for the mic audio source",
     )
     parser.add_argument(
         "--list-audio-devices",
@@ -748,19 +674,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--auto-calibrate-audio",
         type=_positive_float,
         metavar="SECONDS",
-        help="Measure the selected audio input and apply recommended mic tuning before mic mode starts",
+        help="Measure the selected audio input and apply recommended mic tuning before playback starts",
     )
     parser.add_argument(
         "--mic-target-level",
         type=_positive_float,
         default=AudioNormalization().target_level,
-        help="Normalized input level target for mic mode calibration",
+        help="Normalized input level target for microphone calibration",
     )
     parser.add_argument(
         "--mic-noise-floor",
         type=_non_negative_float,
         default=AudioSmoothing().noise_floor,
-        help="Noise floor threshold for mic mode calibration",
+        help="Noise floor threshold for microphone calibration",
     )
     parser.add_argument(
         "--mic-profile",
@@ -775,8 +701,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--idle-enter-frames",
         type=_positive_int,
-        default=MusicSelectorConfig().idle_enter_frames,
-        help="Consecutive low-activity frames before idle activates in mic mode",
+        default=MusicActivityConfig().idle_enter_frames,
+        help="Consecutive non-music frames before Dynamic enters its calm state",
     )
     parser.add_argument(
         "--idle-threshold-scale",
@@ -784,13 +710,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_IDLE_THRESHOLD_SCALE,
         help="Scale factor applied to mic idle activity thresholds",
     )
-    parser.add_argument("--dj-min-duration", type=_positive_float, default=AutoSelectorConfig().min_duration_s)
-    parser.add_argument("--dj-max-duration", type=_positive_float, default=AutoSelectorConfig().max_duration_s)
-    parser.add_argument("--dj-switch-cooldown", type=_positive_float, default=AutoSelectorConfig().switch_cooldown_s)
-    parser.add_argument("--dj-drop-cooldown", type=_positive_float, default=AutoSelectorConfig().drop_cooldown_s)
-    parser.add_argument("--dj-randomness", type=_non_negative_float, default=AutoSelectorConfig().randomness)
-    parser.add_argument("--dj-history-size", type=_positive_int, default=AutoSelectorConfig().history_size)
-    parser.add_argument("--dj-seed", type=int)
+    parser.add_argument("--dynamic-min-duration", type=_positive_float, default=DynamicSelectorConfig().min_duration_s)
+    parser.add_argument("--dynamic-max-duration", type=_positive_float, default=DynamicSelectorConfig().max_duration_s)
+    parser.add_argument("--dynamic-switch-cooldown", type=_positive_float, default=DynamicSelectorConfig().switch_cooldown_s)
+    parser.add_argument("--dynamic-drop-cooldown", type=_positive_float, default=DynamicSelectorConfig().drop_cooldown_s)
+    parser.add_argument("--dynamic-randomness", type=_non_negative_float, default=DynamicSelectorConfig().randomness)
+    parser.add_argument("--dynamic-history-size", type=_positive_int, default=DynamicSelectorConfig().history_size)
+    parser.add_argument("--dynamic-seed", type=int)
     parser.add_argument("--quiet", action="store_true", help="Disable runtime status output")
     parser.add_argument("--chip", default="/dev/gpiochip0", help="Primary GPIO chip path")
     parser.add_argument("--data-pin", type=int, default=14, help="Primary stripe data pin")
@@ -860,8 +786,6 @@ def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
     args.audio_analysis = AudioAnalysis()
-    if args.auto_selector == "dj":
-        args.mode = RuntimeMode.DJ
     if args.analyze_audio_debug:
         print(analyze_audio_debug(args.analyze_audio_debug))
         return
@@ -878,7 +802,10 @@ def main(argv: list[str] | None = None) -> None:
             profile = _load_mic_profile_for_args(args)
             _apply_mic_profile(args, profile, raw_argv)
         calibration = None
-        if args.auto_calibrate_audio is not None and (args.audio_debug or args.mode in {RuntimeMode.MIC, RuntimeMode.DJ}):
+        resolved_source = args.audio_source or (AudioSource.MIC if args.mode is PlaybackMode.DYNAMIC else AudioSource.OFF)
+        if args.mode is PlaybackMode.DYNAMIC and resolved_source is AudioSource.OFF:
+            raise ValueError("dynamic mode requires --audio-source mic or demo")
+        if args.auto_calibrate_audio is not None and (args.audio_debug or resolved_source is AudioSource.MIC):
             calibration = calibrate_audio_input(duration=args.auto_calibrate_audio, device_pattern=args.audio_device)
             _apply_calibration(args, calibration)
         if args.write_mic_profile is not None:
@@ -889,7 +816,8 @@ def main(argv: list[str] | None = None) -> None:
             app = HeadlessApp(
                 controller=Stripe(args.pixels),
                 pixel_count=args.pixels,
-                mode=args.mode if args.mode is RuntimeMode.DJ else RuntimeMode.MIC,
+                mode=PlaybackMode.DYNAMIC,
+                audio_source=AudioSource.MIC,
                 audio_device=args.audio_device,
                 mic_target_level=args.mic_target_level,
                 mic_noise_floor=args.mic_noise_floor,
@@ -900,7 +828,8 @@ def main(argv: list[str] | None = None) -> None:
                 audio_calibration=calibration,
                 animation_name=args.animation,
                 quiet=True,
-                auto_selector_config=_build_auto_selector_config(args),
+                cycling_config=_build_cycling_config(args),
+                dynamic_selector_config=_build_dynamic_selector_config(args),
                 debug_selector=args.debug_selector,
             )
             if args.audio_debug_record is None and args.audio_debug_duration is None:
@@ -917,6 +846,7 @@ def main(argv: list[str] | None = None) -> None:
             controller=controller,
             pixel_count=args.pixels,
             mode=args.mode,
+            audio_source=args.audio_source,
             audio_device=args.audio_device,
             mic_target_level=args.mic_target_level,
             mic_noise_floor=args.mic_noise_floor,
@@ -927,7 +857,8 @@ def main(argv: list[str] | None = None) -> None:
             animation_name=args.animation,
             quiet=args.quiet,
             gpio_backend_label=gpio_backend_label(controller),
-            auto_selector_config=_build_auto_selector_config(args),
+            cycling_config=_build_cycling_config(args),
+            dynamic_selector_config=_build_dynamic_selector_config(args),
             debug_selector=args.debug_selector,
             encoder_backend=encoder_backend,
         ).run()
@@ -969,11 +900,21 @@ def _ensure_gpio_input_ready(chip: str) -> None:
         )
 
 
-def _parse_mode(value: str) -> RuntimeMode:
+def _parse_mode(value: str) -> PlaybackMode:
+    normalized = value.lower()
+    if normalized == "dj":
+        normalized = PlaybackMode.DYNAMIC.value
     try:
-        return RuntimeMode(value.lower())
+        return PlaybackMode(normalized)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(f"invalid mode: {value}") from exc
+
+
+def _parse_audio_source(value: str) -> AudioSource:
+    try:
+        return AudioSource(value.lower())
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid audio source: {value}") from exc
 
 
 def _positive_float(value: str) -> float:
@@ -1087,7 +1028,7 @@ def _read_audio_debug_rows(paths: list[Path]) -> list[dict[str, object]]:
                 except json.JSONDecodeError as exc:
                     raise ValueError(f"{path}:{line_number}: invalid JSONL audio debug row") from exc
                 if not isinstance(row, dict):
-                    raise ValueError(f"{path}:{line_number}: audio debug row must be an object")
+                    raise TypeError(f"{path}:{line_number}: audio debug row must be an object")
                 rows.append(row)
     return rows
 
@@ -1202,9 +1143,11 @@ def analyze_audio_debug(paths: list[Path]) -> str:
     lines = [
         f"Audio debug rows: {len(rows)}",
         f"Labels: {label_text}",
-        f"Classified labels: active={sum(1 for value in classified.values() if value == 'active')} "
-        f"idle={sum(1 for value in classified.values() if value == 'idle')} "
-        f"quiet={sum(1 for value in classified.values() if value == 'quiet')}",
+        (
+            f"Classified labels: active={sum(1 for value in classified.values() if value == 'active')} "
+            f"idle={sum(1 for value in classified.values() if value == 'idle')} "
+            f"quiet={sum(1 for value in classified.values() if value == 'quiet')}"
+        ),
         f"RMS floor/p80/peak: {floor:0.4f} / {_percentile(rms, 80.0):0.4f} / {peak:0.4f}",
         f"Beat/drop/section/silence rates: {beat_rate:0.1%} / {drop_rate:0.1%} / {section_rate:0.1%} / {silence_rate:0.1%}",
         f"BPM median: {_percentile(bpm_values, 50.0):0.0f}" if bpm_values else "BPM median: -",
@@ -1242,29 +1185,35 @@ def _build_audio_config(*, target_level: float, noise_floor: float, analysis: Au
     )
 
 
-def _build_auto_selector_config(args: argparse.Namespace) -> AutoSelectorConfig:
-    return AutoSelectorConfig(
-        min_duration_s=args.dj_min_duration,
-        max_duration_s=args.dj_max_duration,
-        switch_cooldown_s=args.dj_switch_cooldown,
-        drop_cooldown_s=args.dj_drop_cooldown,
-        randomness=args.dj_randomness,
-        history_size=args.dj_history_size,
-        seed=args.dj_seed,
+def _build_cycling_config(args: argparse.Namespace) -> CyclingConfig:
+    return CyclingConfig(
+        order=args.cycle_order,
+        timing=args.cycle_timing,
+        interval_s=args.cycle_interval,
+        seed=args.dynamic_seed,
     )
 
 
-def _build_selector_config(*, idle_enter_frames: int, idle_threshold_scale: float) -> MusicSelectorConfig:
-    defaults = MusicSelectorConfig()
-    return MusicSelectorConfig(
-        class_dwell_frames=defaults.class_dwell_frames,
-        animation_dwell_frames=defaults.animation_dwell_frames,
-        confidence_threshold=defaults.confidence_threshold,
+def _build_dynamic_selector_config(args: argparse.Namespace) -> DynamicSelectorConfig:
+    return DynamicSelectorConfig(
+        min_duration_s=args.dynamic_min_duration,
+        max_duration_s=args.dynamic_max_duration,
+        switch_cooldown_s=args.dynamic_switch_cooldown,
+        drop_cooldown_s=args.dynamic_drop_cooldown,
+        randomness=args.dynamic_randomness,
+        history_size=args.dynamic_history_size,
+        seed=args.dynamic_seed,
+    )
+
+
+def _build_activity_config(*, idle_enter_frames: int, idle_threshold_scale: float) -> MusicActivityConfig:
+    defaults = MusicActivityConfig()
+    return MusicActivityConfig(
         feature_attack=defaults.feature_attack,
         feature_release=defaults.feature_release,
         idle_enter_frames=idle_enter_frames,
-        idle_energy_threshold=defaults.idle_energy_threshold * idle_threshold_scale,
-        idle_onset_threshold=defaults.idle_onset_threshold * idle_threshold_scale,
-        idle_beat_density_threshold=defaults.idle_beat_density_threshold * idle_threshold_scale,
-        idle_brightness_threshold=defaults.idle_brightness_threshold * idle_threshold_scale,
+        energy_threshold=defaults.energy_threshold * idle_threshold_scale,
+        onset_threshold=defaults.onset_threshold * idle_threshold_scale,
+        beat_density_threshold=defaults.beat_density_threshold * idle_threshold_scale,
+        brightness_threshold=defaults.brightness_threshold * idle_threshold_scale,
     )

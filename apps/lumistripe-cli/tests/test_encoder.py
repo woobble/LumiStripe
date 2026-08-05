@@ -3,7 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from lumistripe_cli.encoder import BUTTON_DEBOUNCE_NS, EncoderPins, GPIODEncoderBackend, build_encoder_backend
+from lumistripe_cli.encoder import (
+    BUTTON_DEBOUNCE_NS,
+    EncoderPins,
+    GPIODEncoderBackend,
+    build_encoder_backend,
+)
 
 
 class FakeEdge(Enum):

@@ -4,46 +4,78 @@ from dataclasses import dataclass, field
 
 from ..animation.base import AnimationPlayer
 from ..audio import AudioFeatures
-from .scoring import AnimationScoringEngine, AutoSelectorConfig, SelectorDecision
+from .metadata import animation_metadata
+from .scoring import AnimationScoringEngine, DynamicSelectorConfig, SelectorDecision
 
 
 @dataclass(slots=True)
-class DJModeSelector:
-    config: AutoSelectorConfig = field(default_factory=AutoSelectorConfig)
+class DynamicSelector:
+    config: DynamicSelectorConfig = field(default_factory=DynamicSelectorConfig)
     engine: AnimationScoringEngine = field(init=False)
     current_name: str | None = None
     last_switch_at_s: float = 0.0
     last_drop_switch_at_s: float = -9999.0
     recent_names: list[str] = field(default_factory=list)
-    last_decision: SelectorDecision = field(default_factory=lambda: SelectorDecision(None, 0.0, None, False, "not_started"))
+    last_decision: SelectorDecision = field(
+        default_factory=lambda: SelectorDecision(None, 0.0, None, False, "not_started")
+    )
 
     def __post_init__(self) -> None:
         self.engine = AnimationScoringEngine(self.config)
 
-    def update(self, player: AnimationPlayer, features: AudioFeatures, *, now_s: float) -> SelectorDecision:
+    def reset(self) -> None:
+        self.current_name = None
+        self.last_switch_at_s = 0.0
+        self.last_drop_switch_at_s = -9999.0
+        self.recent_names.clear()
+        self.last_decision = SelectorDecision(None, 0.0, None, False, "not_started")
+
+    def update(
+        self,
+        player: AnimationPlayer,
+        features: AudioFeatures,
+        *,
+        now_s: float,
+        quiet: bool = False,
+        force_switch: bool = False,
+    ) -> SelectorDecision:
         current = player.name_at(player.current_index())
+        candidates = [
+            entry
+            for entry in player.animations
+            if entry.automatic
+            and (not quiet or animation_metadata(entry.animation).supports_silence)
+        ]
         if self.current_name is None:
             self.current_name = current
             self.last_switch_at_s = now_s
             ranked = self.engine.rank(
-                player.animations,
+                candidates,
                 features,
                 current_name=current,
                 recent_names=tuple(self.recent_names),
             )
-            current_score = next((score for score in ranked if score.name == current), None)
+            best = ranked[0] if ranked else None
+            selected = best.name if best is not None else current
+            should_switch = selected is not None and selected != current
+            if selected is not None and selected != current:
+                index = player.index_of(selected)
+                if index is not None:
+                    player.set_index(index)
+                    self._remember(current)
+                    self.current_name = selected
             self.last_decision = SelectorDecision(
-                selected_name=current,
-                selected_score=current_score.score if current_score is not None else 0.0,
+                selected_name=selected,
+                selected_score=best.score if best is not None else 0.0,
                 current_name=current,
-                should_switch=False,
-                reason="initial_hold",
+                should_switch=should_switch,
+                reason="initial" if should_switch else "initial_hold",
                 scores=ranked[:5],
             )
             return self.last_decision
 
         ranked = self.engine.rank(
-            player.animations,
+            candidates,
             features,
             current_name=current,
             recent_names=tuple(self.recent_names),
@@ -78,14 +110,29 @@ class DJModeSelector:
             selected_score = best.score
             reason = "best_is_current"
         else:
-            score_gap = best.score - (current_score.score if current_score is not None else 0.0)
-            if drop_ready and best.metadata.supports_drops:
+            score_gap = best.score - (
+                current_score.score if current_score is not None else 0.0
+            )
+            if force_switch:
+                should_switch = True
+                reason = "music_state"
+            elif drop_ready and best.metadata.supports_drops:
                 should_switch = True
                 reason = "drop"
+            elif (
+                bool(getattr(features, "section_change", False))
+                and min_ready
+                and cooldown_ready
+                and score_gap >= self.config.switch_margin * 0.5
+            ):
+                should_switch = True
+                reason = "section_change"
             elif max_due and cooldown_ready:
                 should_switch = True
                 reason = "max_duration"
-            elif min_ready and cooldown_ready and score_gap >= self.config.switch_margin:
+            elif (
+                min_ready and cooldown_ready and score_gap >= self.config.switch_margin
+            ):
                 should_switch = True
                 reason = f"score_gap={score_gap:0.2f}"
             selected_name = best.name if should_switch else current

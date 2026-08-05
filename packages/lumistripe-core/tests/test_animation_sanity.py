@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import numpy as np
-
 from lumistripe import (
     AudioFrame,
     Aurora,
@@ -21,7 +20,6 @@ from lumistripe import (
     Twinkle,
     Wave,
 )
-
 
 QUIET_AUDIO = AudioFrame(
     rms=0.01,

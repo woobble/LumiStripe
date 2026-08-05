@@ -1,11 +1,9 @@
 import json
 from pathlib import Path
+from typing import Self
 
 import pytest
-
 from lumistripe import (
-    AnimationClass,
-    AutoSelectorConfig,
     AudioAnalysis,
     AudioCalibrationResult,
     AudioConfig,
@@ -13,24 +11,24 @@ from lumistripe import (
     AudioInputHealth,
     AudioNormalization,
     AudioProcessorStats,
-    AudioSnapshot,
     AudioSmoothing,
+    AudioSnapshot,
+    DynamicSelectorConfig,
     MultiController,
-    MusicDrivenSelector,
+    MusicActivityConfig,
     MusicFeatures,
-    MusicSelectorConfig,
+    PlaybackMode,
     Stripe,
+    demo_snapshot,
 )
 from lumistripe_cli.app import (
-    AudioDebugRecorder,
     MIN_FRAME_SECONDS,
+    AudioDebugRecorder,
     HeadlessApp,
-    RuntimeMode,
     analyze_audio_debug,
-    build_runtime_encoder_backend,
     build_output_controller,
     build_parser,
-    demo_frame,
+    build_runtime_encoder_backend,
     gpio_backend_label,
     main,
 )
@@ -46,7 +44,7 @@ class FakeGPIOStripe(Stripe):
 
 
 def test_demo_frame_has_energy() -> None:
-    frame = demo_frame(0)
+    frame = demo_snapshot(0).frame
     assert frame.rms > 0.0
     assert frame.beat is True
 
@@ -55,11 +53,10 @@ def test_headless_app_class_label_reflects_selector_idle_state() -> None:
     app = HeadlessApp(controller=Stripe(12), pixel_count=12)
     assert app.class_label == "-"
 
-    app.selector = MusicDrivenSelector(current_class=AnimationClass.GROOVY)
-    assert app.class_label == "GROOVY"
-
-    app.selector.idle_active = True
-    assert app.class_label == "IDLE"
+    app.mode = PlaybackMode.DYNAMIC
+    assert app.class_label == "CALM"
+    app.playback._music_active = True
+    assert app.class_label == "MUSIC"
 
 
 def test_parser_accepts_second_stripe_arguments() -> None:
@@ -129,26 +126,49 @@ def test_parser_accepts_audio_debug_recording_flags() -> None:
     assert args.analyze_audio_debug == [Path("captures/song.jsonl")]
 
 
-def test_parser_accepts_dj_mode_and_selector_flags() -> None:
+def test_parser_accepts_dynamic_mode_and_selector_flags() -> None:
     parser = build_parser()
     args = parser.parse_args(
         [
             "--mode",
-            "dj",
+            "dynamic",
             "--debug-selector",
-            "--dj-min-duration",
+            "--dynamic-min-duration",
             "3",
-            "--dj-max-duration",
+            "--dynamic-max-duration",
             "30",
-            "--dj-seed",
+            "--dynamic-seed",
             "7",
         ]
     )
-    assert args.mode is RuntimeMode.DJ
+    assert args.mode is PlaybackMode.DYNAMIC
     assert args.debug_selector is True
-    assert args.dj_min_duration == pytest.approx(3.0)
-    assert args.dj_max_duration == pytest.approx(30.0)
-    assert args.dj_seed == 7
+    assert args.dynamic_min_duration == pytest.approx(3.0)
+    assert args.dynamic_max_duration == pytest.approx(30.0)
+    assert args.dynamic_seed == 7
+
+
+def test_parser_accepts_dj_as_dynamic_mode_alias() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "--pixels",
+            "42",
+            "--mode",
+            "dj",
+            "--audio-device",
+            "1",
+            "--data-pin",
+            "15",
+            "--clock-pin",
+            "14",
+            "--mic-profile",
+            "pcm2902",
+            "--debug-selector",
+        ]
+    )
+
+    assert args.mode is PlaybackMode.DYNAMIC
 
 
 def test_parser_accepts_audio_calibration_flags() -> None:
@@ -361,7 +381,7 @@ def test_headless_app_formats_status_like_simulator() -> None:
         drop_detected=True,
     )
     assert "PULSE" in app.current_animation_label
-    assert app.mode_label == "MANUAL"
+    assert app.mode_label == "STATIC"
     assert app.class_label == "-"
     text = app.analysis_text()
     assert "RMS: 0.500" in text
@@ -395,7 +415,7 @@ def test_headless_app_status_block_includes_mic_tuning_in_mic_mode() -> None:
         idle_threshold_scale=1.5,
         quiet=True,
     )
-    app.mode = RuntimeMode.MIC
+    app.mode = PlaybackMode.DYNAMIC
     block = app._status_block()
     assert "MIC: target=0.50 noise=0.010 idle=42f scale=1.50" in block
 
@@ -413,14 +433,14 @@ def test_headless_app_encoder_controls_update_runtime_state() -> None:
     assert app.player.brightness == pytest.approx(0.85)
 
     app.apply_control_event(ControlEvent(kind="press", source="encoder2"))
-    assert "AUTO: OFF" in app._status_block()
+    assert "AUTO:" not in app._status_block()
 
     app.apply_control_event(ControlEvent(kind="press", source="encoder1"))
-    assert app.mode is RuntimeMode.DEMO
+    assert app.mode is PlaybackMode.CYCLING
 
     app.apply_control_event(ControlEvent(kind="rotate", source="encoder1", value=1))
     assert app.player.name_at(app.player.current_index()) != initial_name
-    assert "AUTO: OFF" in app._status_block()
+    assert app.mode is PlaybackMode.STATIC
 
 
 def test_headless_app_run_consumes_encoder_events() -> None:
@@ -447,7 +467,7 @@ def test_headless_app_run_consumes_encoder_events() -> None:
 
 def test_headless_app_debug_header_and_line_include_metrics() -> None:
     app = HeadlessApp(controller=Stripe(12), pixel_count=12, quiet=True)
-    app.mode = RuntimeMode.MIC
+    app.mode = PlaybackMode.DYNAMIC
     app.audio_status = "Input: Fake Mic"
     app.audio_frame = AudioFrame(
         rms=0.5,
@@ -473,12 +493,12 @@ def test_headless_app_debug_header_and_line_include_metrics() -> None:
         rolling_loudness=0.44,
         drop_detected=True,
     )
-    app.selector = MusicDrivenSelector(current_class=AnimationClass.GROOVY)
+    app.playback._music_active = True
     assert "AUDIO-DEBUG SOURCE=Input: Fake Mic" in app.debug_header()
     line = app.debug_log_line(1.25)
     assert "t=1.25s" in line
-    assert "CLASS=GROOVY" in line
-    assert "AUTO=ON" in line
+    assert "CLASS=MUSIC" in line
+    assert "MODE=dynamic" in line
     assert "IDLE=NO" in line
     assert "RMS=0.500" in line
     assert "BPM=128" in line
@@ -497,7 +517,7 @@ def test_headless_app_debug_header_and_line_include_metrics() -> None:
 
 def test_headless_app_debug_log_line_includes_verbose_selector_details() -> None:
     app = HeadlessApp(controller=Stripe(12), pixel_count=12, quiet=True, audio_debug_verbose=True)
-    app.mode = RuntimeMode.MIC
+    app.mode = PlaybackMode.DYNAMIC
     app.audio_status = "Input: Fake Mic"
     app.audio_frame = AudioFrame(rms=0.5, bands=(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8), beat=True, beat_strength=0.9)
     app.music_features = MusicFeatures(
@@ -511,9 +531,9 @@ def test_headless_app_debug_log_line_includes_verbose_selector_details() -> None
         beat_strength=0.9,
         bands=(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8),
     )
-    app.selector = MusicDrivenSelector(current_class=AnimationClass.GROOVY)
+    app.playback.last_decision = app.playback.dynamic_selector.update(app.player, app.music_features, now_s=0.0)
     line = app.debug_log_line(1.25)
-    assert "SEL=energy_short:" in line
+    assert "SEL=reason:" in line
     assert "SCORES=" in line
 
 
@@ -528,7 +548,7 @@ def test_headless_app_debug_log_line_includes_audio_health() -> None:
             )
 
     app = HeadlessApp(controller=Stripe(12), pixel_count=12, quiet=True)
-    app.mode = RuntimeMode.MIC
+    app.mode = PlaybackMode.DYNAMIC
     app.audio_input = FakeAudioInput()
     app.audio_frame = AudioFrame(sequence=4, fresh=True)
     app.audio_snapshot = AudioSnapshot.from_parts(
@@ -555,7 +575,7 @@ def test_headless_app_debug_log_line_includes_audio_health() -> None:
 
 def test_headless_app_audio_debug_record_includes_structured_metrics() -> None:
     app = HeadlessApp(controller=Stripe(12), pixel_count=12, quiet=True)
-    app.mode = RuntimeMode.MIC
+    app.mode = PlaybackMode.DYNAMIC
     app.audio_status = "Input: Fake Mic"
     app.audio_frame = AudioFrame(
         rms=0.5,
@@ -580,7 +600,7 @@ def test_headless_app_audio_debug_record_includes_structured_metrics() -> None:
 
     assert row["elapsed_s"] == pytest.approx(1.25)
     assert row["source"] == "Input: Fake Mic"
-    assert row["mode"] == "mic"
+    assert row["mode"] == "dynamic"
     assert row["animation"]
     assert row["fresh"] is True
     assert row["sequence"] == 9
@@ -659,7 +679,6 @@ def test_analyze_audio_debug_reports_recommended_flags_and_warnings(tmp_path: Pa
 
 def test_headless_app_debug_transition_line_includes_score_snapshot() -> None:
     app = HeadlessApp(controller=Stripe(12), pixel_count=12, quiet=True)
-    app.selector = MusicDrivenSelector(current_class=AnimationClass.GROOVY)
     line = app.debug_transition_line(1.25, "GROOVY", "CALM")
     assert "TRANSITION CLASS=GROOVY->CALM" in line
     assert "SCORES=" in line
@@ -667,7 +686,7 @@ def test_headless_app_debug_transition_line_includes_score_snapshot() -> None:
 
 def test_headless_app_run_audio_debug_prints_header_and_lines(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     app = HeadlessApp(controller=Stripe(12), pixel_count=12, quiet=True)
-    app.mode = RuntimeMode.MIC
+    app.mode = PlaybackMode.DYNAMIC
     app.audio_status = "Input: Fake Mic"
     monkeypatch.setattr(HeadlessApp, "step", lambda self: 0.01)
     monkeypatch.setattr(HeadlessApp, "debug_log_line", lambda self, elapsed: f"tick {elapsed >= 0}")
@@ -679,7 +698,7 @@ def test_headless_app_run_audio_debug_prints_header_and_lines(monkeypatch: pytes
 
 def test_headless_app_run_audio_debug_emits_transition_lines(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     app = HeadlessApp(controller=Stripe(12), pixel_count=12, quiet=True)
-    app.mode = RuntimeMode.MIC
+    app.mode = PlaybackMode.DYNAMIC
     classes = iter(["GROOVY", "CALM"])
     monkeypatch.setattr(HeadlessApp, "step", lambda self: 0.01)
     monkeypatch.setattr(HeadlessApp, "class_label", property(lambda self: next(classes, "CALM")))
@@ -747,7 +766,9 @@ def test_headless_app_finish_status_emits_newline_for_tty(monkeypatch: pytest.Mo
     assert app._status_lines == 0
 
 
-def test_headless_app_mic_mode_falls_back_to_manual_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_headless_app_dynamic_mode_falls_back_to_static_on_mic_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class BrokenAudioInput:
         @classmethod
         def with_config(cls, config):
@@ -755,13 +776,13 @@ def test_headless_app_mic_mode_falls_back_to_manual_on_error(monkeypatch: pytest
             raise RuntimeError("no audio input device available")
 
     monkeypatch.setattr("lumistripe_cli.app.AudioInput", BrokenAudioInput)
-    app = HeadlessApp(controller=Stripe(12), pixel_count=12, mode=RuntimeMode.MIC)
-    assert app.mode is RuntimeMode.MANUAL
+    app = HeadlessApp(controller=Stripe(12), pixel_count=12, mode=PlaybackMode.DYNAMIC)
+    assert app.mode is PlaybackMode.STATIC
     assert app.audio_error == "no audio input device available"
     assert app.audio_status == "Microphone unavailable."
 
 
-def test_headless_app_mic_mode_uses_music_selector(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_headless_app_dynamic_mode_uses_shared_playback(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeAudioInput:
         last_config: AudioConfig | None = None
 
@@ -803,7 +824,7 @@ def test_headless_app_mic_mode_uses_music_selector(monkeypatch: pytest.MonkeyPat
     app = HeadlessApp(
         controller=Stripe(12),
         pixel_count=12,
-        mode=RuntimeMode.MIC,
+        mode=PlaybackMode.DYNAMIC,
         mic_target_level=0.5,
         mic_noise_floor=0.01,
         idle_enter_frames=42,
@@ -811,18 +832,18 @@ def test_headless_app_mic_mode_uses_music_selector(monkeypatch: pytest.MonkeyPat
     )
     for _ in range(140):
         app.step()
-    assert app.selector is not None
-    assert app.selector.current_class in {app.selector.current_class.FAST_PARTY, app.selector.current_class.CHAOTIC}
+    assert app.playback.last_decision is not None
+    assert app.playback.music_active is True
     assert app.audio_status == "Input: Fake Mic"
     assert FakeAudioInput.last_config == AudioConfig(
         smoothing=AudioSmoothing(noise_floor=0.01),
         normalization=AudioNormalization(target_level=0.5),
     )
-    assert app.selector.config.idle_enter_frames == 42
-    assert app.selector.config.idle_energy_threshold == pytest.approx(MusicSelectorConfig().idle_energy_threshold * 1.5)
+    assert app.playback.activity_detector.config.idle_enter_frames == 42
+    assert app.playback.activity_detector.config.energy_threshold == pytest.approx(MusicActivityConfig().energy_threshold * 1.5)
 
 
-def test_headless_app_dj_mode_uses_dj_selector(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_headless_app_dynamic_mode_scores_animations(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeAudioInput:
         def read(self) -> AudioFrame:
             return AudioFrame(
@@ -866,19 +887,19 @@ def test_headless_app_dj_mode_uses_dj_selector(monkeypatch: pytest.MonkeyPatch) 
     app = HeadlessApp(
         controller=Stripe(12),
         pixel_count=12,
-        mode=RuntimeMode.DJ,
-        auto_selector_config=AutoSelectorConfig(randomness=0.0, min_duration_s=0.1, switch_cooldown_s=0.1),
+        mode=PlaybackMode.DYNAMIC,
+        dynamic_selector_config=DynamicSelectorConfig(randomness=0.0, min_duration_s=0.1, switch_cooldown_s=0.1),
         quiet=True,
     )
 
     app.step()
-    assert app.dj_selector is not None
-    app.dj_selector.last_switch_at_s -= 1.0
+    assert app.playback.dynamic_selector is not None
+    app.playback.dynamic_selector.last_switch_at_s -= 1.0
     app.step()
 
-    assert app.selector is None
-    assert app.dj_selector.last_decision.scores
-    assert app.class_label == "DJ"
+    assert app.playback.last_decision is not None
+    assert app.playback.last_decision.scores
+    assert app.class_label == "MUSIC"
     assert "TOP=" in app.debug_log_line(1.0)
 
 
@@ -909,14 +930,14 @@ def test_headless_app_mic_mode_stale_audio_updates_selector_with_silence(monkeyp
             return cls()
 
     monkeypatch.setattr("lumistripe_cli.app.AudioInput", FakeAudioInput)
-    app = HeadlessApp(controller=Stripe(12), pixel_count=12, mode=RuntimeMode.MIC)
+    app = HeadlessApp(controller=Stripe(12), pixel_count=12, mode=PlaybackMode.DYNAMIC)
 
     app.step()
 
     assert app.music_features == MusicFeatures()
     assert app.audio_frame.fresh is False
     assert app.audio_snapshot.features == MusicFeatures()
-    assert app._mic_snapshot() == AudioFrame(sequence=1, fresh=False)
+    assert app.audio_snapshot.frame == AudioFrame(sequence=1, fresh=False)
 
 
 def test_headless_app_mic_mode_uses_device_specific_audio_config(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -941,7 +962,7 @@ def test_headless_app_mic_mode_uses_device_specific_audio_config(monkeypatch: py
             return cls()
 
     monkeypatch.setattr("lumistripe_cli.app.AudioInput", FakeAudioInput)
-    app = HeadlessApp(controller=Stripe(12), pixel_count=12, mode=RuntimeMode.MIC, audio_device="2")
+    app = HeadlessApp(controller=Stripe(12), pixel_count=12, mode=PlaybackMode.DYNAMIC, audio_device="2")
     assert app.audio_status == "Input: USB Mic"
     assert FakeAudioInput.seen == (
         "2",
@@ -1030,7 +1051,7 @@ def _fake_audio_config(*args: object, **kwargs: object) -> object:
         def close(self) -> None:
             pass
 
-        def __enter__(self) -> "_FakeAudioInput":
+        def __enter__(self) -> Self:
             return self
 
         def __exit__(self, *exc: object) -> None:
@@ -1059,7 +1080,7 @@ def test_main_audio_debug_skips_gpio_and_runs_with_in_memory_stripe(monkeypatch:
     main(["--audio-debug", "--audio-debug-verbose", "--pixels", "16"])
 
     assert isinstance(called["controller"], Stripe)
-    assert called["mode"] is RuntimeMode.MIC
+    assert called["mode"] is PlaybackMode.DYNAMIC
     assert called["quiet"] is True
     assert called["audio_debug_verbose"] is True
 

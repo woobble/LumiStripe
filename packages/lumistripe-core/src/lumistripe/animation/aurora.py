@@ -6,8 +6,8 @@ from math import cos, sin
 from ..audio import AudioFrame
 from ..color import Hsla
 from ..controller import Controller
-from .club_utils import strip_ratio
 from .base import Animation
+from .club_utils import strip_ratio
 from .reactive import AudioReactive, Decay
 
 

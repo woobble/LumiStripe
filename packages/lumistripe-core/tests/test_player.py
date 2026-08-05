@@ -22,12 +22,12 @@ def test_party_contains_expected_reactive_animations() -> None:
         assert player.index_of(name) is not None
 
 
-def test_reactive_indices_exclude_utility_entries() -> None:
+def test_automatic_indices_exclude_utility_entries() -> None:
     player = AnimationPlayer()
     party = AnimationPlayer.party()
     player.add(party.animations[0].animation, 20, 120)
     player.add_utility(RgbwTest(), 20, 120)
-    assert player.reactive_indices() == [0]
+    assert player.automatic_indices() == [0]
 
 
 def test_player_uses_audio_snapshot() -> None:

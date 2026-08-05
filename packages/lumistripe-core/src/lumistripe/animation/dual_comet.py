@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 from ..audio import AudioFrame
 from ..color import Hsla, Rgba
 from ..controller import Controller
-from .club_utils import trail_profile
 from .base import Animation
+from .club_utils import trail_profile
 from .reactive import AudioReactive, Decay
 
 

@@ -4,27 +4,31 @@ import argparse
 import sys
 import time
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Any
 
 from lumistripe import (
-    AnimationClass,
     AnimationPlayer,
-    AutoSelectorConfig,
     AudioAnalysis,
-    AudioConfig,
     AudioCalibrationResult,
+    AudioConfig,
     AudioFrame,
     AudioInput,
     AudioNormalization,
     AudioSmoothing,
-    CLASS_MAP,
-    DJModeSelector,
+    AudioSnapshot,
+    AudioSource,
+    CycleOrder,
+    CycleTiming,
+    CyclingConfig,
+    DynamicSelectorConfig,
+    MusicActivityConfig,
     MusicFeatures,
-    MusicDrivenSelector,
-    MusicSelectorConfig,
+    PlaybackConfig,
+    PlaybackEngine,
+    PlaybackMode,
     Stripe,
     calibrate_audio_input,
+    demo_snapshot,
     list_input_device_details,
     load_mic_profile,
 )
@@ -56,17 +60,6 @@ ACCENT_COLOR = (180, 212, 255)
 ERROR_COLOR = (255, 170, 170)
 
 
-class SimulatorMode(str, Enum):
-    MANUAL = "manual"
-    DEMO = "demo"
-    MIC = "mic"
-    DJ = "dj"
-
-    @property
-    def label(self) -> str:
-        return self.value.upper()
-
-
 @dataclass(frozen=True, slots=True)
 class Rect:
     x: int
@@ -82,10 +75,9 @@ class Rect:
 class Controls:
     prev: Rect
     next: Rect
-    manual: Rect
-    demo: Rect
-    mic: Rect
-    auto_sel: Rect
+    static: Rect
+    cycling: Rect
+    dynamic: Rect
     calibrate: Rect
 
 
@@ -101,65 +93,29 @@ def layout_controls() -> Controls:
     prev = Rect(x=PAD, y=BUTTON_Y, w=184, h=BUTTON_H)
     next_rect = Rect(x=prev.x + prev.w + BUTTON_GAP, y=BUTTON_Y, w=184, h=BUTTON_H)
     mode_y = BUTTON_Y + BUTTON_H + 20
-    manual = Rect(x=PAD, y=mode_y, w=MODE_BUTTON_W, h=BUTTON_H)
-    demo = Rect(x=manual.x + manual.w + BUTTON_GAP, y=mode_y, w=MODE_BUTTON_W, h=BUTTON_H)
-    mic = Rect(x=demo.x + demo.w + BUTTON_GAP, y=mode_y, w=MODE_BUTTON_W, h=BUTTON_H)
-    auto_sel = Rect(x=mic.x + mic.w + BUTTON_GAP, y=mode_y, w=148, h=BUTTON_H)
-    calibrate = Rect(x=auto_sel.x + auto_sel.w + BUTTON_GAP, y=mode_y, w=148, h=BUTTON_H)
-    return Controls(prev=prev, next=next_rect, manual=manual, demo=demo, mic=mic, auto_sel=auto_sel, calibrate=calibrate)
-
-
-def demo_frame(frame: int) -> AudioFrame:
-    frames_per_beat = 25
-    frames_per_measure = frames_per_beat * 4
-
-    measure_pos = frame % frames_per_measure
-    beat_idx = measure_pos // frames_per_beat
-    phase = (measure_pos % frames_per_beat) / frames_per_beat
-
-    decay = pow(2.718281828, -phase * 5.0)
-    fast = pow(2.718281828, -phase * 12.0)
-    slow = pow(2.718281828, -phase * 2.0)
-
-    kick = fast if beat_idx in (0, 2) else 0.001
-    snare = decay * 0.8 if beat_idx in (1, 3) else 0.001
-
-    bass_harmonic = (1.0, 1.0, 1.0, 0.75)[(frame // frames_per_measure) % 4]
-    bass = slow * 0.6 * bass_harmonic
-
-    pos_in_beat = measure_pos % frames_per_beat
-    hat = 0.35 if pos_in_beat < 2 or 12 <= pos_in_beat < 14 else 0.001
-    accent = 0.2 if 62 <= measure_pos < 64 else 0.0
-
-    bands = (
-        min(kick, 1.0),
-        min(bass, 1.0),
-        min(snare * 0.3 + kick * 0.15, 1.0),
-        min(snare, 1.0),
-        min(snare * 0.5 + hat * 0.3, 1.0),
-        min(hat + accent, 1.0),
-        min((hat + accent) * 0.4, 1.0),
-        min((hat + accent) * 0.15, 1.0),
-    )
-    rms = min((sum(bands) / len(bands)) ** 0.5, 1.0)
-    beat = beat_idx == 0
-    beat_strength = 0.7 + kick * 0.3 if beat else 0.0
-    return AudioFrame(rms=rms, bands=bands, beat=beat, beat_strength=beat_strength)
+    static = Rect(x=PAD, y=mode_y, w=MODE_BUTTON_W, h=BUTTON_H)
+    cycling = Rect(x=static.x + static.w + BUTTON_GAP, y=mode_y, w=MODE_BUTTON_W, h=BUTTON_H)
+    dynamic = Rect(x=cycling.x + cycling.w + BUTTON_GAP, y=mode_y, w=MODE_BUTTON_W, h=BUTTON_H)
+    calibrate = Rect(x=dynamic.x + dynamic.w + BUTTON_GAP, y=mode_y, w=148, h=BUTTON_H)
+    return Controls(prev=prev, next=next_rect, static=static, cycling=cycling, dynamic=dynamic, calibrate=calibrate)
 
 
 @dataclass(slots=True)
 class SimulatorApp:
     pixel_count: int = 80
-    mode: SimulatorMode = SimulatorMode.MANUAL
+    mode: PlaybackMode = PlaybackMode.STATIC
+    audio_source: AudioSource | None = None
     audio_device: str | None = None
     mic_target_level: float = field(default_factory=lambda: AudioNormalization().target_level)
     mic_noise_floor: float = field(default_factory=lambda: AudioSmoothing().noise_floor)
     audio_analysis: AudioAnalysis = field(default_factory=AudioAnalysis)
-    idle_enter_frames: int = field(default_factory=lambda: MusicSelectorConfig().idle_enter_frames)
+    idle_enter_frames: int = field(default_factory=lambda: MusicActivityConfig().idle_enter_frames)
     idle_threshold_scale: float = DEFAULT_IDLE_THRESHOLD_SCALE
     auto_calibrate_audio: float | None = None
-    auto_selector_config: AutoSelectorConfig = field(default_factory=AutoSelectorConfig)
+    cycling_config: CyclingConfig = field(default_factory=CyclingConfig)
+    dynamic_selector_config: DynamicSelectorConfig = field(default_factory=DynamicSelectorConfig)
     player: AnimationPlayer = field(init=False)
+    playback: PlaybackEngine = field(init=False)
     stripe: Stripe = field(init=False)
     controls: Controls = field(init=False)
     running: bool = field(init=False, default=True)
@@ -168,13 +124,24 @@ class SimulatorApp:
     audio_error: str | None = field(init=False, default=None)
     audio_frame: AudioFrame = field(init=False, default_factory=AudioFrame)
     music_features: MusicFeatures = field(init=False, default_factory=MusicFeatures)
+    audio_snapshot: AudioSnapshot = field(init=False, default_factory=AudioSnapshot.silence)
     audio_calibration: AudioCalibrationResult | None = field(init=False, default=None)
     demo_tick: int = field(init=False, default=0)
-    selector: MusicDrivenSelector | None = field(init=False, default=None)
-    dj_selector: DJModeSelector | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         self.player = AnimationPlayer.party()
+        self.playback = PlaybackEngine(
+            self.player,
+            PlaybackConfig(
+                mode=self.mode,
+                cycling=self.cycling_config,
+                dynamic=self.dynamic_selector_config,
+                activity=_build_activity_config(
+                    idle_enter_frames=self.idle_enter_frames,
+                    idle_threshold_scale=self.idle_threshold_scale,
+                ),
+            ),
+        )
         self.stripe = Stripe(self.pixel_count)
         self.controls = layout_controls()
         self.running = True
@@ -193,24 +160,18 @@ class SimulatorApp:
     @property
     def animation_name(self) -> str:
         raw = self.player.name_at(self.player.current_index()) or "?"
-        classes = CLASS_MAP.get(raw, ())
-        label = raw.upper()
-        if classes:
-            tags = ", ".join(c.value.upper() for c in classes)
-            label = f"{label}  [{tags}]"
-        return label
+        metadata = self.player.animations[self.player.current_index()].animation.metadata
+        return f"{raw.upper()}  [{metadata.mood.upper()}]"
 
     @property
     def mode_label(self) -> str:
-        return self.mode.label
+        return self.mode.value.upper()
 
     @property
     def class_label(self) -> str:
-        if self.selector is None:
-            return "DJ" if self.dj_selector is not None else "-"
-        if self.selector.idle_active:
-            return "IDLE"
-        return self.selector.current_class.value.upper()
+        if self.mode is not PlaybackMode.DYNAMIC:
+            return "-"
+        return "MUSIC" if self.playback.music_active else "CALM"
 
     @property
     def mic_tuning_label(self) -> str:
@@ -225,41 +186,35 @@ class SimulatorApp:
     def handle_key(self, key: str) -> None:
         match key:
             case "left":
-                self.player.prev()
+                self.playback.previous_animation()
+                self.mode = self.playback.mode
             case "right":
-                self.player.next()
-            case "m":
-                self.set_mode(SimulatorMode.MANUAL)
-            case "d":
-                self.set_mode(SimulatorMode.DEMO)
-            case "a":
-                self.set_mode(SimulatorMode.MIC)
-            case "j":
-                self.set_mode(SimulatorMode.DJ)
+                self.playback.next_animation()
+                self.mode = self.playback.mode
             case "s":
-                self._toggle_auto_select()
+                self.set_mode(PlaybackMode.STATIC)
             case "c":
+                self.set_mode(PlaybackMode.CYCLING)
+            case "d":
+                self.set_mode(PlaybackMode.DYNAMIC)
+            case "k":
                 self.calibrate_audio()
             case "escape":
                 self.running = False
 
-    def _toggle_auto_select(self) -> None:
-        if self.selector is not None:
-            self.selector.set_auto_select(not self.selector.auto_select)
-
     def handle_click(self, x: int, y: int) -> None:
         if self.controls.prev.contains(x, y):
-            self.player.prev()
+            self.playback.previous_animation()
+            self.mode = self.playback.mode
         elif self.controls.next.contains(x, y):
-            self.player.next()
-        elif self.controls.manual.contains(x, y):
-            self.set_mode(SimulatorMode.MANUAL)
-        elif self.controls.demo.contains(x, y):
-            self.set_mode(SimulatorMode.DEMO)
-        elif self.controls.mic.contains(x, y):
-            self.set_mode(SimulatorMode.MIC)
-        elif self.controls.auto_sel.contains(x, y):
-            self._toggle_auto_select()
+            self.playback.next_animation()
+            self.mode = self.playback.mode
+        elif self.controls.static.contains(x, y):
+            self.set_mode(PlaybackMode.STATIC)
+        elif self.controls.cycling.contains(x, y):
+            self.set_mode(PlaybackMode.CYCLING)
+        elif self.controls.dynamic.contains(x, y):
+            self.set_mode(PlaybackMode.DYNAMIC)
         elif self.controls.calibrate.contains(x, y):
             self.calibrate_audio()
 
@@ -270,8 +225,9 @@ class SimulatorApp:
             self.audio_error = str(exc)
             return None
         self._apply_calibration_result(result)
-        if self.mode is SimulatorMode.MIC:
-            self.set_mode(SimulatorMode.MIC)
+        source = self.audio_source or (AudioSource.MIC if self.mode is PlaybackMode.DYNAMIC else AudioSource.OFF)
+        if source is AudioSource.MIC:
+            self.set_mode(self.mode)
         return result
 
     def _apply_calibration_result(self, result: AudioCalibrationResult) -> None:
@@ -280,24 +236,24 @@ class SimulatorApp:
         self.mic_target_level = result.recommended_target_level
         self.idle_threshold_scale = result.recommended_idle_threshold_scale
 
-    def set_mode(self, mode: SimulatorMode) -> None:
+    def set_mode(self, mode: PlaybackMode) -> None:
         self._close_audio_input()
         self.player.clear_audio_snapshot()
         self.player.audio_enabled = True
         self.mode = mode
+        self.playback.set_mode(mode)
         self.audio_error = None
         self.audio_frame = AudioFrame()
-        self.selector = None
-        self.dj_selector = None
-
-        if mode is SimulatorMode.MANUAL:
+        self.audio_snapshot = AudioSnapshot.silence()
+        source = self.audio_source or (AudioSource.MIC if mode is PlaybackMode.DYNAMIC else AudioSource.OFF)
+        if mode is PlaybackMode.DYNAMIC and source is AudioSource.OFF:
+            raise ValueError("dynamic mode requires mic or demo audio")
+        if source is AudioSource.OFF:
             self.audio_status = "No audio source active."
             return
-
-        if mode is SimulatorMode.DEMO:
+        if source is AudioSource.DEMO:
             self.demo_tick = 0
             self.audio_status = "Using internal demo beat."
-            self.player.set_audio_snapshot(self._demo_snapshot)
             return
 
         try:
@@ -312,35 +268,13 @@ class SimulatorApp:
                 else AudioInput.with_config(audio_config)
             )
         except RuntimeError as exc:
-            self.mode = SimulatorMode.MANUAL
+            self.mode = PlaybackMode.STATIC
+            self.playback.set_mode(PlaybackMode.STATIC)
             self.audio_error = str(exc)
             self.audio_status = "Microphone unavailable."
             return
 
         self.audio_status = f"Input: {self.audio_input.device_name()}"
-        current_name = self.player.name_at(self.player.current_index())
-        current_classes = CLASS_MAP.get(current_name or "", ())
-        if mode is SimulatorMode.DJ:
-            self.dj_selector = DJModeSelector(self.auto_selector_config)
-        else:
-            self.selector = MusicDrivenSelector(
-                config=_build_selector_config(
-                    idle_enter_frames=self.idle_enter_frames,
-                    idle_threshold_scale=self.idle_threshold_scale,
-                ),
-                current_class=current_classes[0] if current_classes else AnimationClass.GROOVY,
-            )
-            self.selector.set_auto_select(False)
-        self.player.set_audio_snapshot(self._mic_snapshot)
-
-    def _demo_snapshot(self) -> AudioFrame:
-        frame = demo_frame(self.demo_tick)
-        self.demo_tick += 1
-        self.audio_frame = frame
-        return frame
-
-    def _mic_snapshot(self) -> AudioFrame:
-        return self.audio_frame
 
     def _close_audio_input(self) -> None:
         if self.audio_input is None:
@@ -349,19 +283,25 @@ class SimulatorApp:
         self.audio_input = None
 
     def step(self) -> float:
-        if self.mode in {SimulatorMode.MIC, SimulatorMode.DJ} and self.audio_input is not None:
+        source = self.audio_source or (AudioSource.MIC if self.mode is PlaybackMode.DYNAMIC else AudioSource.OFF)
+        if source is AudioSource.MIC and self.audio_input is not None:
             self.audio_frame = self.audio_input.read()
-            self.music_features = self.audio_input.read_features()
-            if self.selector is not None:
-                self.selector.update(self.player, self.music_features)
-                self.player.audio_enabled = not self.selector.idle_active
-            if self.dj_selector is not None:
-                self.dj_selector.update(self.player, self.music_features, now_s=time.monotonic())
-                self.player.audio_enabled = not self.music_features.silence
-        delay = max(self.player.step(self.stripe), MIN_FRAME_SECONDS)
-        if self.mode is SimulatorMode.MANUAL:
+            self.music_features = self.audio_input.read_features() if self.audio_frame.fresh else MusicFeatures(silence=True)
+            self.audio_snapshot = (
+                AudioSnapshot.from_parts(self.audio_frame, self.music_features)
+                if self.audio_frame.fresh
+                else AudioSnapshot.silence(frame=self.audio_frame)
+            )
+        elif source is AudioSource.DEMO:
+            self.audio_snapshot = demo_snapshot(self.demo_tick)
+            self.demo_tick += 1
+            self.audio_frame = self.audio_snapshot.frame
+            self.music_features = self.audio_snapshot.features
+        delay = max(self.playback.step(self.stripe, snapshot=None if source is AudioSource.OFF else self.audio_snapshot), MIN_FRAME_SECONDS)
+        if source is AudioSource.OFF:
             self.audio_frame = AudioFrame()
             self.music_features = MusicFeatures()
+            self.audio_snapshot = AudioSnapshot.silence()
         return delay
 
     def run(self) -> None:
@@ -389,7 +329,7 @@ class SimulatorApp:
             tkinter,
             controls_frame,
             "PREV",
-            self.player.prev,
+            lambda: self.handle_key("left"),
             button_font,
         )
         prev_button.pack(side="left")
@@ -398,49 +338,40 @@ class SimulatorApp:
             tkinter,
             controls_frame,
             "NEXT",
-            self.player.next,
+            lambda: self.handle_key("right"),
             button_font,
         )
         next_button.pack(side="left", padx=(BUTTON_GAP, 0))
 
         mode_buttons_frame = tkinter.Frame(header, bg=_hex(HEADER_COLOR))
-        mode_buttons_frame.place(x=PAD, y=self.controls.manual.y)
+        mode_buttons_frame.place(x=PAD, y=self.controls.static.y)
 
-        manual_button = self._make_button(
+        static_button = self._make_button(
             tkinter,
             mode_buttons_frame,
-            "MANUAL",
-            lambda: self.set_mode(SimulatorMode.MANUAL),
+            "STATIC",
+            lambda: self.set_mode(PlaybackMode.STATIC),
             button_font,
         )
-        manual_button.pack(side="left")
+        static_button.pack(side="left")
 
-        demo_button = self._make_button(
+        cycling_button = self._make_button(
             tkinter,
             mode_buttons_frame,
-            "DEMO",
-            lambda: self.set_mode(SimulatorMode.DEMO),
+            "CYCLING",
+            lambda: self.set_mode(PlaybackMode.CYCLING),
             button_font,
         )
-        demo_button.pack(side="left", padx=(BUTTON_GAP, 0))
+        cycling_button.pack(side="left", padx=(BUTTON_GAP, 0))
 
-        mic_button = self._make_button(
+        dynamic_button = self._make_button(
             tkinter,
             mode_buttons_frame,
-            "MIC",
-            lambda: self.set_mode(SimulatorMode.MIC),
+            "DYNAMIC",
+            lambda: self.set_mode(PlaybackMode.DYNAMIC),
             button_font,
         )
-        mic_button.pack(side="left", padx=(BUTTON_GAP, 0))
-
-        auto_sel_button = self._make_button(
-            tkinter,
-            mode_buttons_frame,
-            "AUTO",
-            self._toggle_auto_select,
-            button_font,
-        )
-        auto_sel_button.pack(side="left", padx=(BUTTON_GAP, 0))
+        dynamic_button.pack(side="left", padx=(BUTTON_GAP, 0))
 
         calibrate_button = self._make_button(
             tkinter,
@@ -459,7 +390,7 @@ class SimulatorApp:
             bg=_hex(HEADER_COLOR),
             anchor="w",
         )
-        animation_label.place(x=PAD, y=self.controls.manual.y + BUTTON_H + 34)
+        animation_label.place(x=PAD, y=self.controls.static.y + BUTTON_H + 34)
 
         mode_label = tkinter.Label(
             header,
@@ -469,7 +400,7 @@ class SimulatorApp:
             bg=_hex(HEADER_COLOR),
             anchor="w",
         )
-        mode_label.place(x=PAD, y=self.controls.manual.y + BUTTON_H + 88)
+        mode_label.place(x=PAD, y=self.controls.static.y + BUTTON_H + 88)
 
         source_label = tkinter.Label(
             header,
@@ -480,7 +411,7 @@ class SimulatorApp:
             anchor="w",
             justify="left",
         )
-        source_label.place(x=PAD, y=self.controls.manual.y + BUTTON_H + 148)
+        source_label.place(x=PAD, y=self.controls.static.y + BUTTON_H + 148)
 
         family_label = tkinter.Label(
             header,
@@ -491,7 +422,7 @@ class SimulatorApp:
             anchor="w",
             justify="left",
         )
-        family_label.place(x=PAD, y=self.controls.manual.y + BUTTON_H + 176)
+        family_label.place(x=PAD, y=self.controls.static.y + BUTTON_H + 176)
 
         analysis_label = tkinter.Label(
             header,
@@ -502,7 +433,7 @@ class SimulatorApp:
             anchor="w",
             justify="left",
         )
-        analysis_label.place(x=PAD, y=self.controls.manual.y + BUTTON_H + 232)
+        analysis_label.place(x=PAD, y=self.controls.static.y + BUTTON_H + 232)
 
         error_label = tkinter.Label(
             header,
@@ -513,7 +444,7 @@ class SimulatorApp:
             anchor="w",
             justify="left",
         )
-        error_label.place(x=PAD, y=self.controls.manual.y + BUTTON_H + 350)
+        error_label.place(x=PAD, y=self.controls.static.y + BUTTON_H + 350)
 
         canvas = tkinter.Canvas(
             root,
@@ -527,24 +458,19 @@ class SimulatorApp:
         root.bind("<Left>", lambda _event: self.handle_key("left"))
         root.bind("<Right>", lambda _event: self.handle_key("right"))
         root.bind("<Escape>", lambda _event: self.handle_key("escape"))
-        root.bind("m", lambda _event: self.handle_key("m"))
         root.bind("d", lambda _event: self.handle_key("d"))
-        root.bind("a", lambda _event: self.handle_key("a"))
         root.bind("s", lambda _event: self.handle_key("s"))
         root.bind("c", lambda _event: self.handle_key("c"))
+        root.bind("k", lambda _event: self.handle_key("k"))
         root.bind("<Button-1>", lambda event: self.handle_click(event.x, event.y))
         root.protocol("WM_DELETE_WINDOW", lambda: self.handle_key("escape"))
 
         next_frame_at = time.monotonic()
 
         def refresh_mode_buttons() -> None:
-            self._style_mode_button(manual_button, self.mode is SimulatorMode.MANUAL)
-            self._style_mode_button(demo_button, self.mode is SimulatorMode.DEMO)
-            self._style_mode_button(mic_button, self.mode is SimulatorMode.MIC)
-
-        def refresh_auto_sel_button() -> None:
-            active = self.selector is not None and self.selector.auto_select
-            self._style_mode_button(auto_sel_button, active)
+            self._style_mode_button(static_button, self.mode is PlaybackMode.STATIC)
+            self._style_mode_button(cycling_button, self.mode is PlaybackMode.CYCLING)
+            self._style_mode_button(dynamic_button, self.mode is PlaybackMode.DYNAMIC)
 
         def tick() -> None:
             nonlocal next_frame_at
@@ -559,18 +485,17 @@ class SimulatorApp:
             if now >= next_frame_at:
                 next_frame_at = now + self.step()
 
-            auto_status = "AUTO: ON" if self.selector is not None and self.selector.auto_select else "AUTO: OFF"
             animation_label.configure(text=f"ANIM: {self.animation_name}")
-            mode_label.configure(text=f"MODE: {self.mode_label}  |  {auto_status}")
+            mode_label.configure(text=f"MODE: {self.mode_label}")
             source_text = f"SOURCE: {self.audio_status}"
-            if self.mode is SimulatorMode.MIC:
+            source = self.audio_source or (AudioSource.MIC if self.mode is PlaybackMode.DYNAMIC else AudioSource.OFF)
+            if source is AudioSource.MIC:
                 source_text = f"{source_text}\n{self.mic_tuning_label}"
             source_label.configure(text=source_text)
             family_label.configure(text=f"CLASS: {self.class_label}")
             analysis_label.configure(text=self.analysis_text())
             error_label.configure(text=f"ERROR: {self.audio_error}" if self.audio_error else "")
             refresh_mode_buttons()
-            refresh_auto_sel_button()
             self.render(canvas, width, height - HEADER_H)
             root.after(8, tick)
 
@@ -600,17 +525,18 @@ class SimulatorApp:
             f"BRIGHT: {feat.brightness:0.2f}    ONSET: {feat.onset_strength:0.3f}    DYN: {feat.dynamic_range:0.3f}\n"
             f"LOUD: {feat.rolling_loudness:0.2f}    FLUX: {feat.spectral_flux:0.2f}    SILENCE: {silence}    DROP: {drop}    SECTION: {section}\n"
             f"BANDS: {bands}"
-            f"{self._dj_summary_text()}"
+            f"{self._dynamic_summary_text()}"
         )
 
-    def _dj_summary_text(self) -> str:
-        if self.dj_selector is None or not self.dj_selector.last_decision.scores:
+    def _dynamic_summary_text(self) -> str:
+        decision = self.playback.last_decision
+        if decision is None or not decision.scores:
             return ""
         top = ",".join(
             f"{score.name}:{score.score:0.2f}"
-            for score in self.dj_selector.last_decision.scores[:3]
+            for score in decision.scores[:3]
         )
-        return f"\nDJ: {top} reason={self.dj_selector.last_decision.reason}"
+        return f"\nDYNAMIC: {top} reason={decision.reason}"
 
     def render(self, canvas: Any, width: int, height: int) -> None:
         canvas.delete("all")
@@ -685,12 +611,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--mode",
         type=_parse_mode,
-        default=SimulatorMode.MANUAL,
-        help="Startup mode: manual, demo, mic, or dj",
+        default=PlaybackMode.STATIC,
+        help="Playback mode: static, cycling, or dynamic",
     )
     parser.add_argument(
+        "--audio-source",
+        type=_parse_audio_source,
+        help="Audio source: off, mic, or demo (defaults to mic for dynamic and off otherwise)",
+    )
+    parser.add_argument("--cycle-order", type=CycleOrder, choices=tuple(CycleOrder), default=CycleOrder.SEQUENTIAL)
+    parser.add_argument("--cycle-timing", type=CycleTiming, choices=tuple(CycleTiming), default=CycleTiming.PER_ANIMATION)
+    parser.add_argument("--cycle-interval", type=_positive_float, default=30.0, metavar="SECONDS")
+    parser.add_argument(
         "--audio-device",
-        help="Input device index or substring match for the device name when using mic mode",
+        help="Input device index or substring match for the mic audio source",
     )
     parser.add_argument(
         "--list-audio-devices",
@@ -701,13 +635,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--mic-target-level",
         type=_positive_float,
         default=AudioNormalization().target_level,
-        help="Normalized input level target for mic mode calibration",
+        help="Normalized input level target for microphone calibration",
     )
     parser.add_argument(
         "--mic-noise-floor",
         type=_non_negative_float,
         default=AudioSmoothing().noise_floor,
-        help="Noise floor threshold for mic mode calibration",
+        help="Noise floor threshold for microphone calibration",
     )
     parser.add_argument(
         "--mic-profile",
@@ -716,8 +650,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--idle-enter-frames",
         type=_positive_int,
-        default=MusicSelectorConfig().idle_enter_frames,
-        help="Consecutive low-activity frames before idle activates in mic mode",
+        default=MusicActivityConfig().idle_enter_frames,
+        help="Consecutive non-music frames before Dynamic enters its calm state",
     )
     parser.add_argument(
         "--idle-threshold-scale",
@@ -731,13 +665,13 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help="Measure the selected audio input and apply recommended mic tuning before startup",
     )
-    parser.add_argument("--dj-min-duration", type=_positive_float, default=AutoSelectorConfig().min_duration_s)
-    parser.add_argument("--dj-max-duration", type=_positive_float, default=AutoSelectorConfig().max_duration_s)
-    parser.add_argument("--dj-switch-cooldown", type=_positive_float, default=AutoSelectorConfig().switch_cooldown_s)
-    parser.add_argument("--dj-drop-cooldown", type=_positive_float, default=AutoSelectorConfig().drop_cooldown_s)
-    parser.add_argument("--dj-randomness", type=_non_negative_float, default=AutoSelectorConfig().randomness)
-    parser.add_argument("--dj-history-size", type=_positive_int, default=AutoSelectorConfig().history_size)
-    parser.add_argument("--dj-seed", type=int)
+    parser.add_argument("--dynamic-min-duration", type=_positive_float, default=DynamicSelectorConfig().min_duration_s)
+    parser.add_argument("--dynamic-max-duration", type=_positive_float, default=DynamicSelectorConfig().max_duration_s)
+    parser.add_argument("--dynamic-switch-cooldown", type=_positive_float, default=DynamicSelectorConfig().switch_cooldown_s)
+    parser.add_argument("--dynamic-drop-cooldown", type=_positive_float, default=DynamicSelectorConfig().drop_cooldown_s)
+    parser.add_argument("--dynamic-randomness", type=_non_negative_float, default=DynamicSelectorConfig().randomness)
+    parser.add_argument("--dynamic-history-size", type=_positive_int, default=DynamicSelectorConfig().history_size)
+    parser.add_argument("--dynamic-seed", type=int)
     return parser
 
 
@@ -755,6 +689,7 @@ def main(argv: list[str] | None = None) -> None:
     SimulatorApp(
         pixel_count=args.pixels,
         mode=args.mode,
+        audio_source=args.audio_source,
         audio_device=args.audio_device,
         mic_target_level=args.mic_target_level,
         mic_noise_floor=args.mic_noise_floor,
@@ -762,15 +697,23 @@ def main(argv: list[str] | None = None) -> None:
         idle_enter_frames=args.idle_enter_frames,
         idle_threshold_scale=args.idle_threshold_scale,
         auto_calibrate_audio=args.auto_calibrate_audio,
-        auto_selector_config=_build_auto_selector_config(args),
+        cycling_config=_build_cycling_config(args),
+        dynamic_selector_config=_build_dynamic_selector_config(args),
     ).run()
 
 
-def _parse_mode(value: str) -> SimulatorMode:
+def _parse_mode(value: str) -> PlaybackMode:
     try:
-        return SimulatorMode(value.lower())
+        return PlaybackMode(value.lower())
     except ValueError as exc:
         raise argparse.ArgumentTypeError(f"invalid mode: {value}") from exc
+
+
+def _parse_audio_source(value: str) -> AudioSource:
+    try:
+        return AudioSource(value.lower())
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid audio source: {value}") from exc
 
 
 def _positive_float(value: str) -> float:
@@ -841,31 +784,37 @@ def _build_audio_config(*, target_level: float, noise_floor: float, analysis: Au
     )
 
 
-def _build_auto_selector_config(args: argparse.Namespace) -> AutoSelectorConfig:
-    return AutoSelectorConfig(
-        min_duration_s=args.dj_min_duration,
-        max_duration_s=args.dj_max_duration,
-        switch_cooldown_s=args.dj_switch_cooldown,
-        drop_cooldown_s=args.dj_drop_cooldown,
-        randomness=args.dj_randomness,
-        history_size=args.dj_history_size,
-        seed=args.dj_seed,
+def _build_cycling_config(args: argparse.Namespace) -> CyclingConfig:
+    return CyclingConfig(
+        order=args.cycle_order,
+        timing=args.cycle_timing,
+        interval_s=args.cycle_interval,
+        seed=args.dynamic_seed,
     )
 
 
-def _build_selector_config(*, idle_enter_frames: int, idle_threshold_scale: float) -> MusicSelectorConfig:
-    defaults = MusicSelectorConfig()
-    return MusicSelectorConfig(
-        class_dwell_frames=defaults.class_dwell_frames,
-        animation_dwell_frames=defaults.animation_dwell_frames,
-        confidence_threshold=defaults.confidence_threshold,
+def _build_dynamic_selector_config(args: argparse.Namespace) -> DynamicSelectorConfig:
+    return DynamicSelectorConfig(
+        min_duration_s=args.dynamic_min_duration,
+        max_duration_s=args.dynamic_max_duration,
+        switch_cooldown_s=args.dynamic_switch_cooldown,
+        drop_cooldown_s=args.dynamic_drop_cooldown,
+        randomness=args.dynamic_randomness,
+        history_size=args.dynamic_history_size,
+        seed=args.dynamic_seed,
+    )
+
+
+def _build_activity_config(*, idle_enter_frames: int, idle_threshold_scale: float) -> MusicActivityConfig:
+    defaults = MusicActivityConfig()
+    return MusicActivityConfig(
         feature_attack=defaults.feature_attack,
         feature_release=defaults.feature_release,
         idle_enter_frames=idle_enter_frames,
-        idle_energy_threshold=defaults.idle_energy_threshold * idle_threshold_scale,
-        idle_onset_threshold=defaults.idle_onset_threshold * idle_threshold_scale,
-        idle_beat_density_threshold=defaults.idle_beat_density_threshold * idle_threshold_scale,
-        idle_brightness_threshold=defaults.idle_brightness_threshold * idle_threshold_scale,
+        energy_threshold=defaults.energy_threshold * idle_threshold_scale,
+        onset_threshold=defaults.onset_threshold * idle_threshold_scale,
+        beat_density_threshold=defaults.beat_density_threshold * idle_threshold_scale,
+        brightness_threshold=defaults.brightness_threshold * idle_threshold_scale,
     )
 
 

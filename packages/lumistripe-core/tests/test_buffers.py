@@ -1,6 +1,5 @@
 import numpy as np
 import pytest
-
 from lumistripe import (
     Rgb,
     Rgba,

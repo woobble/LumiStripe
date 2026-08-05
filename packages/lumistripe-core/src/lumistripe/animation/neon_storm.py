@@ -9,7 +9,6 @@ from ..controller import Controller
 from .base import Animation
 from .reactive import AudioReactive
 
-
 _PALETTE = [(0, 100, 60), (200, 100, 55), (120, 100, 50), (300, 100, 60), (50, 100, 55)]
 
 

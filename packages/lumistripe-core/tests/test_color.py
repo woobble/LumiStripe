@@ -1,5 +1,4 @@
 import numpy as np
-
 from lumistripe import ColorBatch, Hex, Hsl, Hsla, Rgb, Rgba
 
 

@@ -1,17 +1,16 @@
+import lumistripe.gpio as gpio_module
 import numpy as np
 import pytest
-import lumistripe.gpio as gpio_module
-
 from lumistripe import (
     BrightnessController,
-    Config,
     CompositeController,
+    Config,
     DualController,
     GPIOStripe,
     MultiController,
+    ReversedController,
     Rgb,
     Rgba,
-    ReversedController,
     Stripe,
     SubStripe,
 )

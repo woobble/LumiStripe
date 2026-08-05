@@ -1,10 +1,9 @@
 from __future__ import annotations
 
+import importlib
 from dataclasses import dataclass
 from datetime import timedelta
-import importlib
-from typing import Protocol, SupportsInt, cast
-
+from typing import ClassVar, Protocol, SupportsInt, cast
 
 BUTTON_DEBOUNCE_NS = 150_000_000
 
@@ -44,7 +43,7 @@ class NullEncoderBackend:
 
 
 class GPIODEncoderBackend:
-    _TRANSITIONS = {
+    _TRANSITIONS: ClassVar[dict[tuple[int, int], int]] = {
         (0, 1): 1,
         (1, 3): 1,
         (3, 2): 1,
@@ -102,9 +101,9 @@ class GPIODEncoderBackend:
         self._request.release()
 
     def _decode_event(self, edge_event: object) -> list[ControlEvent]:
-        offset = int(getattr(edge_event, "line_offset"))
-        timestamp_ns = int(getattr(edge_event, "timestamp_ns"))
-        event_type = getattr(edge_event, "event_type")
+        offset = int(edge_event.line_offset)
+        timestamp_ns = int(edge_event.timestamp_ns)
+        event_type = edge_event.event_type
 
         if offset in self._button_offsets:
             return self._decode_button(offset, timestamp_ns, event_type)
@@ -157,13 +156,13 @@ class GPIODEncoderBackend:
     def _edge_enum(self):
         line = getattr(self._gpiod, "line", None)
         if line is not None and hasattr(line, "Edge"):
-            return getattr(line, "Edge")
+            return line.Edge
         raise RuntimeError("unsupported gpiod Python API; expected libgpiod 2.x line.Edge enum")
 
     def _bias_enum(self):
         line = getattr(self._gpiod, "line", None)
         if line is not None and hasattr(line, "Bias"):
-            return getattr(line, "Bias")
+            return line.Bias
         raise RuntimeError("unsupported gpiod Python API; expected libgpiod 2.x line.Bias enum")
 
     def _edge_event_type(self):

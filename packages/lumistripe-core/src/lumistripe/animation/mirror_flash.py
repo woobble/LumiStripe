@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from ..audio import AudioFrame
 from ..controller import Controller
 from .base import Animation
-from .club_utils import mirrored_index, club_color, warm_flash
+from .club_utils import club_color, mirrored_index, warm_flash
 from .reactive import AudioReactive, Decay
 
 

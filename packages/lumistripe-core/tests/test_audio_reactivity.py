@@ -1,9 +1,15 @@
 import numpy as np
 import pytest
-
-from lumistripe import AudioFrame, AudioSnapshot, ColorWipe, MusicFeatures, Pulse, RainbowCycle, Stripe
+from lumistripe import (
+    AudioFrame,
+    AudioSnapshot,
+    ColorWipe,
+    MusicFeatures,
+    Pulse,
+    RainbowCycle,
+    Stripe,
+)
 from lumistripe.animation.reactive import AudioReactive
-
 
 TEST_AUDIO = AudioFrame(
     rms=0.9,

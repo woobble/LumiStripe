@@ -3,7 +3,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from random import Random
 
 from ..audio import AudioFrame
 from ..controller import BrightnessController, Controller
@@ -34,7 +33,7 @@ class _AnimationEntry:
     animation: Animation
     frame_ms: int
     frames_per_cycle: int
-    reactive: bool
+    automatic: bool
 
 
 @dataclass(slots=True)
@@ -43,9 +42,7 @@ class AnimationPlayer:
     index: int = 0
     frame: int = 0
     brightness: float = 1.0
-    random_mode: bool = False
     audio_enabled: bool = True
-    _rng: Random = field(default_factory=Random)
     _audio_snapshot: Callable[[], AudioFrame] | None = None
 
     def add(self, animation: Animation, frame_ms: int, frames_per_cycle: int) -> None:
@@ -94,16 +91,16 @@ class AnimationPlayer:
         from .plasma_rave import PlasmaRave
         from .police import Police
         from .pulse import Pulse
-        from .rave_scanner import RaveScanner
         from .rainbow import Rainbow
         from .rainbow_cycle import RainbowCycle
         from .rainbow_strobe import RainbowStrobe
         from .rave_pulse import RavePulse
+        from .rave_scanner import RaveScanner
         from .shockwave import Shockwave
-        from .spectrum_flash import SpectrumFlash
         from .sinelon import Sinelon
-        from .strobe_chase import StrobeChase
+        from .spectrum_flash import SpectrumFlash
         from .strobe import Strobe
+        from .strobe_chase import StrobeChase
         from .theater_chase import TheaterChase
         from .twinkle import Twinkle
         from .wave import Wave
@@ -165,20 +162,20 @@ class AnimationPlayer:
     def set_brightness(self, brightness: float) -> None:
         self.brightness = max(0.0, min(1.0, brightness))
 
-    def set_random_mode(self, enabled: bool) -> None:
-        self.random_mode = enabled
-
     def set_audio_snapshot(self, snapshot: Callable[[], AudioFrame]) -> None:
         self._audio_snapshot = snapshot
 
     def clear_audio_snapshot(self) -> None:
         self._audio_snapshot = None
 
-    def step(self, controller: Controller) -> float:
+    def step(self, controller: Controller, *, audio_frame: AudioFrame | None = None) -> float:
         if not self.animations:
             return 0.05
 
-        audio_frame = self._audio_snapshot() if (self._audio_snapshot is not None and self.audio_enabled) else None
+        if audio_frame is None and self._audio_snapshot is not None and self.audio_enabled:
+            audio_frame = self._audio_snapshot()
+        if not self.audio_enabled:
+            audio_frame = None
         entry = self.animations[self.index]
         bright = BrightnessController(controller, self.brightness)
         if audio_frame is None:
@@ -208,24 +205,8 @@ class AnimationPlayer:
     def current_index(self) -> int:
         return self.index
 
-    def reactive_indices(self) -> list[int]:
-        return [index for index, entry in enumerate(self.animations) if entry.reactive]
-
-    def cycle_due(self) -> bool:
-        if not self.animations:
-            return False
-        return self.frame >= self.animations[self.index].frames_per_cycle
-
-    def cycle_next(self) -> None:
-        if not self.animations:
-            return
-        self.frame = 0
-        if self.random_mode and len(self.animations) > 1:
-            current = self.index
-            while self.index == current:
-                self.index = self._rng.randrange(len(self.animations))
-        else:
-            self.index = (self.index + 1) % len(self.animations)
+    def automatic_indices(self) -> list[int]:
+        return [index for index, entry in enumerate(self.animations) if entry.automatic]
 
     def index_of(self, name: str) -> int | None:
         for index, entry in enumerate(self.animations):

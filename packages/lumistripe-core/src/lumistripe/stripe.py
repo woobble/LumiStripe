@@ -6,7 +6,8 @@ from dataclasses import dataclass
 import numpy as np
 import numpy.typing as npt
 
-from .buffers import PixelBuffer, as_pixel_buffer, clear as clear_pixels, new_pixel_buffer
+from .buffers import PixelBuffer, as_pixel_buffer, new_pixel_buffer
+from .buffers import clear as clear_pixels
 from .color import Color, Rgba
 from .controller import Controller
 

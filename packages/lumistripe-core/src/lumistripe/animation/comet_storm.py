@@ -15,7 +15,7 @@ def _render_comet(controller: Controller, head: int, hue: int, length: float, al
         intensity = 1.0 if dist == 0 else (1.0 - dist / length if dist < length else 0.0)
         if intensity > 0.0:
             existing = controller.pixel(i)
-            er, eg, eb, ea = existing.to_rgba()
+            ea = existing.to_rgba()[3]
             if ea > 0.0:
                 controller.set_pixel(i, Hsl(hue, 100, 50))
             else:

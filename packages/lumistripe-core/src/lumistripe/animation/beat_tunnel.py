@@ -17,7 +17,7 @@ def _render_ring(controller: Controller, center: float, radius: float, width: fl
         combined = min(ambient + ring * alpha, 1.0)
         if combined > 0.0:
             existing = controller.pixel(i)
-            er, eg, eb, ea = existing.to_rgba()
+            ea = existing.to_rgba()[3]
             if ea > 0.0:
                 combined = max(ea, combined)
             controller.set_pixel(i, Hsla(hue, 80, 55, combined))

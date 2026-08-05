@@ -15,3 +15,7 @@ from lumistripe import Config, GPIOStripe
 
 stripe = GPIOStripe(Config(gpio_data=14, gpio_clock=15), 80)
 ```
+
+Use `PlaybackEngine` for the shared Static, Cycling, and Dynamic behavior used by
+the command-line runtime and simulator. Audio snapshots are optional in Static
+and Cycling and required for meaningful Dynamic selection.

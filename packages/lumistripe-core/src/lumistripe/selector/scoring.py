@@ -9,9 +9,7 @@ from .metadata import AnimationMetadata, animation_metadata
 
 
 @dataclass(frozen=True, slots=True)
-class AutoSelectorConfig:
-    enabled: bool = True
-    mode: str = "dj"
+class DynamicSelectorConfig:
     min_duration_s: float = 12.0
     max_duration_s: float = 45.0
     switch_cooldown_s: float = 8.0
@@ -42,7 +40,7 @@ class SelectorDecision:
 
 @dataclass(slots=True)
 class AnimationScoringEngine:
-    config: AutoSelectorConfig = field(default_factory=AutoSelectorConfig)
+    config: DynamicSelectorConfig = field(default_factory=DynamicSelectorConfig)
     _rng: Random = field(init=False)
 
     def __post_init__(self) -> None:

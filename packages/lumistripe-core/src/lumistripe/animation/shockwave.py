@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 from ..audio import AudioFrame
 from ..color import Hsla
 from ..controller import Controller
-from .club_utils import center_distance, ring_profile
 from .base import Animation
+from .club_utils import center_distance, ring_profile
 from .reactive import AudioReactive, Decay
 
 

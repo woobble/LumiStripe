@@ -1,5 +1,4 @@
 import numpy as np
-
 from lumistripe import (
     AudioFrame,
     BassDrop,
@@ -7,11 +6,11 @@ from lumistripe import (
     BeatRipple,
     BeatTunnel,
     BeatWave,
+    Bpm,
     CenterBurst,
     ClubFlash,
     ColorBurst,
     CometStorm,
-    Bpm,
     DanceFloor,
     DiscoComet,
     DiscoSparkle,
@@ -37,13 +36,12 @@ from lumistripe import (
     Rgba,
     RgbwTest,
     Sinelon,
+    SpectrumFlash,
     Stripe,
     Strobe,
-    SpectrumFlash,
     StrobeChase,
     Twinkle,
 )
-
 
 TEST_AUDIO = AudioFrame(
     rms=0.9,

@@ -1,8 +1,13 @@
 from lumistripe import (
     AnimationPlayer,
     AudioFrame,
+    AudioSource,
     CompositeController,
+    CyclingConfig,
+    DynamicSelector,
     GPIOStripe,
+    PlaybackEngine,
+    PlaybackMode,
     ReversedController,
     Stripe,
 )
@@ -19,11 +24,16 @@ def test_package_exports_are_importable() -> None:
     assert GPIOStripe is not None
     assert CompositeController is not None
     assert ReversedController is not None
+    assert PlaybackEngine is not None
+    assert PlaybackMode.STATIC.value == "static"
+    assert AudioSource.DEMO.value == "demo"
+    assert CyclingConfig().interval_s == 30.0
+    assert DynamicSelector is not None
 
 
 def test_animation_star_import_exports_reactive_helpers() -> None:
     namespace: dict[str, object] = {}
-    exec("from lumistripe.animation import *", namespace, namespace)
+    exec("from lumistripe.animation import *", namespace, namespace)  # noqa: S102
 
     assert "AudioReactive" in namespace
     assert "Decay" in namespace

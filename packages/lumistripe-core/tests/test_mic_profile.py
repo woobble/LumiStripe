@@ -1,7 +1,6 @@
 import json
 
 import pytest
-
 from lumistripe import (
     PCM2902_PROFILE,
     AudioAnalysis,

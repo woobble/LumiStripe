@@ -1,6 +1,5 @@
 import numpy as np
 import pytest
-
 from lumistripe.audio import (
     AudioAnalysis,
     AudioConfig,
@@ -657,7 +656,7 @@ class FakeSoundDevice:
 class BrokenSoundDevice(FakeSoundDevice):
     def InputStream(self, **kwargs):
         del kwargs
-        raise Exception("Device unavailable [PaErrorCode -9985]")
+        raise RuntimeError("Device unavailable [PaErrorCode -9985]")
 
 
 def test_audio_input_missing_dependency_raises(monkeypatch: pytest.MonkeyPatch) -> None:

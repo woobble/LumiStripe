@@ -4,7 +4,8 @@ import importlib
 import threading
 import time
 from dataclasses import dataclass, field, replace
-from typing import Any, cast
+from types import TracebackType
+from typing import Any, Self, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -677,10 +678,15 @@ class AudioInput:
         self._stream.stop()
         self._stream.close()
 
-    def __enter__(self) -> AudioInput:
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
         del exc_type, exc, tb
         self.close()
 

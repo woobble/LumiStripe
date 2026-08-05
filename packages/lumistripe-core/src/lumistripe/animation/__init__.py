@@ -1,3 +1,4 @@
+from ..selector import AnimationMetadata
 from .aurora import Aurora
 from .base import Animation, AnimationPlayer
 from .bass_drop import BassDrop
@@ -5,17 +6,17 @@ from .beat_explosion import BeatExplosion
 from .beat_ripple import BeatRipple
 from .beat_tunnel import BeatTunnel
 from .beat_wave import BeatWave
-from .center_burst import CenterBurst
-from .club_flash import ClubFlash
 from .bouncing_ball import BouncingBall
 from .bpm import Bpm
+from .center_burst import CenterBurst
+from .club_flash import ClubFlash
 from .color_burst import ColorBurst
 from .color_wipe import ColorWipe
 from .comet import Comet
 from .comet_storm import CometStorm
-from .disco_comet import DiscoComet
 from .confetti import Confetti
 from .dance_floor import DanceFloor
+from .disco_comet import DiscoComet
 from .disco_sparkle import DiscoSparkle
 from .drop_explosion import DropExplosion
 from .drop_wave import DropWave
@@ -37,51 +38,45 @@ from .pixel_explosion import PixelExplosion
 from .plasma_rave import PlasmaRave
 from .police import Police
 from .pulse import Pulse
-from .rave_scanner import RaveScanner
 from .rainbow import Rainbow
 from .rainbow_cycle import RainbowCycle
 from .rainbow_strobe import RainbowStrobe
 from .rave_pulse import RavePulse
+from .rave_scanner import RaveScanner
 from .reactive import AudioReactive, Decay
 from .rgbw_test import RgbwTest
-from .selector import AnimationClass, CLASS_MAP, MusicDrivenSelector, MusicSelectorConfig
-from ..selector import AnimationMetadata
 from .shockwave import Shockwave
-from .spectrum_flash import SpectrumFlash
 from .sinelon import Sinelon
-from .strobe_chase import StrobeChase
+from .spectrum_flash import SpectrumFlash
 from .strobe import Strobe
+from .strobe_chase import StrobeChase
 from .theater_chase import TheaterChase
 from .twinkle import Twinkle
 from .wave import Wave
 
 __all__ = [
     "Animation",
-    "AnimationClass",
-    "AnimationPlayer",
     "AnimationMetadata",
-    "CLASS_MAP",
+    "AnimationPlayer",
     "AudioReactive",
-    "Decay",
-    "MusicDrivenSelector",
-    "MusicSelectorConfig",
     "Aurora",
     "BassDrop",
     "BeatExplosion",
     "BeatRipple",
     "BeatTunnel",
     "BeatWave",
-    "CenterBurst",
-    "ClubFlash",
     "BouncingBall",
     "Bpm",
+    "CenterBurst",
+    "ClubFlash",
     "ColorBurst",
     "ColorWipe",
     "Comet",
     "CometStorm",
-    "DiscoComet",
     "Confetti",
     "DanceFloor",
+    "Decay",
+    "DiscoComet",
     "DiscoSparkle",
     "DropExplosion",
     "DropWave",
@@ -96,24 +91,24 @@ __all__ = [
     "LaserSweep",
     "LightningStrike",
     "MirrorFlash",
-    "NeonStorm",
     "NeonConfetti",
+    "NeonStorm",
     "PeakMirror",
     "PixelExplosion",
     "PlasmaRave",
     "Police",
     "Pulse",
-    "RaveScanner",
     "Rainbow",
     "RainbowCycle",
     "RainbowStrobe",
     "RavePulse",
+    "RaveScanner",
     "RgbwTest",
     "Shockwave",
-    "SpectrumFlash",
     "Sinelon",
-    "StrobeChase",
+    "SpectrumFlash",
     "Strobe",
+    "StrobeChase",
     "TheaterChase",
     "Twinkle",
     "Wave",

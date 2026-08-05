@@ -29,7 +29,7 @@ class ColorWipe(Animation):
             self.head = 0.0
             self.palette_index = (self.palette_index + 1) % len(self.palette)
         color = self.palette[self.palette_index]
-        hue, sat, light, _ = color.to_rgba()
+        hue, sat, _, _ = color.to_rgba()
         for i in range(controller.length):
             distance = self.head - i
             if distance >= 0.0:
@@ -48,7 +48,7 @@ class ColorWipe(Animation):
             self.palette_index = (self.palette_index + 1) % len(self.palette)
         if audio.beat or reactive.accent > 0.65:
             self.palette_index = (self.palette_index + 1) % len(self.palette)
-        hue, sat, light, _ = self.palette[self.palette_index].to_rgba()
+        hue, sat, _, _ = self.palette[self.palette_index].to_rgba()
         boost = reactive.beat_pulse(0.0, 0.4)
         local = reactive.band_window(audio, int(self.head), length, 1)
         for i in range(controller.length):

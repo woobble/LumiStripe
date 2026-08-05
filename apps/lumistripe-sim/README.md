@@ -8,17 +8,22 @@ Run the simulator:
 lumistripe-sim
 ```
 
-Start directly in MIC mode with automatic input calibration:
+Start directly in Dynamic mode with automatic input calibration:
 
 ```bash
-lumistripe-sim --mode mic --auto-calibrate-audio 3
+lumistripe-sim --mode dynamic --auto-calibrate-audio 3
 ```
 
 Keyboard shortcuts:
 - `Left` / `Right` - Previous / next animation
-- `m` - MANUAL mode
-- `d` - DEMO mode
-- `a` - MIC mode
-- `s` - Toggle automatic selection
-- `c` - Calibrate microphone levels
+- `s` - Static mode
+- `c` - Cycling mode
+- `d` - Dynamic mode
+- `k` - Calibrate microphone levels
 - `Escape` - Quit
+
+Use synthetic audio without adding another playback mode:
+
+```bash
+lumistripe-sim --mode dynamic --audio-source demo
+```

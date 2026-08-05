@@ -60,3 +60,6 @@ skip_covered = false
 exclude = [
     "packages/lumistripe-core/src/lumistripe/audio/kissfft/",
 ]
+
+[tool.ruff]
+extend-exclude = ["third_party"]

@@ -11,8 +11,8 @@ LumiStripe drives 2-wire addressable LED strips from a Raspberry Pi or other Lin
 - **GPIO Driver** — Bit-bangs a 2-wire protocol on any two GPIO lines using `libgpiod` (v2.x)
 - **38+ Animations** — Fire, Rainbow, Confetti, Aurora, LightningStrike, PlasmaRave, and many more, with `tick` and `tick_audio` modes
 - **Audio Reactive** — Real-time FFT analysis with 8 frequency bands, beat detection, BPM estimation, and onset/transient detection
-- **Music Classifier** — Automatically selects animations based on 8 music moods (Ambient, Groovy, Bass Heavy, Chaotic, etc.)
-- **Simulator** — Tkinter GUI with MANUAL (browse animations), DEMO (synthetic beat), and MIC (live audio input) modes
+- **Dynamic Selection** — Selects animations from live energy, BPM, spectrum, beats, drops, and inferred song sections
+- **Three Playback Modes** — Static, Cycling, and music-driven Dynamic playback in both the CLI and simulator
 - **CLI** — Launch the simulator from the terminal with `lumistripe`
 
 ## Quick Start
@@ -62,24 +62,24 @@ pip install lumistripe-core[gpio,audio]
 ```
 
 ```python
-from lumistripe import (AnimationPlayer, AudioInput, Config,
-                         GPIOStripe, MusicDrivenSelector)
+from lumistripe import (AnimationPlayer, AudioInput, AudioSnapshot, Config,
+                        GPIOStripe, PlaybackConfig, PlaybackEngine,
+                        PlaybackMode)
 
 stripe = GPIOStripe(Config(gpio_data=14, gpio_clock=15), 80)
 player = AnimationPlayer.party()
-selector = MusicDrivenSelector()
-selector.set_auto_select(True)
+playback = PlaybackEngine(player, PlaybackConfig(mode=PlaybackMode.DYNAMIC))
 
 with AudioInput.new() as audio:
     while True:
-        features = audio.read_features()
-        selector.update(player, features)  # picks animation matching the music
-        player.step(stripe)                # renders one frame to the LEDs
+        frame = audio.read()
+        snapshot = AudioSnapshot.from_parts(frame, audio.read_features())
+        playback.step(stripe, snapshot=snapshot)
 ```
 
 ## Animations
 
-All 38+ animations can be browsed in the simulator. Each animation is tagged with one or more mood classes (e.g., `FAST_PARTY`, `BASS_HEAVY`, `CHAOTIC`, `GROOVY`, `AMBIENT`). The `MusicDrivenSelector` automatically picks the best-matching animation based on live audio analysis.
+All animations can be browsed in Static mode. Animation metadata describes suitable energy, BPM, spectrum, mood, beat/drop support, and whether an effect is safe for Dynamic's calm state.
 
 ## Simulator
 
@@ -91,12 +91,19 @@ lumistripe
 
 Keyboard shortcuts:
 - `←` / `→` — Previous / next animation
-- `m` — MANUAL mode (browse animations)
-- `d` — DEMO mode (synthetic beat)
-- `a` — MIC mode (live microphone)
-- `s` — Toggle auto-select
-- `c` — Calibrate microphone levels
+- `s` — Static mode
+- `c` — Cycling mode
+- `d` — Dynamic mode
+- `k` — Calibrate microphone levels
 - `Escape` — Quit
+
+Audio source is configured independently from playback mode:
+
+```bash
+lumistripe-sim --mode cycling --audio-source demo
+lumistripe-sim --mode static --audio-source mic
+lumistripe-sim --mode dynamic                    # microphone by default
+```
 
 ## Audio Calibration
 
@@ -106,12 +113,12 @@ Measure the selected microphone and print recommended tuning flags:
 lumistripe --calibrate-audio 3 --audio-device usb
 ```
 
-Apply calibration automatically before starting MIC mode:
+Apply calibration automatically before starting Dynamic mode:
 
 ```bash
-lumistripe --mode mic --auto-calibrate-audio 3
+lumistripe --mode dynamic --auto-calibrate-audio 3
 lumistripe --audio-debug --auto-calibrate-audio 3
-lumistripe-sim --mode mic --auto-calibrate-audio 3
+lumistripe-sim --mode dynamic --auto-calibrate-audio 3
 ```
 
 ## Development

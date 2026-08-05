@@ -11,7 +11,7 @@ RgbArray = npt.NDArray[np.uint8]
 RgbaFloatArray = npt.NDArray[np.float32]
 
 
-def _clamp_u8(value: int | float) -> int:
+def _clamp_u8(value: float) -> int:
     return max(0, min(255, int(value)))
 
 

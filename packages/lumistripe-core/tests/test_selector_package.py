@@ -1,10 +1,9 @@
 import pytest
-
 from lumistripe import (
     AnimationPlayer,
     AnimationScoringEngine,
-    AutoSelectorConfig,
-    DJModeSelector,
+    DynamicSelector,
+    DynamicSelectorConfig,
     MusicFeatures,
     Shockwave,
     animation_metadata,
@@ -48,7 +47,7 @@ def test_representative_animation_metadata_is_available() -> None:
 
 def test_scoring_engine_prefers_drop_animation_on_drop() -> None:
     player = AnimationPlayer.party()
-    engine = AnimationScoringEngine(AutoSelectorConfig(randomness=0.0, seed=1))
+    engine = AnimationScoringEngine(DynamicSelectorConfig(randomness=0.0, seed=1))
 
     ranked = engine.rank(player.animations, _bass_drop_features())
 
@@ -58,37 +57,48 @@ def test_scoring_engine_prefers_drop_animation_on_drop() -> None:
 
 
 def test_scoring_engine_penalizes_recent_animation() -> None:
-    engine = AnimationScoringEngine(AutoSelectorConfig(randomness=0.0))
+    engine = AnimationScoringEngine(DynamicSelectorConfig(randomness=0.0))
     player = AnimationPlayer.party()
-    shockwave = next(entry.animation for entry in player.animations if entry.animation.name == "shockwave")
+    shockwave = next(
+        entry.animation
+        for entry in player.animations
+        if entry.animation.name == "shockwave"
+    )
 
     fresh = engine.score_animation(shockwave, _bass_drop_features())
-    fatigued = engine.score_animation(shockwave, _bass_drop_features(), recent_names=("shockwave",))
+    fatigued = engine.score_animation(
+        shockwave, _bass_drop_features(), recent_names=("shockwave",)
+    )
 
     assert fatigued.score < fresh.score
 
 
-def test_dj_selector_honors_min_duration_before_switching() -> None:
+def test_dynamic_selector_selects_immediately() -> None:
     player = AnimationPlayer.party()
     player.set_index(player.index_of("aurora") or 0)
-    selector = DJModeSelector(AutoSelectorConfig(randomness=0.0, min_duration_s=12, switch_cooldown_s=8))
+    selector = DynamicSelector(
+        DynamicSelectorConfig(randomness=0.0, min_duration_s=12, switch_cooldown_s=8)
+    )
 
     first = selector.update(player, _bass_drop_features(), now_s=0.0)
-    early = selector.update(player, _bass_drop_features(), now_s=5.0)
 
-    assert first.should_switch is False
-    assert early.should_switch is False
-    assert player.name_at(player.current_index()) == "aurora"
+    assert first.should_switch is True
+    assert player.name_at(player.current_index()) in {
+        "shockwave",
+        "bass_drop",
+        "drop_wave",
+        "drop_explosion",
+    }
 
 
-def test_dj_selector_can_switch_on_drop_after_cooldown() -> None:
+def test_dynamic_selector_honors_min_duration_after_initial_selection() -> None:
     player = AnimationPlayer.party()
     player.set_index(player.index_of("aurora") or 0)
-    selector = DJModeSelector(AutoSelectorConfig(randomness=0.0, min_duration_s=12, switch_cooldown_s=8))
+    selector = DynamicSelector(
+        DynamicSelectorConfig(randomness=0.0, min_duration_s=12, switch_cooldown_s=8)
+    )
 
-    selector.update(player, _bass_drop_features(), now_s=0.0)
-    decision = selector.update(player, _bass_drop_features(), now_s=16.0)
+    selector.update(player, MusicFeatures(silence=True), now_s=0.0, quiet=True)
+    decision = selector.update(player, _bass_drop_features(), now_s=5.0)
 
-    assert decision.should_switch is True
-    assert decision.reason == "drop"
-    assert player.name_at(player.current_index()) in {"shockwave", "bass_drop", "drop_wave", "drop_explosion"}
+    assert decision.should_switch is False

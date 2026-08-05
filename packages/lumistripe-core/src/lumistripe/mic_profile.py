@@ -119,7 +119,7 @@ def mic_profile_from_dict(data: dict[str, Any]) -> MicProfile:
         device_patterns = tuple(str(pattern) for pattern in patterns)
     analysis_data = data.get("analysis") or {}
     if not isinstance(analysis_data, dict):
-        raise ValueError("mic profile analysis must be an object")
+        raise TypeError("mic profile analysis must be an object")
     return MicProfile(
         name=name,
         device_patterns=device_patterns,
@@ -152,7 +152,7 @@ def _optional_float(value: object) -> float | None:
     if value is None:
         return None
     if isinstance(value, bool):
-        raise ValueError("mic profile numeric values must be numbers")
+        raise TypeError("mic profile numeric values must be numbers")
     if isinstance(value, str | int | float):
         return float(value)
-    raise ValueError("mic profile numeric values must be numbers")
+    raise TypeError("mic profile numeric values must be numbers")
