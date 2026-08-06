@@ -2,16 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..animation.club_utils import center_distance, ring_profile
+from ..animation.reactive import AudioReactive, Decay
 from ..audio import AudioFrame
 from ..color import Hsla
 from ..controller import Controller
-from .base import Animation
-from .club_utils import center_distance, ring_profile
-from .reactive import AudioReactive, Decay
+from .base import Effect
 
 
 @dataclass(slots=True)
-class Shockwave(Animation):
+class Shockwave(Effect):
     radius: float = 0.0
     accent: Decay = field(default_factory=Decay)
 
@@ -45,5 +45,8 @@ class Shockwave(Animation):
             ambient = max(1.0 - dist / max(center, 1.0), 0.0) * 0.12
             alpha = min(ambient + ring * 0.88 + self.accent.value * 0.05, 1.0)
             hue = (170 + int(reactive.low * 18.0) - int(reactive.high * 10.0)) % 256
-            light = min(int(52.0 + reactive.mid * 10.0 + band * 8.0 + self.accent.value * 4.0), 68)
+            light = min(
+                int(52.0 + reactive.mid * 10.0 + band * 8.0 + self.accent.value * 4.0),
+                68,
+            )
             controller.set_pixel(i, reactive.accent_color(hue, 95, light, alpha))

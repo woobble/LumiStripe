@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..animation.reactive import AudioReactive, Decay
 from ..audio import AudioFrame
 from ..color import Hsla
 from ..controller import Controller
-from .base import Animation
-from .reactive import AudioReactive, Decay
+from .base import Effect
 
 
 @dataclass(slots=True)
-class BeatRipple(Animation):
+class BeatRipple(Effect):
     radius: float = 0.0
     burst: Decay = field(default_factory=Decay)
     hue: int = 0
@@ -27,7 +27,9 @@ class BeatRipple(Animation):
             dist = abs(i - center)
             ring = max(1.0 - abs(dist - self.radius) / 4.0, 0.0)
             mirror = max(1.0 - abs(dist - (center - self.radius + center)) / 4.0, 0.0)
-            alpha = max(ring, mirror) * (0.4 + 0.6 * (1.0 - self.radius / (center + 6.0)))
+            alpha = max(ring, mirror) * (
+                0.4 + 0.6 * (1.0 - self.radius / (center + 6.0))
+            )
             if alpha > 0.01:
                 controller.set_pixel(i, Hsla(self.hue, 100, 50, alpha))
 

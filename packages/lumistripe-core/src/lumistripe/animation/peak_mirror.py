@@ -4,10 +4,9 @@ from dataclasses import dataclass, field
 from math import sin
 
 from ..audio import AudioFrame
-from ..color import Hsl, Rgba
+from ..color import Hsla, Rgba
 from ..controller import Controller
 from .base import Animation
-from .club_utils import strip_ratio
 from .reactive import AudioReactive, Decay
 
 
@@ -21,45 +20,52 @@ class PeakMirror(Animation):
         return "peak_mirror"
 
     def tick(self, frame: int, controller: Controller) -> None:
-        half = controller.length // 2
-        for i in range(controller.length):
-            mirrored = min(i, max(controller.length - 1 - i, 0))
-            band = mirrored * 8 // max(half, 1)
-            phase = sin(frame * 0.08 + band * 0.7) * 0.5 + 0.5
-            limit = int(phase * half / 8.0)
-            dist = mirrored - band * max(half, 1) // 8
-            if dist <= limit:
-                hue = int(40 + strip_ratio(band, 8) * 180.0) % 256
-                controller.set_pixel(i, Rgba(hue, 255, 220, 0.82))
-            else:
-                controller.set_pixel(i, Rgba(0, 0, 0, 0.0))
+        levels = [
+            0.14 + (sin(frame * 0.08 + band * 0.7) * 0.5 + 0.5) * 0.38
+            for band in range(8)
+        ]
+        self._render(controller, levels, hue_shift=int(frame * 0.4) % 360)
 
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
-        half = controller.length // 2
         reactive = AudioReactive.from_frame(audio)
         decay_rate = 0.15 + reactive.high * 0.10
-        raw = [peak.step(audio.bands[band], decay_rate) for band, peak in enumerate(self.peaks)]
+        raw = [
+            peak.step(audio.bands[band], decay_rate)
+            for band, peak in enumerate(self.peaks)
+        ]
         if audio.beat:
             self._center_flash = max(self._center_flash, reactive.beat_pulse(0.0, 0.95))
             raw = [min(v + reactive.accent * 0.45, 1.0) for v in raw]
+
+        self._render(controller, raw, hue_shift=reactive.hue_shift(frame, 0.4) % 360)
         self._center_flash *= 0.92
 
-        hue_shift = reactive.hue_shift(frame, 0.4)
-        for i in range(controller.length):
-            mirrored = min(i, max(controller.length - 1 - i, 0))
-            band = min(mirrored * 8 // max(half, 1), len(raw) - 1)
-            band_start = band * max(half, 1) // 8
-            band_width = max(max(half, 1) // 8, 1)
-            within = mirrored - band_start
-            fill = int(raw[band] * band_width)
-            local = reactive.band_window(audio, i, controller.length, span=1)
-            base = local * 0.5 + reactive.accent * 0.25
-            if within < fill:
-                hue = (hue_shift + band * 24 + int(local * 18.0)) % 256
-                controller.set_pixel(i, Hsl(hue, 100, 54))
-            elif within == min(fill, band_width - 1):
-                controller.set_pixel(i, Rgba(255, 255, 255, min(0.3 + base, 1.0)))
-            elif mirrored <= 2 and self._center_flash > 0.0:
-                controller.set_pixel(i, Rgba(255, 255, 255, self._center_flash))
-            else:
+    def _render(
+        self, controller: Controller, levels: list[float], *, hue_shift: int
+    ) -> None:
+        length = controller.length
+        if length == 0:
+            return
+
+        mirror_span = max((length - 1) // 2, 1)
+        center = (length - 1) / 2.0
+        for i in range(length):
+            mirrored = min(i, length - 1 - i)
+            position = 1.0 if length == 1 else min(mirrored / mirror_span, 1.0)
+            band_position = position * (len(levels) - 1)
+            lower_band = int(band_position)
+            upper_band = min(lower_band + 1, len(levels) - 1)
+            blend = band_position - lower_band
+            level = levels[lower_band] * (1.0 - blend) + levels[upper_band] * blend
+
+            center_glow = max(0.0, 1.0 - abs(i - center) / 2.5)
+            beat_glow = self._center_flash * center_glow
+            level = max(level, beat_glow)
+            if level <= 0.015:
                 controller.set_pixel(i, Rgba(0, 0, 0, 0.0))
+                continue
+
+            hue = (hue_shift + int(band_position * 28.0)) % 360
+            lightness = min(48.0 + level * 12.0 + beat_glow * 6.0, 66.0)
+            alpha = min(0.08 + level * 0.9, 1.0)
+            controller.set_pixel(i, Hsla(hue, 100, lightness, alpha))

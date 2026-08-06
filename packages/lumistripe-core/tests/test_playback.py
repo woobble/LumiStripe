@@ -157,6 +157,24 @@ def test_dynamic_resumes_audio_when_music_returns() -> None:
     assert engine.player.audio_enabled is True
 
 
+def test_dynamic_schedules_layered_effects_after_activation_crossfade() -> None:
+    engine = PlaybackEngine(
+        AnimationPlayer.party(),
+        PlaybackConfig(
+            mode=PlaybackMode.DYNAMIC,
+            activity=MusicActivityConfig(activation_delay_s=0.0),
+        ),
+    )
+    stripe = Stripe(42)
+
+    for frame in range(24):
+        engine.step(stripe, snapshot=_active_snapshot(), now_s=frame * 0.025)
+
+    assert engine.music_active is True
+    assert engine.active_effect_names
+    assert len(engine.active_effect_names) <= 2
+
+
 def test_speech_like_low_energy_input_does_not_activate_music() -> None:
     detector = MusicActivityDetector(MusicActivityConfig(idle_enter_frames=3))
     speech_like = MusicFeatures(

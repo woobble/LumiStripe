@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..animation.club_utils import club_color, warm_flash
+from ..animation.reactive import AudioReactive, Decay
 from ..audio import AudioFrame
 from ..controller import Controller
-from .base import Animation
-from .club_utils import club_color, warm_flash
-from .reactive import AudioReactive, Decay
+from .base import Effect
 
 
 @dataclass(slots=True)
-class ClubFlash(Animation):
+class ClubFlash(Effect):
     flash: Decay = field(default_factory=Decay)
     segment_start: int = 0
     segment_width: int = 0
@@ -24,7 +24,15 @@ class ClubFlash(Animation):
     def tick(self, frame: int, controller: Controller) -> None:
         drive = 0.18 + ((frame % 13) / 13.0) * 0.28
         low = 0.08 + ((frame % 9) / 9.0) * 0.18
-        self._step(frame, controller, drive=drive, low=low, high=0.12, accent=0.0, beat=frame % 11 == 0)
+        self._step(
+            frame,
+            controller,
+            drive=drive,
+            low=low,
+            high=0.12,
+            accent=0.0,
+            beat=frame % 11 == 0,
+        )
 
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
         reactive = AudioReactive.from_frame(audio)
@@ -48,10 +56,12 @@ class ClubFlash(Animation):
         high: float,
         accent: float,
         beat: bool,
-        ) -> None:
+    ) -> None:
         length = max(controller.length, 1)
         seed = frame * 131 + length * 17 + int(drive * 100.0) + int(low * 80.0)
-        strong_hit = (beat and low > 0.24) or accent > 0.74 or low > 0.78 or drive > 0.82
+        strong_hit = (
+            (beat and low > 0.24) or accent > 0.74 or low > 0.78 or drive > 0.82
+        )
         trigger_prob = 0.03 + drive * 0.08 + accent * 0.07 + low * 0.05
 
         if strong_hit or (seed % 1000) < int(trigger_prob * 1000.0):
@@ -71,7 +81,9 @@ class ClubFlash(Animation):
             return
 
         if self.whole_strip:
-            controller.fill(warm_flash(self.hue_seed, alpha=min(1.0, 0.2 + brightness * 0.8)))
+            controller.fill(
+                warm_flash(self.hue_seed, alpha=min(1.0, 0.2 + brightness * 0.8))
+            )
             return
 
         controller.clear()
@@ -81,4 +93,9 @@ class ClubFlash(Animation):
             controller.set_pixel(index, color)
             if brightness > 0.6 and length > 6:
                 mirror = max(length - 1 - index, 0)
-                controller.set_pixel(mirror, warm_flash(self.hue_seed + offset, alpha=min(1.0, 0.1 + brightness * 0.7)))
+                controller.set_pixel(
+                    mirror,
+                    warm_flash(
+                        self.hue_seed + offset, alpha=min(1.0, 0.1 + brightness * 0.7)
+                    ),
+                )

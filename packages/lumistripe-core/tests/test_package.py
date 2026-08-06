@@ -37,3 +37,13 @@ def test_animation_star_import_exports_reactive_helpers() -> None:
 
     assert "AudioReactive" in namespace
     assert "Decay" in namespace
+
+
+def test_effects_package_exports_effects_and_layering_api() -> None:
+    namespace: dict[str, object] = {}
+    exec("from lumistripe.effects import *", namespace, namespace)  # noqa: S102
+
+    assert "BeatWave" in namespace
+    assert "Effect" in namespace
+    assert "EffectScheduler" in namespace
+    assert "EffectSchedulerDiagnostics" in namespace

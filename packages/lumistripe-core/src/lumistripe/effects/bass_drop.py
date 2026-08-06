@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..animation.reactive import AudioReactive, Decay
 from ..audio import AudioFrame
 from ..color import Rgba
 from ..controller import Controller
-from .base import Animation
-from .reactive import AudioReactive, Decay
+from .base import Effect
 
 
 @dataclass(slots=True)
-class BassDrop(Animation):
+class BassDrop(Effect):
     charge: float = 0.0
     flash: Decay = field(default_factory=Decay)
 
@@ -27,7 +27,11 @@ class BassDrop(Animation):
         preview = (frame % 30) / 30.0 if tension > 0.6 else 0.0
         alpha = max(preview * tension * 0.4, self.flash.value)
         hue = (frame * 3) % 256
-        color = Rgba(hue, int(200 - hue * 0.5), int(255 - hue * 0.3), alpha) if alpha > 0.0 else Rgba(0, 0, 0, 0.0)
+        color = (
+            Rgba(hue, int(200 - hue * 0.5), int(255 - hue * 0.3), alpha)
+            if alpha > 0.0
+            else Rgba(0, 0, 0, 0.0)
+        )
         for i in range(controller.length):
             controller.set_pixel(i, color)
 
@@ -45,6 +49,15 @@ class BassDrop(Animation):
         alpha = max(preview * tension * 0.4, flash)
         hue = int(20 + reactive.low * 30) % 256
         brightness = min(1.0, flash * 2.0 + tension * 0.3)
-        color = Rgba(hue, int(brightness * 200), int(brightness * (255 - hue * 0.3)), min(alpha * 2.0, 1.0)) if alpha > 0.0 else Rgba(0, 0, 0, 0.0)
+        color = (
+            Rgba(
+                hue,
+                int(brightness * 200),
+                int(brightness * (255 - hue * 0.3)),
+                min(alpha * 2.0, 1.0),
+            )
+            if alpha > 0.0
+            else Rgba(0, 0, 0, 0.0)
+        )
         for i in range(controller.length):
             controller.set_pixel(i, color)

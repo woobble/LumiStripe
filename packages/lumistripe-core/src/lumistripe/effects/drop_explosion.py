@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..animation.reactive import AudioReactive, Decay
 from ..audio import AudioFrame
 from ..color import Rgba
 from ..controller import Controller
-from .base import Animation
-from .reactive import AudioReactive, Decay
+from .base import Effect
 
 
 @dataclass(slots=True)
-class DropExplosion(Animation):
+class DropExplosion(Effect):
     charge: float = 0.0
     flash: Decay = field(default_factory=Decay)
 
@@ -47,7 +47,9 @@ class DropExplosion(Animation):
         if audio.beat and bass_energy > 0.35:
             self.flash.value = 1.0
             self.charge = 0.0
-        self.charge = min(self.charge + 0.004 + reactive.low * 0.014 + reactive.mid * 0.006, 1.0)
+        self.charge = min(
+            self.charge + 0.004 + reactive.low * 0.014 + reactive.mid * 0.006, 1.0
+        )
         tension = self.charge
         flash_alpha = self.flash.step(0.0, 0.04)
         preview = reactive.mid * 0.3 + reactive.rms * 0.2 if tension > 0.65 else 0.0
@@ -59,7 +61,9 @@ class DropExplosion(Animation):
             elif tension > 0.65 and preview > 0.2:
                 alpha = preview * 0.6 + flicker
                 warmth = int(40 + reactive.low * 60)
-                controller.set_pixel(i, Rgba(warmth, warmth // 3, warmth // 6, min(alpha, 1.0)))
+                controller.set_pixel(
+                    i, Rgba(warmth, warmth // 3, warmth // 6, min(alpha, 1.0))
+                )
             elif tension > 0.3:
                 pulse = ((frame * 2 + i) % 24) / 24.0
                 alpha = tension * 0.12 + pulse * 0.06

@@ -11,7 +11,7 @@ LumiStripe drives 2-wire addressable LED strips from a Raspberry Pi or other Lin
 - **GPIO Driver** — Bit-bangs a 2-wire protocol on any two GPIO lines using `libgpiod` (v2.x)
 - **38+ Animations** — Fire, Rainbow, Confetti, Aurora, LightningStrike, PlasmaRave, and many more, with `tick` and `tick_audio` modes
 - **Audio Reactive** — Real-time FFT analysis with 8 frequency bands, beat detection, BPM estimation, and onset/transient detection
-- **Dynamic Selection** — Selects animations from live energy, BPM, spectrum, beats, drops, and inferred song sections
+- **Layered Dynamic Selection** — Selects a smooth base animation and independently schedules up to two compatible beat/drop effects from live music features
 - **Three Playback Modes** — Static, Cycling, and music-driven Dynamic playback in both the CLI and simulator
 - **CLI** — Launch the simulator from the terminal with `lumistripe`
 
@@ -81,6 +81,11 @@ with AudioInput.new() as audio:
 
 All animations can be browsed in Static mode. Animation metadata describes suitable energy, BPM, spectrum, mood, beat/drop support, and whether an effect is safe for Dynamic's calm state.
 
+Dynamic mode composes one long-running base with at most one rhythmic and one
+accent layer. Automatic base changes crossfade, while manual and Cycling modes
+keep every standalone animation available. Strobe, Rainbow Strobe, and Police
+remain excluded from Dynamic selection.
+
 ## Simulator
 
 Launch the Tkinter GUI simulator:
@@ -119,6 +124,13 @@ Apply calibration automatically before starting Dynamic mode:
 lumistripe --mode dynamic --auto-calibrate-audio 3
 lumistripe --audio-debug --auto-calibrate-audio 3
 lumistripe-sim --mode dynamic --auto-calibrate-audio 3
+```
+
+For live base-animation, effect-layer, selector, and scheduler diagnostics:
+
+```bash
+lumistripe --mode dynamic --debug-selector
+lumistripe --audio-debug --audio-debug-verbose
 ```
 
 ## Development

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import sin
+
+import numpy as np
 
 from ..audio import AudioFrame
 from ..color import Hsla
@@ -14,15 +16,22 @@ from .reactive import AudioReactive
 @dataclass(slots=True)
 class Twinkle(Animation):
     _bloom: float = 0.0
+    levels: np.ndarray = field(init=False, repr=False)
+    hues: np.ndarray = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.levels = np.zeros((0,), dtype=np.float32)
+        self.hues = np.zeros((0,), dtype=np.int16)
 
     @property
     def name(self) -> str:
         return "twinkle"
 
     def tick(self, frame: int, controller: Controller) -> None:
-        self._bloom *= 0.96
-        for i in range(controller.length):
-            controller.set_pixel(i, self._pixel(frame, i, controller.length, density=2.4, age_speed=1.8, bloom=self._bloom))
+        reactive = AudioReactive.from_frame(
+            AudioFrame(rms=0.12, bands=(0.08, 0.09, 0.1, 0.11, 0.12, 0.16, 0.2, 0.22))
+        )
+        self._render(frame, controller, reactive)
 
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
         reactive = AudioReactive.from_frame(audio)
@@ -31,38 +40,28 @@ class Twinkle(Animation):
         else:
             self._bloom *= 0.92
 
-        density = 2.0 + reactive.drive() * 4.5 + reactive.shimmer() * 1.8
-        age_speed = 1.4 + reactive.speed(0.0, 2.4)
-        for i in range(controller.length):
-            controller.set_pixel(i, self._pixel(frame, i, controller.length, density=density, age_speed=age_speed, bloom=self._bloom, warmth=reactive.low, shimmer=reactive.high))
+        self._render(frame, controller, reactive)
 
-    def _pixel(
-        self,
-        frame: int,
-        index: int,
-        length: int,
-        *,
-        density: float,
-        age_speed: float,
-        bloom: float,
-        warmth: float = 0.0,
-        shimmer: float = 0.0,
-    ) -> Hsla:
-        seed = (frame * 2862933555777941757 + index * 1234567) & 0xFFFFFFFFFFFFFFFF
-        twinkle_chance = (seed >> 40) & 0x3F
-        age = ((seed + int(frame * age_speed)) >> 24) & 0xFF
-        pos = strip_ratio(index, length)
-        drift = sin(frame * 0.018 + pos * 4.2) * 0.5 + 0.5
-        base_hue = 154 + int(warmth * 10.0) + int(drift * 8.0)
-        base_alpha = 0.028 + drift * 0.028 + bloom * 0.055
-        active = twinkle_chance < density
+    def _render(self, frame: int, controller: Controller, reactive: AudioReactive) -> None:
+        length = controller.length
+        if len(self.levels) != length:
+            self.levels = np.zeros(length, dtype=np.float32)
+            self.hues = np.zeros(length, dtype=np.int16)
+        self.levels *= 0.92 - reactive.high * 0.025
+        spawn_threshold = int(
+            (0.004 + reactive.drive() * 0.012 + reactive.shimmer() * 0.018)
+            * 10_000.0
+        )
+        for index in range(length):
+            seed = (frame * 1103515245 + index * 2654435761) & 0xFFFFFFFF
+            if seed % 10_000 < spawn_threshold:
+                self.levels[index] = min(1.0, self.levels[index] + 0.45 + reactive.high * 0.2)
+                self.hues[index] = (154 + seed % 24 + int(reactive.low * 12.0)) % 360
 
-        if active:
-            life = 1.0 - abs(age - 127.5) / 127.5
-            fade = max(0.0, life)
-            alpha = min(base_alpha + fade * fade * (0.22 + shimmer * 0.08) + bloom * 0.08, 0.44)
-            hue = base_hue + int(pos * 10.0) + int(shimmer * 6.0)
-            lightness = min(68, 56 + int(fade * 8.0) + int(bloom * 4.0))
-            return Hsla(hue % 256, 65, lightness, alpha)
-
-        return Hsla(base_hue % 256, 40, 24 + int(drift * 6.0), min(base_alpha, 0.14))
+            pos = strip_ratio(index, length)
+            drift = sin(frame * 0.018 + pos * 4.2) * 0.5 + 0.5
+            level = float(self.levels[index])
+            hue = int(self.hues[index]) if level > 0.01 else 154 + int(drift * 8.0)
+            alpha = min(0.05 + drift * 0.03 + level * 0.38 + self._bloom * 0.08, 0.5)
+            lightness = 28 + int(drift * 5.0 + level * 34.0)
+            controller.set_pixel(index, Hsla(hue, 65, lightness, alpha))

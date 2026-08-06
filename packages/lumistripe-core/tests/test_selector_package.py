@@ -1,6 +1,7 @@
 import pytest
 from lumistripe import (
     AnimationPlayer,
+    AnimationRole,
     AnimationScoringEngine,
     DynamicSelector,
     DynamicSelectorConfig,
@@ -83,12 +84,9 @@ def test_dynamic_selector_selects_immediately() -> None:
     first = selector.update(player, _bass_drop_features(), now_s=0.0)
 
     assert first.should_switch is True
-    assert player.name_at(player.current_index()) in {
-        "shockwave",
-        "bass_drop",
-        "drop_wave",
-        "drop_explosion",
-    }
+    selected = player.name_at(player.current_index())
+    assert selected is not None
+    assert animation_metadata(selected).role is AnimationRole.BASE
 
 
 def test_dynamic_selector_honors_min_duration_after_initial_selection() -> None:
@@ -102,3 +100,25 @@ def test_dynamic_selector_honors_min_duration_after_initial_selection() -> None:
     decision = selector.update(player, _bass_drop_features(), now_s=5.0)
 
     assert decision.should_switch is False
+
+
+def test_dynamic_selector_diagnostics_report_timing_and_history() -> None:
+    player = AnimationPlayer.party()
+    selector = DynamicSelector(
+        DynamicSelectorConfig(
+            randomness=0.0,
+            min_duration_s=12.0,
+            max_duration_s=45.0,
+            switch_cooldown_s=8.0,
+            drop_cooldown_s=15.0,
+        )
+    )
+    selector.update(player, _bass_drop_features(), now_s=10.0)
+
+    diagnostics = selector.diagnostics(now_s=15.0)
+
+    assert diagnostics.elapsed_s == pytest.approx(5.0)
+    assert diagnostics.min_duration_remaining_s == pytest.approx(7.0)
+    assert diagnostics.max_duration_remaining_s == pytest.approx(40.0)
+    assert diagnostics.switch_cooldown_remaining_s == pytest.approx(3.0)
+    assert diagnostics.drop_cooldown_remaining_s == pytest.approx(0.0)

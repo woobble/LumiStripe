@@ -3,6 +3,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
+
+import numpy as np
 
 from ..audio import AudioFrame
 from ..controller import BrightnessController, Controller
@@ -21,6 +24,9 @@ class Animation(ABC):
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
         self.tick(frame, controller)
 
+    def reset(self) -> None:
+        """Reset runtime state before this animation is activated again."""
+
     @property
     def metadata(self):
         from ..selector import animation_metadata
@@ -35,6 +41,17 @@ class _AnimationEntry:
     frames_per_cycle: int
     automatic: bool
 
+    def fresh_animation(self) -> Animation:
+        animation_type: type[Animation] = type(self.animation)
+        try:
+            return animation_type()
+        except TypeError:
+            self.animation.reset()
+            return self.animation
+
+    def restart(self) -> None:
+        self.animation = self.fresh_animation()
+
 
 @dataclass(slots=True)
 class AnimationPlayer:
@@ -43,51 +60,66 @@ class AnimationPlayer:
     frame: int = 0
     brightness: float = 1.0
     audio_enabled: bool = True
+    transition_ms: int = 0
     _audio_snapshot: Callable[[], AudioFrame] | None = None
+    _transition_duration_ms: int = 0
+    _transition_elapsed_ms: int = 0
+    _transition_source: Any = None
+    _transition_buffer: Any = None
 
     def add(self, animation: Animation, frame_ms: int, frames_per_cycle: int) -> None:
-        self.animations.append(_AnimationEntry(animation, frame_ms, frames_per_cycle, True))
+        self.animations.append(
+            _AnimationEntry(animation, frame_ms, frames_per_cycle, True)
+        )
 
-    def add_utility(self, animation: Animation, frame_ms: int, frames_per_cycle: int) -> None:
-        self.animations.append(_AnimationEntry(animation, frame_ms, frames_per_cycle, False))
+    def add_utility(
+        self, animation: Animation, frame_ms: int, frames_per_cycle: int
+    ) -> None:
+        self.animations.append(
+            _AnimationEntry(animation, frame_ms, frames_per_cycle, False)
+        )
 
     @classmethod
     def party(cls) -> AnimationPlayer:
+        from ..effects import (
+            BassDrop,
+            BeatExplosion,
+            BeatRipple,
+            BeatTunnel,
+            BeatWave,
+            CenterBurst,
+            ClubFlash,
+            ColorBurst,
+            Confetti,
+            DropExplosion,
+            DropWave,
+            ElectricStorm,
+            FireworkBurst,
+            HardBeat,
+            LightningStrike,
+            MirrorFlash,
+            PixelExplosion,
+            Shockwave,
+            SpectrumFlash,
+        )
         from .aurora import Aurora
-        from .bass_drop import BassDrop
-        from .beat_explosion import BeatExplosion
-        from .beat_ripple import BeatRipple
-        from .beat_tunnel import BeatTunnel
-        from .beat_wave import BeatWave
         from .bouncing_ball import BouncingBall
         from .bpm import Bpm
-        from .center_burst import CenterBurst
-        from .club_flash import ClubFlash
-        from .color_burst import ColorBurst
         from .color_wipe import ColorWipe
         from .comet import Comet
         from .comet_storm import CometStorm
-        from .confetti import Confetti
         from .dance_floor import DanceFloor
         from .disco_comet import DiscoComet
         from .disco_sparkle import DiscoSparkle
-        from .drop_explosion import DropExplosion
-        from .drop_wave import DropWave
         from .dual_comet import DualComet
         from .dual_laser import DualLaser
-        from .electric_storm import ElectricStorm
         from .fire import Fire
-        from .firework_burst import FireworkBurst
         from .glow_rush import GlowRush
-        from .hard_beat import HardBeat
         from .juggle import Juggle
         from .laser_sweep import LaserSweep
-        from .lightning_strike import LightningStrike
-        from .mirror_flash import MirrorFlash
         from .neon_confetti import NeonConfetti
         from .neon_storm import NeonStorm
         from .peak_mirror import PeakMirror
-        from .pixel_explosion import PixelExplosion
         from .plasma_rave import PlasmaRave
         from .police import Police
         from .pulse import Pulse
@@ -96,9 +128,7 @@ class AnimationPlayer:
         from .rainbow_strobe import RainbowStrobe
         from .rave_pulse import RavePulse
         from .rave_scanner import RaveScanner
-        from .shockwave import Shockwave
         from .sinelon import Sinelon
-        from .spectrum_flash import SpectrumFlash
         from .strobe import Strobe
         from .strobe_chase import StrobeChase
         from .theater_chase import TheaterChase
@@ -168,39 +198,131 @@ class AnimationPlayer:
     def clear_audio_snapshot(self) -> None:
         self._audio_snapshot = None
 
-    def step(self, controller: Controller, *, audio_frame: AudioFrame | None = None) -> float:
+    def step(
+        self, controller: Controller, *, audio_frame: AudioFrame | None = None
+    ) -> float:
         if not self.animations:
             return 0.05
 
-        if audio_frame is None and self._audio_snapshot is not None and self.audio_enabled:
+        if (
+            audio_frame is None
+            and self._audio_snapshot is not None
+            and self.audio_enabled
+        ):
             audio_frame = self._audio_snapshot()
         if not self.audio_enabled:
             audio_frame = None
         entry = self.animations[self.index]
-        bright = BrightnessController(controller, self.brightness)
+        target = controller
+        if self.transition_active:
+            from ..stripe import Stripe
+
+            if (
+                self._transition_source is None
+                or self._transition_source.shape != controller.pixels().shape
+            ):
+                self._transition_source = controller.pixels().copy()
+            if (
+                self._transition_buffer is None
+                or self._transition_buffer.length != controller.length
+            ):
+                self._transition_buffer = Stripe(controller.length)
+            target = self._transition_buffer
+        bright = BrightnessController(target, self.brightness)
         if audio_frame is None:
             entry.animation.tick(self.frame, bright)
         else:
             entry.animation.tick_audio(self.frame, bright, audio_frame)
-        controller.flush()
+        if self.transition_active:
+            self._write_transition(controller, entry.frame_ms)
+        else:
+            controller.flush()
         self.frame += 1
         return entry.frame_ms / 1000.0
 
-    def set_index(self, index: int) -> None:
-        self.index = min(index, max(len(self.animations) - 1, 0))
+    @property
+    def transition_active(self) -> bool:
+        return self._transition_duration_ms > 0
+
+    @property
+    def transition_progress(self) -> float:
+        if not self.transition_active:
+            return 1.0
+        return min(
+            1.0,
+            self._transition_elapsed_ms / max(self._transition_duration_ms, 1),
+        )
+
+    def set_index(
+        self,
+        index: int,
+        *,
+        transition_ms: int | None = None,
+        restart: bool = True,
+    ) -> None:
+        next_index = min(max(index, 0), max(len(self.animations) - 1, 0))
+        changed = next_index != self.index
+        self.index = next_index
         self.frame = 0
+        if self.animations and restart:
+            self.animations[self.index].restart()
+        duration = self.transition_ms if transition_ms is None else transition_ms
+        if changed and duration > 0:
+            self.begin_transition(duration_ms=duration)
+        else:
+            self.cancel_transition()
 
     def next(self) -> None:
         if not self.animations:
             return
-        self.index = (self.index + 1) % len(self.animations)
-        self.frame = 0
+        self.set_index((self.index + 1) % len(self.animations))
 
     def prev(self) -> None:
         if not self.animations:
             return
-        self.index = len(self.animations) - 1 if self.index == 0 else self.index - 1
-        self.frame = 0
+        self.set_index(len(self.animations) - 1 if self.index == 0 else self.index - 1)
+
+    def begin_transition(self, *, duration_ms: int, source: Any = None) -> None:
+        duration_ms = max(int(duration_ms), 0)
+        if duration_ms == 0:
+            self.cancel_transition()
+            return
+        self._transition_duration_ms = duration_ms
+        self._transition_elapsed_ms = 0
+        self._transition_source = (
+            None if source is None else np.asarray(source, dtype=np.uint8).copy()
+        )
+        self._transition_buffer = None
+
+    def cancel_transition(self) -> None:
+        self._transition_duration_ms = 0
+        self._transition_elapsed_ms = 0
+        self._transition_source = None
+        self._transition_buffer = None
+
+    def fresh_animation(self, name: str) -> Animation | None:
+        index = self.index_of(name)
+        if index is None:
+            return None
+        return self.animations[index].fresh_animation()
+
+    def _write_transition(self, controller: Controller, frame_ms: int) -> None:
+        assert self._transition_source is not None
+        assert self._transition_buffer is not None
+        self._transition_elapsed_ms = min(
+            self._transition_elapsed_ms + frame_ms,
+            self._transition_duration_ms,
+        )
+        amount = self._transition_elapsed_ms / max(self._transition_duration_ms, 1)
+        source = self._transition_source.astype(np.float32)
+        target = self._transition_buffer.pixels().astype(np.float32)
+        blended = np.clip(source * (1.0 - amount) + target * amount, 0.0, 255.0).astype(
+            np.uint8
+        )
+        controller.set_pixels(blended)
+        controller.flush()
+        if amount >= 1.0:
+            self.cancel_transition()
 
     def current_index(self) -> int:
         return self.index

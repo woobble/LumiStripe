@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..animation.reactive import AudioReactive, Decay
 from ..audio import AudioFrame
 from ..color import Hsla
 from ..controller import Controller
-from .base import Animation
-from .reactive import AudioReactive, Decay
+from .base import Effect
 
 
 @dataclass(slots=True)
-class BeatExplosion(Animation):
+class BeatExplosion(Effect):
     radius: float = 0.0
     burst: Decay = field(default_factory=Decay)
 

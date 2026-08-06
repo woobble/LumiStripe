@@ -3,14 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from random import Random
 
+from ..animation.reactive import AudioReactive, Decay
 from ..audio import AudioFrame
 from ..color import Hsla, Rgba
 from ..controller import Controller
-from .base import Animation
-from .reactive import AudioReactive, Decay
+from .base import Effect
 
 
-def _render_bolt(controller: Controller, start: int, length: int, hue: int, alpha: float) -> None:
+def _render_bolt(
+    controller: Controller, start: int, length: int, hue: int, alpha: float
+) -> None:
     pos = start
     segments = max(length // 3, 1)
     for _ in range(segments):
@@ -24,7 +26,7 @@ def _render_bolt(controller: Controller, start: int, length: int, hue: int, alph
 
 
 @dataclass(slots=True)
-class LightningStrike(Animation):
+class LightningStrike(Effect):
     flash: Decay = field(default_factory=Decay)
     strike_pos: int = 0
     strike_len: int = 0

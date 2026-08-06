@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..animation.reactive import AudioReactive
 from ..audio import AudioFrame
 from ..color import Hsla, Rgba
 from ..controller import Controller
-from .base import Animation
-from .reactive import AudioReactive
+from .base import Effect
 
 
 @dataclass(slots=True)
@@ -18,7 +18,7 @@ class _Burst:
 
 
 @dataclass(slots=True)
-class FireworkBurst(Animation):
+class FireworkBurst(Effect):
     bursts: list[_Burst] = field(default_factory=list)
     _hue: int = 0
 
@@ -50,17 +50,23 @@ class FireworkBurst(Animation):
 
         if audio.beat:
             self._hue = (self._hue + 41) % 256
-            self.bursts.append(_Burst(
-                phase=0.5,
-                speed=0.5 + reactive.speed(0.15, 2.5) * (0.8 + reactive.accent * 0.4),
-                strength=0.7 + reactive.accent * 0.3,
-                hue=self._hue,
-            ))
+            self.bursts.append(
+                _Burst(
+                    phase=0.5,
+                    speed=0.5
+                    + reactive.speed(0.15, 2.5) * (0.8 + reactive.accent * 0.4),
+                    strength=0.7 + reactive.accent * 0.3,
+                    hue=self._hue,
+                )
+            )
+            self.bursts = self.bursts[-8:]
 
         for b in self.bursts:
             b.phase += b.speed
             b.strength *= 0.97
-        self.bursts = [b for b in self.bursts if b.strength > 0.02 and b.phase < center + 6.0]
+        self.bursts = [
+            b for b in self.bursts if b.strength > 0.02 and b.phase < center + 6.0
+        ]
 
         bg_glow = reactive.rms * 0.08
         for i in range(controller.length):

@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..animation.club_utils import burst_profile, club_color
+from ..animation.reactive import AudioReactive, Decay
 from ..audio import AudioFrame
 from ..controller import Controller
-from .base import Animation
-from .club_utils import burst_profile, club_color
-from .reactive import AudioReactive, Decay
+from .base import Effect
 
 
 @dataclass(slots=True)
-class CenterBurst(Animation):
+class CenterBurst(Effect):
     radius: float = 0.0
     speed: float = 0.0
     width: float = 1.4
@@ -22,16 +22,22 @@ class CenterBurst(Animation):
         return "center_burst"
 
     def tick(self, frame: int, controller: Controller) -> None:
-        reactive = AudioReactive.from_frame(AudioFrame(rms=0.18, bands=(0.18, 0.2, 0.22, 0.2, 0.16, 0.14, 0.12, 0.1)))
+        reactive = AudioReactive.from_frame(
+            AudioFrame(rms=0.18, bands=(0.18, 0.2, 0.22, 0.2, 0.16, 0.14, 0.12, 0.1))
+        )
         self._step(frame, controller, reactive, beat=frame % 32 == 0)
 
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
         reactive = AudioReactive.from_frame(audio)
         self._step(frame, controller, reactive, beat=audio.beat)
 
-    def _step(self, frame: int, controller: Controller, reactive: AudioReactive, *, beat: bool) -> None:
+    def _step(
+        self, frame: int, controller: Controller, reactive: AudioReactive, *, beat: bool
+    ) -> None:
         length = max(controller.length, 1)
-        if beat and (reactive.low > 0.22 or reactive.accent > 0.46 or reactive.rms > 0.5):
+        if beat and (
+            reactive.low > 0.22 or reactive.accent > 0.46 or reactive.rms > 0.5
+        ):
             self.radius = 0.0
             self.speed = 0.9 + reactive.accent * 2.2
             self.width = 1.1 + reactive.accent * 3.6
@@ -51,4 +57,6 @@ class CenterBurst(Animation):
             intensity = burst_profile(distance, self.radius, max(self.width, 1.0))
             if intensity > 0.0:
                 alpha = min(1.0, intensity * (0.28 + flash * 0.72))
-                controller.set_pixel(index, club_color(self.hue_seed + index, alpha=alpha, lightness=60))
+                controller.set_pixel(
+                    index, club_color(self.hue_seed + index, alpha=alpha, lightness=60)
+                )

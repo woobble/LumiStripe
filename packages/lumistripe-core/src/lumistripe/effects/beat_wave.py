@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..animation.reactive import AudioReactive
 from ..audio import AudioFrame
 from ..color import Rgba
 from ..controller import Controller
-from .base import Animation
-from .reactive import AudioReactive
+from .base import Effect
 
 
 @dataclass(slots=True)
@@ -18,7 +18,7 @@ class _Wave:
 
 
 @dataclass(slots=True)
-class BeatWave(Animation):
+class BeatWave(Effect):
     waves: list[_Wave] = field(default_factory=list)
     _hue: int = 0
 
@@ -41,11 +41,14 @@ class BeatWave(Animation):
                 hue=self._hue,
             )
             self.waves.append(wave)
+            self.waves = self.waves[-8:]
 
         for w in self.waves:
             w.pos += w.speed
             w.strength *= 0.98
-        self.waves = [w for w in self.waves if w.strength > 0.01 and w.pos < controller.length]
+        self.waves = [
+            w for w in self.waves if w.strength > 0.01 and w.pos < controller.length
+        ]
 
         glow = 0.04 + reactive.rms * 0.12
         hue = reactive.hue_shift(frame, 0.25)

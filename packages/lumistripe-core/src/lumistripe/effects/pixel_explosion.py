@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from random import Random
 
+from ..animation.reactive import AudioReactive, Decay
 from ..audio import AudioFrame
 from ..color import Hsla
 from ..controller import Controller
-from .base import Animation
-from .reactive import AudioReactive, Decay
+from .base import Effect
 
 
 @dataclass(slots=True)
@@ -19,7 +19,7 @@ class _Burst:
 
 
 @dataclass(slots=True)
-class PixelExplosion(Animation):
+class PixelExplosion(Effect):
     bursts: list[_Burst] = field(default_factory=list)
     _rng: Random = field(default_factory=Random)
 
@@ -30,17 +30,30 @@ class PixelExplosion(Animation):
     def tick(self, frame: int, controller: Controller) -> None:
         if frame % 12 < 2:
             x = self._rng.randint(0, max(controller.length - 1, 0))
-            self.bursts.append(_Burst(x=float(x), radius=0.0, hue=(frame * 17) % 256, alpha=Decay(1.0)))
+            self.bursts.append(
+                _Burst(x=float(x), radius=0.0, hue=(frame * 17) % 256, alpha=Decay(1.0))
+            )
+            self.bursts = self.bursts[-12:]
         self._update(controller, 0.6)
 
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
         reactive = AudioReactive.from_frame(audio)
         if audio.beat or reactive.accent > 0.5:
-            count = 1 + int(reactive.accent * 3 + reactive.drive() * 2)
+            count = min(1 + int(reactive.accent * 3 + reactive.drive() * 2), 4)
             for _ in range(count):
                 x = self._rng.randint(0, max(controller.length - 1, 0))
-                hue = (int(reactive.low * 90) + frame * 6 + self._rng.randint(0, 120)) % 256
-                self.bursts.append(_Burst(x=float(x), radius=0.0, hue=hue, alpha=Decay(0.7 + reactive.accent * 0.3)))
+                hue = (
+                    int(reactive.low * 90) + frame * 6 + self._rng.randint(0, 120)
+                ) % 256
+                self.bursts.append(
+                    _Burst(
+                        x=float(x),
+                        radius=0.0,
+                        hue=hue,
+                        alpha=Decay(0.7 + reactive.accent * 0.3),
+                    )
+                )
+            self.bursts = self.bursts[-12:]
         self._update(controller, 0.8 + reactive.high * 1.2)
 
     def _update(self, controller: Controller, speed: float) -> None:

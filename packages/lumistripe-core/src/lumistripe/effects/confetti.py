@@ -4,15 +4,15 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from ..animation.reactive import AudioReactive
 from ..audio import AudioFrame
 from ..color import Hsla, Rgba
 from ..controller import Controller
-from .base import Animation
-from .reactive import AudioReactive
+from .base import Effect
 
 
 @dataclass(slots=True)
-class Confetti(Animation):
+class Confetti(Effect):
     intensities: np.ndarray = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -50,9 +50,15 @@ class Confetti(Animation):
             seed = (frame * 1103515245 + i * 12345) & 0xFFFFFFFFFFFFFFFF
             trigger = reactive.accent > 0.55 or (seed % 100) < density
             if trigger:
-                self.intensities[i] = min(1.0, self.intensities[i] + 0.4 + reactive.high * 0.15)
+                self.intensities[i] = min(
+                    1.0, self.intensities[i] + 0.4 + reactive.high * 0.15
+                )
             if self.intensities[i] > 0.03:
-                hue = ((seed // 100) + reactive.hue_shift(frame, 0.25) + int(reactive.band_window(audio, i, controller.length, 1) * 18.0)) % 256
+                hue = (
+                    (seed // 100)
+                    + reactive.hue_shift(frame, 0.25)
+                    + int(reactive.band_window(audio, i, controller.length, 1) * 18.0)
+                ) % 256
                 light = 46 + int(self.intensities[i] * 20.0 + reactive.high * 8.0)
                 alpha = min(1.0, 0.12 + self.intensities[i] * 0.78 + bloom * 0.08)
                 controller.set_pixel(i, Hsla(hue, 100, light, alpha))

@@ -11,6 +11,9 @@ from .reactive import AudioReactive
 
 @dataclass(slots=True)
 class TheaterChase(Animation):
+    phase: float = 0.0
+    hue_phase: float = 0.0
+
     @property
     def name(self) -> str:
         return "theater_chase"
@@ -31,14 +34,17 @@ class TheaterChase(Animation):
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
         reactive = AudioReactive.from_frame(audio)
         stride = 4 if reactive.high > 0.65 else 3
-        speed = max(reactive.speed(0.45, 2.8), 0.5)
-        phase = int(frame / speed) % stride
-        hue = reactive.hue_shift(frame, 0.5)
+        speed = 0.28 + reactive.drive() * 0.65 + reactive.accent * 0.2
+        self.phase = (self.phase + speed) % stride
+        self.hue_phase = (self.hue_phase + 0.45 + reactive.high * 1.2) % 360.0
+        hue = int(self.hue_phase)
         for i in range(controller.length):
             slot = i % stride
-            if slot == phase:
-                controller.set_pixel(i, Hsla(hue, 100, 56, min(1.0, 0.76 + reactive.drive() * 0.24)))
-            elif slot == (phase - 1) % stride or slot == (phase + 1) % stride:
-                controller.set_pixel(i, Hsla(hue, 88, 42, 0.22 + reactive.high * 0.12))
-            else:
-                controller.set_pixel(i, Rgba(0, 0, 0, 0.0))
+            direct = abs(slot - self.phase)
+            distance = min(direct, stride - direct)
+            glow = max(1.0 - distance / 1.35, 0.0)
+            alpha = glow * (0.72 + reactive.drive() * 0.22)
+            if alpha > 0.01:
+                controller.set_pixel(i, Hsla(hue, 96, 52, alpha))
+                continue
+            controller.set_pixel(i, Rgba(0, 0, 0, 0.0))
