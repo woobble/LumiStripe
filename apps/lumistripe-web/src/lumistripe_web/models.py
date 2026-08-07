@@ -49,6 +49,7 @@ class DashboardState(BaseModel):
     runtime: RuntimeKind
     output_backend: str = "simulation"
     output_devices: tuple[str, ...] = ()
+    spi_speed_hz: int | None = None
     running: bool = False
     mode: PlaybackMode = PlaybackMode.STATIC
     solid_color: str = "#7C3AED"
@@ -130,3 +131,84 @@ class CalibrationFinishRequest(BaseModel):
 class CalibrationSessionResponse(BaseModel):
     session_id: str
     state: DashboardState
+
+
+class AudioTuningValues(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    target_level: float = Field(default=0.36, ge=0.1, le=0.8)
+    dynamic_response: float = Field(default=0.65, ge=0.0, le=1.0)
+    rms_attack: float = Field(default=0.45, ge=0.01, le=1.0)
+    rms_release: float = Field(default=0.12, ge=0.01, le=1.0)
+    band_attack: float = Field(default=0.4, ge=0.01, le=1.0)
+    band_release: float = Field(default=0.1, ge=0.01, le=1.0)
+    beat_release: float = Field(default=0.18, ge=0.01, le=1.0)
+    energy_threshold: float = Field(default=0.03, ge=0.0, le=1.0)
+    onset_threshold: float = Field(default=0.025, ge=0.0, le=1.0)
+    beat_density_threshold: float = Field(default=0.05, ge=0.0, le=1.0)
+    brightness_threshold: float = Field(default=0.08, ge=0.0, le=1.0)
+    spectral_balance_ratio: float = Field(default=0.35, ge=0.0, le=1.0)
+
+
+class AudioDeviceOption(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    selector: str
+    name: str
+    settings: AudioTuningValues
+
+
+class AudioSettingsResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    source: str
+    monitoring: bool
+    active_device: str | None = None
+    active_device_name: str | None = None
+    devices: tuple[AudioDeviceOption, ...] = ()
+    settings: AudioTuningValues = AudioTuningValues()
+    configured_noise_floor: float = 0.015
+    error: str | None = None
+
+
+class AudioSettingsRequest(BaseModel):
+    device: str = Field(min_length=1)
+    settings: AudioTuningValues
+
+
+class AudioResetRequest(BaseModel):
+    device: str = Field(min_length=1)
+
+
+class AudioTelemetry(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    sequence: int = 0
+    fresh: bool = False
+    input_level: float = Field(default=0.0, ge=0.0, le=1.0)
+    processed_level: float = Field(default=0.0, ge=0.0, le=1.0)
+    bands: tuple[float, float, float, float, float, float, float, float] = (
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+    )
+    beat: bool = False
+    beat_strength: float = Field(default=0.0, ge=0.0, le=1.0)
+    bpm: float = 0.0
+    estimated_noise_floor: float = Field(default=0.0, ge=0.0, le=1.0)
+    configured_noise_floor: float = Field(default=0.015, ge=0.0, le=1.0)
+    normalization_gain: float = Field(default=1.0, ge=0.0)
+    program_loudness: float = Field(default=0.0, ge=0.0, le=1.0)
+    musical_impact: float = Field(default=0.0, ge=0.0, le=1.0)
+    gate: str = "idle"
+    gate_preview: bool = True
+    gate_energy: float = Field(default=0.0, ge=0.0, le=1.0)
+    gate_onset: float = Field(default=0.0, ge=0.0, le=1.0)
+    gate_beat_density: float = Field(default=0.0, ge=0.0, le=1.0)
+    gate_brightness: float = Field(default=0.0, ge=0.0, le=1.0)
+    health: str = "inactive"

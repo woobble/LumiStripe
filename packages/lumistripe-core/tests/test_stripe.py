@@ -18,6 +18,8 @@ from lumistripe import (
     SubStripe,
 )
 from lumistripe.gpio import encode_legacy_frame
+from lumistripe.gpio._sm16716 import encode_into as encode_sm16716_into
+from lumistripe.gpio._sm16716 import frame_size as sm16716_frame_size
 
 
 class FakeLineWriter:
@@ -44,21 +46,14 @@ class FakeSPIDevice:
         self.bits_per_word = 0
         self.lsbfirst = True
         self.no_cs = False
-        self.transfers: list[tuple[list[int], int, int, int]] = []
+        self.transfers: list[tuple[object, bytes]] = []
         self.close_count = 0
 
     def open_path(self, path: str) -> None:
         self.path = path
 
-    def xfer2(
-        self,
-        values: list[int],
-        speed_hz: int = 0,
-        delay_usec: int = 0,
-        bits_per_word: int = 0,
-    ) -> list[int]:
-        self.transfers.append((values, speed_hz, delay_usec, bits_per_word))
-        return [0] * len(values)
+    def writebytes2(self, values: object) -> None:
+        self.transfers.append((values, bytes(values)))  # type: ignore[arg-type]
 
     def close(self) -> None:
         self.close_count += 1
@@ -476,6 +471,33 @@ def test_legacy_spi_encoder_matches_gpio_pulse_bits() -> None:
     )
 
 
+@pytest.mark.parametrize("pixel_count", [1, 7, 8, 41, 100, 200])
+def test_native_sm16716_encoder_matches_reference(pixel_count: int) -> None:
+    pixels = np.random.default_rng(pixel_count).integers(
+        0,
+        256,
+        size=(pixel_count, 4),
+        dtype=np.uint8,
+    )
+    destination = bytearray(sm16716_frame_size(pixel_count))
+
+    result = encode_sm16716_into(pixels, destination)
+
+    assert result is None
+    assert bytes(destination) == encode_legacy_frame(pixels).tobytes()
+
+
+def test_native_sm16716_encoder_validates_buffers() -> None:
+    pixels = np.zeros((2, 4), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="too small"):
+        encode_sm16716_into(pixels, bytearray(1))
+    with pytest.raises(ValueError, match="C-contiguous"):
+        encode_sm16716_into(pixels[::-1], bytearray(sm16716_frame_size(2)))
+    with pytest.raises(ValueError, match="one-byte elements"):
+        encode_sm16716_into(pixels, np.zeros(sm16716_frame_size(2), dtype=np.uint16))
+
+
 def test_spi_stripe_configures_mode_and_sends_one_transfer() -> None:
     device = FakeSPIDevice()
     stripe = SPIStripe(
@@ -494,9 +516,9 @@ def test_spi_stripe_configures_mode_and_sends_one_transfer() -> None:
     assert stripe.gpio_backend_label == "spi"
     assert stripe.spi_device_path == "/dev/spidev9.2"
     assert len(device.transfers) == 1
-    values, speed_hz, delay_usec, bits_per_word = device.transfers[0]
-    assert values == encode_legacy_frame(stripe.pixels()).tolist()
-    assert (speed_hz, delay_usec, bits_per_word) == (750_000, 0, 8)
+    values, snapshot = device.transfers[0]
+    assert isinstance(values, np.ndarray)
+    assert snapshot == encode_legacy_frame(stripe.pixels()).tobytes()
 
 
 def test_spi_stripe_skips_clean_flush_and_force_flushes() -> None:
@@ -508,6 +530,7 @@ def test_spi_stripe_skips_clean_flush_and_force_flushes() -> None:
     stripe.force_flush()
 
     assert len(device.transfers) == 2
+    assert device.transfers[0][0] is device.transfers[1][0]
 
 
 def test_spi_stripe_rejects_frame_larger_than_single_transfer() -> None:

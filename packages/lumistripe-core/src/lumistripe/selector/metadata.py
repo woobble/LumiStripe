@@ -497,6 +497,36 @@ ANIMATION_METADATA.update(
             mood="club",
             intensity=0.7,
         ),
+        "red_rave_sweep": _meta(
+            "red_rave_sweep",
+            {"red", "scanner", "segments", "motion"},
+            energy_min=0.35,
+            energy_max=0.95,
+            prefers_bass=0.55,
+            prefers_mid=0.45,
+            mood="club",
+            intensity=0.72,
+            weight=1.1,
+        ),
+        "red_rave_chase": _meta(
+            "red_rave_chase",
+            {"red", "chase", "segments", "blackout"},
+            energy_min=0.5,
+            prefers_bass=0.65,
+            supports_beats=True,
+            mood="intense",
+            intensity=0.82,
+            weight=1.05,
+        ),
+        "red_blackout_strobe": _meta(
+            "red_blackout_strobe",
+            {"red", "flash", "strobe", "blackout"},
+            energy_min=0.7,
+            prefers_bass=0.75,
+            supports_beats=True,
+            mood="intense",
+            intensity=1.0,
+        ),
         "neon_confetti": _meta(
             "neon_confetti",
             {"neon", "sparkle"},
@@ -573,9 +603,6 @@ EFFECT_ANIMATION_NAMES = frozenset(
     }
 )
 
-DYNAMIC_UNSAFE_NAMES = frozenset({"police", "rainbow_strobe", "strobe"})
-
-
 def default_metadata(name: str) -> AnimationMetadata:
     return AnimationMetadata(name=name, tags=frozenset({"general"}))
 
@@ -599,7 +626,7 @@ def animation_metadata(animation_or_name: Any) -> AnimationMetadata:
     role = (
         AnimationRole.EFFECT if str(name) in EFFECT_ANIMATION_NAMES else metadata.role
     )
-    dynamic_safe = metadata.dynamic_safe and str(name) not in DYNAMIC_UNSAFE_NAMES
+    dynamic_safe = metadata.dynamic_safe
     if role is metadata.role and dynamic_safe == metadata.dynamic_safe:
         return metadata
     return replace(metadata, role=role, dynamic_safe=dynamic_safe)

@@ -22,13 +22,7 @@ class _SPIDevice(Protocol):
 
     def open_path(self, path: str) -> None: ...
 
-    def xfer2(
-        self,
-        values: list[int],
-        speed_hz: int = ...,
-        delay_usec: int = ...,
-        bits_per_word: int = ...,
-    ) -> list[int]: ...
+    def writebytes2(self, values: npt.NDArray[np.uint8]) -> None: ...
 
     def close(self) -> None: ...
 
@@ -76,6 +70,30 @@ def encode_legacy_frame(pixels: npt.ArrayLike) -> npt.NDArray[np.uint8]:
     return np.packbits(bits, bitorder="big")
 
 
+def _encoded_frame_size(pixel_count: int) -> int:
+    return (50 + pixel_count * 26 + 7) // 8
+
+
+class _FrameEncoder:
+    """Own a stable wire buffer and encode frames into it without reallocating."""
+
+    def __init__(self, pixel_count: int) -> None:
+        self.payload = np.empty(_encoded_frame_size(pixel_count), dtype=np.uint8)
+        try:
+            from ._sm16716 import encode_into
+        except ImportError:
+            self._native_encode_into = None
+        else:
+            self._native_encode_into = encode_into
+
+    def encode(self, pixels: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
+        if self._native_encode_into is None:
+            self.payload[:] = encode_legacy_frame(pixels)
+        else:
+            self._native_encode_into(pixels, self.payload)
+        return self.payload
+
+
 class SPIStripe(Stripe):
     """LED stripe output using one uninterrupted Linux spidev transaction."""
 
@@ -98,6 +116,7 @@ class SPIStripe(Stripe):
             if config.max_transfer_bytes is not None
             else _kernel_spi_buffer_size()
         )
+        self._encoder = _FrameEncoder(length)
 
     @property
     def spi_device_path(self) -> str:
@@ -115,19 +134,14 @@ class SPIStripe(Stripe):
     def force_flush(self) -> None:
         if self._closed:
             raise RuntimeError("SPI stripe is closed")
-        payload = encode_legacy_frame(self._pixels)
+        payload = self._encoder.encode(self._pixels)
         if payload.size > self._max_transfer_bytes:
             raise RuntimeError(
                 f"encoded SPI frame is {payload.size} bytes, exceeding the "
                 f"single-transfer limit of {self._max_transfer_bytes} bytes; "
                 "increase the spidev.bufsiz kernel parameter"
             )
-        self._device.xfer2(
-            payload.tolist(),
-            self._config.speed_hz,
-            0,
-            8,
-        )
+        self._device.writebytes2(payload)
         self._dirty[:] = False
 
     def close(self) -> None:

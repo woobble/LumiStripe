@@ -46,7 +46,8 @@ def normalize_pixel_array(colors: npt.ArrayLike) -> PixelBuffer:
     if array.shape[1] not in (3, 4):
         raise ValueError("pixel array must have shape (n, 3) or (n, 4)")
 
-    array = np.clip(array, 0, 255).astype(np.uint8, copy=False)
+    if array.dtype != np.uint8:
+        array = np.clip(array, 0, 255).astype(np.uint8)
     if array.shape[1] == 4:
         return array
 

@@ -128,6 +128,7 @@ class AnimationPlayer:
         from .rainbow_strobe import RainbowStrobe
         from .rave_pulse import RavePulse
         from .rave_scanner import RaveScanner
+        from .red_rave import RedBlackoutStrobe, RedRaveChase, RedRaveSweep
         from .sinelon import Sinelon
         from .strobe import Strobe
         from .strobe_chase import StrobeChase
@@ -181,6 +182,9 @@ class AnimationPlayer:
         player.add(ColorBurst(), 16, 180)
         player.add(DiscoComet(), 14, 180)
         player.add(RaveScanner(), 12, 140)
+        player.add(RedRaveSweep(), 16, 180)
+        player.add(RedRaveChase(), 16, 160)
+        player.add(RedBlackoutStrobe(), 24, 120)
         player.add(NeonConfetti(), 12, 150)
         player.add(StrobeChase(), 12, 120)
         player.add(CenterBurst(), 16, 160)

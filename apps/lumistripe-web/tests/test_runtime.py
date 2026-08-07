@@ -6,7 +6,18 @@ from pathlib import Path
 import lumistripe_web.runtime as runtime_module
 import numpy as np
 import pytest
-from lumistripe import ColorCorrection, MultiController, PlaybackMode, Rgb, Stripe
+from lumistripe import (
+    AudioFrame,
+    AudioInputDevice,
+    AudioInputHealth,
+    AudioProcessorStats,
+    ColorCorrection,
+    MultiController,
+    MusicFeatures,
+    PlaybackMode,
+    Rgb,
+    Stripe,
+)
 from lumistripe_web.runtime import (
     LumiStripeRuntime,
     OutputGateController,
@@ -15,7 +26,7 @@ from lumistripe_web.runtime import (
     UnknownAnimationError,
     _default_controller_factory,
 )
-from lumistripe_web.settings import CalibrationSettingsStore
+from lumistripe_web.settings import AudioTuningProfile, CalibrationSettingsStore
 
 
 class TrackingStripe(Stripe):
@@ -41,6 +52,44 @@ class FakeSPIStripe(TrackingStripe):
     def __init__(self, config, length: int) -> None:
         super().__init__(length)
         self.config = config
+
+
+class FakeAudioInput:
+    def __init__(self, name: str, config) -> None:
+        self.name = name
+        self.config = config
+        self.closed = False
+        self.sequence = 0
+
+    def read(self) -> AudioFrame:
+        self.sequence += 1
+        return AudioFrame(
+            rms=0.2,
+            bands=(0.1, 0.2, 0.3, 0.4, 0.3, 0.2, 0.1, 0.05),
+            sequence=self.sequence,
+            timestamp=time.monotonic(),
+            fresh=True,
+        )
+
+    def read_features(self) -> MusicFeatures:
+        return MusicFeatures(energy=0.2, onset_strength=0.1, silence=False)
+
+    def health(self) -> AudioInputHealth:
+        return AudioInputHealth(
+            callback_count=self.sequence,
+            last_callback_age=0.0,
+            last_frame_age=0.0,
+            processor=AudioProcessorStats(input_rms=0.12, normalization_gain=1.4),
+        )
+
+    def device_name(self) -> str:
+        return self.name
+
+    def reconfigure(self, config) -> None:
+        self.config = config
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def test_output_gate_blackout_preserves_latest_buffered_frame() -> None:
@@ -111,6 +160,97 @@ def test_runtime_controls_simulation_and_cleans_up() -> None:
     assert runtime.snapshot().running is False
     assert stripe.close_count == 1
     assert stripe.force_flush_count >= 3
+
+
+def test_microphone_monitor_stays_active_outside_dynamic_mode_and_saves_profile(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake = FakeAudioInput("USB Mic", None)
+    monkeypatch.setattr(
+        runtime_module,
+        "list_input_device_details",
+        lambda: [AudioInputDevice(index=2, name="USB Mic")],
+    )
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(
+            hardware=True,
+            pixels=4,
+            audio_source="mic",
+            audio_device="2",
+            settings_file=tmp_path / "settings.json",
+        ),
+        controller_factory=lambda settings: TrackingStripe(settings.pixels),
+        audio_factory=lambda device, config: fake,
+    )
+    runtime.start()
+    try:
+        assert runtime.snapshot().mode is PlaybackMode.STATIC
+        deadline = time.monotonic() + 1
+        while runtime.audio_telemetry().sequence == 0:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        assert runtime.audio_telemetry().input_level == pytest.approx(0.12)
+        assert runtime.audio_telemetry().gate_preview is True
+
+        profile = AudioTuningProfile(
+            target_level=0.5,
+            dynamic_response=0.8,
+            energy_threshold=0.1,
+        )
+        response = runtime.apply_audio_settings("2", profile).result(timeout=1)
+
+        assert response.monitoring is True
+        assert response.settings.target_level == pytest.approx(0.5)
+        assert response.settings.dynamic_response == pytest.approx(0.8)
+        assert fake.config.normalization.target_level == pytest.approx(0.5)
+        assert runtime.playback.config.dynamic_response == pytest.approx(0.8)
+        saved, warning = CalibrationSettingsStore(tmp_path / "settings.json").load_all()
+        assert warning is None
+        assert saved.audio_profiles["USB Mic"] == profile
+    finally:
+        runtime.stop()
+
+
+def test_failed_microphone_swap_keeps_current_input(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    current = FakeAudioInput("USB Mic", None)
+    monkeypatch.setattr(
+        runtime_module,
+        "list_input_device_details",
+        lambda: [
+            AudioInputDevice(index=1, name="USB Mic"),
+            AudioInputDevice(index=2, name="Broken Mic"),
+        ],
+    )
+
+    def audio_factory(device, config):
+        del config
+        if device == "2":
+            raise RuntimeError("device busy")
+        return current
+
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(
+            hardware=True,
+            pixels=4,
+            audio_source="mic",
+            audio_device="1",
+            settings_file=tmp_path / "settings.json",
+        ),
+        controller_factory=lambda settings: TrackingStripe(settings.pixels),
+        audio_factory=audio_factory,
+    )
+    runtime.start()
+    try:
+        with pytest.raises(RuntimeCommandError, match="device busy"):
+            runtime.apply_audio_settings("2", AudioTuningProfile()).result(timeout=1)
+        assert runtime.audio_settings().active_device_name == "USB Mic"
+        assert current.closed is False
+    finally:
+        runtime.stop()
 
 
 def test_select_animation_switches_to_static() -> None:
@@ -365,10 +505,10 @@ def test_invalid_calibration_settings_are_actionable(tmp_path: Path) -> None:
         issue = next(
             item
             for item in runtime.snapshot().diagnostic_issues
-            if item.title == "Color calibration was not loaded"
+                if item.title == "Dashboard settings were not fully loaded"
         )
         assert "invalid" in issue.message.lower()
-        assert "Calibration page" in issue.action
+        assert "dashboard settings file" in issue.action
     finally:
         runtime.stop()
 

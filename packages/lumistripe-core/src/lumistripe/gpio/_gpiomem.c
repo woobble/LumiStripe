@@ -38,6 +38,8 @@ typedef struct {
     int data_fsel;
     int clock_fsel;
     int pins_configured;
+    uint8_t *rgb_buffer;
+    size_t rgb_capacity;
 } GPIOMem;
 
 static void gpio_set(volatile uint32_t *gpio, int pin, int value) {
@@ -87,6 +89,9 @@ static void GPIOMem_release(GPIOMem *self) {
         close(self->fd);
         self->fd = -1;
     }
+    PyMem_Free(self->rgb_buffer);
+    self->rgb_buffer = NULL;
+    self->rgb_capacity = 0;
 }
 
 static void busy_wait_ns(GPIOMem *self, long ns) {
@@ -138,6 +143,8 @@ static int GPIOMem_init(GPIOMem *self, PyObject *args, PyObject *kwds) {
     self->pins_configured = 0;
     self->data_fsel = 0;
     self->clock_fsel = 0;
+    self->rgb_buffer = NULL;
+    self->rgb_capacity = 0;
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "ii", kwlist, &data_pin, &clock_pin))
         return -1;
 
@@ -234,6 +241,11 @@ static PyObject *GPIOMem_flush(GPIOMem *self, PyObject *args) {
                         "pixels must have dtype uint8");
         return NULL;
     }
+    if (!PyArray_ISCARRAY_RO(pixels)) {
+        PyErr_SetString(PyExc_ValueError,
+                        "pixels must be C-contiguous");
+        return NULL;
+    }
     if (self->gpio_mem == NULL) {
         PyErr_SetString(PyExc_RuntimeError, "GPIOMem is closed");
         return NULL;
@@ -241,38 +253,35 @@ static PyObject *GPIOMem_flush(GPIOMem *self, PyObject *args) {
 
     npy_intp num_pixels = PyArray_DIM(pixels, 0);
     uint8_t *data = (uint8_t *)PyArray_DATA(pixels);
-    uint8_t *rgb = NULL;
-
-    if (num_pixels > 0) {
-        if (num_pixels > PY_SSIZE_T_MAX / 3) {
-            PyErr_SetString(PyExc_MemoryError, "pixel buffer is too large");
-            return NULL;
-        }
-        rgb = (uint8_t *)malloc((size_t)num_pixels * 3u);
-        if (rgb == NULL) {
+    if ((size_t)num_pixels > SIZE_MAX / 3u) {
+        PyErr_SetString(PyExc_OverflowError, "pixel buffer is too large");
+        return NULL;
+    }
+    size_t required = (size_t)num_pixels * 3u;
+    if (required > self->rgb_capacity) {
+        uint8_t *resized = (uint8_t *)PyMem_Realloc(self->rgb_buffer, required);
+        if (resized == NULL) {
             PyErr_NoMemory();
             return NULL;
         }
+        self->rgb_buffer = resized;
+        self->rgb_capacity = required;
     }
-
     for (npy_intp i = 0; i < num_pixels; i++) {
-        uint32_t r = data[i * 4 + 0];
-        uint32_t g = data[i * 4 + 1];
-        uint32_t b = data[i * 4 + 2];
-        uint32_t a = data[i * 4 + 3];
-
-        rgb[i * 3 + 0] = (uint8_t)(r * a / 255);
-        rgb[i * 3 + 1] = (uint8_t)(g * a / 255);
-        rgb[i * 3 + 2] = (uint8_t)(b * a / 255);
+        uint32_t alpha = data[i * 4 + 3];
+        self->rgb_buffer[i * 3 + 0] =
+            (uint8_t)((uint32_t)data[i * 4 + 0] * alpha / 255u);
+        self->rgb_buffer[i * 3 + 1] =
+            (uint8_t)((uint32_t)data[i * 4 + 1] * alpha / 255u);
+        self->rgb_buffer[i * 3 + 2] =
+            (uint8_t)((uint32_t)data[i * 4 + 2] * alpha / 255u);
     }
 
     self->flushing = 1;
     Py_BEGIN_ALLOW_THREADS
-    flush_rgb_frame(self, rgb, num_pixels);
+    flush_rgb_frame(self, self->rgb_buffer, num_pixels);
     Py_END_ALLOW_THREADS
     self->flushing = 0;
-
-    free(rgb);
 
     Py_RETURN_NONE;
 }

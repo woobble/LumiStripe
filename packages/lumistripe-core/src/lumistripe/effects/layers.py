@@ -108,6 +108,7 @@ class ActiveEffect:
     animation: Effect
     started_at_s: float
     trigger_frame: AudioFrame
+    intensity: float = 1.0
     frame: int = 0
 
 
@@ -154,6 +155,7 @@ class EffectScheduler:
     _last_update_at_s: float = 0.0
     _rhythmic_status: EffectTriggerStatus = field(init=False)
     _accent_status: EffectTriggerStatus = field(init=False)
+    _response: float = field(default=0.65, init=False)
 
     def __post_init__(self) -> None:
         self._rng = Random(self.config.seed)
@@ -162,6 +164,19 @@ class EffectScheduler:
     @property
     def active_names(self) -> tuple[str, ...]:
         return tuple(effect.definition.name for effect in self.active)
+
+    @property
+    def impact_threshold(self) -> float:
+        return 0.85 - self._response * 0.25
+
+    @property
+    def quiet_floor(self) -> float:
+        return 0.65 - self._response * 0.4
+
+    def set_response(self, response: float) -> None:
+        if not 0.0 <= response <= 1.0:
+            raise ValueError("dynamic response must be between zero and one")
+        self._response = response
 
     def reset(self) -> None:
         self.active.clear()
@@ -181,7 +196,7 @@ class EffectScheduler:
                 name=effect.definition.name,
                 category=effect.definition.category,
                 blend_mode=effect.definition.blend_mode,
-                strength=effect.definition.strength,
+                strength=effect.definition.strength * effect.intensity,
                 elapsed_s=max(0.0, now - effect.started_at_s),
                 remaining_s=max(
                     0.0,
@@ -233,9 +248,14 @@ class EffectScheduler:
             features.beat_confidence,
         )
         beat = snapshot.frame.beat or features.beat
+        impact = snapshot.musical_impact
         rhythmic_result = self._trigger_result(
             category=EffectCategory.RHYTHMIC,
-            triggered=beat and beat_strength >= self.config.beat_confidence_threshold,
+            triggered=(
+                beat
+                and beat_strength >= self.config.beat_confidence_threshold
+                and impact >= self.impact_threshold
+            ),
             now_s=now_s,
             last_trigger_at_s=self._last_rhythmic_at_s,
             cooldown_s=self.config.rhythmic_cooldown_s,
@@ -258,8 +278,11 @@ class EffectScheduler:
         )
 
         accent_trigger = (
-            features.drop_detected
-            or features.onset_strength >= self.config.onset_threshold
+            impact >= self.impact_threshold
+            and (
+                features.drop_detected
+                or features.onset_strength >= self.config.onset_threshold
+            )
         )
         accent_result = self._trigger_result(
             category=EffectCategory.ACCENT,
@@ -335,12 +358,16 @@ class EffectScheduler:
             snapshot.frame.beat_strength,
             snapshot.features.beat_strength,
             snapshot.features.onset_strength,
-            0.75,
         )
+        if snapshot.features.drop_detected:
+            trigger_strength = max(trigger_strength, 0.9)
+        intensity = min(1.0, snapshot.musical_impact * trigger_strength)
         trigger = replace(
             snapshot.frame, beat=True, beat_strength=min(trigger_strength, 1.0)
         )
-        self.active.append(ActiveEffect(definition, animation, now_s, trigger))
+        self.active.append(
+            ActiveEffect(definition, animation, now_s, trigger, intensity=intensity)
+        )
         self._recent = (self._recent + [definition.name])[-4:]
         return True
 
@@ -432,9 +459,17 @@ class LayeredRenderer:
                 audio,
             )
             active.frame += 1
-            layers.append((buffer.pixels(), active.definition.strength))
+            layers.append(
+                (
+                    buffer.pixels(),
+                    active.definition.strength * active.intensity,
+                )
+            )
 
-        composed = _visible_rgb(self._base_buffer.pixels())
+        base_intensity = self.scheduler.quiet_floor + (
+            1.0 - self.scheduler.quiet_floor
+        ) * snapshot.musical_impact
+        composed = _visible_rgb(self._base_buffer.pixels()) * base_intensity
         budget = self.scheduler.config.max_overlay_strength
         used = 0.0
         for pixels, requested_strength in layers:

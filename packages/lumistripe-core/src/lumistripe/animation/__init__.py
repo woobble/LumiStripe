@@ -63,6 +63,7 @@ from .rainbow_strobe import RainbowStrobe
 from .rave_pulse import RavePulse
 from .rave_scanner import RaveScanner
 from .reactive import AudioReactive, Decay
+from .red_rave import RedBlackoutStrobe, RedRaveChase, RedRaveSweep
 from .rgbw_test import RgbwTest
 from .sinelon import Sinelon
 from .strobe import Strobe
@@ -134,6 +135,9 @@ __all__ = [
     "RainbowStrobe",
     "RavePulse",
     "RaveScanner",
+    "RedBlackoutStrobe",
+    "RedRaveChase",
+    "RedRaveSweep",
     "RgbwTest",
     "Shockwave",
     "Sinelon",

@@ -72,6 +72,7 @@ def _layered_snapshot() -> AudioSnapshot:
             beat_strength=0.9,
             beat_confidence=0.9,
             drop_detected=True,
+            musical_impact=1.0,
         ),
     )
 

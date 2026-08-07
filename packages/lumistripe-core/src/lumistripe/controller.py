@@ -83,6 +83,9 @@ class ColorCorrectionController(Controller):
         self._inner = inner
         self._correction = correction or ColorCorrection()
         self._pixels = new_pixel_buffer(inner.length)
+        self._corrected = new_pixel_buffer(inner.length)
+        self._scaled_rgb = np.empty((inner.length, 3), dtype=np.uint16)
+        self._correction_array = self._correction.as_array()
 
     @property
     def correction(self) -> ColorCorrection:
@@ -90,6 +93,7 @@ class ColorCorrectionController(Controller):
 
     def set_correction(self, correction: ColorCorrection) -> None:
         self._correction = correction
+        self._correction_array[:] = (correction.red, correction.green, correction.blue)
 
     @property
     def length(self) -> int:
@@ -139,11 +143,16 @@ class ColorCorrectionController(Controller):
         self._inner.close()
 
     def _copy_corrected_pixels(self) -> None:
-        corrected = self._pixels.copy()
-        corrected[:, :3] = (
-            corrected[:, :3].astype(np.uint16) * self._correction.as_array() // 255
-        ).astype(np.uint8)
-        self._inner.set_pixels(corrected)
+        np.multiply(
+            self._pixels[:, :3],
+            self._correction_array,
+            out=self._scaled_rgb,
+            dtype=np.uint16,
+        )
+        np.floor_divide(self._scaled_rgb, 255, out=self._scaled_rgb)
+        np.copyto(self._corrected[:, :3], self._scaled_rgb, casting="unsafe")
+        self._corrected[:, 3] = self._pixels[:, 3]
+        self._inner.set_pixels(self._corrected)
 
     def _check_index(self, index: int) -> None:
         if not 0 <= index < self.length:

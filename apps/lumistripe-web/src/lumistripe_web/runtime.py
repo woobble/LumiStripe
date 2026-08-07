@@ -3,6 +3,7 @@ from __future__ import annotations
 import queue
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass, field
@@ -15,6 +16,7 @@ from uuid import uuid4
 import numpy.typing as npt
 from lumistripe import (
     AnimationPlayer,
+    AudioConfig,
     AudioFrame,
     AudioInput,
     AudioInputHealth,
@@ -27,6 +29,7 @@ from lumistripe import (
     Controller,
     GPIOStripe,
     MultiController,
+    MusicActivityDetector,
     MusicFeatures,
     PixelBuffer,
     PlaybackConfig,
@@ -37,10 +40,16 @@ from lumistripe import (
     SPIStripe,
     Stripe,
     demo_snapshot,
+    list_input_device_details,
 )
+from lumistripe.audio import BandTuple
 
 from .models import (
     AnimationOption,
+    AudioDeviceOption,
+    AudioSettingsResponse,
+    AudioTelemetry,
+    AudioTuningValues,
     CalibrationSessionResponse,
     CalibrationStatus,
     ColorCorrectionProfile,
@@ -48,7 +57,11 @@ from .models import (
     DiagnosticIssue,
     RuntimeKind,
 )
-from .settings import CalibrationSettingsStore, default_settings_path
+from .settings import (
+    AudioTuningProfile,
+    CalibrationSettingsStore,
+    default_settings_path,
+)
 
 MIN_FRAME_SECONDS = 0.016
 FPS_SAMPLE_SECONDS = 1.0
@@ -219,6 +232,12 @@ class _CalibrationFinishCommand:
     save: bool
 
 
+@dataclass(frozen=True, slots=True)
+class _AudioSettingsCommand:
+    device: str
+    profile: AudioTuningProfile
+
+
 @dataclass(slots=True)
 class _CalibrationSession:
     session_id: str
@@ -231,7 +250,7 @@ class _CalibrationSession:
 
 
 _ControllerFactory = Callable[[RuntimeSettings], Controller]
-_AudioFactory = Callable[[str | None], AudioInput]
+_AudioFactory = Callable[[str | None, AudioConfig], AudioInput]
 
 
 def _default_controller_factory(settings: RuntimeSettings) -> Controller:
@@ -267,8 +286,12 @@ def _default_controller_factory(settings: RuntimeSettings) -> Controller:
     return MultiController([primary, secondary])
 
 
-def _default_audio_factory(device: str | None) -> AudioInput:
-    return AudioInput.with_device(device) if device else AudioInput.new()
+def _default_audio_factory(device: str | None, config: AudioConfig) -> AudioInput:
+    return (
+        AudioInput.with_device_config(device, config)
+        if device
+        else AudioInput.with_config(config)
+    )
 
 
 class LumiStripeRuntime:
@@ -283,11 +306,26 @@ class LumiStripeRuntime:
         self._controller_factory = controller_factory
         self._audio_factory = audio_factory
         self._settings_store = CalibrationSettingsStore(self.settings.settings_file)
-        self._saved_corrections, self._settings_warning = self._settings_store.load()
+        loaded_settings, self._settings_warning = self._settings_store.load_all()
+        self._saved_corrections = loaded_settings.color_corrections
+        self._audio_profiles = loaded_settings.audio_profiles
+        self._selected_audio_device = (
+            self.settings.audio_device or loaded_settings.selected_audio_device
+        )
+        self._audio_profile = self._audio_profiles.get(
+            self._selected_audio_device or "", AudioTuningProfile()
+        )
         self.player = AnimationPlayer.party()
         self.playback = PlaybackEngine(
             self.player,
-            PlaybackConfig(mode=PlaybackMode.STATIC),
+            PlaybackConfig(
+                mode=PlaybackMode.STATIC,
+                activity=self._audio_profile.activity_config(),
+                dynamic_response=self._audio_profile.dynamic_response,
+            ),
+        )
+        self._monitor_detector = MusicActivityDetector(
+            self._audio_profile.activity_config()
         )
         self.player.set_brightness(1.0)
 
@@ -308,11 +346,15 @@ class LumiStripeRuntime:
         self._correction_controllers: tuple[ColorCorrectionController, ...] = ()
         self._calibration: _CalibrationSession | None = None
         self._audio_input: AudioInput | None = None
+        self._configured_audio_source = self.settings.dynamic_audio_source()
         self._active_audio_source = AudioSource.OFF
         self._audio_frame = AudioFrame()
         self._music_features = MusicFeatures()
         self._demo_tick = 0
         self._audio_status = "No audio source active."
+        self._audio_monitor_error: str | None = None
+        self._noise_samples: deque[float] = deque(maxlen=300)
+        self._audio_telemetry = AudioTelemetry()
         self._fatal_error: str | None = None
         self._last_command_error: str | None = None
         self._started_at_s: float | None = None
@@ -363,6 +405,55 @@ class LumiStripeRuntime:
             )
             for entry in self.player.animations
         )
+
+    def audio_telemetry(self) -> AudioTelemetry:
+        with self._snapshot_lock:
+            return self._audio_telemetry
+
+    def audio_settings(self) -> AudioSettingsResponse:
+        try:
+            devices = list_input_device_details()
+            options = tuple(
+                AudioDeviceOption(
+                    selector=str(device.index),
+                    name=device.name,
+                    settings=_profile_values(
+                        self._audio_profiles.get(device.name, AudioTuningProfile())
+                    ),
+                )
+                for device in devices
+            )
+            enumeration_error = None
+        except RuntimeError as exc:
+            options = ()
+            enumeration_error = str(exc)
+        active_name = self._audio_input.device_name() if self._audio_input else None
+        selected_name = active_name or self._selected_audio_device
+        active_selector = next(
+            (option.selector for option in options if option.name == selected_name),
+            selected_name,
+        )
+        return AudioSettingsResponse(
+            source=self._configured_audio_source.value,
+            monitoring=self._audio_input is not None,
+            active_device=active_selector,
+            active_device_name=active_name,
+            devices=options,
+            settings=_profile_values(self._audio_profile),
+            configured_noise_floor=self._audio_profile.audio_config().smoothing.noise_floor,
+            error=self._audio_monitor_error or enumeration_error,
+        )
+
+    def apply_audio_settings(
+        self, device: str, profile: AudioTuningProfile
+    ) -> Future[AudioSettingsResponse]:
+        return cast(
+            Future[AudioSettingsResponse],
+            self._submit("audio_settings", _AudioSettingsCommand(device, profile)),
+        )
+
+    def reset_audio_settings(self, device: str) -> Future[AudioSettingsResponse]:
+        return self.apply_audio_settings(device, AudioTuningProfile())
 
     def set_mode(
         self, mode: PlaybackMode, *, solid_color: str | None = None
@@ -432,6 +523,7 @@ class LumiStripeRuntime:
             self._controller = OutputGateController(self._raw_controller)
             self._started_at_s = time.monotonic()
             self._fps_window_started_s = self._started_at_s
+            self._initialize_audio_monitor()
             self._publish(running=True)
             self._started_event.set()
             self._frame_loop()
@@ -510,6 +602,11 @@ class LumiStripeRuntime:
                 assert self._controller is not None
                 self._controller.set_blackout(_expect(command.value, bool))
                 result = self._publish(running=True)
+            elif command.name == "audio_settings":
+                audio_update = _expect(command.value, _AudioSettingsCommand)
+                self._apply_audio_settings(audio_update.device, audio_update.profile)
+                self._publish(running=True)
+                result = self.audio_settings()
             else:
                 raise RuntimeCommandError(f"unknown runtime command: {command.name}")
             if not command.future.done():
@@ -520,38 +617,123 @@ class LumiStripeRuntime:
             if not command.future.done():
                 command.future.set_exception(exc)
 
+    def _initialize_audio_monitor(self) -> None:
+        if self._configured_audio_source is not AudioSource.MIC:
+            return
+        try:
+            audio_input = self._audio_factory(
+                self._selected_audio_device,
+                self._audio_profile.audio_config(),
+            )
+            device_name = audio_input.device_name()
+            saved_profile = self._audio_profiles.get(device_name)
+            if saved_profile is not None and saved_profile != self._audio_profile:
+                audio_input.reconfigure(saved_profile.audio_config())
+                self._audio_profile = saved_profile
+            self._selected_audio_device = device_name
+            self._audio_input = audio_input
+            self.playback.set_activity_config(self._audio_profile.activity_config())
+            self.playback.set_dynamic_response(self._audio_profile.dynamic_response)
+            self._monitor_detector.config = self._audio_profile.activity_config()
+            self._audio_status = f"Input: {device_name}"
+            self._audio_monitor_error = None
+        except RuntimeError as exc:
+            self._audio_input = None
+            self._audio_monitor_error = str(exc)
+            self._audio_status = f"Microphone unavailable: {exc}"
+
+    def _apply_audio_settings(
+        self, device: str, profile: AudioTuningProfile
+    ) -> None:
+        device_name = self._device_name_for_selector(device)
+        candidate: AudioInput | None = None
+        current = self._audio_input
+        try:
+            if (
+                self._configured_audio_source is AudioSource.MIC
+                and (current is None or current.device_name() != device_name)
+            ):
+                candidate = self._audio_factory(device, profile.audio_config())
+                device_name = candidate.device_name()
+
+            next_profiles = dict(self._audio_profiles)
+            next_profiles[device_name] = profile
+            self._settings_store.save_audio(device_name, next_profiles)
+
+            if candidate is not None:
+                self._audio_input = candidate
+            elif current is not None:
+                current.reconfigure(profile.audio_config())
+
+            self._audio_profiles = next_profiles
+            self._selected_audio_device = device_name
+            self._audio_profile = profile
+            activity = profile.activity_config()
+            self.playback.set_activity_config(activity)
+            self.playback.set_dynamic_response(profile.dynamic_response)
+            self._monitor_detector.config = activity
+            self._monitor_detector.reset()
+            self._noise_samples.clear()
+            self._audio_monitor_error = None
+            self._audio_status = (
+                f"Input: {device_name}"
+                if self._audio_input is not None
+                else "Microphone monitoring is disabled by the audio source."
+            )
+            if candidate is not None and current is not None:
+                try:
+                    current.close()
+                except Exception as exc:  # noqa: BLE001 - new monitor remains usable
+                    self._audio_monitor_error = f"Previous input did not close cleanly: {exc}"
+        except Exception as exc:
+            if candidate is not None:
+                candidate.close()
+                if self._audio_input is candidate:
+                    self._audio_input = current
+            if isinstance(exc, RuntimeCommandError):
+                raise
+            raise RuntimeCommandError(str(exc)) from exc
+
+    def _device_name_for_selector(self, selector: str) -> str:
+        try:
+            devices = list_input_device_details()
+        except RuntimeError as exc:
+            raise RuntimeCommandError(str(exc)) from exc
+        lowered = selector.lower()
+        for device in devices:
+            if str(device.index) == selector or device.name == selector:
+                return device.name
+        for device in devices:
+            if lowered in device.name.lower():
+                return device.name
+        raise RuntimeCommandError(f'no input device matching "{selector}"')
+
     def _set_mode(self, mode: PlaybackMode) -> None:
         if mode is self.playback.mode:
             return
         next_source = AudioSource.OFF
-        next_input: AudioInput | None = None
         if mode is PlaybackMode.DYNAMIC:
-            next_source = self.settings.dynamic_audio_source()
+            next_source = self._configured_audio_source
             if next_source is AudioSource.OFF:
                 raise RuntimeCommandError(
                     "dynamic mode requires demo or microphone audio"
                 )
-            if next_source is AudioSource.MIC:
-                try:
-                    next_input = self._audio_factory(self.settings.audio_device)
-                except RuntimeError as exc:
-                    raise RuntimeCommandError(str(exc)) from exc
+            if next_source is AudioSource.MIC and self._audio_input is None:
+                raise RuntimeCommandError(
+                    self._audio_monitor_error or "microphone input is unavailable"
+                )
 
-        previous_input = self._audio_input
-        self._audio_input = next_input
         self._active_audio_source = next_source
         self._demo_tick = 0
         self._audio_frame = AudioFrame()
         self._music_features = MusicFeatures()
-        if next_source is AudioSource.MIC and next_input is not None:
-            self._audio_status = f"Input: {next_input.device_name()}"
+        if self._audio_input is not None:
+            self._audio_status = f"Input: {self._audio_input.device_name()}"
         elif next_source is AudioSource.DEMO:
             self._audio_status = "Using internal demo beat."
         else:
             self._audio_status = "No audio source active."
         self.playback.set_mode(mode)
-        if previous_input is not None:
-            previous_input.close()
 
     def _with_color_correction(self, physical: Controller) -> Controller:
         children = (
@@ -675,10 +857,7 @@ class LumiStripeRuntime:
                 self._finish_calibration(session.session_id, save=False)
             return CALIBRATION_FRAME_SECONDS
         snapshot: AudioSnapshot | None = None
-        if (
-            self._active_audio_source is AudioSource.MIC
-            and self._audio_input is not None
-        ):
+        if self._audio_input is not None:
             self._audio_frame = self._audio_input.read()
             self._audio_health = self._audio_input.health()
             self._music_features = (
@@ -698,6 +877,11 @@ class LumiStripeRuntime:
                     health=self._audio_health,
                 )
             )
+            if self._audio_frame.fresh:
+                self._monitor_detector.update(self._music_features)
+                self._noise_samples.append(
+                    min(1.0, max(0.0, self._audio_health.processor.input_rms))
+                )
         elif self._active_audio_source is AudioSource.DEMO:
             snapshot = demo_snapshot(self._demo_tick)
             self._demo_tick += 1
@@ -709,9 +893,62 @@ class LumiStripeRuntime:
             self._audio_health = AudioInputHealth()
 
         delay = self.playback.step(self._controller, snapshot=snapshot)
+        self._update_audio_telemetry()
         self._record_frame()
         self._publish(running=True)
         return max(delay, MIN_FRAME_SECONDS)
+
+    def _update_audio_telemetry(self) -> None:
+        preview = self.playback.mode is not PlaybackMode.DYNAMIC
+        detector = self._monitor_detector if preview else self.playback.activity_detector
+        ordered_noise = sorted(self._noise_samples)
+        noise_floor = 0.0
+        if ordered_noise:
+            noise_floor = ordered_noise[int((len(ordered_noise) - 1) * 0.2)]
+        processor = self._audio_health.processor
+        telemetry = AudioTelemetry(
+            sequence=self._audio_frame.sequence,
+            fresh=self._audio_frame.fresh,
+            input_level=min(1.0, max(0.0, processor.input_rms)),
+            processed_level=min(1.0, max(0.0, self._audio_frame.rms)),
+            bands=cast(
+                BandTuple,
+                tuple(
+                    min(1.0, max(0.0, value))
+                    for value in self._audio_frame.bands
+                ),
+            ),
+            beat=self._audio_frame.beat or self._music_features.beat,
+            beat_strength=min(
+                1.0,
+                max(
+                    0.0,
+                    self._audio_frame.beat_strength,
+                    self._music_features.beat_strength,
+                ),
+            ),
+            bpm=max(0.0, self._music_features.bpm),
+            estimated_noise_floor=noise_floor,
+            configured_noise_floor=self._audio_profile.audio_config().smoothing.noise_floor,
+            normalization_gain=max(0.0, processor.normalization_gain),
+            program_loudness=min(
+                1.0,
+                max(0.0, processor.program_loudness, self._music_features.program_loudness),
+            ),
+            musical_impact=min(
+                1.0,
+                max(0.0, processor.musical_impact, self._music_features.musical_impact),
+            ),
+            gate=detector.state.value,
+            gate_preview=preview,
+            gate_energy=min(1.0, max(0.0, detector.energy)),
+            gate_onset=min(1.0, max(0.0, detector.onset)),
+            gate_beat_density=min(1.0, max(0.0, detector.beat_density)),
+            gate_brightness=min(1.0, max(0.0, detector.brightness)),
+            health=self._audio_health_status(self._uptime_seconds()),
+        )
+        with self._snapshot_lock:
+            self._audio_telemetry = telemetry
 
     def _publish(
         self,
@@ -727,6 +964,11 @@ class LumiStripeRuntime:
             runtime=self.settings.kind,
             output_backend=self._output_backend_label(),
             output_devices=self._output_device_paths(),
+            spi_speed_hz=(
+                self.settings.spi_speed_hz
+                if self.settings.hardware and self.settings.output_backend == "spi"
+                else None
+            ),
             running=running,
             mode=self.playback.mode,
             solid_color=_color_to_hex(self.playback.solid_color),
@@ -838,10 +1080,12 @@ class LumiStripeRuntime:
         self._fps_window_started_s = now
 
     def _audio_health_status(self, uptime_seconds: float) -> str:
-        if self._active_audio_source is AudioSource.OFF:
-            return "inactive"
-        if self._active_audio_source is AudioSource.DEMO:
+        if self._configured_audio_source is AudioSource.DEMO:
+            if self._active_audio_source is not AudioSource.DEMO:
+                return "inactive"
             return "demo"
+        if self._configured_audio_source is AudioSource.OFF:
+            return "inactive"
         if self._audio_input is None:
             return "unavailable"
         if self._audio_health.status_count > 0:
@@ -893,11 +1137,10 @@ class LumiStripeRuntime:
             issues.append(
                 DiagnosticIssue(
                     severity="warning",
-                    title="Color calibration was not loaded",
+                    title="Dashboard settings were not fully loaded",
                     message=self._settings_warning,
                     action=(
-                        "Check the calibration settings file, then save a new profile "
-                        "from the Calibration page."
+                        "Check the dashboard settings file, then save the affected profile again."
                     ),
                 )
             )
@@ -905,7 +1148,8 @@ class LumiStripeRuntime:
         audio_health = self._audio_health_status(uptime_seconds)
         if audio_health in {"degraded", "unavailable"}:
             detail = (
-                self._audio_health.last_status
+                self._audio_monitor_error
+                or self._audio_health.last_status
                 or "Audio frames are not arriving reliably."
             )
             issues.append(
@@ -913,7 +1157,7 @@ class LumiStripeRuntime:
                     severity="warning",
                     title="Audio input needs attention",
                     message=detail,
-                    action="Reconnect the microphone, verify the selected device, then restart Dynamic mode.",
+                    action="Reconnect the microphone or select a working input on the Audio page.",
                 )
             )
 
@@ -1018,3 +1262,12 @@ def _profile_name(output_index: int) -> str:
     if output_index == 1:
         return "secondary"
     raise ValueError(f"unsupported output index: {output_index}")
+
+
+def _profile_values(profile: AudioTuningProfile) -> AudioTuningValues:
+    return AudioTuningValues(
+        **{
+            name: getattr(profile, name)
+            for name in AudioTuningProfile.__dataclass_fields__
+        }
+    )

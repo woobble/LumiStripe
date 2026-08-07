@@ -5,6 +5,7 @@ export const initialState: DashboardState = {
   runtime: "simulation",
   output_backend: "simulation",
   output_devices: [],
+  spi_speed_hz: null,
   running: true,
   mode: "static",
   solid_color: "#7C3AED",

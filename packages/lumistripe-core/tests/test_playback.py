@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
+import pytest
 from lumistripe import (
     AudioFrame,
     AudioSnapshot,
@@ -50,6 +53,7 @@ def _active_snapshot() -> AudioSnapshot:
         beat=True,
         beat_strength=0.9,
         beat_confidence=0.9,
+        musical_impact=1.0,
     )
     return AudioSnapshot.from_parts(frame, features)
 
@@ -149,7 +153,7 @@ def test_fixed_shuffle_never_repeats_current_animation() -> None:
     assert player.current_index() != before
 
 
-def test_dynamic_quiet_state_latches_steady_idle_color() -> None:
+def test_dynamic_quiet_state_latches_complete_blackout() -> None:
     player = AnimationPlayer.party()
     config = PlaybackConfig(
         mode=PlaybackMode.DYNAMIC,
@@ -161,7 +165,7 @@ def test_dynamic_quiet_state_latches_steady_idle_color() -> None:
     engine.step(stripe, snapshot=AudioSnapshot.silence(), now_s=0.0)
     engine.step(stripe, snapshot=AudioSnapshot.silence(), now_s=0.1)
 
-    assert stripe.pixels()[0].tolist() == [32, 96, 255, 20]
+    assert not stripe.pixels()[:, :3].any()
     assert stripe.flush_calls == 1
     assert engine.music_active is False
     assert player.audio_enabled is False
@@ -197,7 +201,9 @@ def test_dynamic_schedules_layered_effects_after_activation_crossfade() -> None:
     )
     stripe = Stripe(42)
 
-    for frame in range(24):
+    # Some newly eligible strobe/effect entries render at 10 ms per frame, so
+    # allow enough frames for the 300 ms activation crossfade to finish.
+    for frame in range(40):
         engine.step(stripe, snapshot=_active_snapshot(), now_s=frame * 0.025)
 
     assert engine.music_active is True
@@ -234,6 +240,24 @@ def test_loud_speech_without_rhythm_or_broadband_energy_stays_idle() -> None:
         assert detector.update(speech_like, now_s=step * 0.1) is False
 
 
+def test_rhythmic_activation_requires_configured_onset_threshold() -> None:
+    detector = MusicActivityDetector(
+        MusicActivityConfig(activation_delay_s=0.0, onset_threshold=0.5)
+    )
+    weak_onsets = MusicFeatures(
+        energy=0.7,
+        onset_strength=0.1,
+        beat=True,
+        bass_energy=0.7,
+        mid_energy=0.9,
+        treble_energy=0.01,
+        silence=False,
+    )
+
+    for step in range(20):
+        assert detector.update(weak_onsets, now_s=step * 0.1) is False
+
+
 def test_music_must_remain_qualified_for_activation_delay() -> None:
     detector = MusicActivityDetector(MusicActivityConfig(activation_delay_s=0.75))
     music = _active_snapshot().features
@@ -266,6 +290,46 @@ def test_music_candidate_resets_when_evidence_disappears() -> None:
     assert detector.update(MusicFeatures(silence=True), now_s=0.5) is False
     assert detector.update(_active_snapshot().features, now_s=1.0) is False
     assert detector.update(_active_snapshot().features, now_s=1.5) is False
+
+
+def test_beat_density_uses_a_bounded_time_window() -> None:
+    detector = MusicActivityDetector(
+        MusicActivityConfig(beat_density_window_s=2.0, activation_delay_s=10.0)
+    )
+    pulse = MusicFeatures(beat=True, silence=False)
+    quiet = MusicFeatures(silence=False)
+
+    detector.update(pulse, now_s=0.0)
+    detector.update(quiet, now_s=1.0)
+    assert detector.beat_density == pytest.approx(0.5)
+
+    detector.update(quiet, now_s=2.1)
+    assert detector.beat_density == pytest.approx(0.0)
+
+
+def test_music_activation_uses_stronger_thresholds_than_deactivation() -> None:
+    config = MusicActivityConfig(
+        activation_delay_s=0.0,
+        idle_enter_frames=2,
+        feature_attack=1.0,
+        feature_release=1.0,
+        energy_threshold=0.1,
+        onset_threshold=0.1,
+        beat_density_threshold=0.1,
+        activation_hysteresis_ratio=1.5,
+    )
+    detector = MusicActivityDetector(config)
+    borderline = MusicFeatures(
+        energy=0.12,
+        onset_strength=0.12,
+        beat=True,
+        silence=False,
+    )
+    strong = replace(borderline, energy=0.2, onset_strength=0.2)
+
+    assert detector.update(borderline, now_s=0.0) is False
+    assert detector.update(strong, now_s=0.1) is True
+    assert detector.update(borderline, now_s=0.2) is True
 
 
 def test_playback_config_rejects_invalid_idle_brightness() -> None:

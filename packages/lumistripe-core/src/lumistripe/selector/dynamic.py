@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 
 from ..animation.base import AnimationPlayer
 from ..audio import AudioFeatures
-from .metadata import AnimationRole, animation_metadata
 from .scoring import AnimationScoringEngine, DynamicSelectorConfig, SelectorDecision
 
 
@@ -76,9 +75,6 @@ class DynamicSelector:
             entry
             for entry in player.animations
             if entry.automatic
-            and animation_metadata(entry.animation).role is AnimationRole.BASE
-            and animation_metadata(entry.animation).dynamic_safe
-            and (not quiet or animation_metadata(entry.animation).supports_silence)
         ]
         if self.current_name is None:
             self.current_name = current
@@ -120,13 +116,6 @@ class DynamicSelector:
         cooldown_ready = elapsed >= self.config.switch_cooldown_s
         min_ready = elapsed >= self.config.min_duration_s
         max_due = elapsed >= self.config.max_duration_s
-        drop_ready = (
-            bool(getattr(features, "drop_detected", False))
-            and min_ready
-            and cooldown_ready
-            and (now_s - self.last_drop_switch_at_s) >= self.config.drop_cooldown_s
-        )
-
         should_switch = False
         reason = "hold"
         selected_name = current
@@ -150,9 +139,8 @@ class DynamicSelector:
             if force_switch:
                 should_switch = True
                 reason = "music_state"
-            elif drop_ready and best.metadata.supports_drops:
-                should_switch = True
-                reason = "drop"
+            elif bool(getattr(features, "drop_detected", False)):
+                reason = "drop_hold"
             elif (
                 bool(getattr(features, "section_change", False))
                 and min_ready

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections import deque
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from math import exp
@@ -8,7 +9,7 @@ from random import Random
 
 from .animation.base import AnimationPlayer
 from .audio import AudioFrame, AudioSnapshot, MusicFeatures, features_from_frame
-from .color import Color, Rgb, Rgba
+from .color import Color, Rgb
 from .controller import BrightnessController, Controller
 from .effects.layers import (
     EffectScheduler,
@@ -76,6 +77,8 @@ class MusicActivityConfig:
     beat_density_threshold: float = 0.05
     brightness_threshold: float = 0.08
     spectral_balance_ratio: float = 0.35
+    activation_hysteresis_ratio: float = 1.35
+    beat_density_window_s: float = 2.0
 
     def __post_init__(self) -> None:
         if self.idle_enter_frames <= 0:
@@ -84,6 +87,20 @@ class MusicActivityConfig:
             raise ValueError("activation_delay_s must not be negative")
         if not 0.0 <= self.spectral_balance_ratio <= 1.0:
             raise ValueError("spectral_balance_ratio must be between zero and one")
+        if self.activation_hysteresis_ratio < 1.0:
+            raise ValueError("activation_hysteresis_ratio must be at least one")
+        if self.beat_density_window_s <= 0.0:
+            raise ValueError("beat_density_window_s must be greater than zero")
+        for name in (
+            "feature_attack",
+            "feature_release",
+            "energy_threshold",
+            "onset_threshold",
+            "beat_density_threshold",
+            "brightness_threshold",
+        ):
+            if not 0.0 <= getattr(self, name) <= 1.0:
+                raise ValueError(f"{name} must be between zero and one")
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +113,7 @@ class PlaybackConfig:
     idle_color: Color = field(default_factory=lambda: Rgb(32, 96, 255))
     idle_brightness: float = 0.08
     transition_duration_s: float = 0.3
+    dynamic_response: float = 0.65
     effects: EffectSchedulerConfig = field(default_factory=EffectSchedulerConfig)
 
     def __post_init__(self) -> None:
@@ -103,6 +121,8 @@ class PlaybackConfig:
             raise ValueError("idle_brightness must be between zero and one")
         if self.transition_duration_s < 0.0:
             raise ValueError("transition_duration_s must not be negative")
+        if not 0.0 <= self.dynamic_response <= 1.0:
+            raise ValueError("dynamic_response must be between zero and one")
 
 
 @dataclass(slots=True)
@@ -115,6 +135,7 @@ class MusicActivityDetector:
     beat_density: float = 0.0
     brightness: float = 0.0
     candidate_since_s: float | None = None
+    beat_samples: deque[tuple[float, bool]] = field(default_factory=deque)
 
     @property
     def state(self) -> MusicGateState:
@@ -132,6 +153,7 @@ class MusicActivityDetector:
         self.beat_density = 0.0
         self.brightness = 0.0
         self.candidate_since_s = None
+        self.beat_samples.clear()
 
     def update(self, features: MusicFeatures, *, now_s: float | None = None) -> bool:
         cfg = self.config
@@ -142,11 +164,14 @@ class MusicActivityDetector:
         self.onset = _smooth(
             self.onset, features.onset_strength, cfg.feature_attack, cfg.feature_release
         )
-        self.beat_density = _smooth(
-            self.beat_density,
-            1.0 if features.beat else 0.0,
-            0.3,
-            0.06,
+        if self.beat_samples and now < self.beat_samples[-1][0]:
+            self.beat_samples.clear()
+        self.beat_samples.append((now, features.beat))
+        cutoff = now - cfg.beat_density_window_s
+        while self.beat_samples and self.beat_samples[0][0] < cutoff:
+            self.beat_samples.popleft()
+        self.beat_density = sum(beat for _, beat in self.beat_samples) / len(
+            self.beat_samples
         )
         self.brightness = _smooth(
             self.brightness,
@@ -155,12 +180,16 @@ class MusicActivityDetector:
             0.1,
         )
 
-        signal = self.energy >= cfg.energy_threshold
-        rhythmic = self.beat_density >= cfg.beat_density_threshold
+        threshold_scale = 1.0 if self.active else cfg.activation_hysteresis_ratio
+        signal = self.energy >= cfg.energy_threshold * threshold_scale
+        rhythmic = (
+            self.beat_density >= cfg.beat_density_threshold * threshold_scale
+            and self.onset >= cfg.onset_threshold * threshold_scale
+        )
         spectral_floor = features.mid_energy * cfg.spectral_balance_ratio
         broadband = (
-            features.bass_energy >= cfg.energy_threshold
-            and features.treble_energy >= cfg.brightness_threshold
+            features.bass_energy >= cfg.energy_threshold * threshold_scale
+            and features.treble_energy >= cfg.brightness_threshold * threshold_scale
             and min(features.bass_energy, features.treble_energy) >= spectral_floor
         )
         detected = not features.silence and signal and (rhythmic or broadband)
@@ -243,7 +272,9 @@ class PlaybackEngine:
         effect_config = self.config.effects
         if effect_config.seed is None and self.config.dynamic.seed is not None:
             effect_config = replace(effect_config, seed=self.config.dynamic.seed)
-        self.layered_renderer = LayeredRenderer(EffectScheduler(effect_config))
+        scheduler = EffectScheduler(effect_config)
+        scheduler.set_response(self.config.dynamic_response)
+        self.layered_renderer = LayeredRenderer(scheduler)
         self.reactive_smoother = ReactiveFrameSmoother()
         self.player.transition_ms = int(self.config.transition_duration_s * 1000.0)
         self._rng = Random(self.config.cycling.seed)
@@ -286,6 +317,17 @@ class PlaybackEngine:
 
     def set_solid_color(self, color: Color) -> None:
         self.solid_color = color
+
+    def set_activity_config(self, config: MusicActivityConfig) -> None:
+        self.activity_detector.config = config
+        self.activity_detector.reset()
+        self._music_active = False
+
+    def set_dynamic_response(self, response: float) -> None:
+        if not 0.0 <= response <= 1.0:
+            raise ValueError("dynamic response must be between zero and one")
+        self.config = replace(self.config, dynamic_response=response)
+        self.layered_renderer.scheduler.set_response(response)
 
     def select_animation(self, name: str) -> None:
         index = self.player.index_of(name)
@@ -353,15 +395,7 @@ class PlaybackEngine:
                     self.music_gate_state.value,
                 )
                 if not self._idle_rendered:
-                    red, green, blue, alpha = self.config.idle_color.to_rgba()
-                    controller.fill(
-                        Rgba(
-                            red,
-                            green,
-                            blue,
-                            alpha * self.config.idle_brightness,
-                        )
-                    )
+                    controller.clear()
                     controller.flush()
                     self._idle_rendered = True
                 return 0.05
@@ -480,4 +514,9 @@ def demo_snapshot(frame: int, *, now_s: float | None = None) -> AudioSnapshot:
         timestamp=time.monotonic() if now_s is None else now_s,
         fresh=True,
     )
-    return AudioSnapshot.from_parts(audio_frame, features_from_frame(audio_frame))
+    features = replace(
+        features_from_frame(audio_frame),
+        program_loudness=rms,
+        musical_impact=min(1.0, rms * 1.5),
+    )
+    return AudioSnapshot.from_parts(audio_frame, features)

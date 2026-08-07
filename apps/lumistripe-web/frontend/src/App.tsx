@@ -1,5 +1,5 @@
-import { ActivityIcon, CircleAlertIcon, LightbulbIcon, PaletteIcon, SlidersHorizontalIcon } from "lucide-react"
-import type { MouseEvent } from "react"
+import { ActivityIcon, AudioLinesIcon, CircleAlertIcon, LightbulbIcon, PaletteIcon, SlidersHorizontalIcon } from "lucide-react"
+import { lazy, Suspense, type MouseEvent } from "react"
 import { Navigate, NavLink, Route, Routes } from "react-router"
 import { toast } from "sonner"
 
@@ -14,6 +14,11 @@ import { Toaster } from "@/components/ui/sonner"
 import { useAccess, type AccessController } from "@/hooks/use-access"
 import { useDashboard } from "@/hooks/use-dashboard"
 import { cn } from "@/lib/utils"
+
+const AudioTuningPanel = lazy(async () => {
+  const module = await import("@/components/dashboard/audio-tuning-panel")
+  return { default: module.AudioTuningPanel }
+})
 
 function DashboardSkeleton() {
   return (
@@ -78,36 +83,45 @@ function Dashboard({ access }: { access: AccessController }) {
           <div className="min-h-0 flex-1 pb-[calc(5.25rem+env(safe-area-inset-bottom))]">
             <Routes>
               <Route path="/" element={<ControlPanel controller={controller} />} />
+              <Route path="/audio" element={<Suspense fallback={<DashboardSkeleton />}><AudioTuningPanel /></Suspense>} />
               <Route path="/calibration" element={<CalibrationPanel controller={controller} />} />
               <Route path="/diagnostics" element={<StatusPanel controller={controller} onLogout={access.required ? access.logout : undefined} />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
             <div className="fixed inset-x-0 bottom-0 z-40 border-t border-white/5 bg-background/90 backdrop-blur-2xl">
               <div className="mx-auto w-full max-w-lg px-4 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-                <nav aria-label="Dashboard" className="grid h-14 w-full grid-cols-3 items-stretch rounded-2xl border border-white/5 bg-white/[0.04] p-1">
+                <nav aria-label="Dashboard" className="grid h-14 w-full grid-cols-4 items-stretch rounded-2xl border border-white/5 bg-white/[0.04] p-1">
                   <NavLink
                     to="/"
                     end
                     onClick={blockCalibrationExit}
-                    className={({ isActive }) => cn("flex h-full w-full items-center justify-center gap-1.5 rounded-xl text-sm font-medium text-foreground/60 transition-colors", isActive && "bg-background text-foreground shadow-sm")}
+                    className={({ isActive }) => cn("flex h-full w-full flex-col items-center justify-center gap-0.5 rounded-xl text-[10px] font-medium text-foreground/60 transition-colors", isActive && "bg-background text-foreground shadow-sm")}
                   >
                     <SlidersHorizontalIcon aria-hidden="true" />
                     Control
                   </NavLink>
                   <NavLink
+                    to="/audio"
+                    onClick={blockCalibrationExit}
+                    className={({ isActive }) => cn("flex h-full w-full flex-col items-center justify-center gap-0.5 rounded-xl text-[10px] font-medium text-foreground/60 transition-colors", isActive && "bg-background text-foreground shadow-sm")}
+                  >
+                    <AudioLinesIcon aria-hidden="true" />
+                    Audio
+                  </NavLink>
+                  <NavLink
                     to="/calibration"
-                    className={({ isActive }) => cn("flex h-full w-full items-center justify-center gap-1.5 rounded-xl text-xs font-medium text-foreground/60 transition-colors", isActive && "bg-background text-foreground shadow-sm")}
+                    className={({ isActive }) => cn("flex h-full w-full flex-col items-center justify-center gap-0.5 rounded-xl text-[10px] font-medium text-foreground/60 transition-colors", isActive && "bg-background text-foreground shadow-sm")}
                   >
                     <PaletteIcon aria-hidden="true" />
-                    Calibrate
+                    Color
                   </NavLink>
                   <NavLink
                     to="/diagnostics"
                     onClick={blockCalibrationExit}
-                    className={({ isActive }) => cn("flex h-full w-full items-center justify-center gap-1.5 rounded-xl text-sm font-medium text-foreground/60 transition-colors", isActive && "bg-background text-foreground shadow-sm")}
+                    className={({ isActive }) => cn("flex h-full w-full flex-col items-center justify-center gap-0.5 rounded-xl text-[10px] font-medium text-foreground/60 transition-colors", isActive && "bg-background text-foreground shadow-sm")}
                   >
                     <ActivityIcon aria-hidden="true" />
-                    Diagnostics
+                    Status
                   </NavLink>
                 </nav>
               </div>

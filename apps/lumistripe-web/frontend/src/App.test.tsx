@@ -7,6 +7,32 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import App from "@/App"
 import { animations, initialState, jsonResponse } from "@/test/fixtures"
 
+const audioValues = {
+  target_level: 0.36,
+  dynamic_response: 0.65,
+  rms_attack: 0.45,
+  rms_release: 0.12,
+  band_attack: 0.4,
+  band_release: 0.1,
+  beat_release: 0.18,
+  energy_threshold: 0.03,
+  onset_threshold: 0.025,
+  beat_density_threshold: 0.05,
+  brightness_threshold: 0.08,
+  spectral_balance_ratio: 0.35,
+}
+
+const audioSettings = {
+  source: "mic",
+  monitoring: true,
+  active_device: "2",
+  active_device_name: "USB Mic",
+  devices: [{ selector: "2", name: "USB Mic", settings: audioValues }],
+  settings: audioValues,
+  configured_noise_floor: 0.015,
+  error: null,
+}
+
 function Router({ children }: { children: ReactNode }) {
   return <MemoryRouter>{children}</MemoryRouter>
 }
@@ -38,6 +64,9 @@ describe("App", () => {
       return jsonResponse({ required: false, authenticated: true })
     }
     if (path === "/api/animations") return jsonResponse({ items: animations })
+    if (path === "/api/audio/settings" || path === "/api/audio/settings/reset") {
+      return jsonResponse(audioSettings)
+    }
     if (path === "/api/calibration/session") {
       return jsonResponse({
         session_id: "calibration-session",
@@ -126,11 +155,12 @@ describe("App", () => {
     await screen.findByText(/aurora wave/i)
 
     const navigation = screen.getByRole("navigation", { name: "Dashboard" })
-    expect(navigation).toHaveClass("grid-cols-3", "items-stretch")
+    expect(navigation).toHaveClass("grid-cols-4", "items-stretch")
     expect(navigation.parentElement?.parentElement).toHaveClass("fixed", "inset-x-0", "bottom-0")
     expect(screen.getByRole("link", { name: "Control" })).toHaveClass("w-full")
-    expect(screen.getByRole("link", { name: "Calibrate" })).toHaveClass("w-full")
-    expect(screen.getByRole("link", { name: "Diagnostics" })).toHaveClass("w-full")
+    expect(screen.getByRole("link", { name: "Audio" })).toHaveClass("w-full")
+    expect(screen.getByRole("link", { name: "Color" })).toHaveClass("w-full")
+    expect(screen.getByRole("link", { name: "Status" })).toHaveClass("w-full")
   })
 
   it("runs a guided color calibration session", async () => {
@@ -138,7 +168,7 @@ describe("App", () => {
     const { container } = render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("link", { name: "Calibrate" }))
+    await user.click(screen.getByRole("link", { name: "Color" }))
     expect(await screen.findByRole("heading", { name: "Color calibration" })).toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: "Start calibration" }))
 
@@ -199,13 +229,58 @@ describe("App", () => {
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("link", { name: "Diagnostics" }))
+    await user.click(screen.getByRole("link", { name: "Status" }))
 
     expect(await screen.findByRole("heading", { name: "Diagnostics" })).toBeInTheDocument()
     expect(screen.getByText("1m 5s")).toBeInTheDocument()
     expect(screen.getByText("20.0 FPS")).toBeInTheDocument()
     expect(screen.getByText("0.1.0")).toBeInTheDocument()
     expect(screen.getByText("No problems detected.")).toBeInTheDocument()
+  })
+
+  it("shows live audio telemetry and resets the active microphone profile", async () => {
+    const user = userEvent.setup()
+    render(<App />, { wrapper: Router })
+    await screen.findByText(/aurora wave/i)
+
+    await user.click(screen.getByRole("link", { name: "Audio" }))
+    expect(await screen.findByRole("heading", { name: "Audio tuning" })).toBeInTheDocument()
+    expect(screen.getByText("USB Mic")).toBeInTheDocument()
+    expect(screen.getByRole("group", { name: "Calm ↔ Dramatic" })).toBeInTheDocument()
+    expect(screen.getByText("0.650")).toBeInTheDocument()
+
+    act(() => MockWebSocket.instances[1].emit({
+      sequence: 4,
+      fresh: true,
+      input_level: 0.42,
+      processed_level: 0.35,
+      bands: [0.1, 0.2, 0.3, 0.4, 0.5, 0.4, 0.3, 0.2],
+      beat: true,
+      beat_strength: 0.8,
+      bpm: 128,
+      estimated_noise_floor: 0.012,
+      configured_noise_floor: 0.015,
+      normalization_gain: 1.4,
+      program_loudness: 0.38,
+      musical_impact: 0.92,
+      gate: "music",
+      gate_preview: false,
+      gate_energy: 0.4,
+      gate_onset: 0.2,
+      gate_beat_density: 0.3,
+      gate_brightness: 0.25,
+      health: "healthy",
+    }))
+    expect(screen.getByText("42%")).toBeInTheDocument()
+    expect(screen.getByText("128 BPM")).toBeInTheDocument()
+    expect(screen.getByText("92%")).toBeInTheDocument()
+    expect(screen.getByText("music")).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: /Reset/i }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/audio/settings/reset",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ device: "2" }) }),
+    ))
   })
 
   it("shows retry UI when the initial API load fails", async () => {

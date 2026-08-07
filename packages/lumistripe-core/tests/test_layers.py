@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import pytest
@@ -65,20 +65,21 @@ def _event_snapshot() -> AudioSnapshot:
         beat_strength=0.9,
         beat_confidence=0.9,
         drop_detected=True,
+        musical_impact=1.0,
     )
     return AudioSnapshot.from_parts(frame, features)
 
 
-def test_dynamic_roles_keep_effects_and_strobes_out_of_base_selection() -> None:
+def test_dynamic_metadata_allows_strobes_while_preserving_effect_roles() -> None:
     assert animation_metadata("aurora").role is AnimationRole.BASE
     assert animation_metadata("beat_wave").role is AnimationRole.EFFECT
     assert isinstance(BeatWave(), Effect)
-    for name in ("strobe", "rainbow_strobe", "police"):
-        assert animation_metadata(name).dynamic_safe is False
+    for name in ("strobe", "rainbow_strobe", "red_blackout_strobe", "police"):
+        assert animation_metadata(name).dynamic_safe is True
 
     player = AnimationPlayer.party()
     automatic = {player.name_at(index) for index in player.automatic_indices()}
-    assert {"strobe", "rainbow_strobe", "police"} <= automatic
+    assert {"strobe", "rainbow_strobe", "red_blackout_strobe", "police"} <= automatic
 
 
 def test_scheduler_limits_layers_to_one_effect_per_category() -> None:
@@ -94,6 +95,36 @@ def test_scheduler_limits_layers_to_one_effect_per_category() -> None:
     }
     scheduler.update(player, _event_snapshot(), now_s=1.3)
     assert len(scheduler.active) == 2
+
+
+def test_scheduler_suppresses_wild_effects_during_quiet_passages() -> None:
+    scheduler = EffectScheduler(EffectSchedulerConfig(seed=4))
+    quiet_event = replace(
+        _event_snapshot(),
+        features=replace(_event_snapshot().features, musical_impact=0.3),
+    )
+
+    scheduler.update(AnimationPlayer.party(), quiet_event, now_s=1.0)
+
+    assert scheduler.active == []
+    diagnostics = scheduler.diagnostics()
+    assert diagnostics.rhythmic.result is EffectTriggerResult.BELOW_THRESHOLD
+    assert diagnostics.accent.result is EffectTriggerResult.BELOW_THRESHOLD
+
+
+def test_scheduler_response_controls_quiet_floor_and_impact_threshold() -> None:
+    scheduler = EffectScheduler(EffectSchedulerConfig(seed=4))
+
+    scheduler.set_response(0.0)
+    assert scheduler.quiet_floor == pytest.approx(0.65)
+    assert scheduler.impact_threshold == pytest.approx(0.85)
+
+    scheduler.set_response(1.0)
+    assert scheduler.quiet_floor == pytest.approx(0.25)
+    assert scheduler.impact_threshold == pytest.approx(0.60)
+
+    with pytest.raises(ValueError, match="response must be between zero and one"):
+        scheduler.set_response(1.01)
 
 
 def test_scheduler_diagnostics_describe_layers_budget_and_triggers() -> None:
@@ -179,6 +210,26 @@ def test_layered_renderer_composes_base_and_two_effects() -> None:
     np.testing.assert_array_equal(stripe.pixels()[:, 3], np.full(42, 255))
 
 
+def test_layered_renderer_keeps_quiet_base_but_reserves_full_brightness_for_peaks() -> None:
+    def render_at(impact: float) -> int:
+        player = AnimationPlayer()
+        player.add(Red(), 50, 10)
+        renderer = LayeredRenderer(EffectScheduler(EffectSchedulerConfig(seed=2)))
+        stripe = Stripe(4)
+        snapshot = AudioSnapshot.from_parts(
+            AudioFrame(fresh=True),
+            MusicFeatures(musical_impact=impact),
+        )
+        renderer.render(player, stripe, snapshot, now_s=1.0)
+        return int(stripe.pixels()[0, 0])
+
+    quiet_red = render_at(0.2)
+    peak_red = render_at(1.0)
+
+    assert 100 < quiet_red < 180
+    assert peak_red == 255
+
+
 def test_player_crossfades_automatic_switches() -> None:
     player = AnimationPlayer(transition_ms=100)
     player.add(Red(), 50, 10)
@@ -235,14 +286,17 @@ def test_reactive_event_collections_remain_bounded() -> None:
     assert len(storm.streaks) <= 8
 
 
-def test_dynamic_bases_are_temporally_stable_under_steady_audio() -> None:
+def test_non_flashing_bases_are_temporally_stable_under_steady_audio() -> None:
     steady = AudioFrame(
         rms=0.45,
         bands=(0.5, 0.45, 0.4, 0.38, 0.35, 0.3, 0.28, 0.25),
     )
     for entry in AnimationPlayer.party().animations:
         metadata = animation_metadata(entry.animation)
-        if metadata.role is not AnimationRole.BASE or not metadata.dynamic_safe:
+        if metadata.role is not AnimationRole.BASE or metadata.tags & {
+            "flash",
+            "strobe",
+        }:
             continue
         stripe = Stripe(42)
         previous: np.ndarray | None = None

@@ -1,12 +1,12 @@
 import pytest
 from lumistripe import (
     AnimationPlayer,
-    AnimationRole,
     AnimationScoringEngine,
     DynamicSelector,
     DynamicSelectorConfig,
     MusicFeatures,
     Shockwave,
+    Strobe,
     animation_metadata,
 )
 
@@ -44,6 +44,17 @@ def test_representative_animation_metadata_is_available() -> None:
     assert metadata.name == "shockwave"
     assert metadata.supports_drops is True
     assert metadata.prefers_bass > 0.0
+
+
+def test_red_rave_metadata_allows_blackout_strobe_in_dynamic_mode() -> None:
+    sweep = animation_metadata("red_rave_sweep")
+    chase = animation_metadata("red_rave_chase")
+    strobe = animation_metadata("red_blackout_strobe")
+
+    assert {sweep.mood, chase.mood} == {"club", "intense"}
+    assert sweep.dynamic_safe is True
+    assert chase.dynamic_safe is True
+    assert strobe.dynamic_safe is True
 
 
 def test_scoring_engine_prefers_drop_animation_on_drop() -> None:
@@ -86,7 +97,18 @@ def test_dynamic_selector_selects_immediately() -> None:
     assert first.should_switch is True
     selected = player.name_at(player.current_index())
     assert selected is not None
-    assert animation_metadata(selected).role is AnimationRole.BASE
+    assert player.index_of(selected) is not None
+
+
+def test_dynamic_selector_includes_effects_and_strobes() -> None:
+    player = AnimationPlayer()
+    player.add(Shockwave(), 16, 180)
+    player.add(Strobe(), 12, 160)
+    selector = DynamicSelector(DynamicSelectorConfig(randomness=0.0))
+
+    decision = selector.update(player, _bass_drop_features(), now_s=0.0)
+
+    assert {score.name for score in decision.scores} == {"shockwave", "strobe"}
 
 
 def test_dynamic_selector_honors_min_duration_after_initial_selection() -> None:
@@ -100,6 +122,24 @@ def test_dynamic_selector_honors_min_duration_after_initial_selection() -> None:
     decision = selector.update(player, _bass_drop_features(), now_s=5.0)
 
     assert decision.should_switch is False
+
+
+def test_dynamic_selector_holds_base_animation_on_drop() -> None:
+    player = AnimationPlayer.party()
+    selector = DynamicSelector(
+        DynamicSelectorConfig(randomness=0.0, min_duration_s=0.0, switch_cooldown_s=0.0)
+    )
+    aurora = player.index_of("aurora")
+    assert aurora is not None
+    player.set_index(aurora, transition_ms=0)
+    selector.current_name = "aurora"
+    current = player.name_at(player.current_index())
+
+    decision = selector.update(player, _bass_drop_features(), now_s=20.0)
+
+    assert decision.should_switch is False
+    assert decision.reason == "drop_hold"
+    assert player.name_at(player.current_index()) == current
 
 
 def test_dynamic_selector_diagnostics_report_timing_and_history() -> None:

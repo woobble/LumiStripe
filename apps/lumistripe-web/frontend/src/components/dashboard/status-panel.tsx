@@ -44,6 +44,12 @@ function formatAge(age: number | null) {
   return `${formatDuration(age)} ago`
 }
 
+function formatFrequency(hertz: number | null) {
+  if (hertz === null) return "—"
+  const megahertz = hertz / 1_000_000
+  return `${Number.isInteger(megahertz) ? megahertz.toFixed(0) : megahertz.toFixed(2)} MHz`
+}
+
 function Metric({ icon: Icon, label, value }: { icon: typeof GaugeIcon; label: string; value: string }) {
   return (
     <div className="rounded-xl bg-white/[0.035] p-3">
@@ -128,6 +134,7 @@ export function StatusPanel({ controller, onLogout }: { controller: DashboardCon
           <Metric icon={PackageIcon} label="Version" value={state.application_version} />
           <Metric icon={CpuIcon} label="Runtime" value={displayName(state.runtime)} />
           <Metric icon={ActivityIcon} label="Output backend" value={displayName(state.output_backend)} />
+          <Metric icon={GaugeIcon} label="Requested SPI clock" value={formatFrequency(state.spi_speed_hz)} />
           <div className="col-span-2 rounded-xl bg-white/[0.035] p-3">
             <p className="mb-2 text-xs text-muted-foreground">Output devices</p>
             <p className="break-all font-medium">

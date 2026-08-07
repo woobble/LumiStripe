@@ -27,6 +27,10 @@ from .models import (
     AccessStatus,
     AnimationList,
     AnimationRequest,
+    AudioResetRequest,
+    AudioSettingsRequest,
+    AudioSettingsResponse,
+    AudioTelemetry,
     BlackoutRequest,
     BrightnessRequest,
     CalibrationFinishRequest,
@@ -43,9 +47,11 @@ from .runtime import (
     RuntimeUnavailableError,
     UnknownAnimationError,
 )
+from .settings import AudioTuningProfile
 
 COMMAND_TIMEOUT_SECONDS = 5.0
 WEBSOCKET_INTERVAL_SECONDS = 0.25
+AUDIO_WEBSOCKET_INTERVAL_SECONDS = 1.0 / 15.0
 
 router = APIRouter()
 
@@ -200,6 +206,32 @@ async def finish_calibration(
     )
 
 
+@router.get("/api/audio/settings", response_model=AudioSettingsResponse)
+async def audio_settings(request: Request) -> AudioSettingsResponse:
+    return _runtime_from_request(request).audio_settings()
+
+
+@router.put("/api/audio/settings", response_model=AudioSettingsResponse)
+async def update_audio_settings(
+    request: Request,
+    body: AudioSettingsRequest,
+) -> AudioSettingsResponse:
+    profile = AudioTuningProfile(**body.settings.model_dump())
+    return await _await_command(
+        _runtime_from_request(request).apply_audio_settings(body.device, profile)
+    )
+
+
+@router.post("/api/audio/settings/reset", response_model=AudioSettingsResponse)
+async def reset_audio_settings(
+    request: Request,
+    body: AudioResetRequest,
+) -> AudioSettingsResponse:
+    return await _await_command(
+        _runtime_from_request(request).reset_audio_settings(body.device)
+    )
+
+
 @router.websocket("/ws/state")
 async def websocket_state(websocket: WebSocket) -> None:
     access: PairingAuth = websocket.app.state.access
@@ -218,6 +250,22 @@ async def websocket_state(websocket: WebSocket) -> None:
                     await websocket.close(code=1011, reason="runtime unavailable")
                     return
             await asyncio.sleep(WEBSOCKET_INTERVAL_SECONDS)
+    except (WebSocketDisconnect, RuntimeError):
+        return
+
+
+@router.websocket("/ws/audio")
+async def websocket_audio(websocket: WebSocket) -> None:
+    access: PairingAuth = websocket.app.state.access
+    if not access.authenticated(websocket.cookies.get(SESSION_COOKIE)):
+        raise WebSocketException(code=4401, reason="pairing required")
+    await websocket.accept()
+    runtime: LumiStripeRuntime = websocket.app.state.runtime
+    try:
+        while True:
+            telemetry: AudioTelemetry = runtime.audio_telemetry()
+            await websocket.send_json(telemetry.model_dump(mode="json"))
+            await asyncio.sleep(AUDIO_WEBSOCKET_INTERVAL_SECONDS)
     except (WebSocketDisconnect, RuntimeError):
         return
 

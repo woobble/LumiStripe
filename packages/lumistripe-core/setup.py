@@ -8,6 +8,18 @@ ext_gpio = Extension(
     extra_compile_args=["-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-O2"],
 )
 
+ext_sm16716 = Extension(
+    "lumistripe.gpio._sm16716",
+    sources=["src/lumistripe/gpio/_sm16716.c"],
+    include_dirs=[numpy.get_include()],
+    extra_compile_args=[
+        "-std=c11", "-Wall", "-Wextra", "-Wpedantic",
+        "-O3", "-march=native", "-flto",
+        "-ffinite-math-only", "-fno-math-errno",
+    ],
+    extra_link_args=["-flto", "-O3"],
+)
+
 ext_audio = Extension(
     "lumistripe.audio._audio",
     sources=[
@@ -25,4 +37,4 @@ ext_audio = Extension(
     extra_link_args=["-flto", "-O3"],
 )
 
-setup(ext_modules=[ext_gpio, ext_audio])
+setup(ext_modules=[ext_gpio, ext_sm16716, ext_audio])

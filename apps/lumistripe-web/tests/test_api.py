@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import lumistripe_web.runtime as runtime_module
 import pytest
 from fastapi.testclient import TestClient
+from lumistripe import AudioInputDevice
 from lumistripe_web.app import build_parser, create_app, main
 from lumistripe_web.runtime import LumiStripeRuntime, RuntimeSettings
 from starlette.websockets import WebSocketDisconnect
@@ -69,6 +71,45 @@ def test_api_maps_validation_and_runtime_errors() -> None:
         assert client.put("/api/animation", json={"name": "missing"}).status_code == 404
         conflict = client.put("/api/mode", json={"mode": "dynamic"})
         assert conflict.status_code == 409
+
+
+def test_audio_settings_api_and_telemetry_websocket(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        runtime_module,
+        "list_input_device_details",
+        lambda: [AudioInputDevice(index=2, name="USB Mic")],
+    )
+    app = create_app(
+        RuntimeSettings(pixels=8, settings_file=tmp_path / "settings.json")
+    )
+    with TestClient(app) as client:
+        settings = client.get("/api/audio/settings")
+        assert settings.status_code == 200
+        assert settings.json()["devices"][0]["name"] == "USB Mic"
+
+        values = settings.json()["settings"]
+        values["target_level"] = 0.5
+        updated = client.put(
+            "/api/audio/settings",
+            json={"device": "2", "settings": values},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["active_device"] == "2"
+        assert updated.json()["settings"]["target_level"] == 0.5
+
+        invalid = dict(values, target_level=0.99)
+        assert client.put(
+            "/api/audio/settings",
+            json={"device": "2", "settings": invalid},
+        ).status_code == 422
+
+        with client.websocket_connect("/ws/audio") as websocket:
+            telemetry = websocket.receive_json()
+            assert len(telemetry["bands"]) == 8
+            assert telemetry["gate_preview"] is True
 
 
 def test_calibration_api_session_lifecycle(tmp_path: Path) -> None:
@@ -200,6 +241,12 @@ def test_pairing_code_protects_api_and_websocket() -> None:
         ):
             pass
         assert exc_info.value.code == 4401
+        with (
+            pytest.raises(WebSocketDisconnect) as audio_exc_info,
+            client.websocket_connect("/ws/audio"),
+        ):
+            pass
+        assert audio_exc_info.value.code == 4401
 
         rejected = client.post("/api/auth/pair", json={"code": "0000"})
         assert rejected.status_code == 401
@@ -216,6 +263,8 @@ def test_pairing_code_protects_api_and_websocket() -> None:
         assert client.get("/api/state").status_code == 200
         with client.websocket_connect("/ws/state") as websocket:
             assert websocket.receive_json()["running"] is True
+        with client.websocket_connect("/ws/audio") as websocket:
+            assert websocket.receive_json()["health"] == "inactive"
 
         logged_out = client.post("/api/auth/logout")
         assert logged_out.json() == {"required": True, "authenticated": False}
