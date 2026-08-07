@@ -35,6 +35,9 @@ typedef struct {
     int fd;
     double ns_per_iter;
     int flushing;
+    int data_fsel;
+    int clock_fsel;
+    int pins_configured;
 } GPIOMem;
 
 static void gpio_set(volatile uint32_t *gpio, int pin, int value) {
@@ -57,6 +60,33 @@ static void gpio_set_fsel(volatile uint32_t *gpio, int pin, int mode) {
     uint32_t mask = ~(7u << shift);
     uint32_t val = ((uint32_t)mode & 7u) << shift;
     gpio[reg_idx] = (gpio[reg_idx] & mask) | val;
+}
+
+static int gpio_get_fsel(volatile uint32_t *gpio, int pin) {
+    int reg_idx = (pin / 10);
+    int shift = (pin % 10) * 3;
+    return (int)((gpio[reg_idx] >> shift) & 7u);
+}
+
+static void gpio_restore_fsel(GPIOMem *self) {
+    if (self->gpio_mem == NULL || !self->pins_configured)
+        return;
+    gpio_set_fsel(self->gpio_mem, self->data_pin, self->data_fsel);
+    if (self->clock_pin != self->data_pin)
+        gpio_set_fsel(self->gpio_mem, self->clock_pin, self->clock_fsel);
+    self->pins_configured = 0;
+}
+
+static void GPIOMem_release(GPIOMem *self) {
+    if (self->gpio_mem != NULL) {
+        gpio_restore_fsel(self);
+        munmap((void *)self->gpio_mem, GPIO_MAP_BYTES);
+        self->gpio_mem = NULL;
+    }
+    if (self->fd >= 0) {
+        close(self->fd);
+        self->fd = -1;
+    }
 }
 
 static void busy_wait_ns(GPIOMem *self, long ns) {
@@ -102,11 +132,15 @@ static void flush_rgb_frame(GPIOMem *self, const uint8_t *rgb, npy_intp num_pixe
 static int GPIOMem_init(GPIOMem *self, PyObject *args, PyObject *kwds) {
     static char *kwlist[] = {"data_pin", "clock_pin", NULL};
     int data_pin, clock_pin;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "ii", kwlist, &data_pin, &clock_pin))
-        return -1;
 
     self->fd = -1;
     self->gpio_mem = NULL;
+    self->pins_configured = 0;
+    self->data_fsel = 0;
+    self->clock_fsel = 0;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "ii", kwlist, &data_pin, &clock_pin))
+        return -1;
+
     self->data_pin = data_pin;
     self->clock_pin = clock_pin;
     self->flushing = 0;
@@ -127,12 +161,16 @@ static int GPIOMem_init(GPIOMem *self, PyObject *args, PyObject *kwds) {
         NULL, GPIO_MAP_BYTES, PROT_READ | PROT_WRITE,
         MAP_SHARED, self->fd, 0);
     if (self->gpio_mem == MAP_FAILED) {
+        self->gpio_mem = NULL;
         PyErr_Format(PyExc_OSError, "mmap failed: %s", strerror(errno));
         close(self->fd);
         self->fd = -1;
         return -1;
     }
 
+    self->data_fsel = gpio_get_fsel(self->gpio_mem, data_pin);
+    self->clock_fsel = gpio_get_fsel(self->gpio_mem, clock_pin);
+    self->pins_configured = 1;
     gpio_set_fsel(self->gpio_mem, data_pin, 1);
     gpio_set_fsel(self->gpio_mem, clock_pin, 1);
 
@@ -154,14 +192,7 @@ static int GPIOMem_init(GPIOMem *self, PyObject *args, PyObject *kwds) {
 }
 
 static void GPIOMem_dealloc(GPIOMem *self) {
-    if (self->gpio_mem != NULL) {
-        munmap((void *)self->gpio_mem, GPIO_MAP_BYTES);
-        self->gpio_mem = NULL;
-    }
-    if (self->fd >= 0) {
-        close(self->fd);
-        self->fd = -1;
-    }
+    GPIOMem_release(self);
     Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
@@ -184,14 +215,7 @@ static PyObject *GPIOMem_close(GPIOMem *self, PyObject *args) {
         PyErr_SetString(PyExc_RuntimeError, "cannot close GPIOMem while flush is active");
         return NULL;
     }
-    if (self->gpio_mem != NULL) {
-        munmap((void *)self->gpio_mem, GPIO_MAP_BYTES);
-        self->gpio_mem = NULL;
-    }
-    if (self->fd >= 0) {
-        close(self->fd);
-        self->fd = -1;
-    }
+    GPIOMem_release(self);
     Py_RETURN_NONE;
 }
 

@@ -69,6 +69,8 @@ from .buffers import (
 from .color import Color, ColorBatch, Hex, Hsl, Hsla, Rgb, Rgba
 from .controller import (
     BrightnessController,
+    ColorCorrection,
+    ColorCorrectionController,
     CompositeController,
     Controller,
     DualController,
@@ -107,7 +109,7 @@ from .effects import (
     Shockwave,
     SpectrumFlash,
 )
-from .gpio import GPIOStripe
+from .gpio import GPIOStripe, SPIConfig, SPIStripe
 from .mic_profile import (
     BUILTIN_MIC_PROFILES,
     PCM2902_PROFILE,
@@ -179,6 +181,8 @@ __all__ = [
     "Color",
     "ColorBatch",
     "ColorBurst",
+    "ColorCorrection",
+    "ColorCorrectionController",
     "ColorWipe",
     "Comet",
     "CometStorm",
@@ -249,6 +253,8 @@ __all__ = [
     "Rgb",
     "Rgba",
     "RgbwTest",
+    "SPIConfig",
+    "SPIStripe",
     "SelectorDecision",
     "Shockwave",
     "Sinelon",

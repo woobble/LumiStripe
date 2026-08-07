@@ -9,7 +9,7 @@ from random import Random
 from .animation.base import AnimationPlayer
 from .audio import AudioFrame, AudioSnapshot, MusicFeatures, features_from_frame
 from .color import Color, Rgb, Rgba
-from .controller import Controller
+from .controller import BrightnessController, Controller
 from .effects.layers import (
     EffectScheduler,
     EffectSchedulerConfig,
@@ -25,6 +25,7 @@ from .selector import (
 
 
 class PlaybackMode(str, Enum):
+    SOLID = "solid"
     STATIC = "static"
     CYCLING = "cycling"
     DYNAMIC = "dynamic"
@@ -88,6 +89,7 @@ class MusicActivityConfig:
 @dataclass(frozen=True, slots=True)
 class PlaybackConfig:
     mode: PlaybackMode = PlaybackMode.STATIC
+    solid_color: Color = field(default_factory=lambda: Rgb(124, 58, 237))
     cycling: CyclingConfig = field(default_factory=CyclingConfig)
     dynamic: DynamicSelectorConfig = field(default_factory=DynamicSelectorConfig)
     activity: MusicActivityConfig = field(default_factory=MusicActivityConfig)
@@ -231,9 +233,11 @@ class PlaybackEngine:
     _music_active: bool = field(init=False, default=False)
     _idle_rendered: bool = field(init=False, default=False)
     _rng: Random = field(init=False)
+    solid_color: Color = field(init=False)
 
     def __post_init__(self) -> None:
         self.mode = self.config.mode
+        self.solid_color = self.config.solid_color
         self.dynamic_selector = DynamicSelector(self.config.dynamic)
         self.activity_detector = MusicActivityDetector(self.config.activity)
         effect_config = self.config.effects
@@ -280,6 +284,9 @@ class PlaybackEngine:
         if mode is PlaybackMode.DYNAMIC:
             self.dynamic_selector.reset()
 
+    def set_solid_color(self, color: Color) -> None:
+        self.solid_color = color
+
     def select_animation(self, name: str) -> None:
         index = self.player.index_of(name)
         if index is None:
@@ -314,6 +321,14 @@ class PlaybackEngine:
         if self.mode is PlaybackMode.CYCLING and self._cycling_due(now):
             self._cycle_next()
             self._cycle_started_at_s = now
+
+        if self.mode is PlaybackMode.SOLID:
+            BrightnessController(controller, self.player.brightness).fill(
+                self.solid_color
+            )
+            controller.flush()
+            self.player.audio_enabled = False
+            return 0.05
 
         audio_frame = None
         if self.mode is PlaybackMode.DYNAMIC:

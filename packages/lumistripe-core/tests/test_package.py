@@ -9,6 +9,8 @@ from lumistripe import (
     PlaybackEngine,
     PlaybackMode,
     ReversedController,
+    SPIConfig,
+    SPIStripe,
     Stripe,
 )
 
@@ -22,6 +24,8 @@ def test_package_exports_are_importable() -> None:
     assert player.index_of("pulse") is not None
     assert frame.bands == (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     assert GPIOStripe is not None
+    assert SPIConfig().device == "/dev/spidev0.0"
+    assert SPIStripe is not None
     assert CompositeController is not None
     assert ReversedController is not None
     assert PlaybackEngine is not None

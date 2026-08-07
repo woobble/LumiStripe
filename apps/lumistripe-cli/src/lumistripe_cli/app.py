@@ -39,6 +39,8 @@ from lumistripe import (
     PlaybackConfig,
     PlaybackEngine,
     PlaybackMode,
+    SPIConfig,
+    SPIStripe,
     Stripe,
     calibrate_audio_input,
     demo_snapshot,
@@ -363,11 +365,14 @@ class HeadlessApp:
         except KeyboardInterrupt:
             self.running = False
         finally:
-            self.controller.clear()
-            self.controller.force_flush()
-            self._finish_status()
-            self.encoder_backend.close()
-            self._close_audio_input()
+            try:
+                self.controller.clear()
+                self.controller.force_flush()
+            finally:
+                self.controller.close()
+                self._finish_status()
+                self.encoder_backend.close()
+                self._close_audio_input()
 
     def _render_status(self, now: float) -> None:
         if not self._status_enabled:
@@ -402,7 +407,7 @@ class HeadlessApp:
             f"MUSIC: BEAT={'YES' if self.audio_frame.beat else 'NO'} BPM={feat.bpm:0.0f} ONSET={feat.onset_strength:0.3f} FRESH={'YES' if self.audio_frame.fresh else 'NO'}",
         ]
         if self.gpio_backend_label:
-            lines.insert(2, f"GPIO: {self.gpio_backend_label}")
+            lines.insert(2, f"Output: {self.gpio_backend_label}")
         source = self.audio_source or (AudioSource.MIC if self.mode is PlaybackMode.DYNAMIC else AudioSource.OFF)
         if source is AudioSource.MIC:
             lines.append(f"MIC: {self.mic_tuning_label}")
@@ -803,10 +808,13 @@ class HeadlessApp:
         except KeyboardInterrupt:
             self.running = False
         finally:
-            self.controller.clear()
-            self.controller.force_flush()
-            self.encoder_backend.close()
-            self._close_audio_input()
+            try:
+                self.controller.clear()
+                self.controller.force_flush()
+            finally:
+                self.controller.close()
+                self.encoder_backend.close()
+                self._close_audio_input()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -942,6 +950,25 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dynamic-history-size", type=_positive_int, default=DynamicSelectorConfig().history_size)
     parser.add_argument("--dynamic-seed", type=int)
     parser.add_argument("--quiet", action="store_true", help="Disable runtime status output")
+    parser.add_argument(
+        "--output-backend",
+        choices=("spi", "gpio"),
+        default="spi",
+        help="Hardware output backend (default: spi)",
+    )
+    parser.add_argument("--spi-device", default="/dev/spidev0.0", help="Primary SPI device path")
+    parser.add_argument(
+        "--spi-speed",
+        type=_positive_int,
+        default=1_000_000,
+        help="Primary SPI clock speed in Hz",
+    )
+    parser.add_argument("--spi-device-2", help="Optional mirrored secondary SPI device path")
+    parser.add_argument(
+        "--spi-speed-2",
+        type=_positive_int,
+        help="Secondary SPI clock speed in Hz",
+    )
     parser.add_argument("--chip", default="/dev/gpiochip0", help="Primary GPIO chip path")
     parser.add_argument("--data-pin", type=int, default=14, help="Primary stripe data pin")
     parser.add_argument("--clock-pin", type=int, default=15, help="Primary stripe clock pin")
@@ -959,6 +986,36 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def build_output_controller(args: argparse.Namespace) -> Controller:
+    if args.output_backend == "spi":
+        if _secondary_gpio_stripe_requested(args):
+            raise ValueError(
+                "--chip-2, --data-pin-2, and --clock-pin-2 require --output-backend gpio"
+            )
+        if args.spi_speed_2 is not None and args.spi_device_2 is None:
+            raise ValueError("--spi-speed-2 requires --spi-device-2")
+        _ensure_spi_ready(args.spi_device)
+        spi_primary = SPIStripe(
+            SPIConfig(device=args.spi_device, speed_hz=args.spi_speed),
+            args.pixels,
+        )
+        if args.spi_device_2 is None:
+            return spi_primary
+        try:
+            _ensure_spi_ready(args.spi_device_2)
+            spi_secondary = SPIStripe(
+                SPIConfig(
+                    device=args.spi_device_2,
+                    speed_hz=args.spi_speed_2 or args.spi_speed,
+                ),
+                args.pixels,
+            )
+        except Exception:
+            spi_primary.close()
+            raise
+        return MultiController([spi_primary, spi_secondary])
+
+    if args.spi_device_2 is not None or args.spi_speed_2 is not None:
+        raise ValueError("secondary SPI flags require --output-backend spi")
     _ensure_gpio_ready(args.chip)
     primary = GPIOStripe(
         Config(chip=args.chip, gpio_data=args.data_pin, gpio_clock=args.clock_pin, consumer="lumistripe"),
@@ -988,6 +1045,9 @@ def gpio_backend_label(controller: Controller) -> str | None:
         compact = [label for label in labels if label]
         return ", ".join(compact) if compact else None
     label = getattr(controller, "gpio_backend_label", None)
+    if label == "spi":
+        device = getattr(controller, "spi_device_path", None)
+        return f"spi ({device})" if device else "spi"
     return str(label) if label else None
 
 
@@ -1094,8 +1154,31 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(f"error: {exc}") from exc
 
 
-def _secondary_stripe_requested(args: argparse.Namespace) -> bool:
+def _secondary_gpio_stripe_requested(args: argparse.Namespace) -> bool:
     return args.chip_2 is not None or args.data_pin_2 is not None or args.clock_pin_2 is not None
+
+
+def _secondary_stripe_requested(args: argparse.Namespace) -> bool:
+    return _secondary_gpio_stripe_requested(args)
+
+
+def _ensure_spi_ready(device: str) -> None:
+    if importlib.util.find_spec("spidev") is None:
+        raise RuntimeError(
+            "SPI runtime unavailable: install lumistripe-core[spi] to use the headless CLI"
+        )
+    device_path = Path(device)
+    if not device_path.exists():
+        raise RuntimeError(
+            f'SPI device "{device}" was not found. Enable SPI and verify the device path.'
+        )
+    if not device_path.is_char_device():
+        raise RuntimeError(f'SPI device "{device}" is not a character device.')
+    if not os.access(device_path, os.R_OK | os.W_OK):
+        raise RuntimeError(
+            f'permission denied for SPI device "{device}". '
+            "Add your user to the spi group or configure an appropriate udev rule."
+        )
 
 
 def _ensure_gpio_ready(chip: str) -> None:

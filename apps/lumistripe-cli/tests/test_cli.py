@@ -44,6 +44,15 @@ class FakeGPIOStripe(Stripe):
         self.config = config
 
 
+class FakeSPIStripe(Stripe):
+    gpio_backend_label = "spi"
+
+    def __init__(self, config, length: int) -> None:
+        super().__init__(length)
+        self.config = config
+        self.spi_device_path = config.device
+
+
 def _layered_snapshot() -> AudioSnapshot:
     return AudioSnapshot.from_parts(
         AudioFrame(
@@ -85,10 +94,28 @@ def test_headless_app_class_label_reflects_selector_idle_state() -> None:
 
 def test_parser_accepts_second_stripe_arguments() -> None:
     parser = build_parser()
-    args = parser.parse_args(["--pixels", "32", "--data-pin-2", "16", "--clock-pin-2", "20"])
+    args = parser.parse_args(
+        [
+            "--pixels",
+            "32",
+            "--output-backend",
+            "gpio",
+            "--data-pin-2",
+            "16",
+            "--clock-pin-2",
+            "20",
+        ]
+    )
     assert args.pixels == 32
     assert args.data_pin_2 == 16
     assert args.clock_pin_2 == 20
+
+
+def test_parser_defaults_hardware_output_to_spi() -> None:
+    args = build_parser().parse_args([])
+    assert args.output_backend == "spi"
+    assert args.spi_device == "/dev/spidev0.0"
+    assert args.spi_speed == 1_000_000
 
 
 def test_parser_accepts_encoder_arguments() -> None:
@@ -234,7 +261,7 @@ def test_parser_rejects_invalid_mic_tuning_values() -> None:
 def test_build_output_controller_returns_single_stripe(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("lumistripe_cli.app.GPIOStripe", FakeGPIOStripe)
     monkeypatch.setattr("lumistripe_cli.app._ensure_gpio_ready", lambda chip: None)
-    args = build_parser().parse_args(["--pixels", "16"])
+    args = build_parser().parse_args(["--pixels", "16", "--output-backend", "gpio"])
     controller = build_output_controller(args)
     assert isinstance(controller, FakeGPIOStripe)
     assert controller.length == 16
@@ -243,7 +270,18 @@ def test_build_output_controller_returns_single_stripe(monkeypatch: pytest.Monke
 def test_build_output_controller_returns_multi_controller(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("lumistripe_cli.app.GPIOStripe", FakeGPIOStripe)
     monkeypatch.setattr("lumistripe_cli.app._ensure_gpio_ready", lambda chip: None)
-    args = build_parser().parse_args(["--pixels", "16", "--data-pin-2", "16", "--clock-pin-2", "20"])
+    args = build_parser().parse_args(
+        [
+            "--pixels",
+            "16",
+            "--output-backend",
+            "gpio",
+            "--data-pin-2",
+            "16",
+            "--clock-pin-2",
+            "20",
+        ]
+    )
     controller = build_output_controller(args)
     assert isinstance(controller, MultiController)
     assert controller.length == 16
@@ -260,9 +298,62 @@ def test_gpio_backend_label_reports_single_and_multi_controller() -> None:
 def test_build_output_controller_rejects_partial_second_stripe(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("lumistripe_cli.app.GPIOStripe", FakeGPIOStripe)
     monkeypatch.setattr("lumistripe_cli.app._ensure_gpio_ready", lambda chip: None)
-    args = build_parser().parse_args(["--pixels", "16", "--data-pin-2", "16"])
+    args = build_parser().parse_args(
+        ["--pixels", "16", "--output-backend", "gpio", "--data-pin-2", "16"]
+    )
     with pytest.raises(ValueError, match="secondary stripe"):
         build_output_controller(args)
+
+
+def test_build_output_controller_returns_spi_stripe_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("lumistripe_cli.app.SPIStripe", FakeSPIStripe)
+    monkeypatch.setattr("lumistripe_cli.app._ensure_spi_ready", lambda device: None)
+    args = build_parser().parse_args(["--pixels", "16"])
+
+    controller = build_output_controller(args)
+
+    assert isinstance(controller, FakeSPIStripe)
+    assert controller.config.device == "/dev/spidev0.0"
+    assert controller.config.speed_hz == 1_000_000
+
+
+def test_build_output_controller_returns_mirrored_spi_controller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("lumistripe_cli.app.SPIStripe", FakeSPIStripe)
+    monkeypatch.setattr("lumistripe_cli.app._ensure_spi_ready", lambda device: None)
+    args = build_parser().parse_args(
+        ["--pixels", "16", "--spi-device-2", "/dev/spidev1.0"]
+    )
+
+    controller = build_output_controller(args)
+
+    assert isinstance(controller, MultiController)
+    assert [child.config.device for child in controller.controllers] == [
+        "/dev/spidev0.0",
+        "/dev/spidev1.0",
+    ]
+    assert gpio_backend_label(controller) == (
+        "spi (/dev/spidev0.0), spi (/dev/spidev1.0)"
+    )
+
+
+def test_build_output_controller_rejects_incomplete_or_conflicting_backend_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("lumistripe_cli.app._ensure_spi_ready", lambda device: None)
+    with pytest.raises(ValueError, match="spi-speed-2"):
+        build_output_controller(build_parser().parse_args(["--spi-speed-2", "500000"]))
+    with pytest.raises(ValueError, match="output-backend gpio"):
+        build_output_controller(build_parser().parse_args(["--data-pin-2", "20"]))
+    with pytest.raises(ValueError, match="secondary SPI"):
+        build_output_controller(
+            build_parser().parse_args(
+                ["--output-backend", "gpio", "--spi-device-2", "/dev/spidev1.0"]
+            )
+        )
 
 
 def test_build_runtime_encoder_backend_returns_null_when_unconfigured() -> None:
@@ -313,7 +404,9 @@ def test_build_output_controller_fails_nicely_when_chip_missing(monkeypatch: pyt
             return False
 
     monkeypatch.setattr("lumistripe_cli.app.Path", MissingPath)
-    args = build_parser().parse_args(["--pixels", "16", "--chip", "/dev/gpiochip9"])
+    args = build_parser().parse_args(
+        ["--pixels", "16", "--output-backend", "gpio", "--chip", "/dev/gpiochip9"]
+    )
     with pytest.raises(RuntimeError, match='GPIO chip "/dev/gpiochip9" was not found'):
         build_output_controller(args)
 
@@ -336,7 +429,9 @@ def test_build_output_controller_fails_nicely_when_chip_permission_denied(monkey
 
     monkeypatch.setattr("lumistripe_cli.app.Path", PresentPath)
     monkeypatch.setattr("lumistripe_cli.app.os.access", lambda path, mode: False)
-    args = build_parser().parse_args(["--pixels", "16", "--chip", "/dev/gpiochip0"])
+    args = build_parser().parse_args(
+        ["--pixels", "16", "--output-backend", "gpio", "--chip", "/dev/gpiochip0"]
+    )
     with pytest.raises(RuntimeError, match='permission denied for GPIO chip "/dev/gpiochip0"'):
         build_output_controller(args)
 
@@ -449,10 +544,10 @@ def test_headless_app_tty_status_honors_no_color(monkeypatch: pytest.MonkeyPatch
     assert "\x1b[" not in app._status_block()
 
 
-def test_headless_app_status_block_includes_gpio_backend_when_present() -> None:
+def test_headless_app_status_block_includes_output_backend_when_present() -> None:
     app = HeadlessApp(controller=Stripe(12), pixel_count=12, quiet=True, gpio_backend_label="gpiomem")
     block = app._status_block()
-    assert "GPIO: gpiomem" in block
+    assert "Output: gpiomem" in block
 
 
 def test_headless_app_status_block_includes_mic_tuning_in_mic_mode() -> None:

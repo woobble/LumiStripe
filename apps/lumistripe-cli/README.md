@@ -2,6 +2,17 @@
 
 Headless GPIO runtime for Lumistripe on Raspberry Pi.
 
+Hardware output uses SPI by default. On a Raspberry Pi 4, enable SPI0 and wire
+GPIO10 (MOSI) to strip data and GPIO11 (SCLK) to strip clock, then run:
+
+```bash
+lumistripe-cli --pixels 80 --spi-device /dev/spidev0.0
+```
+
+Add a mirrored second device with
+`--spi-device-2 /dev/spidev1.0`. Use `--output-backend gpio` with the existing
+data/clock pin flags to select the legacy userspace GPIO backend explicitly.
+
 For live mic tuning without GPIO, run audio debug mode:
 
 ```bash

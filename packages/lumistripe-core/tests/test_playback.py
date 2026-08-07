@@ -12,6 +12,7 @@ from lumistripe import (
     PlaybackConfig,
     PlaybackEngine,
     PlaybackMode,
+    Rgb,
     RgbwTest,
     Stripe,
 )
@@ -72,6 +73,35 @@ def test_static_can_render_with_optional_audio() -> None:
     engine.step(Stripe(8), snapshot=_active_snapshot(), now_s=0.0)
 
     assert player.audio_enabled is True
+
+
+def test_solid_mode_fills_every_pixel_with_selected_color_and_brightness() -> None:
+    player = AnimationPlayer.party()
+    player.set_brightness(0.5)
+    engine = PlaybackEngine(
+        player,
+        PlaybackConfig(mode=PlaybackMode.SOLID, solid_color=Rgb(20, 40, 60)),
+    )
+    stripe = CountingStripe(4)
+
+    delay = engine.step(stripe, now_s=0.0)
+
+    assert stripe.pixels().tolist() == [[20, 40, 60, 127]] * 4
+    assert stripe.flush_calls == 1
+    assert delay == 0.05
+    assert player.audio_enabled is False
+
+
+def test_solid_color_can_be_changed_without_rebuilding_playback() -> None:
+    engine = PlaybackEngine(
+        AnimationPlayer.party(), PlaybackConfig(mode=PlaybackMode.SOLID)
+    )
+    stripe = Stripe(2)
+
+    engine.set_solid_color(Rgb(1, 2, 3))
+    engine.step(stripe, now_s=0.0)
+
+    assert stripe.pixels().tolist() == [[1, 2, 3, 255]] * 2
 
 
 def test_manual_selection_switches_to_static() -> None:

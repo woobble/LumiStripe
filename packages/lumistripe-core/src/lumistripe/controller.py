@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 import numpy as np
 import numpy.typing as npt
 
-from .buffers import PixelBuffer, as_pixel_buffer
+from .buffers import PixelBuffer, as_pixel_buffer, new_pixel_buffer
+from .buffers import clear as clear_pixels
 from .color import Color, Rgba
 
 
@@ -46,6 +48,106 @@ class Controller(ABC):
 
     def force_flush(self) -> None:
         self.flush()
+
+    def close(self) -> None:
+        """Release hardware resources owned by this controller."""
+
+
+@dataclass(frozen=True, slots=True)
+class ColorCorrection:
+    red: int = 255
+    green: int = 255
+    blue: int = 255
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("red", self.red),
+            ("green", self.green),
+            ("blue", self.blue),
+        ):
+            if not 0 <= value <= 255:
+                raise ValueError(f"{name} correction must be between 0 and 255")
+
+    def as_array(self) -> npt.NDArray[np.uint16]:
+        return np.array((self.red, self.green, self.blue), dtype=np.uint16)
+
+
+class ColorCorrectionController(Controller):
+    """Apply per-channel output correction while retaining logical pixels."""
+
+    def __init__(
+        self,
+        inner: Controller,
+        correction: ColorCorrection | None = None,
+    ) -> None:
+        self._inner = inner
+        self._correction = correction or ColorCorrection()
+        self._pixels = new_pixel_buffer(inner.length)
+
+    @property
+    def correction(self) -> ColorCorrection:
+        return self._correction
+
+    def set_correction(self, correction: ColorCorrection) -> None:
+        self._correction = correction
+
+    @property
+    def length(self) -> int:
+        return self._inner.length
+
+    def pixels(self) -> PixelBuffer:
+        return self._pixels
+
+    def pixel(self, index: int) -> Color:
+        self._check_index(index)
+        red, green, blue, alpha = self._pixels[index]
+        return Rgba(
+            int(red),
+            int(green),
+            int(blue),
+            float(alpha) / 255.0,
+        )
+
+    def set_pixel(self, index: int, color: Color) -> None:
+        self._check_index(index)
+        self._pixels[index] = color.as_rgba_array()
+
+    def set_pixels(self, colors: Sequence[Color] | npt.ArrayLike) -> None:
+        normalized = as_pixel_buffer(colors)
+        if normalized.shape[0] > self.length:
+            raise ValueError(
+                f"too many pixels: got {normalized.shape[0]}, "
+                f"color-correction controller length is {self.length}"
+            )
+        self._pixels[: normalized.shape[0]] = normalized
+
+    def fill(self, color: Color) -> None:
+        self._pixels[:] = color.as_rgba_array()
+
+    def clear(self) -> None:
+        clear_pixels(self._pixels)
+
+    def flush(self) -> None:
+        self._copy_corrected_pixels()
+        self._inner.flush()
+
+    def force_flush(self) -> None:
+        self._copy_corrected_pixels()
+        self._inner.force_flush()
+
+    def close(self) -> None:
+        self._inner.close()
+
+    def _copy_corrected_pixels(self) -> None:
+        corrected = self._pixels.copy()
+        corrected[:, :3] = (
+            corrected[:, :3].astype(np.uint16) * self._correction.as_array() // 255
+        ).astype(np.uint8)
+        self._inner.set_pixels(corrected)
+
+    def _check_index(self, index: int) -> None:
+        if not 0 <= index < self.length:
+            raise IndexError(f"pixel index {index} out of bounds for length {self.length}")
 
 
 class BrightnessController(Controller):
@@ -96,6 +198,9 @@ class BrightnessController(Controller):
     def force_flush(self) -> None:
         self._inner.force_flush()
 
+    def close(self) -> None:
+        self._inner.close()
+
 
 class ReversedController(Controller):
     def __init__(self, inner: Controller) -> None:
@@ -137,6 +242,9 @@ class ReversedController(Controller):
 
     def force_flush(self) -> None:
         self._inner.force_flush()
+
+    def close(self) -> None:
+        self._inner.close()
 
     def _map(self, index: int) -> int:
         if not 0 <= index < self.length:
@@ -204,6 +312,10 @@ class CompositeController(Controller):
         for controller in self._controllers:
             controller.force_flush()
 
+    def close(self) -> None:
+        for controller in self._controllers:
+            controller.close()
+
     def _locate(self, index: int) -> tuple[Controller, int]:
         if not 0 <= index < self.length:
             raise IndexError(f"pixel index {index} out of bounds for length {self.length}")
@@ -260,6 +372,10 @@ class MultiController(Controller):
     def force_flush(self) -> None:
         for controller in self._controllers:
             controller.force_flush()
+
+    def close(self) -> None:
+        for controller in self._controllers:
+            controller.close()
 
 
 class DualController(MultiController):

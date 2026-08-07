@@ -33,17 +33,22 @@ player.step(stripe)  # renders one frame
 
 ## Hardware Setup
 
-Connect 2-wire (clock + data) addressable LED strips to GPIO pins on a Raspberry Pi and install with GPIO support:
+For stable continuously animated output, connect a 2-wire strip to Raspberry
+Pi hardware SPI and install SPI support:
 
 ```bash
-pip install lumistripe-core[gpio]
+pip install lumistripe-core[spi]
 ```
 
 ```python
-from lumistripe import Config, GPIOStripe
+from lumistripe import SPIConfig, SPIStripe
 
-stripe = GPIOStripe(Config(gpio_data=14, gpio_clock=15), 80)
+stripe = SPIStripe(SPIConfig(device="/dev/spidev0.0"), 80)
 ```
+
+On Raspberry Pi 4, SPI0 data is GPIO10 (physical pin 19) and clock is GPIO11
+(physical pin 23). The legacy bit-banged backend remains available through
+`GPIOStripe` and `lumistripe-core[gpio]`.
 
 ## Audio Setup
 
@@ -55,18 +60,18 @@ pip install lumistripe-core[audio]
 
 LumiStripe works with any microphone or line-in device supported by `sounddevice`.
 
-GPIO and audio can be combined for audio-reactive lighting on real hardware:
+SPI and audio can be combined for audio-reactive lighting on real hardware:
 
 ```bash
-pip install lumistripe-core[gpio,audio]
+pip install lumistripe-core[spi,audio]
 ```
 
 ```python
-from lumistripe import (AnimationPlayer, AudioInput, AudioSnapshot, Config,
-                        GPIOStripe, PlaybackConfig, PlaybackEngine,
+from lumistripe import (AnimationPlayer, AudioInput, AudioSnapshot, SPIConfig,
+                        SPIStripe, PlaybackConfig, PlaybackEngine,
                         PlaybackMode)
 
-stripe = GPIOStripe(Config(gpio_data=14, gpio_clock=15), 80)
+stripe = SPIStripe(SPIConfig(), 80)
 player = AnimationPlayer.party()
 playback = PlaybackEngine(player, PlaybackConfig(mode=PlaybackMode.DYNAMIC))
 

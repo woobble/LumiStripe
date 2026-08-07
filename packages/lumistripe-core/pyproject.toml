@@ -20,6 +20,9 @@ audio = [
 gpio = [
     "gpiod>=2.5",
 ]
+spi = [
+    "spidev>=3.8",
+]
 
 [build-system]
 requires = ["setuptools>=83.0.0", "numpy>=2.5.1"]

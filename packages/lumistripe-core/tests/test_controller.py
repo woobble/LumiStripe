@@ -2,6 +2,8 @@ import numpy as np
 import pytest
 from lumistripe import (
     BrightnessController,
+    ColorCorrection,
+    ColorCorrectionController,
     CompositeController,
     MultiController,
     ReversedController,
@@ -24,6 +26,70 @@ class TrackingStripe(Stripe):
     def force_flush(self) -> None:
         self.force_flush_count += 1
         super().force_flush()
+
+
+def test_color_correction_validates_channel_gains() -> None:
+    assert ColorCorrection() == ColorCorrection(255, 255, 255)
+    with pytest.raises(ValueError, match="red correction"):
+        ColorCorrection(red=-1)
+    with pytest.raises(ValueError, match="blue correction"):
+        ColorCorrection(blue=256)
+
+
+def test_color_correction_controller_preserves_logical_pixels_and_alpha() -> None:
+    inner = TrackingStripe(2)
+    controller = ColorCorrectionController(
+        inner,
+        ColorCorrection(red=255, green=128, blue=64),
+    )
+    logical = np.array(
+        [[100, 100, 100, 127], [255, 128, 64, 255]],
+        dtype=np.uint8,
+    )
+
+    controller.set_pixels(logical)
+    controller.flush()
+
+    np.testing.assert_array_equal(controller.pixels(), logical)
+    np.testing.assert_array_equal(
+        inner.pixels(),
+        np.array([[100, 50, 25, 127], [255, 64, 16, 255]], dtype=np.uint8),
+    )
+    assert inner.flush_count == 1
+
+
+def test_color_correction_controller_reapplies_without_compounding() -> None:
+    inner = TrackingStripe(1)
+    controller = ColorCorrectionController(inner, ColorCorrection(128, 128, 128))
+    controller.set_pixel(0, Rgba(200, 100, 50, 0.5))
+
+    controller.force_flush()
+    first = inner.pixels().copy()
+    controller.force_flush()
+
+    np.testing.assert_array_equal(first, inner.pixels())
+    np.testing.assert_array_equal(first[0], np.array([100, 50, 25, 127], dtype=np.uint8))
+    assert controller.pixel(0).to_rgba() == (200, 100, 50, pytest.approx(127 / 255))
+    assert inner.force_flush_count == 2
+
+
+def test_color_correction_can_change_live_and_delegates_close() -> None:
+    inner = TrackingStripe(1)
+    controller = ColorCorrectionController(inner)
+    controller.fill(Rgb(120, 80, 40))
+    controller.set_correction(ColorCorrection(64, 128, 255))
+    controller.force_flush()
+
+    np.testing.assert_array_equal(inner.pixels()[0], np.array([30, 40, 40, 255]))
+    assert controller.correction == ColorCorrection(64, 128, 255)
+
+
+def test_color_correction_rejects_invalid_indices_and_overflow() -> None:
+    controller = ColorCorrectionController(Stripe(1))
+    with pytest.raises(IndexError, match="out of bounds"):
+        controller.pixel(1)
+    with pytest.raises(ValueError, match="color-correction controller length"):
+        controller.set_pixels(np.zeros((2, 4), dtype=np.uint8))
 
 
 def test_brightness_controller_clamps_and_scales_single_pixel() -> None:

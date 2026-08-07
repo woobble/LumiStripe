@@ -1,4 +1,5 @@
 import lumistripe.gpio as gpio_module
+import lumistripe.gpio.spi as spi_module
 import numpy as np
 import pytest
 from lumistripe import (
@@ -11,9 +12,12 @@ from lumistripe import (
     ReversedController,
     Rgb,
     Rgba,
+    SPIConfig,
+    SPIStripe,
     Stripe,
     SubStripe,
 )
+from lumistripe.gpio import encode_legacy_frame
 
 
 class FakeLineWriter:
@@ -22,6 +26,42 @@ class FakeLineWriter:
 
     def set_values(self, data: bool, clock: bool) -> None:
         self.writes.append((data, clock))
+
+
+class ClosableFakeLineWriter(FakeLineWriter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.close_count = 0
+
+    def close(self) -> None:
+        self.close_count += 1
+
+
+class FakeSPIDevice:
+    def __init__(self) -> None:
+        self.mode = -1
+        self.max_speed_hz = 0
+        self.bits_per_word = 0
+        self.lsbfirst = True
+        self.no_cs = False
+        self.transfers: list[tuple[list[int], int, int, int]] = []
+        self.close_count = 0
+
+    def open_path(self, path: str) -> None:
+        self.path = path
+
+    def xfer2(
+        self,
+        values: list[int],
+        speed_hz: int = 0,
+        delay_usec: int = 0,
+        bits_per_word: int = 0,
+    ) -> list[int]:
+        self.transfers.append((values, speed_hz, delay_usec, bits_per_word))
+        return [0] * len(values)
+
+    def close(self) -> None:
+        self.close_count += 1
 
 
 def test_stripe_initializes_clear_pixels() -> None:
@@ -250,6 +290,16 @@ def test_gpio_stripe_custom_writer_reports_custom_backend() -> None:
     assert stripe.gpio_backend_label == "custom"
 
 
+def test_gpio_stripe_close_is_idempotent() -> None:
+    writer = ClosableFakeLineWriter()
+    stripe = GPIOStripe(Config(), 1, _line_writer=writer)
+
+    stripe.close()
+    stripe.close()
+
+    assert writer.close_count == 1
+
+
 def test_gpio_stripe_custom_writer_can_report_backend_label() -> None:
     class LabeledWriter(FakeLineWriter):
         backend_label = "test-writer"
@@ -402,3 +452,120 @@ def test_gpio_stripe_supports_nested_line_enums(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr("lumistripe.gpio.importlib.import_module", lambda name: FakeGpiod)
     stripe = GPIOStripe(Config(), 1)
     stripe.flush()
+
+
+def test_legacy_spi_encoder_matches_gpio_pulse_bits() -> None:
+    pixels = np.array(
+        [[255, 0, 16, 127], [2, 128, 64, 255]],
+        dtype=np.uint8,
+    )
+    writer = FakeLineWriter()
+    gpio = GPIOStripe(Config(), 2, _line_writer=writer)
+    gpio.set_pixels(pixels)
+    gpio.flush()
+
+    pulse_bits = [
+        int(writer.writes[index][0]) for index in range(1, len(writer.writes), 3)
+    ]
+    encoded = encode_legacy_frame(pixels)
+    encoded_bits = np.unpackbits(encoded, bitorder="big").tolist()
+
+    assert encoded_bits[: len(pulse_bits)] == pulse_bits
+    assert encoded_bits[len(pulse_bits) :] == [0] * (
+        len(encoded_bits) - len(pulse_bits)
+    )
+
+
+def test_spi_stripe_configures_mode_and_sends_one_transfer() -> None:
+    device = FakeSPIDevice()
+    stripe = SPIStripe(
+        SPIConfig(device="/dev/spidev9.2", speed_hz=750_000),
+        2,
+        _device=device,
+    )
+    stripe.set_pixel(0, Rgba(255, 0, 0, 0.5))
+    stripe.flush()
+
+    assert device.mode == 0
+    assert device.max_speed_hz == 750_000
+    assert device.bits_per_word == 8
+    assert device.lsbfirst is False
+    assert device.no_cs is True
+    assert stripe.gpio_backend_label == "spi"
+    assert stripe.spi_device_path == "/dev/spidev9.2"
+    assert len(device.transfers) == 1
+    values, speed_hz, delay_usec, bits_per_word = device.transfers[0]
+    assert values == encode_legacy_frame(stripe.pixels()).tolist()
+    assert (speed_hz, delay_usec, bits_per_word) == (750_000, 0, 8)
+
+
+def test_spi_stripe_skips_clean_flush_and_force_flushes() -> None:
+    device = FakeSPIDevice()
+    stripe = SPIStripe(SPIConfig(max_transfer_bytes=4096), 1, _device=device)
+
+    stripe.flush()
+    stripe.flush()
+    stripe.force_flush()
+
+    assert len(device.transfers) == 2
+
+
+def test_spi_stripe_rejects_frame_larger_than_single_transfer() -> None:
+    stripe = SPIStripe(
+        SPIConfig(max_transfer_bytes=1),
+        1,
+        _device=FakeSPIDevice(),
+    )
+
+    with pytest.raises(RuntimeError, match="single-transfer limit"):
+        stripe.flush()
+
+
+def test_spi_stripe_close_is_idempotent_and_prevents_flush() -> None:
+    device = FakeSPIDevice()
+    stripe = SPIStripe(SPIConfig(), 1, _device=device)
+
+    stripe.close()
+    stripe.close()
+
+    assert device.close_count == 1
+    with pytest.raises(RuntimeError, match="closed"):
+        stripe.force_flush()
+
+
+def test_spi_config_accepts_defaults() -> None:
+    config = SPIConfig(device="/dev/spidev0.0")
+    assert config.speed_hz == 1_000_000
+
+
+def test_spi_config_rejects_invalid_values() -> None:
+    with pytest.raises(ValueError, match="path"):
+        SPIConfig(device="")
+    with pytest.raises(ValueError, match="speed"):
+        SPIConfig(speed_hz=0)
+    with pytest.raises(ValueError, match="transfer"):
+        SPIConfig(max_transfer_bytes=0)
+
+
+def test_spi_stripe_missing_dependency_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    def raising_import(name: str):
+        raise ImportError(name)
+
+    monkeypatch.setattr(spi_module.importlib, "import_module", raising_import)
+    with pytest.raises(RuntimeError, match=r"lumistripe-core\[spi\]"):
+        SPIStripe(SPIConfig(), 1)
+
+
+def test_spi_stripe_open_failure_is_actionable(monkeypatch: pytest.MonkeyPatch) -> None:
+    class UnavailableSPIDevice(FakeSPIDevice):
+        def open_path(self, path: str) -> None:
+            raise PermissionError(13, "Permission denied", path)
+
+    class FakeSPIModule:
+        @staticmethod
+        def SpiDev() -> UnavailableSPIDevice:
+            return UnavailableSPIDevice()
+
+    monkeypatch.setattr(spi_module.importlib, "import_module", lambda name: FakeSPIModule)
+    with pytest.raises(RuntimeError, match='cannot open SPI device "/dev/spidev0.0"'):
+        SPIStripe(SPIConfig(), 1)

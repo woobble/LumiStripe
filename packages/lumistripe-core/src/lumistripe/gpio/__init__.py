@@ -7,6 +7,9 @@ import numpy as np
 
 from ..color import Rgba
 from ..stripe import Config, Stripe, SubStripe
+from .spi import SPIConfig, SPIStripe, encode_legacy_frame
+
+__all__ = ["GPIOStripe", "SPIConfig", "SPIStripe", "encode_legacy_frame"]
 
 
 class _LineWriter(Protocol):
@@ -79,6 +82,15 @@ class _GPIODLineWriter:
             self._clock_pin: active if clock else inactive,
         }
         self._request.set_values(values)
+
+    def close(self) -> None:
+        request = getattr(self, "_request", None)
+        if request is None:
+            return
+        self._request = None
+        release = getattr(request, "release", None)
+        if callable(release):
+            release()
 
     def _supports_modern_api(self, gpiod: object) -> bool:
         if not hasattr(gpiod, "LineSettings"):
@@ -167,6 +179,7 @@ class GPIOStripe(Stripe):
         else:
             self._line_writer = _GPIODLineWriter(config)
             self._gpio_backend_label = self._line_writer.backend_label
+        self._closed = False
 
     @property
     def gpio_backend_label(self) -> str:
@@ -211,6 +224,14 @@ class GPIOStripe(Stripe):
     def clear(self) -> None:
         self._pixels[:] = np.array([0, 0, 0, 0], dtype=np.uint8)
         self._dirty[:] = True
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        close = getattr(self._line_writer, "close", None)
+        if callable(close):
+            close()
 
     def sub_stripe(self, start: int, end: int) -> SubStripe:
         return SubStripe(self, start, end)
