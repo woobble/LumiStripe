@@ -42,6 +42,42 @@ class CalibrationStatus(BaseModel):
     expires_in_seconds: float | None = None
 
 
+class StripeOutputConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=40)
+    pixels: int = Field(ge=1, le=4096)
+    backend: Literal["spi", "gpio"] = "spi"
+    reversed: bool = False
+    spi_device: str = Field(default="/dev/spidev0.0", min_length=1)
+    spi_speed_hz: int = Field(default=1_000_000, gt=0, le=32_000_000)
+    chip: str = Field(default="/dev/gpiochip0", min_length=1)
+    data_pin: int = Field(default=10, ge=0)
+    clock_pin: int = Field(default=11, ge=0)
+    last_output_at: datetime | None = None
+    error: str | None = None
+
+
+class StripeTopology(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    layout: Literal["mirrored", "continuous", "independent"] = "mirrored"
+    outputs: tuple[StripeOutputConfig, ...] = Field(default=(), max_length=2)
+
+
+class StripePlaybackState(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    stripe_id: str
+    mode: PlaybackMode = PlaybackMode.STATIC
+    solid_color: str = "#7C3AED"
+    animation: str = ""
+    brightness: float = 1.0
+    blackout: bool = False
+    music_active: bool = False
+
+
 class DashboardState(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -71,6 +107,8 @@ class DashboardState(BaseModel):
     application_version: str = "development"
     color_corrections: tuple[ColorCorrectionProfile, ...] = ()
     calibration: CalibrationStatus = CalibrationStatus()
+    stripe_topology: StripeTopology = StripeTopology()
+    stripe_playback: tuple[StripePlaybackState, ...] = ()
     diagnostic_issues: tuple[DiagnosticIssue, ...] = ()
     error: str | None = None
 
@@ -90,18 +128,33 @@ class AnimationList(BaseModel):
 class ModeRequest(BaseModel):
     mode: PlaybackMode
     color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    stripe_id: str | None = None
 
 
 class BrightnessRequest(BaseModel):
     brightness: float = Field(ge=0.0, le=1.0)
+    stripe_id: str | None = None
 
 
 class AnimationRequest(BaseModel):
     name: str = Field(min_length=1)
+    stripe_id: str | None = None
 
 
 class BlackoutRequest(BaseModel):
     enabled: bool
+    stripe_id: str | None = None
+
+
+class StripeTopologyRequest(BaseModel):
+    layout: Literal["mirrored", "continuous", "independent"]
+    outputs: tuple[StripeOutputConfig, ...] = Field(max_length=2)
+
+
+class StripeTestRequest(BaseModel):
+    stripe_id: str
+    pattern: Literal["identify", "red", "green", "blue", "white"] = "identify"
+    topology: StripeTopologyRequest | None = None
 
 
 class AccessStatus(BaseModel):
@@ -178,6 +231,31 @@ class AudioSettingsRequest(BaseModel):
 
 class AudioResetRequest(BaseModel):
     device: str = Field(min_length=1)
+
+
+class AudioDeviceRequest(BaseModel):
+    device: str = Field(min_length=1)
+
+
+class StartupPlaybackState(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    mode: PlaybackMode = PlaybackMode.STATIC
+    solid_color: str = Field(default="#7C3AED", pattern=r"^#[0-9A-Fa-f]{6}$")
+    animation: str = ""
+    brightness: float = Field(default=1.0, ge=0.0, le=1.0)
+    blackout: bool = False
+
+
+class StartupSettingsResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    restore_last_state: bool
+    remembered: StartupPlaybackState
+
+
+class StartupSettingsRequest(BaseModel):
+    restore_last_state: bool
 
 
 class AudioTelemetry(BaseModel):

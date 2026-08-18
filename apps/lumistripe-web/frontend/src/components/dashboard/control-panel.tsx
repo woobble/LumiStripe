@@ -22,14 +22,29 @@ export function ControlPanel({ controller }: { controller: DashboardController }
   const { state, animations, pendingCommand } = controller
   const [brightnessDraft, setBrightnessDraft] = useState<number | null>(null)
   const [colorDraft, setColorDraft] = useState<string | null>(null)
+  const [target, setTarget] = useState("all")
 
   if (!state) return null
   const disabled = !state.running || pendingCommand !== null
-  const brightness = brightnessDraft ?? Math.round(state.brightness * 100)
+  const targetId = target === "all" ? undefined : target
+  const targetPlayback = state.stripe_topology.layout === "independent"
+    ? (targetId
+        ? state.stripe_playback.find((item) => item.stripe_id === targetId)
+        : state.stripe_playback[0])
+    : undefined
+  const mode = targetPlayback?.mode ?? state.mode
+  const solidColor = targetPlayback?.solid_color ?? state.solid_color
+  const animation = targetPlayback?.animation ?? state.animation
+  const blackout = targetId
+    ? (targetPlayback?.blackout ?? false)
+    : state.stripe_topology.layout === "independent" && state.stripe_playback.length > 0
+      ? state.stripe_playback.every((item) => item.blackout)
+      : state.blackout
+  const brightness = brightnessDraft ?? Math.round((targetPlayback?.brightness ?? state.brightness) * 100)
 
   const changeMode = (values: string[]) => {
     const nextMode = values[0] as PlaybackMode | undefined
-    if (nextMode && nextMode !== state.mode) void controller.setMode(nextMode)
+    if (nextMode && nextMode !== mode) void controller.setMode(nextMode, targetId)
   }
 
   const brightnessValue = (value: number | readonly number[]) =>
@@ -40,27 +55,63 @@ export function ControlPanel({ controller }: { controller: DashboardController }
   }
 
   const commitBrightness = async (value: number | readonly number[]) => {
-    await controller.setBrightness(brightnessValue(value) / 100)
+    await controller.setBrightness(brightnessValue(value) / 100, targetId)
     setBrightnessDraft(null)
   }
 
   const commitSolidColor = async (color: string) => {
     setColorDraft(color)
-    await controller.setSolidColor(color)
+    await controller.setSolidColor(color, targetId)
     setColorDraft(null)
   }
 
   return (
     <div className="space-y-4 pb-4">
+      {state.stripe_topology.layout === "independent" && state.stripe_topology.outputs.length > 0 && (
+        <section className="space-y-2" aria-labelledby="control-target-label">
+          <div className="flex items-center justify-between px-1 text-xs">
+            <span id="control-target-label" className="font-medium text-muted-foreground">Control target</span>
+            <span className="max-w-[55%] truncate text-violet-200">
+              {target === "all" ? "All stripes" : state.stripe_topology.outputs.find((stripe) => stripe.id === target)?.name}
+            </span>
+          </div>
+          <ToggleGroup
+            value={[target]}
+            onValueChange={(values) => {
+              if (!values[0]) return
+              setBrightnessDraft(null)
+              setColorDraft(null)
+              setTarget(values[0])
+            }}
+            variant="outline"
+            spacing={1}
+            className="grid w-full gap-1 rounded-xl border border-white/5 bg-black/20 p-1"
+            style={{ gridTemplateColumns: `repeat(${state.stripe_topology.outputs.length + 1}, minmax(0, 1fr))` }}
+            aria-label="Control target"
+          >
+            <ToggleGroupItem value="all" className="h-11 min-w-0 rounded-lg border-0 px-2 data-pressed:bg-violet-400/15 data-pressed:text-violet-100">All</ToggleGroupItem>
+            {state.stripe_topology.outputs.map((stripe) => (
+              <ToggleGroupItem
+                key={stripe.id}
+                value={stripe.id}
+                title={stripe.name}
+                className="h-11 min-w-0 truncate rounded-lg border-0 px-2 data-pressed:bg-violet-400/15 data-pressed:text-violet-100"
+              >
+                <span className="truncate">{stripe.name}</span>
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        </section>
+      )}
       <Button
-        variant={state.blackout ? "default" : "destructive"}
+        variant={blackout ? "default" : "destructive"}
         size="lg"
-        className={state.blackout ? "h-14 w-full rounded-2xl bg-emerald-400 text-emerald-950 hover:bg-emerald-300" : "h-14 w-full rounded-2xl border-red-400/20 bg-red-500/15 text-red-200 hover:bg-red-500/25"}
+        className={blackout ? "h-14 w-full rounded-2xl bg-emerald-400 text-emerald-950 hover:bg-emerald-300" : "h-14 w-full rounded-2xl border-red-400/20 bg-red-500/15 text-red-200 hover:bg-red-500/25"}
         disabled={disabled}
-        onClick={() => void controller.setBlackout(!state.blackout)}
+        onClick={() => void controller.setBlackout(!blackout, targetId)}
       >
         <PowerIcon aria-hidden="true" />
-        {state.blackout ? "Restore lights" : "Blackout"}
+        {blackout ? "Restore lights" : "Blackout"}
       </Button>
 
       <Card className="border-white/5 bg-card/80 shadow-xl shadow-black/10 backdrop-blur-xl">
@@ -100,7 +151,7 @@ export function ControlPanel({ controller }: { controller: DashboardController }
         </CardHeader>
         <CardContent className="space-y-4">
           <ToggleGroup
-            value={[state.mode]}
+            value={[mode]}
             onValueChange={changeMode}
             disabled={disabled}
             variant="outline"
@@ -120,7 +171,7 @@ export function ControlPanel({ controller }: { controller: DashboardController }
             ))}
           </ToggleGroup>
 
-          {state.mode === "solid" ? (
+          {mode === "solid" ? (
             <div className="space-y-3 rounded-xl border border-white/5 bg-black/20 p-3">
               <div className="flex items-center justify-between gap-3">
                 <div>
@@ -129,13 +180,13 @@ export function ControlPanel({ controller }: { controller: DashboardController }
                 </div>
                 <label
                   className="relative size-12 shrink-0 cursor-pointer overflow-hidden rounded-xl border-2 border-white/15 shadow-lg"
-                  style={{ backgroundColor: colorDraft ?? state.solid_color }}
+                  style={{ backgroundColor: colorDraft ?? solidColor }}
                 >
                   <span className="sr-only">Choose solid color</span>
                   <input
                     type="color"
                     aria-label="Choose solid color"
-                    value={colorDraft ?? state.solid_color}
+                    value={colorDraft ?? solidColor}
                     disabled={disabled}
                     onChange={(event) => void commitSolidColor(event.target.value)}
                     className="absolute inset-0 size-full cursor-pointer opacity-0"
@@ -159,9 +210,9 @@ export function ControlPanel({ controller }: { controller: DashboardController }
           ) : (
             <AnimationSheet
               animations={animations}
-              current={state.animation}
+              current={animation}
               disabled={disabled}
-              onSelect={controller.selectAnimation}
+              onSelect={(name) => controller.selectAnimation(name, targetId)}
             />
           )}
         </CardContent>

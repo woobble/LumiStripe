@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
+import { Link } from "react-router"
 import {
   ActivityIcon,
   AudioLinesIcon,
   GaugeIcon,
   MicIcon,
-  RefreshCwIcon,
   RotateCcwIcon,
   SaveIcon,
   SlidersHorizontalIcon,
@@ -15,7 +15,6 @@ import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Slider } from "@/components/ui/slider"
 import {
@@ -129,10 +128,9 @@ export function AudioTuningPanel() {
     try {
       const next = await dashboardApi.getAudioSettings()
       setResponse(next)
-      const selector = next.active_device ?? next.devices[0]?.selector ?? null
+      const selector = next.active_device
       setSelectedDevice(selector)
-      const device = next.devices.find((item) => item.selector === selector)
-      setDraft(device?.settings ?? next.settings)
+      setDraft(next.settings)
       setDirty(false)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not load audio settings.")
@@ -174,14 +172,6 @@ export function AudioTuningPanel() {
     }
   }, [])
 
-  const selectDevice = (selector: string) => {
-    const device = response?.devices.find((item) => item.selector === selector)
-    if (!device) return
-    setSelectedDevice(selector)
-    setDraft(device.settings)
-    setDirty(selector !== response?.active_device)
-  }
-
   const change = (key: SliderKey, value: number) => {
     setDraft((current) => current ? { ...current, [key]: value } : current)
     setDirty(true)
@@ -219,17 +209,14 @@ export function AudioTuningPanel() {
     }
   }
 
-  const activeDeviceName = useMemo(
-    () => response?.devices.find((item) => item.selector === selectedDevice)?.name ?? response?.active_device_name,
-    [response, selectedDevice],
-  )
-
   if (loading && !response) {
     return <div className="space-y-4"><Skeleton className="h-32 rounded-xl" /><Skeleton className="h-64 rounded-xl" /><Skeleton className="h-72 rounded-xl" /></div>
   }
   if (!response || !draft) {
     return <Card><CardHeader><CardTitle>Audio tuning unavailable</CardTitle><CardDescription>Could not load microphone settings.</CardDescription></CardHeader><CardContent><Button onClick={() => void load()}>Try again</Button></CardContent></Card>
   }
+  const activeDeviceName = response.active_device_name
+    ?? response.devices.find((item) => item.selector === selectedDevice)?.name
 
   const thresholds = [
     ["Energy", telemetry.gate_energy, draft.energy_threshold],
@@ -246,17 +233,11 @@ export function AudioTuningPanel() {
       </div>
 
       <Card className="border-white/5 bg-card/80 shadow-xl shadow-black/10 backdrop-blur-xl">
-        <CardHeader><CardTitle className="flex items-center gap-2"><MicIcon className="size-4 text-violet-300" />Input device</CardTitle><CardDescription>{response.monitoring ? `Monitoring ${response.active_device_name}` : `Audio source: ${response.source}`}</CardDescription></CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex gap-2">
-            <Select value={selectedDevice} onValueChange={(value) => value && selectDevice(value)} disabled={!response.devices.length || saving}>
-              <SelectTrigger className="h-11 min-w-0 flex-1 rounded-xl"><SelectValue>{activeDeviceName ?? "Select microphone"}</SelectValue></SelectTrigger>
-              <SelectContent>{response.devices.map((device) => <SelectItem key={device.selector} value={device.selector}>{device.name}</SelectItem>)}</SelectContent>
-            </Select>
-            <Button variant="outline" size="icon" className="size-11 rounded-xl" onClick={() => void load()} aria-label="Refresh audio devices"><RefreshCwIcon /></Button>
-          </div>
-          {response.error && <p className="rounded-xl bg-red-500/10 p-3 text-sm text-red-200">{response.error}</p>}
-        </CardContent>
+        <CardHeader className="grid-cols-[1fr_auto]">
+          <div><CardTitle className="flex items-center gap-2"><MicIcon className="size-4 text-violet-300" />{activeDeviceName ?? "No input selected"}</CardTitle><CardDescription>{response.monitoring ? "Active microphone" : `Audio source: ${response.source}`}</CardDescription></div>
+          <Link to="/setup/audio" className="inline-flex h-9 items-center justify-center rounded-lg border border-border bg-background px-3 text-sm font-medium hover:bg-muted">Change</Link>
+        </CardHeader>
+        {response.error && <CardContent><p className="rounded-xl bg-red-500/10 p-3 text-sm text-red-200">{response.error}</p></CardContent>}
       </Card>
 
       <Card className="border-white/5 bg-card/80 shadow-xl shadow-black/10 backdrop-blur-xl">

@@ -73,6 +73,63 @@ def test_api_maps_validation_and_runtime_errors() -> None:
         assert conflict.status_code == 409
 
 
+def test_stripe_management_api_applies_and_targets_independent_outputs(
+    tmp_path: Path,
+) -> None:
+    app = create_app(
+        RuntimeSettings(pixels=8, settings_file=tmp_path / "settings.json")
+    )
+    topology = {
+        "layout": "independent",
+        "outputs": [
+            {
+                "id": "left",
+                "name": "Left",
+                "pixels": 41,
+                "backend": "spi",
+                "spi_device": "/dev/spidev0.0",
+                "spi_speed_hz": 1_000_000,
+                "chip": "/dev/gpiochip0",
+                "data_pin": 10,
+                "clock_pin": 11,
+            },
+            {
+                "id": "right",
+                "name": "Right",
+                "pixels": 80,
+                "backend": "gpio",
+                "spi_device": "/dev/spidev1.0",
+                "spi_speed_hz": 1_000_000,
+                "chip": "/dev/gpiochip0",
+                "data_pin": 20,
+                "clock_pin": 21,
+                "reversed": True,
+            },
+        ],
+    }
+    with TestClient(app) as client:
+        applied = client.put("/api/stripes", json=topology)
+        assert applied.status_code == 200
+        assert applied.json()["stripe_topology"]["layout"] == "independent"
+        assert client.get("/api/stripes").json()["outputs"][1]["pixels"] == 80
+
+        targeted = client.put(
+            "/api/brightness", json={"brightness": 0.2, "stripe_id": "right"}
+        )
+        states = {
+            item["stripe_id"]: item for item in targeted.json()["stripe_playback"]
+        }
+        assert states["left"]["brightness"] == 1.0
+        assert states["right"]["brightness"] == 0.2
+
+        assert (
+            client.post(
+                "/api/stripes/test", json={"stripe_id": "right", "pattern": "red"}
+            ).status_code
+            == 200
+        )
+
+
 def test_audio_settings_api_and_telemetry_websocket(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -100,16 +157,36 @@ def test_audio_settings_api_and_telemetry_websocket(
         assert updated.json()["active_device"] == "2"
         assert updated.json()["settings"]["target_level"] == 0.5
 
+        selected = client.put("/api/audio/device", json={"device": "2"})
+        assert selected.status_code == 200
+        assert selected.json()["active_device"] == "2"
+
         invalid = dict(values, target_level=0.99)
-        assert client.put(
-            "/api/audio/settings",
-            json={"device": "2", "settings": invalid},
-        ).status_code == 422
+        assert (
+            client.put(
+                "/api/audio/settings",
+                json={"device": "2", "settings": invalid},
+            ).status_code
+            == 422
+        )
 
         with client.websocket_connect("/ws/audio") as websocket:
             telemetry = websocket.receive_json()
             assert len(telemetry["bands"]) == 8
             assert telemetry["gate_preview"] is True
+
+
+def test_startup_settings_api_captures_current_state(tmp_path: Path) -> None:
+    app = create_app(RuntimeSettings(pixels=8, settings_file=tmp_path / "settings.json"))
+    with TestClient(app) as client:
+        assert client.get("/api/startup").json()["restore_last_state"] is False
+        client.put("/api/brightness", json={"brightness": 0.4})
+
+        updated = client.put("/api/startup", json={"restore_last_state": True})
+
+        assert updated.status_code == 200
+        assert updated.json()["restore_last_state"] is True
+        assert updated.json()["remembered"]["brightness"] == pytest.approx(0.4)
 
 
 def test_calibration_api_session_lifecycle(tmp_path: Path) -> None:

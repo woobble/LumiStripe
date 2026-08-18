@@ -26,7 +26,13 @@ from lumistripe_web.runtime import (
     UnknownAnimationError,
     _default_controller_factory,
 )
-from lumistripe_web.settings import AudioTuningProfile, CalibrationSettingsStore
+from lumistripe_web.settings import (
+    AudioTuningProfile,
+    CalibrationSettingsStore,
+    StartupPlaybackSettings,
+    StripeOutputSettings,
+    StripeTopologySettings,
+)
 
 
 class TrackingStripe(Stripe):
@@ -253,6 +259,94 @@ def test_failed_microphone_swap_keeps_current_input(
         runtime.stop()
 
 
+def test_saved_audio_device_takes_precedence_over_cli_fallback(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.json"
+    CalibrationSettingsStore(path).save_audio("Saved Mic", {})
+    opened: list[str | None] = []
+
+    def audio_factory(device, config):
+        del config
+        opened.append(device)
+        return FakeAudioInput("Saved Mic", None)
+
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(
+            hardware=True,
+            pixels=4,
+            audio_source="mic",
+            audio_device="CLI Mic",
+            settings_file=path,
+        ),
+        controller_factory=lambda settings: TrackingStripe(settings.pixels),
+        audio_factory=audio_factory,
+    )
+    runtime.start()
+    try:
+        assert opened == ["Saved Mic"]
+    finally:
+        runtime.stop()
+
+
+def test_startup_restore_remembers_all_target_changes_only(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    store = CalibrationSettingsStore(path)
+    store.save_stripes(
+        StripeTopologySettings(
+            layout="independent",
+            outputs=(
+                StripeOutputSettings(id="left", name="Left", pixels=4),
+                StripeOutputSettings(id="right", name="Right", pixels=4, spi_device="/dev/spidev1.0"),
+            ),
+        )
+    )
+    runtime = LumiStripeRuntime(RuntimeSettings(pixels=4, settings_file=path))
+    runtime.start()
+    try:
+        runtime.set_startup_restore(True).result(timeout=1)
+        runtime.set_mode(PlaybackMode.SOLID, solid_color="#AA1100").result(timeout=1)
+        runtime.set_brightness(0.25).result(timeout=1)
+        runtime.set_brightness(0.8, stripe_id="left").result(timeout=1)
+        runtime.set_blackout(True).result(timeout=1)
+    finally:
+        runtime.stop()
+
+    saved, warning = store.load_all()
+    assert warning is None
+    assert saved.remembered_playback.brightness == pytest.approx(0.25)
+
+    restored = LumiStripeRuntime(RuntimeSettings(pixels=4, settings_file=path))
+    restored.start()
+    try:
+        states = restored.snapshot().stripe_playback
+        assert len(states) == 2
+        assert all(item.mode is PlaybackMode.SOLID for item in states)
+        assert all(item.solid_color == "#AA1100" for item in states)
+        assert all(item.brightness == pytest.approx(0.25) for item in states)
+        assert all(item.blackout is True for item in states)
+    finally:
+        restored.stop()
+
+
+def test_unknown_startup_animation_falls_back_with_warning(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    CalibrationSettingsStore(path).save_startup(
+        True, StartupPlaybackSettings(animation="removed-animation")
+    )
+    runtime = LumiStripeRuntime(RuntimeSettings(pixels=4, settings_file=path))
+    runtime.start()
+    try:
+        assert runtime.healthy is True
+        assert any(
+            issue.title == "Dashboard settings were not fully loaded"
+            and "removed-animation" in issue.message
+            for issue in runtime.snapshot().diagnostic_issues
+        )
+    finally:
+        runtime.stop()
+
+
 def test_select_animation_switches_to_static() -> None:
     runtime = LumiStripeRuntime(RuntimeSettings(pixels=8))
     runtime.start()
@@ -439,7 +533,9 @@ def test_calibration_save_persists_selected_profile_and_restores_blackout(
             "blue",
         ).result(timeout=1)
 
-        saved = runtime.finish_calibration(started.session_id, save=True).result(timeout=1)
+        saved = runtime.finish_calibration(started.session_id, save=True).result(
+            timeout=1
+        )
 
         assert saved.blackout is True
         assert saved.color_corrections[1].red == 210
@@ -505,7 +601,7 @@ def test_invalid_calibration_settings_are_actionable(tmp_path: Path) -> None:
         issue = next(
             item
             for item in runtime.snapshot().diagnostic_issues
-                if item.title == "Dashboard settings were not fully loaded"
+            if item.title == "Dashboard settings were not fully loaded"
         )
         assert "invalid" in issue.message.lower()
         assert "dashboard settings file" in issue.action
@@ -536,5 +632,93 @@ def test_saved_correction_is_loaded_and_applied_on_startup(tmp_path: Path) -> No
             assert time.monotonic() < deadline
             time.sleep(0.01)
         assert state.color_corrections[0].red == 128
+    finally:
+        runtime.stop()
+
+
+def test_live_topology_supports_unequal_continuous_and_zero_outputs(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.json"
+    runtime = LumiStripeRuntime(RuntimeSettings(pixels=2, settings_file=path))
+    runtime.start()
+    try:
+        topology = StripeTopologySettings(
+            layout="continuous",
+            outputs=(
+                StripeOutputSettings(id="a", name="A", pixels=3),
+                StripeOutputSettings(
+                    id="b", name="B", pixels=5, spi_device="/dev/spidev1.0"
+                ),
+            ),
+        )
+        state = runtime.apply_stripe_topology(topology).result(timeout=1)
+        assert state.stripe_topology.layout == "continuous"
+        assert [item.pixels for item in state.stripe_topology.outputs] == [3, 5]
+
+        empty = runtime.apply_stripe_topology(
+            StripeTopologySettings(layout="independent")
+        ).result(timeout=1)
+        assert empty.running is True
+        assert empty.stripe_topology.outputs == ()
+        assert CalibrationSettingsStore(path).load_all()[
+            0
+        ].stripe_topology == StripeTopologySettings(layout="independent")
+    finally:
+        runtime.stop()
+
+
+def test_independent_layout_accepts_targeted_playback_commands(tmp_path: Path) -> None:
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(pixels=2, settings_file=tmp_path / "settings.json")
+    )
+    runtime.start()
+    try:
+        topology = StripeTopologySettings(
+            layout="independent",
+            outputs=(
+                StripeOutputSettings(id="a", name="A", pixels=2),
+                StripeOutputSettings(
+                    id="b", name="B", pixels=2, spi_device="/dev/spidev1.0"
+                ),
+            ),
+        )
+        runtime.apply_stripe_topology(topology).result(timeout=1)
+        state = runtime.set_brightness(0.25, stripe_id="b").result(timeout=1)
+        playback = {item.stripe_id: item for item in state.stripe_playback}
+        assert playback["a"].brightness == 1.0
+        assert playback["b"].brightness == 0.25
+    finally:
+        runtime.stop()
+
+
+def test_draft_stripe_test_temporarily_swaps_and_restores_topology(
+    tmp_path: Path,
+) -> None:
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(pixels=2, settings_file=tmp_path / "settings.json")
+    )
+    runtime.start()
+    try:
+        original = runtime._topology
+        draft = StripeTopologySettings(
+            layout="mirrored",
+            outputs=(StripeOutputSettings(id="draft", name="Draft", pixels=5),),
+        )
+        state = runtime.test_stripe("draft", "identify", draft).result(timeout=1)
+        assert state.stripe_topology.outputs[0].id == "draft"
+
+        assert runtime._stripe_test is not None
+        runtime._stripe_test.expires_at = 0
+        deadline = time.monotonic() + 1
+        while runtime._topology != original:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        assert (
+            CalibrationSettingsStore(tmp_path / "settings.json")
+            .load_all()[0]
+            .stripe_topology
+            is None
+        )
     finally:
         runtime.stop()

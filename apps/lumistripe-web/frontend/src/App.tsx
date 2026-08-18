@@ -1,4 +1,4 @@
-import { ActivityIcon, AudioLinesIcon, CircleAlertIcon, LightbulbIcon, PaletteIcon, SlidersHorizontalIcon } from "lucide-react"
+import { ActivityIcon, AudioLinesIcon, CircleAlertIcon, LightbulbIcon, Settings2Icon, SlidersHorizontalIcon } from "lucide-react"
 import { lazy, Suspense, type MouseEvent } from "react"
 import { Navigate, NavLink, Route, Routes } from "react-router"
 import { toast } from "sonner"
@@ -8,6 +8,8 @@ import { ConnectionBadge } from "@/components/dashboard/connection-badge"
 import { CalibrationPanel } from "@/components/dashboard/calibration-panel"
 import { ControlPanel } from "@/components/dashboard/control-panel"
 import { StatusPanel } from "@/components/dashboard/status-panel"
+import { SetupPage } from "@/components/dashboard/setup-nav"
+import { StripeManagementPanel } from "@/components/dashboard/stripe-management-panel"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Toaster } from "@/components/ui/sonner"
@@ -18,6 +20,16 @@ import { cn } from "@/lib/utils"
 const AudioTuningPanel = lazy(async () => {
   const module = await import("@/components/dashboard/audio-tuning-panel")
   return { default: module.AudioTuningPanel }
+})
+
+const AudioInputPanel = lazy(async () => {
+  const module = await import("@/components/dashboard/audio-input-panel")
+  return { default: module.AudioInputPanel }
+})
+
+const StartupPanel = lazy(async () => {
+  const module = await import("@/components/dashboard/startup-panel")
+  return { default: module.StartupPanel }
 })
 
 function DashboardSkeleton() {
@@ -84,7 +96,12 @@ function Dashboard({ access }: { access: AccessController }) {
             <Routes>
               <Route path="/" element={<ControlPanel controller={controller} />} />
               <Route path="/audio" element={<Suspense fallback={<DashboardSkeleton />}><AudioTuningPanel /></Suspense>} />
-              <Route path="/calibration" element={<CalibrationPanel controller={controller} />} />
+              <Route path="/setup" element={<Navigate to="/setup/stripes" replace />} />
+              <Route path="/setup/stripes" element={<StripeManagementPanel controller={controller} />} />
+              <Route path="/setup/color" element={<SetupPage><CalibrationPanel controller={controller} /></SetupPage>} />
+              <Route path="/setup/audio" element={<Suspense fallback={<DashboardSkeleton />}><AudioInputPanel /></Suspense>} />
+              <Route path="/setup/startup" element={<Suspense fallback={<DashboardSkeleton />}><StartupPanel /></Suspense>} />
+              <Route path="/calibration" element={<Navigate to="/setup/color" replace />} />
               <Route path="/diagnostics" element={<StatusPanel controller={controller} onLogout={access.required ? access.logout : undefined} />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
@@ -109,11 +126,11 @@ function Dashboard({ access }: { access: AccessController }) {
                     Audio
                   </NavLink>
                   <NavLink
-                    to="/calibration"
+                    to="/setup"
                     className={({ isActive }) => cn("flex h-full w-full flex-col items-center justify-center gap-0.5 rounded-xl text-[10px] font-medium text-foreground/60 transition-colors", isActive && "bg-background text-foreground shadow-sm")}
                   >
-                    <PaletteIcon aria-hidden="true" />
-                    Color
+                    <Settings2Icon aria-hidden="true" />
+                    Setup
                   </NavLink>
                   <NavLink
                     to="/diagnostics"

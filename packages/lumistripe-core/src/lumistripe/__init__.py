@@ -78,7 +78,9 @@ from .controller import (
     Controller,
     DualController,
     MultiController,
+    NullController,
     ReversedController,
+    ScaledMultiController,
 )
 from .effects import (
     BassDrop,
@@ -238,6 +240,7 @@ __all__ = [
     "MusicGateState",
     "NeonConfetti",
     "NeonStorm",
+    "NullController",
     "PeakMirror",
     "PixelBuffer",
     "PixelExplosion",
@@ -261,6 +264,7 @@ __all__ = [
     "RgbwTest",
     "SPIConfig",
     "SPIStripe",
+    "ScaledMultiController",
     "SelectorDecision",
     "Shockwave",
     "Sinelon",

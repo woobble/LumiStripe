@@ -101,6 +101,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Persistent dashboard settings file (default: ~/.config/lumistripe/settings.json)",
     )
     parser.add_argument(
+        "--ignore-saved-stripes",
+        action="store_true",
+        help="Use CLI output settings for this run instead of the saved stripe topology",
+    )
+    parser.add_argument(
         "--pairing-code",
         type=_pairing_code,
         help="Require this four-digit code before allowing dashboard access",
@@ -129,6 +134,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         audio_source=args.audio_source,
         audio_device=args.audio_device,
         settings_file=args.settings_file,
+        ignore_saved_stripes=args.ignore_saved_stripes,
     )
     uvicorn.run(
         create_app(settings, pairing_code=args.pairing_code),

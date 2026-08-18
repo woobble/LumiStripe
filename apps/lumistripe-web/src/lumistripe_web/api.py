@@ -27,6 +27,7 @@ from .models import (
     AccessStatus,
     AnimationList,
     AnimationRequest,
+    AudioDeviceRequest,
     AudioResetRequest,
     AudioSettingsRequest,
     AudioSettingsResponse,
@@ -40,6 +41,11 @@ from .models import (
     DashboardState,
     ModeRequest,
     PairingRequest,
+    StartupSettingsRequest,
+    StartupSettingsResponse,
+    StripeTestRequest,
+    StripeTopology,
+    StripeTopologyRequest,
 )
 from .runtime import (
     LumiStripeRuntime,
@@ -47,7 +53,7 @@ from .runtime import (
     RuntimeUnavailableError,
     UnknownAnimationError,
 )
-from .settings import AudioTuningProfile
+from .settings import AudioTuningProfile, StripeOutputSettings, StripeTopologySettings
 
 COMMAND_TIMEOUT_SECONDS = 5.0
 WEBSOCKET_INTERVAL_SECONDS = 0.25
@@ -139,28 +145,79 @@ async def animations(request: Request) -> AnimationList:
 @router.put("/api/mode", response_model=DashboardState)
 async def set_mode(request: Request, body: ModeRequest) -> DashboardState:
     return await _await_command(
-        _runtime_from_request(request).set_mode(body.mode, solid_color=body.color)
+        _runtime_from_request(request).set_mode(
+            body.mode, solid_color=body.color, stripe_id=body.stripe_id
+        )
     )
 
 
 @router.put("/api/brightness", response_model=DashboardState)
 async def set_brightness(request: Request, body: BrightnessRequest) -> DashboardState:
     return await _await_command(
-        _runtime_from_request(request).set_brightness(body.brightness)
+        _runtime_from_request(request).set_brightness(
+            body.brightness, stripe_id=body.stripe_id
+        )
     )
 
 
 @router.put("/api/animation", response_model=DashboardState)
 async def select_animation(request: Request, body: AnimationRequest) -> DashboardState:
     return await _await_command(
-        _runtime_from_request(request).select_animation(body.name)
+        _runtime_from_request(request).select_animation(
+            body.name, stripe_id=body.stripe_id
+        )
     )
 
 
 @router.post("/api/blackout", response_model=DashboardState)
 async def set_blackout(request: Request, body: BlackoutRequest) -> DashboardState:
     return await _await_command(
-        _runtime_from_request(request).set_blackout(body.enabled)
+        _runtime_from_request(request).set_blackout(
+            body.enabled, stripe_id=body.stripe_id
+        )
+    )
+
+
+@router.get("/api/stripes", response_model=StripeTopology)
+async def stripe_topology(request: Request) -> StripeTopology:
+    return _runtime_from_request(request).snapshot().stripe_topology
+
+
+@router.put("/api/stripes", response_model=DashboardState)
+async def update_stripe_topology(
+    request: Request, body: StripeTopologyRequest
+) -> DashboardState:
+    try:
+        topology = _topology_settings(body)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return await _await_command(
+        _runtime_from_request(request).apply_stripe_topology(topology)
+    )
+
+
+@router.post("/api/stripes/test", response_model=DashboardState)
+async def test_stripe(request: Request, body: StripeTestRequest) -> DashboardState:
+    try:
+        topology = _topology_settings(body.topology) if body.topology else None
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return await _await_command(
+        _runtime_from_request(request).test_stripe(
+            body.stripe_id, body.pattern, topology
+        )
+    )
+
+
+def _topology_settings(body: StripeTopologyRequest) -> StripeTopologySettings:
+    return StripeTopologySettings(
+        layout=body.layout,
+        outputs=tuple(
+            StripeOutputSettings(
+                **output.model_dump(exclude={"last_output_at", "error"})
+            )
+            for output in body.outputs
+        ),
     )
 
 
@@ -211,6 +268,15 @@ async def audio_settings(request: Request) -> AudioSettingsResponse:
     return _runtime_from_request(request).audio_settings()
 
 
+@router.put("/api/audio/device", response_model=AudioSettingsResponse)
+async def select_audio_device(
+    request: Request, body: AudioDeviceRequest
+) -> AudioSettingsResponse:
+    return await _await_command(
+        _runtime_from_request(request).select_audio_device(body.device)
+    )
+
+
 @router.put("/api/audio/settings", response_model=AudioSettingsResponse)
 async def update_audio_settings(
     request: Request,
@@ -229,6 +295,20 @@ async def reset_audio_settings(
 ) -> AudioSettingsResponse:
     return await _await_command(
         _runtime_from_request(request).reset_audio_settings(body.device)
+    )
+
+
+@router.get("/api/startup", response_model=StartupSettingsResponse)
+async def startup_settings(request: Request) -> StartupSettingsResponse:
+    return _runtime_from_request(request).startup_settings()
+
+
+@router.put("/api/startup", response_model=StartupSettingsResponse)
+async def update_startup_settings(
+    request: Request, body: StartupSettingsRequest
+) -> StartupSettingsResponse:
+    return await _await_command(
+        _runtime_from_request(request).set_startup_restore(body.restore_last_state)
     )
 
 

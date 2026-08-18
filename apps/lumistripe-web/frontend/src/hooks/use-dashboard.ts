@@ -9,10 +9,11 @@ import {
   type CalibrationPattern,
   type DashboardState,
   type PlaybackMode,
+  type StripeTopology,
 } from "@/lib/api"
 
 export type ConnectionStatus = "connecting" | "connected" | "reconnecting"
-export type CommandName = "mode" | "brightness" | "solidColor" | "animation" | "blackout" | "calibration"
+export type CommandName = "mode" | "brightness" | "solidColor" | "animation" | "blackout" | "calibration" | "stripes" | "stripeTest"
 
 function newerState(current: DashboardState | null, incoming: DashboardState) {
   return current === null || incoming.revision >= current.revision ? incoming : current
@@ -153,15 +154,19 @@ export function useDashboard() {
     loadError,
     pendingCommand,
     refresh,
-    setMode: (mode: PlaybackMode) => runCommand("mode", () => dashboardApi.setMode(mode)),
-    setBrightness: (brightness: number) =>
-      runCommand("brightness", () => dashboardApi.setBrightness(brightness)),
-    setSolidColor: (color: string) =>
-      runCommand("solidColor", () => dashboardApi.setMode("solid", color)),
-    selectAnimation: (name: string) =>
-      runCommand("animation", () => dashboardApi.selectAnimation(name)),
-    setBlackout: (enabled: boolean) =>
-      runCommand("blackout", () => dashboardApi.setBlackout(enabled)),
+    setMode: (mode: PlaybackMode, stripeId?: string) => runCommand("mode", () => dashboardApi.setMode(mode, undefined, stripeId)),
+    setBrightness: (brightness: number, stripeId?: string) =>
+      runCommand("brightness", () => dashboardApi.setBrightness(brightness, stripeId)),
+    setSolidColor: (color: string, stripeId?: string) =>
+      runCommand("solidColor", () => dashboardApi.setMode("solid", color, stripeId)),
+    selectAnimation: (name: string, stripeId?: string) =>
+      runCommand("animation", () => dashboardApi.selectAnimation(name, stripeId)),
+    setBlackout: (enabled: boolean, stripeId?: string) =>
+      runCommand("blackout", () => dashboardApi.setBlackout(enabled, stripeId)),
+    updateStripes: (topology: StripeTopology) =>
+      runCommand("stripes", () => dashboardApi.updateStripes(topology)),
+    testStripe: (stripeId: string, pattern: "identify" | "red" | "green" | "blue" | "white", topology?: StripeTopology) =>
+      runCommand("stripeTest", () => dashboardApi.testStripe(stripeId, pattern, topology)),
     startCalibration,
     updateCalibration,
     finishCalibration,
