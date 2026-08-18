@@ -156,7 +156,9 @@ class ColorCorrectionController(Controller):
 
     def _check_index(self, index: int) -> None:
         if not 0 <= index < self.length:
-            raise IndexError(f"pixel index {index} out of bounds for length {self.length}")
+            raise IndexError(
+                f"pixel index {index} out of bounds for length {self.length}"
+            )
 
 
 class BrightnessController(Controller):
@@ -179,7 +181,11 @@ class BrightnessController(Controller):
         self._inner.set_pixel(index, Rgba(r, g, b, a * self._brightness))
 
     def set_pixels(self, colors: Sequence[Color] | npt.ArrayLike) -> None:
-        if isinstance(colors, Sequence) and len(colors) > 0 and isinstance(colors[0], Color):
+        if (
+            isinstance(colors, Sequence)
+            and len(colors) > 0
+            and isinstance(colors[0], Color)
+        ):
             scaled = []
             for color in colors:
                 assert isinstance(color, Color)
@@ -189,9 +195,9 @@ class BrightnessController(Controller):
             return
 
         pixels = as_pixel_buffer(colors).copy()
-        pixels[:, 3] = (pixels[:, 3].astype("uint16") * int(self._brightness * 255) // 255).astype(
-            "uint8"
-        )
+        pixels[:, 3] = (
+            pixels[:, 3].astype("uint16") * int(self._brightness * 255) // 255
+        ).astype("uint8")
         self._inner.set_pixels(pixels)
 
     def fill(self, color: Color) -> None:
@@ -257,7 +263,9 @@ class ReversedController(Controller):
 
     def _map(self, index: int) -> int:
         if not 0 <= index < self.length:
-            raise IndexError(f"pixel index {index} out of bounds for length {self.length}")
+            raise IndexError(
+                f"pixel index {index} out of bounds for length {self.length}"
+            )
         return self.length - 1 - index
 
 
@@ -280,7 +288,9 @@ class CompositeController(Controller):
     def pixels(self) -> PixelBuffer:
         if len(self._controllers) == 1:
             return self._controllers[0].pixels()
-        return np.concatenate([controller.pixels() for controller in self._controllers], axis=0)
+        return np.concatenate(
+            [controller.pixels() for controller in self._controllers], axis=0
+        )
 
     def pixel(self, index: int) -> Color:
         controller, local_index = self._locate(index)
@@ -327,11 +337,113 @@ class CompositeController(Controller):
 
     def _locate(self, index: int) -> tuple[Controller, int]:
         if not 0 <= index < self.length:
-            raise IndexError(f"pixel index {index} out of bounds for length {self.length}")
+            raise IndexError(
+                f"pixel index {index} out of bounds for length {self.length}"
+            )
         for controller, offset in zip(self._controllers, self._offsets, strict=True):
             if index < offset + controller.length:
                 return controller, index - offset
         raise IndexError(f"pixel index {index} out of bounds for length {self.length}")
+
+
+class NullController(Controller):
+    """In-memory sink used when no physical outputs are configured."""
+
+    def __init__(self, length: int = 1) -> None:
+        if length <= 0:
+            raise ValueError("null controller length must be greater than zero")
+        self._pixels = new_pixel_buffer(length)
+
+    @property
+    def length(self) -> int:
+        return self._pixels.shape[0]
+
+    def pixels(self) -> PixelBuffer:
+        return self._pixels
+
+    def pixel(self, index: int) -> Color:
+        red, green, blue, alpha = self._pixels[index]
+        return Rgba(int(red), int(green), int(blue), float(alpha) / 255.0)
+
+    def set_pixel(self, index: int, color: Color) -> None:
+        self._pixels[index] = color.as_rgba_array()
+
+    def set_pixels(self, colors: Sequence[Color] | npt.ArrayLike) -> None:
+        normalized = as_pixel_buffer(colors)
+        if normalized.shape[0] > self.length:
+            raise ValueError("too many pixels for null controller")
+        self._pixels[: normalized.shape[0]] = normalized
+
+    def fill(self, color: Color) -> None:
+        self._pixels[:] = color.as_rgba_array()
+
+    def clear(self) -> None:
+        clear_pixels(self._pixels)
+
+    def flush(self) -> None:
+        pass
+
+
+class ScaledMultiController(Controller):
+    """Mirror one logical frame across outputs of different lengths."""
+
+    def __init__(self, controllers: Sequence[Controller]) -> None:
+        if not controllers:
+            raise ValueError("at least one controller is required")
+        self._controllers = list(controllers)
+        self._length = max(controller.length for controller in controllers)
+        self._pixels = new_pixel_buffer(self._length)
+        self._indices = tuple(
+            np.rint(np.linspace(0, self._length - 1, controller.length)).astype(np.intp)
+            if controller.length > 1
+            else np.array([0], dtype=np.intp)
+            for controller in controllers
+        )
+
+    @property
+    def controllers(self) -> tuple[Controller, ...]:
+        return tuple(self._controllers)
+
+    @property
+    def length(self) -> int:
+        return self._length
+
+    def pixels(self) -> PixelBuffer:
+        return self._pixels
+
+    def pixel(self, index: int) -> Color:
+        red, green, blue, alpha = self._pixels[index]
+        return Rgba(int(red), int(green), int(blue), float(alpha) / 255.0)
+
+    def set_pixel(self, index: int, color: Color) -> None:
+        self._pixels[index] = color.as_rgba_array()
+
+    def set_pixels(self, colors: Sequence[Color] | npt.ArrayLike) -> None:
+        normalized = as_pixel_buffer(colors)
+        if normalized.shape[0] > self.length:
+            raise ValueError("too many pixels for scaled multi-controller")
+        self._pixels[: normalized.shape[0]] = normalized
+
+    def fill(self, color: Color) -> None:
+        self._pixels[:] = color.as_rgba_array()
+
+    def clear(self) -> None:
+        clear_pixels(self._pixels)
+
+    def flush(self) -> None:
+        self._copy_and_flush(False)
+
+    def force_flush(self) -> None:
+        self._copy_and_flush(True)
+
+    def close(self) -> None:
+        for controller in self._controllers:
+            controller.close()
+
+    def _copy_and_flush(self, force: bool) -> None:
+        for controller, indices in zip(self._controllers, self._indices, strict=True):
+            controller.set_pixels(self._pixels[indices])
+            controller.force_flush() if force else controller.flush()
 
 
 class MultiController(Controller):

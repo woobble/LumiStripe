@@ -40,14 +40,20 @@ def create_app(
 
     @app.middleware("http")
     async def require_pairing(request: Request, call_next):
-        public_api_paths = {
-            "/api/health",
-            "/api/auth/status",
-            "/api/auth/pair",
-        }
+        # The live dashboard is intentionally usable without unlocking the
+        # setup area.  Keep only configuration and hardware-management APIs
+        # behind the pairing session; control and diagnostics remain public.
+        protected_api_prefixes = (
+            "/api/stripes",
+            "/api/calibration",
+            "/api/audio/settings",
+            "/api/audio/device",
+            "/api/audio/calibration",
+            "/api/startup",
+        )
         if (
             request.url.path.startswith("/api/")
-            and request.url.path not in public_api_paths
+            and request.url.path.startswith(protected_api_prefixes)
             and not app.state.access.authenticated(request.cookies.get(SESSION_COOKIE))
         ):
             return JSONResponse(
@@ -101,9 +107,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Persistent dashboard settings file (default: ~/.config/lumistripe/settings.json)",
     )
     parser.add_argument(
+        "--ignore-saved-stripes",
+        action="store_true",
+        help="Use CLI output settings for this run instead of the saved stripe topology",
+    )
+    parser.add_argument(
         "--pairing-code",
         type=_pairing_code,
-        help="Require this four-digit code before allowing dashboard access",
+        help="Require this four-digit code before allowing Setup changes",
+    )
+    parser.add_argument(
+        "--log-level",
+        choices=("trace", "debug", "info", "warning", "error", "critical"),
+        default="info",
+        help="Uvicorn/application log verbosity",
     )
     return parser
 
@@ -129,11 +146,13 @@ def main(argv: Sequence[str] | None = None) -> None:
         audio_source=args.audio_source,
         audio_device=args.audio_device,
         settings_file=args.settings_file,
+        ignore_saved_stripes=args.ignore_saved_stripes,
     )
     uvicorn.run(
         create_app(settings, pairing_code=args.pairing_code),
         host=args.host,
         port=args.port,
+        log_level=args.log_level,
         workers=1,
     )
 

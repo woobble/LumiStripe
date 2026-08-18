@@ -17,6 +17,9 @@ dependencies = [
 audio = [
     "sounddevice>=0.5",
 ]
+hardware-gain = [
+    "pyalsaaudio>=0.11",
+]
 gpio = [
     "gpiod>=2.5",
 ]

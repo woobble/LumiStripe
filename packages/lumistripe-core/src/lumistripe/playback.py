@@ -252,6 +252,7 @@ class ReactiveFrameSmoother:
 class PlaybackEngine:
     player: AnimationPlayer
     config: PlaybackConfig = field(default_factory=PlaybackConfig)
+    music_recognition_enabled: bool = True
     mode: PlaybackMode = field(init=False)
     dynamic_selector: DynamicSelector = field(init=False)
     activity_detector: MusicActivityDetector = field(init=False)
@@ -328,6 +329,12 @@ class PlaybackEngine:
             raise ValueError("dynamic response must be between zero and one")
         self.config = replace(self.config, dynamic_response=response)
         self.layered_renderer.scheduler.set_response(response)
+
+    def set_music_recognition_enabled(self, enabled: bool) -> None:
+        self.music_recognition_enabled = bool(enabled)
+        if not enabled:
+            self.activity_detector.reset()
+            self._music_active = False
 
     def select_animation(self, name: str) -> None:
         index = self.player.index_of(name)
@@ -436,7 +443,7 @@ class PlaybackEngine:
                 active_snapshot,
                 now_s=now,
             )
-        elif snapshot is not None and not snapshot.silence:
+        elif self.music_recognition_enabled and snapshot is not None and not snapshot.silence:
             audio_frame = snapshot.frame
 
         self.player.audio_enabled = audio_frame is not None

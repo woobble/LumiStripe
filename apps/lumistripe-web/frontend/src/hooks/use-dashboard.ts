@@ -1,52 +1,51 @@
 import { useCallback, useEffect, useRef, useState } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 
 import {
   dashboardApi,
   ACCESS_REVOKED_EVENT,
   websocketUrl,
-  type AnimationOption,
   type CalibrationPattern,
   type DashboardState,
   type PlaybackMode,
+  type StripeTopology,
 } from "@/lib/api"
 
 export type ConnectionStatus = "connecting" | "connected" | "reconnecting"
-export type CommandName = "mode" | "brightness" | "solidColor" | "animation" | "blackout" | "calibration"
+export type CommandName = "mode" | "brightness" | "solidColor" | "animation" | "blackout" | "calibration" | "stripes" | "stripeTest"
+
+export const dashboardStateQueryKey = ["dashboard-state"] as const
+export const animationsQueryKey = ["animations"] as const
 
 function newerState(current: DashboardState | null, incoming: DashboardState) {
   return current === null || incoming.revision >= current.revision ? incoming : current
 }
 
 export function useDashboard() {
-  const [state, setState] = useState<DashboardState | null>(null)
-  const [animations, setAnimations] = useState<AnimationOption[]>([])
+  const queryClient = useQueryClient()
+  const stateQuery = useQuery({
+    queryKey: dashboardStateQueryKey,
+    queryFn: async () => newerState(queryClient.getQueryData<DashboardState>(dashboardStateQueryKey) ?? null, await dashboardApi.getState()),
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    retry: false,
+  })
+  const animationsQuery = useQuery({ queryKey: animationsQueryKey, queryFn: dashboardApi.getAnimations, staleTime: 5 * 60_000, refetchOnWindowFocus: false, retry: false })
   const [connection, setConnection] = useState<ConnectionStatus>("connecting")
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState<string | null>(null)
   const [pendingCommand, setPendingCommand] = useState<CommandName | null>(null)
   const commandActive = useRef(false)
 
-  const refresh = useCallback(async () => {
-    setLoading(true)
-    setLoadError(null)
-    try {
-      const [nextState, nextAnimations] = await Promise.all([
-        dashboardApi.getState(),
-        dashboardApi.getAnimations(),
-      ])
-      setState((current) => newerState(current, nextState))
-      setAnimations(nextAnimations)
-    } catch (error) {
-      setLoadError(error instanceof Error ? error.message : "Could not reach LumiStripe.")
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  const state = stateQuery.data ?? null
+  const animations = animationsQuery.data ?? []
+  const loading = stateQuery.isPending
+  const loadError = stateQuery.error instanceof Error
+    ? stateQuery.error.message
+    : animationsQuery.error instanceof Error ? animationsQuery.error.message : null
 
-  useEffect(() => {
-    void refresh()
-  }, [refresh])
+  const refresh = useCallback(async () => {
+    await Promise.all([stateQuery.refetch(), animationsQuery.refetch()])
+  }, [animationsQuery, stateQuery])
 
   useEffect(() => {
     let disposed = false
@@ -66,7 +65,7 @@ export function useDashboard() {
       socket.onmessage = (event) => {
         try {
           const incoming = JSON.parse(String(event.data)) as DashboardState
-          setState((current) => newerState(current, incoming))
+          queryClient.setQueryData<DashboardState>(dashboardStateQueryKey, (current) => newerState(current ?? null, incoming))
         } catch {
           socket?.close()
         }
@@ -91,7 +90,7 @@ export function useDashboard() {
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer)
       socket?.close()
     }
-  }, [])
+  }, [queryClient])
 
   const runCommand = useCallback(
     async (name: CommandName, command: () => Promise<DashboardState>) => {
@@ -100,7 +99,7 @@ export function useDashboard() {
       setPendingCommand(name)
       try {
         const nextState = await command()
-        setState((current) => newerState(current, nextState))
+        queryClient.setQueryData<DashboardState>(dashboardStateQueryKey, (current) => newerState(current ?? null, nextState))
         return true
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "The command could not be applied.")
@@ -110,7 +109,7 @@ export function useDashboard() {
         setPendingCommand(null)
       }
     },
-    []
+    [queryClient]
   )
 
   const startCalibration = useCallback(async (outputIndex: number) => {
@@ -119,7 +118,7 @@ export function useDashboard() {
     setPendingCommand("calibration")
     try {
       const response = await dashboardApi.startCalibration(outputIndex)
-      setState((current) => newerState(current, response.state))
+      queryClient.setQueryData<DashboardState>(dashboardStateQueryKey, (current) => newerState(current ?? null, response.state))
       return response.session_id
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Calibration could not be started.")
@@ -128,7 +127,7 @@ export function useDashboard() {
       commandActive.current = false
       setPendingCommand(null)
     }
-  }, [])
+  }, [queryClient])
 
   const updateCalibration = useCallback((
     sessionId: string,
@@ -153,15 +152,20 @@ export function useDashboard() {
     loadError,
     pendingCommand,
     refresh,
-    setMode: (mode: PlaybackMode) => runCommand("mode", () => dashboardApi.setMode(mode)),
-    setBrightness: (brightness: number) =>
-      runCommand("brightness", () => dashboardApi.setBrightness(brightness)),
-    setSolidColor: (color: string) =>
-      runCommand("solidColor", () => dashboardApi.setMode("solid", color)),
-    selectAnimation: (name: string) =>
-      runCommand("animation", () => dashboardApi.selectAnimation(name)),
-    setBlackout: (enabled: boolean) =>
-      runCommand("blackout", () => dashboardApi.setBlackout(enabled)),
+    setMode: (mode: PlaybackMode, stripeId?: string, musicRecognitionEnabled?: boolean) =>
+      runCommand("mode", () => dashboardApi.setMode(mode, undefined, stripeId, musicRecognitionEnabled)),
+    setBrightness: (brightness: number, stripeId?: string) =>
+      runCommand("brightness", () => dashboardApi.setBrightness(brightness, stripeId)),
+    setSolidColor: (color: string, stripeId?: string) =>
+      runCommand("solidColor", () => dashboardApi.setMode("solid", color, stripeId)),
+    selectAnimation: (name: string, stripeId?: string) =>
+      runCommand("animation", () => dashboardApi.selectAnimation(name, stripeId)),
+    setBlackout: (enabled: boolean, stripeId?: string) =>
+      runCommand("blackout", () => dashboardApi.setBlackout(enabled, stripeId)),
+    updateStripes: (topology: StripeTopology) =>
+      runCommand("stripes", () => dashboardApi.updateStripes(topology)),
+    testStripe: (stripeId: string, pattern: "identify" | "red" | "green" | "blue" | "white", topology?: StripeTopology) =>
+      runCommand("stripeTest", () => dashboardApi.testStripe(stripeId, pattern, topology)),
     startCalibration,
     updateCalibration,
     finishCalibration,

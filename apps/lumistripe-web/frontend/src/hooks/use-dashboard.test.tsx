@@ -1,5 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import type { ReactNode } from "react"
 
 import { useDashboard } from "@/hooks/use-dashboard"
 import { animations, initialState, jsonResponse } from "@/test/fixtures"
@@ -30,6 +32,11 @@ class MockWebSocket {
 }
 
 describe("useDashboard", () => {
+  function wrapper({ children }: { children: ReactNode }) {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    return <QueryClientProvider client={client}>{children}</QueryClientProvider>
+  }
+
   beforeEach(() => {
     MockWebSocket.instances = []
     vi.stubGlobal("WebSocket", MockWebSocket)
@@ -48,12 +55,12 @@ describe("useDashboard", () => {
   })
 
   it("loads initial data and applies only current websocket revisions", async () => {
-    const { result } = renderHook(() => useDashboard())
+    const { result } = renderHook(() => useDashboard(), { wrapper })
     await waitFor(() => expect(result.current.state?.revision).toBe(1))
     await waitFor(() => expect(result.current.connection).toBe("connected"))
 
     act(() => MockWebSocket.instances[0].emit({ ...initialState, revision: 4, brightness: 0.25 }))
-    expect(result.current.state?.brightness).toBe(0.25)
+    await waitFor(() => expect(result.current.state?.brightness).toBe(0.25))
 
     act(() => MockWebSocket.instances[0].emit({ ...initialState, revision: 2, brightness: 0.9 }))
     expect(result.current.state?.revision).toBe(4)
@@ -61,7 +68,7 @@ describe("useDashboard", () => {
   })
 
   it("marks a dropped socket as reconnecting and opens a replacement", async () => {
-    const { result } = renderHook(() => useDashboard())
+    const { result } = renderHook(() => useDashboard(), { wrapper })
     await waitFor(() => expect(result.current.connection).toBe("connected"))
 
     vi.useFakeTimers()

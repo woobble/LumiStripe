@@ -1,23 +1,41 @@
-import { ActivityIcon, AudioLinesIcon, CircleAlertIcon, LightbulbIcon, PaletteIcon, SlidersHorizontalIcon } from "lucide-react"
-import { lazy, Suspense, type MouseEvent } from "react"
-import { Navigate, NavLink, Route, Routes } from "react-router"
-import { toast } from "sonner"
+import { ActivityIcon, AudioLinesIcon, CircleAlertIcon, LightbulbIcon, Settings2Icon, SlidersHorizontalIcon } from "lucide-react"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react"
+import { Navigate, Route, Routes } from "react-router"
 
 import { PairingScreen } from "@/components/auth/pairing-screen"
 import { ConnectionBadge } from "@/components/dashboard/connection-badge"
 import { CalibrationPanel } from "@/components/dashboard/calibration-panel"
 import { ControlPanel } from "@/components/dashboard/control-panel"
 import { StatusPanel } from "@/components/dashboard/status-panel"
+import { SetupPage } from "@/components/dashboard/setup-nav"
+import { StripeManagementPanel } from "@/components/dashboard/stripe-management-panel"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Toaster } from "@/components/ui/sonner"
 import { useAccess, type AccessController } from "@/hooks/use-access"
 import { useDashboard } from "@/hooks/use-dashboard"
 import { cn } from "@/lib/utils"
+import { GuardedNavLink, UnsavedChangesProvider } from "@/hooks/use-unsaved-changes"
 
 const AudioTuningPanel = lazy(async () => {
   const module = await import("@/components/dashboard/audio-tuning-panel")
   return { default: module.AudioTuningPanel }
+})
+
+const AudioStatusPanel = lazy(async () => {
+  const module = await import("@/components/dashboard/audio-status-panel")
+  return { default: module.AudioStatusPanel }
+})
+
+const AudioInputPanel = lazy(async () => {
+  const module = await import("@/components/dashboard/audio-input-panel")
+  return { default: module.AudioInputPanel }
+})
+
+const StartupPanel = lazy(async () => {
+  const module = await import("@/components/dashboard/startup-panel")
+  return { default: module.StartupPanel }
 })
 
 function DashboardSkeleton() {
@@ -45,15 +63,42 @@ function Unavailable({ message, retry }: { message: string; retry: () => void })
   )
 }
 
+function PwaStatus() {
+  const [offline, setOffline] = useState(() => typeof navigator !== "undefined" && !navigator.onLine)
+  const [updateAvailable, setUpdateAvailable] = useState(false)
+
+  useEffect(() => {
+    const goOffline = () => setOffline(true)
+    const goOnline = () => setOffline(false)
+    const update = () => setUpdateAvailable(true)
+    window.addEventListener("offline", goOffline)
+    window.addEventListener("online", goOnline)
+    window.addEventListener("lumistripe:pwa-update", update)
+    return () => {
+      window.removeEventListener("offline", goOffline)
+      window.removeEventListener("online", goOnline)
+      window.removeEventListener("lumistripe:pwa-update", update)
+    }
+  }, [])
+
+  if (!offline && !updateAvailable) return null
+  return (
+    <div className="fixed inset-x-3 bottom-[calc(5.75rem+env(safe-area-inset-bottom))] z-50 mx-auto flex max-w-lg items-center justify-between gap-3 rounded-2xl border border-white/10 bg-card/95 px-4 py-3 text-sm shadow-2xl backdrop-blur-xl">
+      <span className="text-muted-foreground">{offline ? "Offline — controls are unavailable until the Pi reconnects." : "A new LumiStripe version is ready."}</span>
+      {updateAvailable && !offline && <Button className="h-9 shrink-0 rounded-xl px-3 text-xs" onClick={() => void window.__lumistripeUpdatePwa?.()}>Update</Button>}
+    </div>
+  )
+}
+
+function SetupGuard({ access, children }: { access: AccessController; children: ReactNode }) {
+  if (access.loading) return <DashboardSkeleton />
+  if (access.required && !access.authenticated) return <PairingScreen access={access} />
+  return children
+}
+
 function Dashboard({ access }: { access: AccessController }) {
   const controller = useDashboard()
   const { state, connection, loading, loadError } = controller
-  const blockCalibrationExit = (event: MouseEvent<HTMLAnchorElement>) => {
-    if (!state?.calibration.active) return
-    event.preventDefault()
-    toast.info("Save or cancel the active calibration before leaving this page.")
-  }
-
   return (
     <div className="relative min-h-svh overflow-x-hidden bg-background">
       <div className="ambient-glow ambient-glow-one" aria-hidden="true" />
@@ -80,86 +125,80 @@ function Dashboard({ access }: { access: AccessController }) {
         ) : !state ? (
           <Unavailable message={loadError ?? "The controller did not return a state."} retry={() => void controller.refresh()} />
         ) : (
+          <UnsavedChangesProvider>
           <div className="min-h-0 flex-1 pb-[calc(5.25rem+env(safe-area-inset-bottom))]">
             <Routes>
               <Route path="/" element={<ControlPanel controller={controller} />} />
-              <Route path="/audio" element={<Suspense fallback={<DashboardSkeleton />}><AudioTuningPanel /></Suspense>} />
-              <Route path="/calibration" element={<CalibrationPanel controller={controller} />} />
-              <Route path="/diagnostics" element={<StatusPanel controller={controller} onLogout={access.required ? access.logout : undefined} />} />
+              <Route path="/audio" element={<Suspense fallback={<DashboardSkeleton />}><AudioStatusPanel /></Suspense>} />
+              <Route path="/setup" element={<Navigate to="/setup/stripes" replace />} />
+              <Route path="/setup/stripes" element={<SetupGuard access={access}><StripeManagementPanel controller={controller} /></SetupGuard>} />
+              <Route path="/setup/color" element={<SetupGuard access={access}><SetupPage><CalibrationPanel controller={controller} /></SetupPage></SetupGuard>} />
+              <Route path="/setup/audio" element={<SetupGuard access={access}><Suspense fallback={<DashboardSkeleton />}><AudioInputPanel /></Suspense></SetupGuard>} />
+              <Route path="/setup/audio/tuning" element={<SetupGuard access={access}><Suspense fallback={<DashboardSkeleton />}><AudioTuningPanel /></Suspense></SetupGuard>} />
+              <Route path="/setup/startup" element={<SetupGuard access={access}><Suspense fallback={<DashboardSkeleton />}><StartupPanel /></Suspense></SetupGuard>} />
+              <Route path="/calibration" element={<Navigate to="/setup/color" replace />} />
+              <Route path="/diagnostics" element={<StatusPanel controller={controller} onLogout={access.required && access.authenticated ? access.logout : undefined} />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
             <div className="fixed inset-x-0 bottom-0 z-40 border-t border-white/5 bg-background/90 backdrop-blur-2xl">
               <div className="mx-auto w-full max-w-lg px-4 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
                 <nav aria-label="Dashboard" className="grid h-14 w-full grid-cols-4 items-stretch rounded-2xl border border-white/5 bg-white/[0.04] p-1">
-                  <NavLink
+                  <GuardedNavLink
                     to="/"
                     end
-                    onClick={blockCalibrationExit}
                     className={({ isActive }) => cn("flex h-full w-full flex-col items-center justify-center gap-0.5 rounded-xl text-[10px] font-medium text-foreground/60 transition-colors", isActive && "bg-background text-foreground shadow-sm")}
                   >
                     <SlidersHorizontalIcon aria-hidden="true" />
                     Control
-                  </NavLink>
-                  <NavLink
+                  </GuardedNavLink>
+                  <GuardedNavLink
                     to="/audio"
-                    onClick={blockCalibrationExit}
                     className={({ isActive }) => cn("flex h-full w-full flex-col items-center justify-center gap-0.5 rounded-xl text-[10px] font-medium text-foreground/60 transition-colors", isActive && "bg-background text-foreground shadow-sm")}
                   >
                     <AudioLinesIcon aria-hidden="true" />
                     Audio
-                  </NavLink>
-                  <NavLink
-                    to="/calibration"
+                  </GuardedNavLink>
+                  <GuardedNavLink
+                    to="/setup"
                     className={({ isActive }) => cn("flex h-full w-full flex-col items-center justify-center gap-0.5 rounded-xl text-[10px] font-medium text-foreground/60 transition-colors", isActive && "bg-background text-foreground shadow-sm")}
                   >
-                    <PaletteIcon aria-hidden="true" />
-                    Color
-                  </NavLink>
-                  <NavLink
+                    <Settings2Icon aria-hidden="true" />
+                    Setup
+                  </GuardedNavLink>
+                  <GuardedNavLink
                     to="/diagnostics"
-                    onClick={blockCalibrationExit}
                     className={({ isActive }) => cn("flex h-full w-full flex-col items-center justify-center gap-0.5 rounded-xl text-[10px] font-medium text-foreground/60 transition-colors", isActive && "bg-background text-foreground shadow-sm")}
                   >
                     <ActivityIcon aria-hidden="true" />
                     Status
-                  </NavLink>
+                  </GuardedNavLink>
                 </nav>
               </div>
             </div>
           </div>
+          </UnsavedChangesProvider>
         )}
       </main>
       <Toaster position="top-center" richColors />
+      <PwaStatus />
     </div>
   )
 }
 
 export default function App() {
+  const [queryClient] = useState(() => new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, refetchOnWindowFocus: false },
+    },
+  }))
+  return (
+    <QueryClientProvider client={queryClient}>
+      <DashboardApp />
+    </QueryClientProvider>
+  )
+}
+
+function DashboardApp() {
   const access = useAccess()
-
-  if (access.loading) {
-    return (
-      <div className="relative grid min-h-svh place-items-center overflow-hidden bg-background px-5">
-        <div className="ambient-glow ambient-glow-one" aria-hidden="true" />
-        <div className="w-full max-w-sm space-y-4" aria-label="Checking dashboard access">
-          <Skeleton className="mx-auto size-14 rounded-2xl" />
-          <Skeleton className="mx-auto h-6 w-48 rounded-lg" />
-          <Skeleton className="h-14 rounded-xl" />
-        </div>
-      </div>
-    )
-  }
-
-  if (access.required && !access.authenticated) {
-    return (
-      <div className="relative min-h-svh overflow-hidden bg-background">
-        <div className="ambient-glow ambient-glow-one" aria-hidden="true" />
-        <div className="ambient-glow ambient-glow-two" aria-hidden="true" />
-        <PairingScreen access={access} />
-        <Toaster position="top-center" richColors />
-      </div>
-    )
-  }
-
   return <Dashboard access={access} />
 }

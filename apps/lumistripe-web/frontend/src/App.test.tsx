@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { ReactNode } from "react"
 import { MemoryRouter } from "react-router"
@@ -27,7 +27,10 @@ const audioSettings = {
   monitoring: true,
   active_device: "2",
   active_device_name: "USB Mic",
-  devices: [{ selector: "2", name: "USB Mic", settings: audioValues }],
+  devices: [
+    { selector: "2", name: "USB Mic", settings: audioValues },
+    { selector: "3", name: "Built-in Mic", settings: audioValues },
+  ],
   settings: audioValues,
   configured_noise_floor: 0.015,
   error: null,
@@ -66,6 +69,20 @@ describe("App", () => {
     if (path === "/api/animations") return jsonResponse({ items: animations })
     if (path === "/api/audio/settings" || path === "/api/audio/settings/reset") {
       return jsonResponse(audioSettings)
+    }
+    if (path === "/api/audio/device") {
+      const body = JSON.parse(String(init?.body)) as { device: string }
+      const device = audioSettings.devices.find((item) => item.selector === body.device)
+      return jsonResponse({ ...audioSettings, active_device: body.device, active_device_name: device?.name ?? null })
+    }
+    if (path === "/api/startup") {
+      const enabled = init?.body
+        ? (JSON.parse(String(init.body)) as { restore_last_state: boolean }).restore_last_state
+        : false
+      return jsonResponse({
+        restore_last_state: enabled,
+        remembered: { mode: "static", solid_color: "#7C3AED", animation: "aurora_wave", brightness: 0.72, blackout: false },
+      })
     }
     if (path === "/api/calibration/session") {
       return jsonResponse({
@@ -159,8 +176,38 @@ describe("App", () => {
     expect(navigation.parentElement?.parentElement).toHaveClass("fixed", "inset-x-0", "bottom-0")
     expect(screen.getByRole("link", { name: "Control" })).toHaveClass("w-full")
     expect(screen.getByRole("link", { name: "Audio" })).toHaveClass("w-full")
-    expect(screen.getByRole("link", { name: "Color" })).toHaveClass("w-full")
+    expect(screen.getByRole("link", { name: "Setup" })).toHaveClass("w-full")
     expect(screen.getByRole("link", { name: "Status" })).toHaveClass("w-full")
+  })
+
+  it("renders independent stripe targets as a full-width segmented control", async () => {
+    const user = userEvent.setup()
+    render(<App />, { wrapper: Router })
+    await screen.findByText(/aurora wave/i)
+
+    act(() => MockWebSocket.instances[0].emit({
+      ...initialState,
+      revision: 2,
+      stripe_topology: {
+        layout: "independent",
+        outputs: [
+          { ...initialState.stripe_topology.outputs[0], id: "left", name: "Left" },
+          { ...initialState.stripe_topology.outputs[0], id: "right", name: "Right" },
+        ],
+      },
+      stripe_playback: [
+        { ...initialState.stripe_playback[0], stripe_id: "left" },
+        { ...initialState.stripe_playback[0], stripe_id: "right", brightness: 0.4 },
+      ],
+    }))
+
+    const targets = await screen.findByRole("group", { name: "Control target" })
+    expect(targets).toHaveClass("grid", "w-full", "gap-1")
+    expect(screen.getByRole("button", { name: "All" })).toHaveClass("border-0", "min-w-0")
+    await user.click(screen.getByRole("button", { name: "Right" }))
+    expect(screen.getByText("Right", { selector: "span.text-violet-200" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Right" })).toHaveAttribute("data-pressed")
+    expect(screen.getByText("40%")).toBeInTheDocument()
   })
 
   it("runs a guided color calibration session", async () => {
@@ -168,7 +215,8 @@ describe("App", () => {
     const { container } = render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("link", { name: "Color" }))
+    await user.click(screen.getByRole("link", { name: "Setup" }))
+    await user.click(await screen.findByRole("link", { name: "Color" }))
     expect(await screen.findByRole("heading", { name: "Color calibration" })).toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: "Start calibration" }))
 
@@ -185,6 +233,109 @@ describe("App", () => {
       "/api/calibration/session/calibration-session/finish",
       expect.objectContaining({ method: "POST", body: JSON.stringify({ save: true }) }),
     ))
+  })
+
+  it("adds and applies a second stripe from Setup", async () => {
+    const user = userEvent.setup()
+    render(<App />, { wrapper: Router })
+    await screen.findByText(/aurora wave/i)
+
+    await user.click(screen.getByRole("link", { name: "Setup" }))
+    expect(await screen.findByText("Layout")).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Add stripe" }))
+    await user.click(screen.getByRole("button", { name: "Save & apply" }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/stripes",
+      expect.objectContaining({ method: "PUT" }),
+    ))
+    const request = fetchMock.mock.calls.find(([path]) => String(path) === "/api/stripes")
+    const body = JSON.parse(String(request?.[1]?.body)) as { outputs: unknown[] }
+    expect(body.outputs).toHaveLength(2)
+  })
+
+  it("selects the audio input from Setup", async () => {
+    const user = userEvent.setup()
+    render(<App />, { wrapper: Router })
+    await screen.findByText(/aurora wave/i)
+
+    await user.click(screen.getByRole("link", { name: "Setup" }))
+    const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
+    await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
+    await user.click(await screen.findByRole("combobox", { name: "Input device" }))
+    await user.click(await screen.findByRole("option", { name: "Built-in Mic" }))
+    await user.click(screen.getByRole("button", { name: "Save input device" }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/audio/device",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ device: "3" }) }),
+    ))
+  })
+
+  it("enables restoration of the last shared state from Setup", async () => {
+    const user = userEvent.setup()
+    render(<App />, { wrapper: Router })
+    await screen.findByText(/aurora wave/i)
+
+    await user.click(screen.getByRole("link", { name: "Setup" }))
+    const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
+    await user.click(within(setupNav).getByRole("link", { name: "Startup" }))
+    await user.click(await screen.findByRole("button", { name: "Restore last state off" }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/startup",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ restore_last_state: true }) }),
+    ))
+    expect(await screen.findByRole("button", { name: "Restore last state on" })).toHaveAttribute("data-pressed")
+  })
+
+  it("shows and applies the stripe direction while the layout fills its card", async () => {
+    const user = userEvent.setup()
+    render(<App />, { wrapper: Router })
+    await screen.findByText(/aurora wave/i)
+
+    await user.click(screen.getByRole("link", { name: "Setup" }))
+    expect(await screen.findByRole("group", { name: "Stripe layout" })).toHaveClass("w-full")
+
+    await user.click(screen.getByRole("button", { name: "Reverse direction off" }))
+    expect(screen.getByRole("button", { name: "Reverse direction on" })).toHaveAttribute("data-pressed")
+    expect(screen.getByText("On")).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Save & apply" }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/stripes",
+      expect.objectContaining({ method: "PUT" }),
+    ))
+    const request = fetchMock.mock.calls.find(([path]) => String(path) === "/api/stripes")
+    const body = JSON.parse(String(request?.[1]?.body)) as { outputs: Array<{ reversed: boolean }> }
+    expect(body.outputs[0].reversed).toBe(true)
+  })
+
+  it("adds the first stripe when randomUUID is unavailable over plain HTTP", async () => {
+    const originalCrypto = globalThis.crypto
+    const originalImplementation = fetchMock.getMockImplementation()
+    vi.stubGlobal("crypto", {})
+    fetchMock.mockImplementation((input: string | URL | Request) => {
+      const path = String(input)
+      if (path === "/api/auth/status") return jsonResponse({ required: false, authenticated: true })
+      if (path === "/api/animations") return jsonResponse({ items: animations })
+      return jsonResponse({
+        ...initialState,
+        stripe_topology: { layout: "mirrored", outputs: [] },
+        stripe_playback: [],
+        color_corrections: [],
+      })
+    })
+    const user = userEvent.setup()
+    render(<App />, { wrapper: Router })
+    await screen.findByText(/aurora wave/i)
+
+    await user.click(screen.getByRole("link", { name: "Setup" }))
+    await user.click(await screen.findByRole("button", { name: "Add stripe" }))
+
+    expect(screen.getByDisplayValue("Stripe 1")).toBeInTheDocument()
+    vi.stubGlobal("crypto", originalCrypto)
+    fetchMock.mockImplementation(originalImplementation!)
   })
 
   it("searches animations by mood and selects a result", async () => {
@@ -238,12 +389,54 @@ describe("App", () => {
     expect(screen.getByText("No problems detected.")).toBeInTheDocument()
   })
 
-  it("shows live audio telemetry and resets the active microphone profile", async () => {
+  it("shows live audio telemetry without unlocking Setup", async () => {
     const user = userEvent.setup()
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
     await user.click(screen.getByRole("link", { name: "Audio" }))
+    expect(await screen.findByRole("heading", { name: "Audio status" })).toBeInTheDocument()
+    expect(screen.getByText("Live input")).toBeInTheDocument()
+    expect(screen.queryByText("USB Mic")).not.toBeInTheDocument()
+
+    act(() => MockWebSocket.instances[1].emit({
+      sequence: 4,
+      fresh: true,
+      input_level: 0.42,
+      processed_level: 0.35,
+      bands: [0.1, 0.2, 0.3, 0.4, 0.5, 0.4, 0.3, 0.2],
+      beat: true,
+      beat_strength: 0.8,
+      bpm: 128,
+      estimated_noise_floor: 0.012,
+      configured_noise_floor: 0.015,
+      normalization_gain: 1.4,
+      program_loudness: 0.38,
+      musical_impact: 0.92,
+      gate: "music",
+      gate_preview: false,
+      gate_energy: 0.4,
+      gate_onset: 0.2,
+      gate_beat_density: 0.3,
+      gate_brightness: 0.25,
+      health: "healthy",
+    }))
+    expect(screen.getByText("42%")).toBeInTheDocument()
+    expect(screen.getByText("128 BPM")).toBeInTheDocument()
+    expect(screen.getByText("92%")).toBeInTheDocument()
+    expect(screen.getByText("music")).toBeInTheDocument()
+  })
+
+  it("keeps audio tuning behind Setup and resets the active microphone profile", async () => {
+    const user = userEvent.setup()
+    render(<App />, { wrapper: Router })
+    await screen.findByText(/aurora wave/i)
+
+    await user.click(screen.getByRole("link", { name: "Setup" }))
+    const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
+    await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
+    const audioNav = await screen.findByRole("navigation", { name: "Audio setup sections" })
+    await user.click(within(audioNav).getByRole("link", { name: "Tuning" }))
     expect(await screen.findByRole("heading", { name: "Audio tuning" })).toBeInTheDocument()
     expect(screen.getByText("USB Mic")).toBeInTheDocument()
     expect(screen.getByRole("group", { name: "Calm ↔ Dramatic" })).toBeInTheDocument()
@@ -297,7 +490,7 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument()
   })
 
-  it("pairs before connecting to the protected dashboard", async () => {
+  it("keeps Control public and asks for the PIN only when entering Setup", async () => {
     const protectedFetch = vi.fn((input: string | URL | Request) => {
       const path = String(input)
       if (path === "/api/auth/status") {
@@ -313,12 +506,14 @@ describe("App", () => {
     const user = userEvent.setup()
     render(<App />, { wrapper: Router })
 
-    const code = await screen.findByLabelText("Pairing code")
-    expect(MockWebSocket.instances).toHaveLength(0)
-    await user.type(code, "1234")
-    await user.click(screen.getByRole("button", { name: "Pair device" }))
-
     expect(await screen.findByText(/aurora wave/i)).toBeInTheDocument()
+    expect(MockWebSocket.instances).toHaveLength(1)
+    await user.click(screen.getByRole("link", { name: "Setup" }))
+    const code = await screen.findByLabelText("Setup PIN")
+    await user.type(code, "1234")
+    await user.click(screen.getByRole("button", { name: "Unlock Setup" }))
+
+    expect(await screen.findByText("Layout")).toBeInTheDocument()
     expect(protectedFetch).toHaveBeenCalledWith(
       "/api/auth/pair",
       expect.objectContaining({
@@ -327,5 +522,24 @@ describe("App", () => {
       })
     )
     expect(MockWebSocket.instances).toHaveLength(1)
+  })
+
+  it("guards a direct Setup URL before requesting protected settings", async () => {
+    const protectedFetch = vi.fn((input: string | URL | Request) => {
+      const path = String(input)
+      if (path === "/api/auth/status") return jsonResponse({ required: true, authenticated: false })
+      if (path === "/api/animations") return jsonResponse({ items: animations })
+      return jsonResponse(initialState)
+    })
+    vi.stubGlobal("fetch", protectedFetch)
+
+    render(
+      <MemoryRouter initialEntries={["/setup/audio/tuning"]}>
+        <App />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByLabelText("Setup PIN")).toBeInTheDocument()
+    expect(protectedFetch.mock.calls.some(([path]) => String(path) === "/api/audio/settings")).toBe(false)
   })
 })

@@ -42,6 +42,43 @@ class CalibrationStatus(BaseModel):
     expires_in_seconds: float | None = None
 
 
+class StripeOutputConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=40)
+    pixels: int = Field(ge=1, le=4096)
+    backend: Literal["spi", "gpio"] = "spi"
+    reversed: bool = False
+    spi_device: str = Field(default="/dev/spidev0.0", min_length=1)
+    spi_speed_hz: int = Field(default=1_000_000, gt=0, le=32_000_000)
+    chip: str = Field(default="/dev/gpiochip0", min_length=1)
+    data_pin: int = Field(default=10, ge=0)
+    clock_pin: int = Field(default=11, ge=0)
+    last_output_at: datetime | None = None
+    error: str | None = None
+
+
+class StripeTopology(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    layout: Literal["mirrored", "continuous", "independent"] = "mirrored"
+    outputs: tuple[StripeOutputConfig, ...] = Field(default=(), max_length=2)
+
+
+class StripePlaybackState(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    stripe_id: str
+    mode: PlaybackMode = PlaybackMode.STATIC
+    solid_color: str = "#7C3AED"
+    animation: str = ""
+    brightness: float = 1.0
+    blackout: bool = False
+    music_active: bool = False
+    music_recognition_enabled: bool = True
+
+
 class DashboardState(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -57,6 +94,7 @@ class DashboardState(BaseModel):
     brightness: float = 1.0
     blackout: bool = False
     music_active: bool = False
+    music_recognition_enabled: bool = True
     music_gate: str = "calm"
     bpm: float = 0.0
     audio_status: str = "No audio source active."
@@ -71,6 +109,8 @@ class DashboardState(BaseModel):
     application_version: str = "development"
     color_corrections: tuple[ColorCorrectionProfile, ...] = ()
     calibration: CalibrationStatus = CalibrationStatus()
+    stripe_topology: StripeTopology = StripeTopology()
+    stripe_playback: tuple[StripePlaybackState, ...] = ()
     diagnostic_issues: tuple[DiagnosticIssue, ...] = ()
     error: str | None = None
 
@@ -90,18 +130,34 @@ class AnimationList(BaseModel):
 class ModeRequest(BaseModel):
     mode: PlaybackMode
     color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    stripe_id: str | None = None
+    music_recognition_enabled: bool | None = None
 
 
 class BrightnessRequest(BaseModel):
     brightness: float = Field(ge=0.0, le=1.0)
+    stripe_id: str | None = None
 
 
 class AnimationRequest(BaseModel):
     name: str = Field(min_length=1)
+    stripe_id: str | None = None
 
 
 class BlackoutRequest(BaseModel):
     enabled: bool
+    stripe_id: str | None = None
+
+
+class StripeTopologyRequest(BaseModel):
+    layout: Literal["mirrored", "continuous", "independent"]
+    outputs: tuple[StripeOutputConfig, ...] = Field(max_length=2)
+
+
+class StripeTestRequest(BaseModel):
+    stripe_id: str
+    pattern: Literal["identify", "red", "green", "blue", "white"] = "identify"
+    topology: StripeTopologyRequest | None = None
 
 
 class AccessStatus(BaseModel):
@@ -137,6 +193,8 @@ class AudioTuningValues(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     target_level: float = Field(default=0.36, ge=0.1, le=0.8)
+    hardware_gain_target: float | None = Field(default=None, ge=0.0, le=1.0)
+    noise_floor: float = Field(default=0.015, ge=0.0, le=1.0)
     dynamic_response: float = Field(default=0.65, ge=0.0, le=1.0)
     rms_attack: float = Field(default=0.45, ge=0.01, le=1.0)
     rms_release: float = Field(default=0.12, ge=0.01, le=1.0)
@@ -158,6 +216,37 @@ class AudioDeviceOption(BaseModel):
     settings: AudioTuningValues
 
 
+class AudioCalibrationStartRequest(BaseModel):
+    device: str = Field(min_length=1)
+    duration_seconds: float = Field(default=8.0, ge=3.0, le=30.0)
+
+
+class AudioCalibrationFinishRequest(BaseModel):
+    apply: bool
+    target_level: float | None = Field(default=None, ge=0.1, le=0.8)
+    noise_floor: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class AudioCalibrationResult(BaseModel):
+    duration_seconds: float
+    samples: int
+    measured_floor: float
+    measured_peak: float
+    recommended_noise_floor: float
+    recommended_target_level: float
+    recommended_hardware_gain: float | None = Field(default=None, ge=0.0, le=1.0)
+    recommended_idle_threshold_scale: float
+
+
+class AudioCalibrationSessionResponse(BaseModel):
+    session_id: str
+    status: str
+    elapsed_seconds: float = 0.0
+    remaining_seconds: float = 0.0
+    result: AudioCalibrationResult | None = None
+    error: str | None = None
+
+
 class AudioSettingsResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -168,6 +257,12 @@ class AudioSettingsResponse(BaseModel):
     devices: tuple[AudioDeviceOption, ...] = ()
     settings: AudioTuningValues = AudioTuningValues()
     configured_noise_floor: float = 0.015
+    hardware_gain_supported: bool = False
+    hardware_gain_writable: bool = False
+    hardware_gain_backend: str | None = None
+    hardware_gain_control: str | None = None
+    hardware_gain_value: float | None = None
+    hardware_gain_error: str | None = None
     error: str | None = None
 
 
@@ -178,6 +273,31 @@ class AudioSettingsRequest(BaseModel):
 
 class AudioResetRequest(BaseModel):
     device: str = Field(min_length=1)
+
+
+class AudioDeviceRequest(BaseModel):
+    device: str = Field(min_length=1)
+
+
+class StartupPlaybackState(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    mode: PlaybackMode = PlaybackMode.STATIC
+    solid_color: str = Field(default="#7C3AED", pattern=r"^#[0-9A-Fa-f]{6}$")
+    animation: str = ""
+    brightness: float = Field(default=1.0, ge=0.0, le=1.0)
+    blackout: bool = False
+
+
+class StartupSettingsResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    restore_last_state: bool
+    remembered: StartupPlaybackState
+
+
+class StartupSettingsRequest(BaseModel):
+    restore_last_state: bool
 
 
 class AudioTelemetry(BaseModel):
@@ -203,6 +323,7 @@ class AudioTelemetry(BaseModel):
     estimated_noise_floor: float = Field(default=0.0, ge=0.0, le=1.0)
     configured_noise_floor: float = Field(default=0.015, ge=0.0, le=1.0)
     normalization_gain: float = Field(default=1.0, ge=0.0)
+    hardware_gain_value: float | None = Field(default=None, ge=0.0, le=1.0)
     program_loudness: float = Field(default=0.0, ge=0.0, le=1.0)
     musical_impact: float = Field(default=0.0, ge=0.0, le=1.0)
     gate: str = "idle"
@@ -211,4 +332,7 @@ class AudioTelemetry(BaseModel):
     gate_onset: float = Field(default=0.0, ge=0.0, le=1.0)
     gate_beat_density: float = Field(default=0.0, ge=0.0, le=1.0)
     gate_brightness: float = Field(default=0.0, ge=0.0, le=1.0)
+    gate_spectral_balance: float = Field(default=0.0, ge=0.0, le=1.0)
+    gate_reason: str = ""
+    gate_checks: tuple[dict[str, object], ...] = ()
     health: str = "inactive"

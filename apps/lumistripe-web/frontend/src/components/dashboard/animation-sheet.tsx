@@ -97,7 +97,7 @@ export function AnimationSheet({ animations, current, disabled, onSelect }: Anim
                   <button
                     key={animation.name}
                     type="button"
-                    className="flex min-h-14 w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors hover:bg-white/5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50"
+                    className="flex min-h-14 w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors hover:bg-white/5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
                     disabled={disabled}
                     onClick={() => void select(animation.name)}
                   >

@@ -8,7 +8,6 @@ from fastapi.testclient import TestClient
 from lumistripe import AudioInputDevice
 from lumistripe_web.app import build_parser, create_app, main
 from lumistripe_web.runtime import LumiStripeRuntime, RuntimeSettings
-from starlette.websockets import WebSocketDisconnect
 
 
 def test_control_api_round_trip() -> None:
@@ -43,6 +42,13 @@ def test_control_api_round_trip() -> None:
         assert solid.json()["mode"] == "solid"
         assert solid.json()["solid_color"] == "#12ABCD"
 
+        static = client.put(
+            "/api/mode",
+            json={"mode": "static", "music_recognition_enabled": False},
+        )
+        assert static.status_code == 200
+        assert static.json()["music_recognition_enabled"] is False
+
         brightness = client.put("/api/brightness", json={"brightness": 0.4})
         assert brightness.status_code == 200
         assert brightness.json()["brightness"] == 0.4
@@ -73,6 +79,63 @@ def test_api_maps_validation_and_runtime_errors() -> None:
         assert conflict.status_code == 409
 
 
+def test_stripe_management_api_applies_and_targets_independent_outputs(
+    tmp_path: Path,
+) -> None:
+    app = create_app(
+        RuntimeSettings(pixels=8, settings_file=tmp_path / "settings.json")
+    )
+    topology = {
+        "layout": "independent",
+        "outputs": [
+            {
+                "id": "left",
+                "name": "Left",
+                "pixels": 41,
+                "backend": "spi",
+                "spi_device": "/dev/spidev0.0",
+                "spi_speed_hz": 1_000_000,
+                "chip": "/dev/gpiochip0",
+                "data_pin": 10,
+                "clock_pin": 11,
+            },
+            {
+                "id": "right",
+                "name": "Right",
+                "pixels": 80,
+                "backend": "gpio",
+                "spi_device": "/dev/spidev1.0",
+                "spi_speed_hz": 1_000_000,
+                "chip": "/dev/gpiochip0",
+                "data_pin": 20,
+                "clock_pin": 21,
+                "reversed": True,
+            },
+        ],
+    }
+    with TestClient(app) as client:
+        applied = client.put("/api/stripes", json=topology)
+        assert applied.status_code == 200
+        assert applied.json()["stripe_topology"]["layout"] == "independent"
+        assert client.get("/api/stripes").json()["outputs"][1]["pixels"] == 80
+
+        targeted = client.put(
+            "/api/brightness", json={"brightness": 0.2, "stripe_id": "right"}
+        )
+        states = {
+            item["stripe_id"]: item for item in targeted.json()["stripe_playback"]
+        }
+        assert states["left"]["brightness"] == 1.0
+        assert states["right"]["brightness"] == 0.2
+
+        assert (
+            client.post(
+                "/api/stripes/test", json={"stripe_id": "right", "pattern": "red"}
+            ).status_code
+            == 200
+        )
+
+
 def test_audio_settings_api_and_telemetry_websocket(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -100,16 +163,36 @@ def test_audio_settings_api_and_telemetry_websocket(
         assert updated.json()["active_device"] == "2"
         assert updated.json()["settings"]["target_level"] == 0.5
 
+        selected = client.put("/api/audio/device", json={"device": "2"})
+        assert selected.status_code == 200
+        assert selected.json()["active_device"] == "2"
+
         invalid = dict(values, target_level=0.99)
-        assert client.put(
-            "/api/audio/settings",
-            json={"device": "2", "settings": invalid},
-        ).status_code == 422
+        assert (
+            client.put(
+                "/api/audio/settings",
+                json={"device": "2", "settings": invalid},
+            ).status_code
+            == 422
+        )
 
         with client.websocket_connect("/ws/audio") as websocket:
             telemetry = websocket.receive_json()
             assert len(telemetry["bands"]) == 8
             assert telemetry["gate_preview"] is True
+
+
+def test_startup_settings_api_captures_current_state(tmp_path: Path) -> None:
+    app = create_app(RuntimeSettings(pixels=8, settings_file=tmp_path / "settings.json"))
+    with TestClient(app) as client:
+        assert client.get("/api/startup").json()["restore_last_state"] is False
+        client.put("/api/brightness", json={"brightness": 0.4})
+
+        updated = client.put("/api/startup", json={"restore_last_state": True})
+
+        assert updated.status_code == 200
+        assert updated.json()["restore_last_state"] is True
+        assert updated.json()["remembered"]["brightness"] == pytest.approx(0.4)
 
 
 def test_calibration_api_session_lifecycle(tmp_path: Path) -> None:
@@ -225,7 +308,7 @@ def test_cli_rejects_incomplete_secondary_spi_configuration() -> None:
         )
 
 
-def test_pairing_code_protects_api_and_websocket() -> None:
+def test_pairing_code_only_protects_setup_api() -> None:
     app = create_app(RuntimeSettings(pixels=8), pairing_code="1234")
     with TestClient(app) as client:
         assert client.get("/api/health").status_code == 200
@@ -233,20 +316,15 @@ def test_pairing_code_protects_api_and_websocket() -> None:
             "required": True,
             "authenticated": False,
         }
-        assert client.get("/api/state").status_code == 401
+        assert client.get("/api/state").status_code == 200
+        assert client.put("/api/brightness", json={"brightness": 0.4}).status_code == 200
+        assert client.get("/api/stripes").status_code == 401
+        assert client.get("/api/audio/settings").status_code == 401
 
-        with (
-            pytest.raises(WebSocketDisconnect) as exc_info,
-            client.websocket_connect("/ws/state"),
-        ):
-            pass
-        assert exc_info.value.code == 4401
-        with (
-            pytest.raises(WebSocketDisconnect) as audio_exc_info,
-            client.websocket_connect("/ws/audio"),
-        ):
-            pass
-        assert audio_exc_info.value.code == 4401
+        with client.websocket_connect("/ws/state") as websocket:
+            assert websocket.receive_json()["running"] is True
+        with client.websocket_connect("/ws/audio") as websocket:
+            assert websocket.receive_json()["health"] == "inactive"
 
         rejected = client.post("/api/auth/pair", json={"code": "0000"})
         assert rejected.status_code == 401
@@ -261,6 +339,7 @@ def test_pairing_code_protects_api_and_websocket() -> None:
         assert "1234" not in cookie
 
         assert client.get("/api/state").status_code == 200
+        assert client.get("/api/stripes").status_code == 200
         with client.websocket_connect("/ws/state") as websocket:
             assert websocket.receive_json()["running"] is True
         with client.websocket_connect("/ws/audio") as websocket:
@@ -268,7 +347,8 @@ def test_pairing_code_protects_api_and_websocket() -> None:
 
         logged_out = client.post("/api/auth/logout")
         assert logged_out.json() == {"required": True, "authenticated": False}
-        assert client.get("/api/state").status_code == 401
+        assert client.get("/api/state").status_code == 200
+        assert client.get("/api/stripes").status_code == 401
 
 
 def test_pairing_endpoint_rate_limits_fifth_failure() -> None:

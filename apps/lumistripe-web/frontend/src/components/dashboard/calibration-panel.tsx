@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useForm } from "react-hook-form"
+import { zodResolver } from "@hookform/resolvers/zod"
+import { z } from "zod"
 import { CheckIcon, PaletteIcon, RotateCcwIcon, SaveIcon, XIcon } from "lucide-react"
 import { toast } from "sonner"
 
@@ -8,9 +11,11 @@ import { Slider } from "@/components/ui/slider"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import type { DashboardController } from "@/hooks/use-dashboard"
 import type { CalibrationPattern, ColorCorrectionProfile } from "@/lib/api"
+import { useUnsavedChangesGuard } from "@/hooks/use-unsaved-changes"
 
 type Correction = Pick<ColorCorrectionProfile, "red" | "green" | "blue">
 type PendingUpdate = { correction: Correction; pattern: CalibrationPattern }
+const correctionSchema = z.object({ red: z.number().int().min(0).max(255), green: z.number().int().min(0).max(255), blue: z.number().int().min(0).max(255) })
 
 const patterns: Array<{ value: CalibrationPattern; label: string; swatch: string }> = [
   { value: "white", label: "White", swatch: "bg-white" },
@@ -42,10 +47,13 @@ export function CalibrationPanel({ controller }: { controller: DashboardControll
   const [draft, setDraft] = useState<Correction | null>(null)
   const [pattern, setPattern] = useState<CalibrationPattern>("white")
   const [finishing, setFinishing] = useState(false)
+  const form = useForm<Correction>({ resolver: zodResolver(correctionSchema), defaultValues: { red: 255, green: 255, blue: 255 } })
+  const { reset: resetCorrection, setValue: setCorrectionValue, handleSubmit: handleCorrectionSubmit } = form
   const sessionRef = useRef<string | null>(null)
   const pendingRef = useRef<PendingUpdate | null>(null)
   const timerRef = useRef<number | null>(null)
   const inFlightRef = useRef<Promise<boolean> | null>(null)
+  useUnsavedChangesGuard(sessionId !== null)
 
   const profile = useMemo(
     () => state?.color_corrections.find((item) => item.output_index === selectedOutput),
@@ -103,6 +111,7 @@ export function CalibrationPanel({ controller }: { controller: DashboardControll
       sessionRef.current = null
       setSessionId(null)
       setDraft(null)
+      resetCorrection({ red: 255, green: 255, blue: 255 })
       toast.info("The calibration session ended.")
     }
   }, [sessionId, state])
@@ -129,6 +138,7 @@ export function CalibrationPanel({ controller }: { controller: DashboardControll
   const start = async () => {
     if (!profile) return
     setDraft({ red: profile.red, green: profile.green, blue: profile.blue })
+    resetCorrection({ red: profile.red, green: profile.green, blue: profile.blue })
     setPattern("white")
     const nextSession = await startCalibration(selectedOutput)
     if (!nextSession) {
@@ -143,6 +153,7 @@ export function CalibrationPanel({ controller }: { controller: DashboardControll
     if (!draft) return
     const next = { ...draft, [channel]: sliderValue(value) }
     setDraft(next)
+    setCorrectionValue(channel, next[channel], { shouldDirty: true, shouldValidate: true })
     queueUpdate(next, pattern)
   }
 
@@ -156,6 +167,7 @@ export function CalibrationPanel({ controller }: { controller: DashboardControll
   const reset = () => {
     const neutral = { red: 255, green: 255, blue: 255 }
     setDraft(neutral)
+    resetCorrection(neutral)
     queueUpdate(neutral, pattern, true)
   }
 
@@ -183,6 +195,7 @@ export function CalibrationPanel({ controller }: { controller: DashboardControll
     sessionRef.current = null
     setSessionId(null)
     setDraft(null)
+    resetCorrection({ red: 255, green: 255, blue: 255 })
     setFinishing(false)
     toast.success(save ? "Color correction saved." : "Calibration cancelled.")
   }
@@ -206,7 +219,7 @@ export function CalibrationPanel({ controller }: { controller: DashboardControll
               key={output.output_index}
               disabled={sessionId !== null || activeElsewhere}
               onClick={() => setSelectedOutput(output.output_index)}
-              className={`flex min-h-14 items-center justify-between rounded-xl border px-4 text-left transition-colors ${selectedOutput === output.output_index ? "border-violet-300/30 bg-violet-400/10" : "border-white/5 bg-white/[0.03]"}`}
+              className={`flex min-h-14 cursor-pointer items-center justify-between rounded-xl border px-4 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${selectedOutput === output.output_index ? "border-violet-300/30 bg-violet-400/10" : "border-white/5 bg-white/[0.03]"}`}
             >
               <span><span className="block font-medium">{output.name}</span><span className="block text-xs text-muted-foreground">{output.device}</span></span>
               {selectedOutput === output.output_index && <CheckIcon className="size-4 text-violet-200" aria-hidden="true" />}
@@ -262,7 +275,7 @@ export function CalibrationPanel({ controller }: { controller: DashboardControll
 
           <div className="grid grid-cols-2 gap-3">
             <Button variant="outline" className="h-12 rounded-xl" disabled={busy} onClick={() => void finish(false)}><XIcon aria-hidden="true" />Cancel</Button>
-            <Button className="h-12 rounded-xl" disabled={busy} onClick={() => void finish(true)}><SaveIcon aria-hidden="true" />Save profile</Button>
+            <Button className="h-12 rounded-xl" disabled={busy} onClick={() => void handleCorrectionSubmit(() => finish(true))()}><SaveIcon aria-hidden="true" />Save profile</Button>
           </div>
         </>
       )}

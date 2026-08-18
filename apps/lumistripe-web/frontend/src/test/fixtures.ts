@@ -34,6 +34,18 @@ export const initialState: DashboardState = {
     pattern: null,
     expires_in_seconds: null,
   },
+  stripe_topology: {
+    layout: "mirrored",
+    outputs: [{
+      id: "primary", name: "Primary", pixels: 41, backend: "spi", reversed: false,
+      spi_device: "/dev/spidev0.0", spi_speed_hz: 1_000_000,
+      chip: "/dev/gpiochip0", data_pin: 10, clock_pin: 11,
+    }],
+  },
+  stripe_playback: [{
+    stripe_id: "primary", mode: "static", solid_color: "#7C3AED",
+    animation: "aurora_wave", brightness: 0.72, blackout: false, music_active: false,
+  }],
   diagnostic_issues: [],
   error: null,
 }
