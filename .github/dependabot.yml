@@ -10,6 +10,16 @@ updates:
           - "*"
     open-pull-requests-limit: 5
 
+  - package-ecosystem: "bun"
+    directory: "/apps/lumistripe-web/frontend"
+    schedule:
+      interval: "weekly"
+    groups:
+      bun-dependencies:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 5
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
