@@ -19,6 +19,8 @@ jobs:
         with:
           enable-cache: true
           python-version: ${{ matrix.python-version }}
+      - name: Install native audio dependencies
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libasound2-dev
       - name: Install dependencies
         run: uv sync --all-extras --dev
       - name: Lint

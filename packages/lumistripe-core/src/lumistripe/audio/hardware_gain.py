@@ -36,7 +36,7 @@ class HardwareGainController:
     def __init__(self, device_name: str, *, runner=None) -> None:
         self.device_name = device_name
         self._run = runner or self._run_command
-        self._pyalsa = None
+        self._pyalsa: _PyAlsaBackend | None = None
         self._status = self._discover()
         logger.info("hardware gain initialization: device=%r status=%s", device_name, self._status)
 
