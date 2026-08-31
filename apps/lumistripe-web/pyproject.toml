@@ -10,7 +10,7 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.141.1",
     "lumistripe-core[audio,gpio,spi]",
-    "uvicorn[standard]>=0.52.1",
+    "uvicorn[standard]>=0.52.4",
 ]
 
 [project.scripts]
