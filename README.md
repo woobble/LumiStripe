@@ -11,7 +11,7 @@ LumiStripe drives 2-wire addressable LED strips from a Raspberry Pi or other Lin
 - **GPIO Driver** — Bit-bangs a 2-wire protocol on any two GPIO lines using `libgpiod` (v2.x)
 - **38+ Animations** — Fire, Rainbow, Confetti, Aurora, LightningStrike, PlasmaRave, and many more, with `tick` and `tick_audio` modes
 - **Audio Reactive** — Real-time FFT analysis with 8 frequency bands, beat detection, BPM estimation, and onset/transient detection
-- **Dynamic Selection** — Selects animations from live energy, BPM, spectrum, beats, drops, and inferred song sections
+- **Layered Dynamic Selection** — Selects a smooth base animation and independently schedules up to two compatible beat/drop effects from live music features
 - **Three Playback Modes** — Static, Cycling, and music-driven Dynamic playback in both the CLI and simulator
 - **CLI** — Launch the simulator from the terminal with `lumistripe`
 
@@ -33,17 +33,22 @@ player.step(stripe)  # renders one frame
 
 ## Hardware Setup
 
-Connect 2-wire (clock + data) addressable LED strips to GPIO pins on a Raspberry Pi and install with GPIO support:
+For stable continuously animated output, connect a 2-wire strip to Raspberry
+Pi hardware SPI and install SPI support:
 
 ```bash
-pip install lumistripe-core[gpio]
+pip install lumistripe-core[spi]
 ```
 
 ```python
-from lumistripe import Config, GPIOStripe
+from lumistripe import SPIConfig, SPIStripe
 
-stripe = GPIOStripe(Config(gpio_data=14, gpio_clock=15), 80)
+stripe = SPIStripe(SPIConfig(device="/dev/spidev0.0"), 80)
 ```
+
+On Raspberry Pi 4, SPI0 data is GPIO10 (physical pin 19) and clock is GPIO11
+(physical pin 23). The legacy bit-banged backend remains available through
+`GPIOStripe` and `lumistripe-core[gpio]`.
 
 ## Audio Setup
 
@@ -55,18 +60,18 @@ pip install lumistripe-core[audio]
 
 LumiStripe works with any microphone or line-in device supported by `sounddevice`.
 
-GPIO and audio can be combined for audio-reactive lighting on real hardware:
+SPI and audio can be combined for audio-reactive lighting on real hardware:
 
 ```bash
-pip install lumistripe-core[gpio,audio]
+pip install lumistripe-core[spi,audio]
 ```
 
 ```python
-from lumistripe import (AnimationPlayer, AudioInput, AudioSnapshot, Config,
-                        GPIOStripe, PlaybackConfig, PlaybackEngine,
+from lumistripe import (AnimationPlayer, AudioInput, AudioSnapshot, SPIConfig,
+                        SPIStripe, PlaybackConfig, PlaybackEngine,
                         PlaybackMode)
 
-stripe = GPIOStripe(Config(gpio_data=14, gpio_clock=15), 80)
+stripe = SPIStripe(SPIConfig(), 80)
 player = AnimationPlayer.party()
 playback = PlaybackEngine(player, PlaybackConfig(mode=PlaybackMode.DYNAMIC))
 
@@ -80,6 +85,11 @@ with AudioInput.new() as audio:
 ## Animations
 
 All animations can be browsed in Static mode. Animation metadata describes suitable energy, BPM, spectrum, mood, beat/drop support, and whether an effect is safe for Dynamic's calm state.
+
+Dynamic mode composes one long-running base with at most one rhythmic and one
+accent layer. Automatic base changes crossfade, while manual and Cycling modes
+keep every standalone animation available. Strobe, Rainbow Strobe, and Police
+remain excluded from Dynamic selection.
 
 ## Simulator
 
@@ -119,6 +129,13 @@ Apply calibration automatically before starting Dynamic mode:
 lumistripe --mode dynamic --auto-calibrate-audio 3
 lumistripe --audio-debug --auto-calibrate-audio 3
 lumistripe-sim --mode dynamic --auto-calibrate-audio 3
+```
+
+For live base-animation, effect-layer, selector, and scheduler diagnostics:
+
+```bash
+lumistripe --mode dynamic --debug-selector
+lumistripe --audio-debug --audio-debug-verbose
 ```
 
 ## Development

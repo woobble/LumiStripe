@@ -2,11 +2,15 @@ import numpy as np
 import pytest
 from lumistripe import (
     BrightnessController,
+    ColorCorrection,
+    ColorCorrectionController,
     CompositeController,
     MultiController,
+    NullController,
     ReversedController,
     Rgb,
     Rgba,
+    ScaledMultiController,
     Stripe,
 )
 
@@ -24,6 +28,72 @@ class TrackingStripe(Stripe):
     def force_flush(self) -> None:
         self.force_flush_count += 1
         super().force_flush()
+
+
+def test_color_correction_validates_channel_gains() -> None:
+    assert ColorCorrection() == ColorCorrection(255, 255, 255)
+    with pytest.raises(ValueError, match="red correction"):
+        ColorCorrection(red=-1)
+    with pytest.raises(ValueError, match="blue correction"):
+        ColorCorrection(blue=256)
+
+
+def test_color_correction_controller_preserves_logical_pixels_and_alpha() -> None:
+    inner = TrackingStripe(2)
+    controller = ColorCorrectionController(
+        inner,
+        ColorCorrection(red=255, green=128, blue=64),
+    )
+    logical = np.array(
+        [[100, 100, 100, 127], [255, 128, 64, 255]],
+        dtype=np.uint8,
+    )
+
+    controller.set_pixels(logical)
+    controller.flush()
+
+    np.testing.assert_array_equal(controller.pixels(), logical)
+    np.testing.assert_array_equal(
+        inner.pixels(),
+        np.array([[100, 50, 25, 127], [255, 64, 16, 255]], dtype=np.uint8),
+    )
+    assert inner.flush_count == 1
+
+
+def test_color_correction_controller_reapplies_without_compounding() -> None:
+    inner = TrackingStripe(1)
+    controller = ColorCorrectionController(inner, ColorCorrection(128, 128, 128))
+    controller.set_pixel(0, Rgba(200, 100, 50, 0.5))
+
+    controller.force_flush()
+    first = inner.pixels().copy()
+    controller.force_flush()
+
+    np.testing.assert_array_equal(first, inner.pixels())
+    np.testing.assert_array_equal(
+        first[0], np.array([100, 50, 25, 127], dtype=np.uint8)
+    )
+    assert controller.pixel(0).to_rgba() == (200, 100, 50, pytest.approx(127 / 255))
+    assert inner.force_flush_count == 2
+
+
+def test_color_correction_can_change_live_and_delegates_close() -> None:
+    inner = TrackingStripe(1)
+    controller = ColorCorrectionController(inner)
+    controller.fill(Rgb(120, 80, 40))
+    controller.set_correction(ColorCorrection(64, 128, 255))
+    controller.force_flush()
+
+    np.testing.assert_array_equal(inner.pixels()[0], np.array([30, 40, 40, 255]))
+    assert controller.correction == ColorCorrection(64, 128, 255)
+
+
+def test_color_correction_rejects_invalid_indices_and_overflow() -> None:
+    controller = ColorCorrectionController(Stripe(1))
+    with pytest.raises(IndexError, match="out of bounds"):
+        controller.pixel(1)
+    with pytest.raises(ValueError, match="color-correction controller length"):
+        controller.set_pixels(np.zeros((2, 4), dtype=np.uint8))
 
 
 def test_brightness_controller_clamps_and_scales_single_pixel() -> None:
@@ -104,7 +174,9 @@ def test_reversed_controller_reads_and_writes_from_the_end() -> None:
 
     controller.set_pixel(1, Rgb(9, 8, 7))
 
-    np.testing.assert_array_equal(inner.pixels()[1], np.array([9, 8, 7, 255], dtype=np.uint8))
+    np.testing.assert_array_equal(
+        inner.pixels()[1], np.array([9, 8, 7, 255], dtype=np.uint8)
+    )
 
 
 def test_reversed_controller_rejects_invalid_indices_and_overflow() -> None:
@@ -164,7 +236,9 @@ def test_composite_controller_locates_children_for_pixel_operations() -> None:
 
     assert controller.length == 5
     assert controller.pixel(3).to_rgba() == (9, 8, 7, 1.0)
-    np.testing.assert_array_equal(second.pixels()[1], np.array([9, 8, 7, 255], dtype=np.uint8))
+    np.testing.assert_array_equal(
+        second.pixels()[1], np.array([9, 8, 7, 255], dtype=np.uint8)
+    )
 
 
 def test_composite_controller_partial_set_pixels_stops_after_supplied_pixels() -> None:
@@ -184,7 +258,9 @@ def test_composite_controller_partial_set_pixels_stops_after_supplied_pixels() -
     )
 
 
-def test_composite_controller_partial_set_pixels_leaves_later_children_untouched() -> None:
+def test_composite_controller_partial_set_pixels_leaves_later_children_untouched() -> (
+    None
+):
     first = Stripe(1)
     second = Stripe(1)
     third = Stripe(1)
@@ -192,9 +268,15 @@ def test_composite_controller_partial_set_pixels_leaves_later_children_untouched
 
     controller.set_pixels(np.array([[1, 0, 0, 255]], dtype=np.uint8))
 
-    np.testing.assert_array_equal(first.pixels()[0], np.array([1, 0, 0, 255], dtype=np.uint8))
-    np.testing.assert_array_equal(second.pixels()[0], np.array([0, 0, 0, 255], dtype=np.uint8))
-    np.testing.assert_array_equal(third.pixels()[0], np.array([0, 0, 0, 255], dtype=np.uint8))
+    np.testing.assert_array_equal(
+        first.pixels()[0], np.array([1, 0, 0, 255], dtype=np.uint8)
+    )
+    np.testing.assert_array_equal(
+        second.pixels()[0], np.array([0, 0, 0, 255], dtype=np.uint8)
+    )
+    np.testing.assert_array_equal(
+        third.pixels()[0], np.array([0, 0, 0, 255], dtype=np.uint8)
+    )
 
 
 def test_composite_controller_rejects_invalid_indices_and_overflow() -> None:
@@ -216,14 +298,18 @@ def test_composite_controller_fill_clear_and_flush_delegate_to_all_children() ->
     controller = CompositeController([first, second])
 
     controller.fill(Rgb(1, 2, 3))
-    np.testing.assert_array_equal(first.pixels()[0], np.array([1, 2, 3, 255], dtype=np.uint8))
+    np.testing.assert_array_equal(
+        first.pixels()[0], np.array([1, 2, 3, 255], dtype=np.uint8)
+    )
     np.testing.assert_array_equal(
         second.pixels(),
         np.array([[1, 2, 3, 255], [1, 2, 3, 255]], dtype=np.uint8),
     )
 
     controller.clear()
-    np.testing.assert_array_equal(first.pixels()[0], np.array([0, 0, 0, 255], dtype=np.uint8))
+    np.testing.assert_array_equal(
+        first.pixels()[0], np.array([0, 0, 0, 255], dtype=np.uint8)
+    )
     np.testing.assert_array_equal(
         second.pixels(),
         np.array([[0, 0, 0, 255], [0, 0, 0, 255]], dtype=np.uint8),
@@ -236,7 +322,9 @@ def test_composite_controller_fill_clear_and_flush_delegate_to_all_children() ->
     assert (first.force_flush_count, second.force_flush_count) == (1, 1)
 
 
-def test_multi_controller_reads_from_first_child_and_exposes_controllers_tuple() -> None:
+def test_multi_controller_reads_from_first_child_and_exposes_controllers_tuple() -> (
+    None
+):
     first = Stripe(2)
     second = Stripe(2)
     controller = MultiController([first, second])
@@ -275,3 +363,24 @@ def test_multi_controller_mirrors_writes_and_flushes() -> None:
 
     assert (first.flush_count, second.flush_count) == (1, 1)
     assert (first.force_flush_count, second.force_flush_count) == (1, 1)
+
+
+def test_scaled_multi_controller_maps_endpoints_across_unequal_lengths() -> None:
+    short = Stripe(3)
+    long = Stripe(5)
+    controller = ScaledMultiController([short, long])
+    frame = np.array([[index, 0, 0, 255] for index in range(5)], dtype=np.uint8)
+
+    controller.set_pixels(frame)
+    controller.flush()
+
+    np.testing.assert_array_equal(long.pixels(), frame)
+    np.testing.assert_array_equal(short.pixels()[:, 0], [0, 2, 4])
+
+
+def test_null_controller_keeps_runtime_frame_without_output() -> None:
+    controller = NullController()
+    controller.fill(Rgb(3, 4, 5))
+    controller.flush()
+
+    assert controller.pixel(0).to_rgba() == (3, 4, 5, 1.0)

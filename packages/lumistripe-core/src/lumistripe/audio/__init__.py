@@ -11,8 +11,15 @@ import numpy as np
 import numpy.typing as npt
 
 from . import _audio
+from .hardware_gain import (
+    HardwareGainController as HardwareGainController,
+)
+from .hardware_gain import (
+    HardwareGainStatus as HardwareGainStatus,
+)
 
-FFT_SIZE = 1024
+FFT_SIZE = 2048
+FFT_HOP_SIZE = 512
 NUM_BANDS = 8
 BandTuple = tuple[float, float, float, float, float, float, float, float]
 WINDOW_SCALE = FFT_SIZE / 2.0
@@ -86,6 +93,8 @@ class MusicFeatures:
     spectral_flux: float = 0.0
     beat_confidence: float = 0.0
     rolling_loudness: float = 0.0
+    program_loudness: float = 0.0
+    musical_impact: float = 0.0
     silence: bool = False
     drop_detected: bool = False
     section_change: bool = False
@@ -177,6 +186,9 @@ class AudioProcessorStats:
     fft_count: int = 0
     sample_abs_sum: float = 0.0
     normalization_gain: float = 1.0
+    input_rms: float = 0.0
+    program_loudness: float = 0.0
+    musical_impact: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -305,6 +317,10 @@ class AudioSnapshot:
         return _clamp01(self.features.rolling_loudness)
 
     @property
+    def musical_impact(self) -> float:
+        return _clamp01(self.features.musical_impact)
+
+    @property
     def drop_detected(self) -> bool:
         return self.features.drop_detected
 
@@ -338,6 +354,8 @@ def features_from_frame(frame: AudioFrame) -> MusicFeatures:
         spectral_flux=onset,
         beat_confidence=frame.beat_strength,
         rolling_loudness=frame.rms,
+        program_loudness=frame.rms,
+        musical_impact=frame.rms,
         silence=silence,
         drop_detected=frame.beat and low > 0.75 and onset > 0.55,
         section_change=False,
@@ -487,14 +505,36 @@ class AudioState:
         return float(self._processor.normalization_gain())
 
     def stats(self) -> AudioProcessorStats:
-        feed_count, samples_seen, fft_count, sample_abs_sum, normalization_gain = self._processor.stats()
+        (
+            feed_count,
+            samples_seen,
+            fft_count,
+            sample_abs_sum,
+            normalization_gain,
+            input_rms,
+            program_loudness,
+            musical_impact,
+        ) = self._processor.stats()
         return AudioProcessorStats(
             feed_count=int(feed_count),
             samples_seen=int(samples_seen),
             fft_count=int(fft_count),
             sample_abs_sum=float(sample_abs_sum),
             normalization_gain=float(normalization_gain),
+            input_rms=float(input_rms),
+            program_loudness=float(program_loudness),
+            musical_impact=float(musical_impact),
         )
+
+    def reconfigure(self, config: AudioConfig) -> None:
+        """Atomically replace DSP configuration while keeping the input stream alive."""
+        self._config = config
+        self._processor = _audio.AudioProcessor(
+            _config_to_dict(config), self._sample_rate
+        )
+        self._frame = AudioFrame()
+        self._features = MusicFeatures()
+        self._last_sequence = 0
 
     def feed_samples(self, samples: npt.ArrayLike) -> None:
         array = np.asarray(samples, dtype=np.float32).reshape(-1)
@@ -540,6 +580,8 @@ class AudioState:
             silence,
             drop_detected,
             section_change,
+            program_loudness,
+            musical_impact,
         ) = self._processor.features()
         self._features = MusicFeatures(
             bpm=float(bpm),
@@ -561,6 +603,8 @@ class AudioState:
             spectral_flux=float(spectral_flux),
             beat_confidence=float(beat_confidence),
             rolling_loudness=float(rolling_loudness),
+            program_loudness=float(program_loudness),
+            musical_impact=float(musical_impact),
             silence=bool(silence),
             drop_detected=bool(drop_detected),
             section_change=bool(section_change),
@@ -611,7 +655,7 @@ class AudioInput:
                 samplerate=sample_rate,
                 channels=1,
                 dtype="float32",
-                blocksize=FFT_SIZE // 2,
+                blocksize=FFT_HOP_SIZE,
                 callback=callback,
             )
             self._stream.start()
@@ -670,6 +714,11 @@ class AudioInput:
                 last_frame_age=last_frame_age,
                 processor=self._state.stats(),
             )
+
+    def reconfigure(self, config: AudioConfig) -> None:
+        with self._lock:
+            self._config = config
+            self._state.reconfigure(config)
 
     def device_name(self) -> str:
         return self._device_name

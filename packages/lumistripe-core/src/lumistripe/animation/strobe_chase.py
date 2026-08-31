@@ -11,7 +11,8 @@ from .reactive import AudioReactive, Decay
 
 @dataclass(slots=True)
 class StrobeChase(Animation):
-    phase: int = 0
+    phase: float = 0.0
+    hue_phase: float = 0.0
     flash: Decay = field(default_factory=Decay)
 
     @property
@@ -29,19 +30,23 @@ class StrobeChase(Animation):
 
     def _step(self, frame: int, controller: Controller, reactive: AudioReactive, *, beat: bool, bass_hit: bool) -> None:
         stride = 3 if reactive.high < 0.65 else 4
-        if beat:
-            self.phase = (self.phase + 1) % stride
-        else:
-            self.phase = (self.phase + 1 + int(reactive.drive() * 1.5)) % stride
+        advance = 0.3 + reactive.drive() * 0.65
+        self.phase = (self.phase + advance + (0.25 if beat else 0.0)) % stride
+        self.hue_phase = (self.hue_phase + 0.6 + reactive.high * 1.2) % 360.0
 
         if bass_hit:
             self.flash.value = 1.0
 
         flash = self.flash.step(0.0, 0.2)
-        hue = reactive.hue_shift(frame, 1.0)
+        hue = int(self.hue_phase)
         controller.clear()
         for index in range(controller.length):
-            if index % stride == self.phase:
-                controller.set_pixel(index, club_color(hue + index * 11, alpha=min(1.0, 0.38 + reactive.drive() * 0.62)))
+            slot = index % stride
+            direct = abs(slot - self.phase)
+            distance = min(direct, stride - direct)
+            chase = max(1.0 - distance / 1.2, 0.0)
+            if chase > 0.01:
+                alpha = chase * (0.34 + reactive.drive() * 0.5)
+                controller.set_pixel(index, club_color(hue + index * 11, alpha=alpha))
         if flash > 0.0:
             controller.fill(warm_flash(hue + frame, alpha=min(1.0, 0.12 + flash * 0.88)))

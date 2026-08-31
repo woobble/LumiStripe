@@ -274,5 +274,6 @@ $RECYCLE.BIN/
 
 # Custom
 captures/
+apps/lumistripe-web/src/lumistripe_web/static/
 
 # End of https://www.toptal.com/developers/gitignore/api/visualstudiocode,windows,linux,macos,python

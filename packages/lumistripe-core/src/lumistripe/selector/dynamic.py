@@ -4,8 +4,18 @@ from dataclasses import dataclass, field
 
 from ..animation.base import AnimationPlayer
 from ..audio import AudioFeatures
-from .metadata import animation_metadata
 from .scoring import AnimationScoringEngine, DynamicSelectorConfig, SelectorDecision
+
+
+@dataclass(frozen=True, slots=True)
+class DynamicSelectorDiagnostics:
+    current_name: str | None
+    elapsed_s: float
+    min_duration_remaining_s: float
+    max_duration_remaining_s: float
+    switch_cooldown_remaining_s: float
+    drop_cooldown_remaining_s: float
+    recent_names: tuple[str, ...]
 
 
 @dataclass(slots=True)
@@ -19,6 +29,7 @@ class DynamicSelector:
     last_decision: SelectorDecision = field(
         default_factory=lambda: SelectorDecision(None, 0.0, None, False, "not_started")
     )
+    _last_update_at_s: float = 0.0
 
     def __post_init__(self) -> None:
         self.engine = AnimationScoringEngine(self.config)
@@ -29,6 +40,25 @@ class DynamicSelector:
         self.last_drop_switch_at_s = -9999.0
         self.recent_names.clear()
         self.last_decision = SelectorDecision(None, 0.0, None, False, "not_started")
+        self._last_update_at_s = 0.0
+
+    def diagnostics(self, *, now_s: float | None = None) -> DynamicSelectorDiagnostics:
+        now = self._last_update_at_s if now_s is None else now_s
+        elapsed = max(0.0, now - self.last_switch_at_s)
+        drop_elapsed = max(0.0, now - self.last_drop_switch_at_s)
+        return DynamicSelectorDiagnostics(
+            current_name=self.current_name,
+            elapsed_s=elapsed,
+            min_duration_remaining_s=max(0.0, self.config.min_duration_s - elapsed),
+            max_duration_remaining_s=max(0.0, self.config.max_duration_s - elapsed),
+            switch_cooldown_remaining_s=max(
+                0.0, self.config.switch_cooldown_s - elapsed
+            ),
+            drop_cooldown_remaining_s=max(
+                0.0, self.config.drop_cooldown_s - drop_elapsed
+            ),
+            recent_names=tuple(self.recent_names),
+        )
 
     def update(
         self,
@@ -39,12 +69,12 @@ class DynamicSelector:
         quiet: bool = False,
         force_switch: bool = False,
     ) -> SelectorDecision:
+        self._last_update_at_s = now_s
         current = player.name_at(player.current_index())
         candidates = [
             entry
             for entry in player.animations
             if entry.automatic
-            and (not quiet or animation_metadata(entry.animation).supports_silence)
         ]
         if self.current_name is None:
             self.current_name = current
@@ -86,13 +116,6 @@ class DynamicSelector:
         cooldown_ready = elapsed >= self.config.switch_cooldown_s
         min_ready = elapsed >= self.config.min_duration_s
         max_due = elapsed >= self.config.max_duration_s
-        drop_ready = (
-            bool(getattr(features, "drop_detected", False))
-            and min_ready
-            and cooldown_ready
-            and (now_s - self.last_drop_switch_at_s) >= self.config.drop_cooldown_s
-        )
-
         should_switch = False
         reason = "hold"
         selected_name = current
@@ -116,9 +139,8 @@ class DynamicSelector:
             if force_switch:
                 should_switch = True
                 reason = "music_state"
-            elif drop_ready and best.metadata.supports_drops:
-                should_switch = True
-                reason = "drop"
+            elif bool(getattr(features, "drop_detected", False)):
+                reason = "drop_hold"
             elif (
                 bool(getattr(features, "section_change", False))
                 and min_ready

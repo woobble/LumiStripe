@@ -5,6 +5,8 @@ import importlib
 import importlib.util
 import json
 import os
+import re
+import shutil
 import sys
 import time
 from dataclasses import dataclass, field
@@ -28,6 +30,7 @@ from lumistripe import (
     CycleTiming,
     CyclingConfig,
     DynamicSelectorConfig,
+    EffectSchedulerDiagnostics,
     GPIOStripe,
     MicProfile,
     MultiController,
@@ -36,6 +39,8 @@ from lumistripe import (
     PlaybackConfig,
     PlaybackEngine,
     PlaybackMode,
+    SPIConfig,
+    SPIStripe,
     Stripe,
     calibrate_audio_input,
     demo_snapshot,
@@ -54,8 +59,18 @@ from .encoder import (
 
 MIN_FRAME_SECONDS = 0.016
 STATUS_INTERVAL_SECONDS = 0.25
+LOG_INTERVAL_SECONDS = 1.0
 DEFAULT_IDLE_THRESHOLD_SCALE = 1.0
 BRIGHTNESS_STEP = 0.05
+
+ANSI_RESET = "\x1b[0m"
+ANSI_BOLD = "\x1b[1m"
+ANSI_CYAN = "\x1b[36m"
+ANSI_GREEN = "\x1b[32m"
+ANSI_YELLOW = "\x1b[33m"
+ANSI_RED = "\x1b[31m"
+ANSI_MAGENTA = "\x1b[35m"
+ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -147,6 +162,11 @@ class HeadlessApp:
     _status_lines: int = field(init=False, default=0)
     _last_status_at: float = field(init=False, default=0.0)
     _last_debug_class: str = field(init=False, default="-")
+    _runtime_started_at: float = field(init=False, default=0.0)
+    _last_event_base: str = field(init=False, default="")
+    _last_event_gate: str = field(init=False, default="")
+    _last_event_effects: tuple[str, ...] = field(init=False, default=())
+    _last_event_transition: bool = field(init=False, default=False)
 
     def __post_init__(self) -> None:
         self.player = AnimationPlayer.party()
@@ -173,6 +193,7 @@ class HeadlessApp:
         self._status_enabled = not self.quiet
         self._status_tty = self._status_enabled and sys.stdout.isatty()
         self.set_mode(self.mode)
+        self._reset_event_state()
 
     @property
     def current_animation_label(self) -> str:
@@ -326,6 +347,8 @@ class HeadlessApp:
     def run(self, *, frame_limit: int | None = None) -> None:
         frames_run = 0
         next_frame_at = time.monotonic()
+        self._runtime_started_at = next_frame_at
+        self._reset_event_state()
         try:
             while self.running:
                 self.apply_control_events(self.encoder_backend.read_events())
@@ -334,6 +357,7 @@ class HeadlessApp:
                     time.sleep(next_frame_at - now)
                     continue
                 next_frame_at = now + self.step()
+                self._emit_runtime_events(now - self._runtime_started_at)
                 self._render_status(now)
                 frames_run += 1
                 if frame_limit is not None and frames_run >= frame_limit:
@@ -341,11 +365,14 @@ class HeadlessApp:
         except KeyboardInterrupt:
             self.running = False
         finally:
-            self.controller.clear()
-            self.controller.force_flush()
-            self._finish_status()
-            self.encoder_backend.close()
-            self._close_audio_input()
+            try:
+                self.controller.clear()
+                self.controller.force_flush()
+            finally:
+                self.controller.close()
+                self._finish_status()
+                self.encoder_backend.close()
+                self._close_audio_input()
 
     def _render_status(self, now: float) -> None:
         if not self._status_enabled:
@@ -356,33 +383,146 @@ class HeadlessApp:
         if self._status_tty:
             self._write_live_status(block)
             return
-        print(block, flush=True)
+        elapsed = max(0.0, now - self._runtime_started_at)
+        print(self._status_log_line(elapsed), flush=True)
         self._last_status_at = now
 
     def _status_block(self) -> str:
+        diagnostics = self.playback.effect_diagnostics()
+        gate = self.playback.music_gate_state.value.upper()
+        gate_color = ANSI_GREEN if gate == "MUSIC" else ANSI_YELLOW if gate == "CANDIDATE" else ANSI_RED
+        transition = (
+            f"{self._meter(self.player.transition_progress)} {self.player.transition_progress * 100:3.0f}%"
+            if self.player.transition_active
+            else "steady"
+        )
+        feat = self.music_features
         lines = [
-            f"ANIM: {self.current_animation_label}",
-            f"MODE: {self.mode_label}  |  OUT: {self.brightness_label}",
+            f"{self._style('LUMISTRIPE', ANSI_BOLD)}  MODE: {self.mode_label}  |  GATE: {self._style(gate, gate_color)}  |  OUT: {self.brightness_label}",
             f"SOURCE: {self.audio_status}",
-            f"CLASS: {self.class_label}",
-            self.analysis_text(),
+            f"BASE: {self._style(self.current_animation_label, ANSI_CYAN)}  |  TRANSITION: {transition}",
+            f"EFFECTS: {self._effect_stack_summary(diagnostics)}",
+            f"BLEND: screen {self._meter(diagnostics.overlay_strength / max(diagnostics.overlay_limit, 1e-6))} {diagnostics.overlay_strength:0.2f}/{diagnostics.overlay_limit:0.2f}  LAYERS: {len(diagnostics.active)}/{diagnostics.active_limit}",
+            f"AUDIO: RMS {self._meter(self.audio_frame.rms)} {self.audio_frame.rms:0.3f}  BASS {self._meter(feat.bass_energy)} {feat.bass_energy:0.2f}  MID {self._meter(feat.mid_energy)} {feat.mid_energy:0.2f}  TREBLE {self._meter(feat.treble_energy)} {feat.treble_energy:0.2f}",
+            f"MUSIC: BEAT={'YES' if self.audio_frame.beat else 'NO'} BPM={feat.bpm:0.0f} ONSET={feat.onset_strength:0.3f} FRESH={'YES' if self.audio_frame.fresh else 'NO'}",
         ]
         if self.gpio_backend_label:
-            lines.insert(3, f"GPIO: {self.gpio_backend_label}")
+            lines.insert(2, f"Output: {self.gpio_backend_label}")
         source = self.audio_source or (AudioSource.MIC if self.mode is PlaybackMode.DYNAMIC else AudioSource.OFF)
         if source is AudioSource.MIC:
-            lines.insert(4, f"MIC: {self.mic_tuning_label}")
+            lines.append(f"MIC: {self.mic_tuning_label}")
             health = self._audio_health_summary()
             if health:
-                lines.insert(5, f"HEALTH: {health}")
-        if self.playback.last_decision is not None and self.playback.last_decision.scores:
-            lines.append(f"SELECTOR: {self._selector_top_summary()} reason={self.playback.last_decision.reason}")
+                lines.append(f"HEALTH: {health}")
+        if self.debug_selector or self.audio_debug_verbose:
+            lines.extend(self._scheduler_debug_lines(diagnostics))
         if self.audio_error:
-            lines.append(f"ERROR: {self.audio_error}")
+            lines.append(self._style(f"ERROR: {self.audio_error}", ANSI_RED))
         return "\n".join(lines)
 
+    def _status_log_line(self, elapsed: float) -> str:
+        diagnostics = self.playback.effect_diagnostics()
+        effects = ",".join(effect.name for effect in diagnostics.active) or "-"
+        return (
+            f"t={elapsed:0.2f}s STATE MODE={self.mode.value} "
+            f"GATE={self.playback.music_gate_state.value} BASE={self._current_base_name()} "
+            f"FX={effects} BLEND={diagnostics.overlay_strength:0.2f}/{diagnostics.overlay_limit:0.2f} "
+            f"RMS={self.audio_frame.rms:0.3f} BPM={self.music_features.bpm:0.0f} "
+            f"FRESH={'yes' if self.audio_frame.fresh else 'no'}"
+        )
+
+    def _effect_stack_summary(self, diagnostics: EffectSchedulerDiagnostics) -> str:
+        if not diagnostics.active:
+            return "none"
+        return "  |  ".join(
+            self._style(
+                f"{effect.category.value}:{effect.name} {self._meter(effect.progress, width=6)} {effect.remaining_s:0.2f}s str={effect.strength:0.2f}",
+                ANSI_MAGENTA,
+            )
+            for effect in diagnostics.active
+        )
+
+    def _scheduler_debug_lines(self, diagnostics: EffectSchedulerDiagnostics) -> list[str]:
+        decision = self.playback.last_decision
+        selector_reason = "-" if decision is None else decision.reason
+        selector = self.playback.selector_diagnostics()
+        recent = ",".join(selector.recent_names) or "-"
+        return [
+            f"SELECTOR: {self._selector_top_summary()} reason={selector_reason} {self._selector_verbose_summary()}",
+            f"SELECTOR TIMING: active={selector.elapsed_s:0.2f}s min_wait={selector.min_duration_remaining_s:0.2f}s max_in={selector.max_duration_remaining_s:0.2f}s switch_cd={selector.switch_cooldown_remaining_s:0.2f}s drop_cd={selector.drop_cooldown_remaining_s:0.2f}s recent={recent}",
+            f"SCHED RHYTHMIC: {diagnostics.rhythmic.signal}={diagnostics.rhythmic.value:0.2f}/{diagnostics.rhythmic.threshold:0.2f} result={diagnostics.rhythmic.result.value} cooldown={diagnostics.rhythmic_cooldown_remaining_s:0.2f}s",
+            f"SCHED ACCENT: {diagnostics.accent.signal}={diagnostics.accent.value:0.2f}/{diagnostics.accent.threshold:0.2f} result={diagnostics.accent.result.value} cooldown={diagnostics.accent_cooldown_remaining_s:0.2f}s",
+        ]
+
+    def _meter(self, value: float, *, width: int = 8) -> str:
+        filled = round(_clamp(value, 0.0, 1.0) * width)
+        return f"[{'█' * filled}{'·' * (width - filled)}]"
+
+    def _style(self, text: str, color: str) -> str:
+        if not self._status_tty or "NO_COLOR" in os.environ:
+            return text
+        return f"{color}{text}{ANSI_RESET}"
+
+    def _current_base_name(self) -> str:
+        return self.player.name_at(self.player.current_index()) or "?"
+
+    def _reset_event_state(self) -> None:
+        self._last_event_base = self._current_base_name()
+        self._last_event_gate = self.playback.music_gate_state.value
+        self._last_event_effects = self.playback.active_effect_names
+        self._last_event_transition = self.player.transition_active
+
+    def _runtime_event_lines(self, elapsed: float) -> list[str]:
+        lines: list[str] = []
+        gate = self.playback.music_gate_state.value
+        base = self._current_base_name()
+        transition = self.player.transition_active
+        diagnostics = self.playback.effect_diagnostics()
+        active_names = tuple(effect.name for effect in diagnostics.active)
+        active_by_name = {effect.name: effect for effect in diagnostics.active}
+        if gate != self._last_event_gate:
+            lines.append(f"t={elapsed:0.2f}s GATE {self._last_event_gate}->{gate}")
+        if base != self._last_event_base:
+            reason = "-" if self.playback.last_decision is None else self.playback.last_decision.reason
+            lines.append(f"t={elapsed:0.2f}s BASE {self._last_event_base}->{base} reason={reason}")
+        if transition != self._last_event_transition:
+            lines.append(f"t={elapsed:0.2f}s TRANSITION {'start' if transition else 'end'} base={base}")
+        for name in active_names:
+            if name in self._last_event_effects:
+                continue
+            effect = active_by_name[name]
+            trigger = diagnostics.rhythmic if effect.category.value == "rhythmic" else diagnostics.accent
+            lines.append(
+                f"t={elapsed:0.2f}s FX_START name={name} category={effect.category.value} "
+                f"strength={effect.strength:0.2f} trigger={trigger.signal}:{trigger.value:0.2f}/{trigger.threshold:0.2f}"
+            )
+        for name in self._last_event_effects:
+            if name in active_names:
+                continue
+            reason = "transition" if transition else "idle" if gate == "idle" else "expired"
+            lines.append(f"t={elapsed:0.2f}s FX_END name={name} reason={reason}")
+        self._last_event_gate = gate
+        self._last_event_base = base
+        self._last_event_transition = transition
+        self._last_event_effects = active_names
+        return lines
+
+    def _emit_runtime_events(self, elapsed: float) -> None:
+        if not self._status_enabled:
+            return
+        for line in self._runtime_event_lines(elapsed):
+            self._write_event(line)
+
+    def _write_event(self, line: str) -> None:
+        if self._status_tty and self._status_lines:
+            sys.stdout.write(f"\x1b[{self._status_lines}F")
+            sys.stdout.write("\x1b[J")
+            self._status_lines = 0
+        print(line, flush=True)
+        self._last_status_at = 0.0
+
     def _write_live_status(self, block: str) -> None:
-        lines = block.count("\n") + 1
+        lines = self._display_rows(block)
         if self._status_lines:
             sys.stdout.write(f"\x1b[{self._status_lines}F")
         sys.stdout.write("\x1b[J")
@@ -392,8 +532,18 @@ class HeadlessApp:
         self._status_lines = lines
         self._last_status_at = time.monotonic()
 
+    @staticmethod
+    def _display_rows(block: str) -> int:
+        columns = max(shutil.get_terminal_size(fallback=(80, 24)).columns, 1)
+        rows = 0
+        for line in block.split("\n"):
+            visible = ANSI_ESCAPE_PATTERN.sub("", line)
+            rows += max(1, (len(visible) + columns - 1) // columns)
+        return rows
+
     def _status_due(self, now: float) -> bool:
-        return self._last_status_at == 0.0 or (now - self._last_status_at) >= STATUS_INTERVAL_SECONDS
+        interval = STATUS_INTERVAL_SECONDS if self._status_tty else LOG_INTERVAL_SECONDS
+        return self._last_status_at == 0.0 or (now - self._last_status_at) >= interval
 
     def _finish_status(self) -> None:
         if not self._status_enabled or not self._status_tty:
@@ -403,8 +553,8 @@ class HeadlessApp:
         self._status_lines = 0
 
     def debug_header(self) -> str:
-        verbose = " verbose=ON" if self.audio_debug_verbose else ""
-        return f"AUDIO-DEBUG SOURCE={self.audio_status} MIC={self.mic_tuning_label}{verbose}"
+        detail = " diagnostics=FULL" if self.audio_debug_verbose or self.debug_selector else ""
+        return f"AUDIO-DEBUG SOURCE={self.audio_status} MIC={self.mic_tuning_label}{detail} fields=RENDER|STATE|HEALTH|AUDIO|SPECTRUM|EVENTS"
 
     def _selector_scores(self) -> dict[str, float]:
         if self.playback.last_decision is None:
@@ -435,7 +585,7 @@ class HeadlessApp:
         ) or "-"
         return (
             f"t={elapsed:0.2f}s "
-            f"TRANSITION CLASS={previous_class}->{current_class} "
+            f"GATE TRANSITION CLASS={previous_class}->{current_class} "
             f"{self._selector_top_summary()} "
             f"SCORES={score_snapshot}"
         )
@@ -448,6 +598,11 @@ class HeadlessApp:
         fresh = "YES" if frame.fresh else "NO"
         idle = "NO" if self.playback.music_active else "YES"
         anim = self.player.name_at(self.player.current_index()) or "?"
+        diagnostics = self.playback.effect_diagnostics()
+        effects = ",".join(
+            f"{effect.name}:{effect.category.value}:{effect.progress:0.2f}:{effect.strength:0.2f}"
+            for effect in diagnostics.active
+        ) or "-"
         bands = ",".join(f"{value:0.2f}" for value in frame.bands)
         silence = "YES" if feat.silence else "NO"
         drop = "YES" if feat.drop_detected else "NO"
@@ -460,31 +615,33 @@ class HeadlessApp:
         gain = stats.normalization_gain if stats is not None else 1.0
         status_count = health.status_count if health is not None else 0
         line = (
-            f"t={elapsed:0.2f}s "
-            f"SRC={self.audio_status} "
-            f"CLASS={self.class_label} "
-            f"ANIM={anim.upper()} "
-            f"MODE={self.mode.value} "
+            f"t={elapsed:0.2f}s SAMPLE | "
+            f"RENDER BASE={anim.upper()} FX={effects.upper()} BLEND={diagnostics.overlay_strength:0.2f}/{diagnostics.overlay_limit:0.2f} | "
+            f"STATE SRC={self.audio_status} CLASS={self.class_label} MODE={self.mode.value} "
             f"GATE={self.playback.music_gate_state.value.upper()} "
             f"IDLE={idle} "
+            f"| HEALTH "
             f"FRESH={fresh} "
             f"AGE={age_text} "
             f"SEQ={frame.sequence} "
             f"FFT={fft_count} "
             f"GAIN={gain:0.2f} "
             f"STATUS={status_count} "
+            f"| SPECTRUM "
             f"BASS={feat.bass_energy:0.2f} "
             f"MID={feat.mid_energy:0.2f} "
             f"TREBLE={feat.treble_energy:0.2f} "
             f"CENTROID={feat.spectral_centroid:0.2f} "
             f"FLUX={feat.spectral_flux:0.2f} "
             f"LOUD={feat.rolling_loudness:0.2f} "
+            f"| EVENTS "
             f"SILENCE={silence} "
             f"DROP={drop} "
             f"SECTION={section} "
             f"DRIVE={snapshot.drive:0.2f} "
             f"ACCENT={snapshot.accent:0.2f} "
             f"ACTIVITY={snapshot.activity:0.2f} "
+            f"| AUDIO "
             f"RMS={frame.rms:0.3f} "
             f"BEAT={beat} "
             f"BPM={feat.bpm:0.0f} "
@@ -492,10 +649,18 @@ class HeadlessApp:
             f"ONSET={feat.onset_strength:0.3f} "
             f"DYN={feat.dynamic_range:0.3f} "
             f"BANDS={bands} "
+            f"| SELECTOR "
             f"{self._selector_top_summary()}"
         )
         if self.audio_debug_verbose or self.debug_selector:
-            line = f"{line} {self._selector_verbose_summary()}"
+            selector = self.playback.selector_diagnostics()
+            line = (
+                f"{line} {self._selector_verbose_summary()} | "
+                f"SEL_TIME={selector.elapsed_s:0.2f}s MIN_WAIT={selector.min_duration_remaining_s:0.2f}s "
+                f"SWITCH_CD={selector.switch_cooldown_remaining_s:0.2f}s DROP_CD={selector.drop_cooldown_remaining_s:0.2f}s | "
+                f"SCHED_R={diagnostics.rhythmic.result.value}:{diagnostics.rhythmic.value:0.2f}/{diagnostics.rhythmic.threshold:0.2f}:cd={diagnostics.rhythmic_cooldown_remaining_s:0.2f}s "
+                f"SCHED_A={diagnostics.accent.result.value}:{diagnostics.accent.value:0.2f}/{diagnostics.accent.threshold:0.2f}:cd={diagnostics.accent_cooldown_remaining_s:0.2f}s"
+            )
         return line
 
     def audio_debug_record(self, elapsed: float) -> dict[str, object]:
@@ -505,12 +670,15 @@ class HeadlessApp:
         health = self._audio_health()
         stats = health.processor if health is not None else None
         decision = self.playback.last_decision
+        diagnostics = self.playback.effect_diagnostics()
         return {
             "elapsed_s": round(elapsed, 6),
             "source": self.audio_status,
             "mode": self.mode.value,
             "class": self.class_label,
             "animation": self.player.name_at(self.player.current_index()) or "",
+            "base_animation": self.player.name_at(self.player.current_index()) or "",
+            "effects": list(self.playback.active_effect_names),
             "music_active": self.playback.music_active,
             "music_gate": self.playback.music_gate_state.value,
             "fresh": frame.fresh,
@@ -549,6 +717,37 @@ class HeadlessApp:
             "selector_reason": "" if decision is None else decision.reason,
             "selector_should_switch": False if decision is None else decision.should_switch,
             "selector_scores": self._selector_scores(),
+            "effect_layers": [
+                {
+                    "name": effect.name,
+                    "category": effect.category.value,
+                    "blend_mode": effect.blend_mode.value,
+                    "strength": effect.strength,
+                    "elapsed_s": effect.elapsed_s,
+                    "remaining_s": effect.remaining_s,
+                    "progress": effect.progress,
+                }
+                for effect in diagnostics.active
+            ],
+            "effect_scheduler": {
+                "active_limit": diagnostics.active_limit,
+                "overlay_strength": diagnostics.overlay_strength,
+                "overlay_limit": diagnostics.overlay_limit,
+                "rhythmic_cooldown_remaining_s": diagnostics.rhythmic_cooldown_remaining_s,
+                "accent_cooldown_remaining_s": diagnostics.accent_cooldown_remaining_s,
+                "rhythmic": {
+                    "signal": diagnostics.rhythmic.signal,
+                    "value": diagnostics.rhythmic.value,
+                    "threshold": diagnostics.rhythmic.threshold,
+                    "result": diagnostics.rhythmic.result.value,
+                },
+                "accent": {
+                    "signal": diagnostics.accent.signal,
+                    "value": diagnostics.accent.value,
+                    "threshold": diagnostics.accent.threshold,
+                    "result": diagnostics.accent.result.value,
+                },
+            },
         }
 
     def _audio_health(self):
@@ -577,9 +776,11 @@ class HeadlessApp:
         recorder: AudioDebugRecorder | None = None,
     ) -> None:
         started_at = time.monotonic()
+        self._runtime_started_at = started_at
         frames_run = 0
         next_frame_at = started_at
         self._last_debug_class = self.class_label
+        self._reset_event_state()
         print(self.debug_header(), flush=True)
         try:
             while self.running:
@@ -593,6 +794,9 @@ class HeadlessApp:
                     print(self.debug_transition_line(now - started_at, self._last_debug_class, current_class), flush=True)
                     self._last_debug_class = current_class
                 elapsed = now - started_at
+                for event in self._runtime_event_lines(elapsed):
+                    if " GATE " not in event and " TRANSITION " not in event:
+                        print(event, flush=True)
                 print(self.debug_log_line(elapsed), flush=True)
                 if recorder is not None:
                     recorder.write(self.audio_debug_record(elapsed))
@@ -604,10 +808,13 @@ class HeadlessApp:
         except KeyboardInterrupt:
             self.running = False
         finally:
-            self.controller.clear()
-            self.controller.force_flush()
-            self.encoder_backend.close()
-            self._close_audio_input()
+            try:
+                self.controller.clear()
+                self.controller.force_flush()
+            finally:
+                self.controller.close()
+                self.encoder_backend.close()
+                self._close_audio_input()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -743,6 +950,25 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dynamic-history-size", type=_positive_int, default=DynamicSelectorConfig().history_size)
     parser.add_argument("--dynamic-seed", type=int)
     parser.add_argument("--quiet", action="store_true", help="Disable runtime status output")
+    parser.add_argument(
+        "--output-backend",
+        choices=("spi", "gpio"),
+        default="spi",
+        help="Hardware output backend (default: spi)",
+    )
+    parser.add_argument("--spi-device", default="/dev/spidev0.0", help="Primary SPI device path")
+    parser.add_argument(
+        "--spi-speed",
+        type=_positive_int,
+        default=1_000_000,
+        help="Primary SPI clock speed in Hz",
+    )
+    parser.add_argument("--spi-device-2", help="Optional mirrored secondary SPI device path")
+    parser.add_argument(
+        "--spi-speed-2",
+        type=_positive_int,
+        help="Secondary SPI clock speed in Hz",
+    )
     parser.add_argument("--chip", default="/dev/gpiochip0", help="Primary GPIO chip path")
     parser.add_argument("--data-pin", type=int, default=14, help="Primary stripe data pin")
     parser.add_argument("--clock-pin", type=int, default=15, help="Primary stripe clock pin")
@@ -760,6 +986,36 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def build_output_controller(args: argparse.Namespace) -> Controller:
+    if args.output_backend == "spi":
+        if _secondary_gpio_stripe_requested(args):
+            raise ValueError(
+                "--chip-2, --data-pin-2, and --clock-pin-2 require --output-backend gpio"
+            )
+        if args.spi_speed_2 is not None and args.spi_device_2 is None:
+            raise ValueError("--spi-speed-2 requires --spi-device-2")
+        _ensure_spi_ready(args.spi_device)
+        spi_primary = SPIStripe(
+            SPIConfig(device=args.spi_device, speed_hz=args.spi_speed),
+            args.pixels,
+        )
+        if args.spi_device_2 is None:
+            return spi_primary
+        try:
+            _ensure_spi_ready(args.spi_device_2)
+            spi_secondary = SPIStripe(
+                SPIConfig(
+                    device=args.spi_device_2,
+                    speed_hz=args.spi_speed_2 or args.spi_speed,
+                ),
+                args.pixels,
+            )
+        except Exception:
+            spi_primary.close()
+            raise
+        return MultiController([spi_primary, spi_secondary])
+
+    if args.spi_device_2 is not None or args.spi_speed_2 is not None:
+        raise ValueError("secondary SPI flags require --output-backend spi")
     _ensure_gpio_ready(args.chip)
     primary = GPIOStripe(
         Config(chip=args.chip, gpio_data=args.data_pin, gpio_clock=args.clock_pin, consumer="lumistripe"),
@@ -789,6 +1045,9 @@ def gpio_backend_label(controller: Controller) -> str | None:
         compact = [label for label in labels if label]
         return ", ".join(compact) if compact else None
     label = getattr(controller, "gpio_backend_label", None)
+    if label == "spi":
+        device = getattr(controller, "spi_device_path", None)
+        return f"spi ({device})" if device else "spi"
     return str(label) if label else None
 
 
@@ -895,8 +1154,31 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(f"error: {exc}") from exc
 
 
-def _secondary_stripe_requested(args: argparse.Namespace) -> bool:
+def _secondary_gpio_stripe_requested(args: argparse.Namespace) -> bool:
     return args.chip_2 is not None or args.data_pin_2 is not None or args.clock_pin_2 is not None
+
+
+def _secondary_stripe_requested(args: argparse.Namespace) -> bool:
+    return _secondary_gpio_stripe_requested(args)
+
+
+def _ensure_spi_ready(device: str) -> None:
+    if importlib.util.find_spec("spidev") is None:
+        raise RuntimeError(
+            "SPI runtime unavailable: install lumistripe-core[spi] to use the headless CLI"
+        )
+    device_path = Path(device)
+    if not device_path.exists():
+        raise RuntimeError(
+            f'SPI device "{device}" was not found. Enable SPI and verify the device path.'
+        )
+    if not device_path.is_char_device():
+        raise RuntimeError(f'SPI device "{device}" is not a character device.')
+    if not os.access(device_path, os.R_OK | os.W_OK):
+        raise RuntimeError(
+            f'permission denied for SPI device "{device}". '
+            "Add your user to the spi group or configure an appropriate udev rule."
+        )
 
 
 def _ensure_gpio_ready(chip: str) -> None:

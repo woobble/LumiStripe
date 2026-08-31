@@ -1,0 +1,24 @@
+[project]
+name = "lumistripe-web"
+version = "0.1.0"
+description = "Mobile-first web dashboard and GPIO runtime for LumiStripe"
+readme = "README.md"
+authors = [
+    { name = "Felix Sternberg", email = "felix@sternberg.cx" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.141.1",
+    "lumistripe-core[audio,gpio,spi]",
+    "uvicorn[standard]>=0.52.1",
+]
+
+[project.scripts]
+lumistripe-web = "lumistripe_web:main"
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+lumistripe-core = { workspace = true }

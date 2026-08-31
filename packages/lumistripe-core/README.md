@@ -1,8 +1,21 @@
 # lumistripe-core
 
-`lumistripe` provides an in-memory `Stripe` controller for testing and animation work, plus a hardware-backed `GPIOStripe` for Raspberry Pi / Linux GPIO output.
+`lumistripe` provides an in-memory `Stripe` controller for testing and
+animation work, a hardware-backed `SPIStripe`, and the legacy `GPIOStripe`.
 
-Install GPIO support with:
+Install hardware SPI support with:
+
+```bash
+pip install lumistripe-core[spi]
+```
+
+```python
+from lumistripe import SPIConfig, SPIStripe
+
+stripe = SPIStripe(SPIConfig(device="/dev/spidev0.0", speed_hz=1_000_000), 80)
+```
+
+Install the legacy userspace GPIO support with:
 
 ```bash
 pip install lumistripe-core[gpio]

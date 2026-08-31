@@ -126,6 +126,12 @@ def test_as_pixel_buffer_accepts_ndarray() -> None:
     np.testing.assert_array_equal(pixels, np.array([[1, 2, 3, 255]], dtype=np.uint8))
 
 
+def test_as_pixel_buffer_reuses_normalized_rgba_array() -> None:
+    source = np.array([[1, 2, 3, 4]], dtype=np.uint8)
+
+    assert as_pixel_buffer(source) is source
+
+
 def test_as_pixel_buffer_accepts_sequence_pixel_values() -> None:
     pixels = as_pixel_buffer([[1, 2, 3], [4, 5, 6]])
 

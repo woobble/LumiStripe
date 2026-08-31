@@ -1,6 +1,8 @@
 import numpy as np
 import pytest
 from lumistripe.audio import (
+    FFT_HOP_SIZE,
+    FFT_SIZE,
     AudioAnalysis,
     AudioConfig,
     AudioFeatures,
@@ -20,7 +22,7 @@ from lumistripe.audio import (
 
 
 def _drop_like_chunk(frame: int, sample_rate: float = 44_100.0) -> np.ndarray:
-    t = np.arange(1024, dtype=np.float32) / sample_rate
+    t = np.arange(FFT_SIZE, dtype=np.float32) / sample_rate
     bass_env = 1.0 if frame % 2 == 0 else 0.72
     bass = np.sin(2.0 * np.pi * 55.0 * t) * (0.18 * bass_env)
     sub = np.sin(2.0 * np.pi * 110.0 * t) * 0.08
@@ -35,7 +37,7 @@ def _drop_like_chunk(frame: int, sample_rate: float = 44_100.0) -> np.ndarray:
 def test_audio_state_silence_produces_zeroish_frame() -> None:
     state = AudioState()
     for _ in range(8):
-        state.feed_samples(np.zeros(1024, dtype=np.float32))
+        state.feed_samples(np.zeros(FFT_SIZE, dtype=np.float32))
     frame = state.frame()
     features = state.music_features()
 
@@ -49,7 +51,7 @@ def test_audio_state_silence_produces_zeroish_frame() -> None:
 def test_audio_state_low_frequency_pulse_drives_first_bands() -> None:
     state = AudioState(AudioConfig.raw())
     sample_rate = 44_100.0
-    samples = np.sin(2.0 * np.pi * 80.0 * np.arange(1024, dtype=np.float32) / sample_rate).astype(
+    samples = np.sin(2.0 * np.pi * 80.0 * np.arange(FFT_SIZE, dtype=np.float32) / sample_rate).astype(
         np.float32
     )
     state.feed_samples(samples)
@@ -62,7 +64,7 @@ def test_audio_state_low_frequency_pulse_drives_first_bands() -> None:
 def test_audio_state_high_frequency_tone_reaches_upper_bands() -> None:
     state = AudioState(AudioConfig.raw())
     sample_rate = 44_100.0
-    samples = np.sin(2.0 * np.pi * 8_000.0 * np.arange(1024, dtype=np.float32) / sample_rate).astype(
+    samples = np.sin(2.0 * np.pi * 8_000.0 * np.arange(FFT_SIZE, dtype=np.float32) / sample_rate).astype(
         np.float32
     )
 
@@ -77,7 +79,7 @@ def test_audio_state_high_frequency_tone_reaches_upper_bands() -> None:
 def test_audio_state_band_mapping_respects_sample_rate() -> None:
     sample_rate = 16_000.0
     state = AudioState(AudioConfig.raw(), sample_rate=sample_rate)
-    samples = np.sin(2.0 * np.pi * 3_200.0 * np.arange(1024, dtype=np.float32) / sample_rate).astype(
+    samples = np.sin(2.0 * np.pi * 3_200.0 * np.arange(FFT_SIZE, dtype=np.float32) / sample_rate).astype(
         np.float32
     )
 
@@ -90,8 +92,12 @@ def test_audio_state_band_mapping_respects_sample_rate() -> None:
 
 def test_audio_state_can_trigger_beat_detection() -> None:
     state = AudioState()
-    state.feed_samples(np.full(1024, 0.01, dtype=np.float32))
-    state.feed_samples(np.sin(2.0 * np.pi * 3.0 * np.arange(1024, dtype=np.float32) / 1024.0))
+    state.feed_samples(np.full(FFT_SIZE, 0.01, dtype=np.float32))
+    state.feed_samples(
+        np.sin(
+            2.0 * np.pi * 3.0 * np.arange(FFT_SIZE, dtype=np.float32) / float(FFT_SIZE)
+        )
+    )
     frame = state.frame()
 
     assert isinstance(frame, AudioFrame)
@@ -100,7 +106,7 @@ def test_audio_state_can_trigger_beat_detection() -> None:
 
 def test_audio_state_noise_floor_suppresses_low_level_noise() -> None:
     state = AudioState(AudioConfig(smoothing=AudioSmoothing(noise_floor=0.95)))
-    state.feed_samples(np.full(1024, 0.005, dtype=np.float32))
+    state.feed_samples(np.full(FFT_SIZE, 0.005, dtype=np.float32))
     frame = state.frame()
 
     assert frame.rms == pytest.approx(0.0, abs=1e-6)
@@ -109,8 +115,10 @@ def test_audio_state_noise_floor_suppresses_low_level_noise() -> None:
 
 def test_audio_state_default_smoothing_reduces_dropoff() -> None:
     state = AudioState()
-    loud = np.sin(2.0 * np.pi * 4.0 * np.arange(1024, dtype=np.float32) / 1024.0).astype(np.float32)
-    quiet = np.zeros(1024, dtype=np.float32)
+    loud = np.sin(
+        2.0 * np.pi * 4.0 * np.arange(FFT_SIZE, dtype=np.float32) / float(FFT_SIZE)
+    ).astype(np.float32)
+    quiet = np.zeros(FFT_SIZE, dtype=np.float32)
 
     state.feed_samples(loud)
     first = state.frame()
@@ -125,8 +133,10 @@ def test_audio_state_default_smoothing_reduces_dropoff() -> None:
 
 def test_audio_state_raw_config_stays_unsmoothed() -> None:
     state = AudioState(AudioConfig.raw())
-    loud = np.sin(2.0 * np.pi * 4.0 * np.arange(1024, dtype=np.float32) / 1024.0).astype(np.float32)
-    quiet = np.zeros(1024, dtype=np.float32)
+    loud = np.sin(
+        2.0 * np.pi * 4.0 * np.arange(FFT_SIZE, dtype=np.float32) / float(FFT_SIZE)
+    ).astype(np.float32)
+    quiet = np.zeros(FFT_SIZE, dtype=np.float32)
 
     state.feed_samples(loud)
     assert state.frame().rms > 0.0
@@ -137,13 +147,13 @@ def test_audio_state_raw_config_stays_unsmoothed() -> None:
 def test_audio_state_smoothed_beat_strength_has_decay() -> None:
     smoothing = AudioSmoothing(noise_floor=0.0, beat_release=0.25)
     state = AudioState(AudioConfig(smoothing=smoothing))
-    quiet = np.full(1024, 0.01, dtype=np.float32)
-    loud = np.sin(2.0 * np.pi * 80.0 * np.arange(1024, dtype=np.float32) / 44_100.0).astype(np.float32)
+    quiet = np.full(FFT_SIZE, 0.01, dtype=np.float32)
+    loud = np.sin(2.0 * np.pi * 80.0 * np.arange(FFT_SIZE, dtype=np.float32) / 44_100.0).astype(np.float32)
 
     state.feed_samples(quiet)
     state.feed_samples(loud)
     peak = state.frame()
-    state.feed_samples(np.zeros(1024, dtype=np.float32))
+    state.feed_samples(np.zeros(FFT_SIZE, dtype=np.float32))
     decayed = state.frame()
 
     assert peak.beat_strength > 0.0
@@ -153,17 +163,17 @@ def test_audio_state_smoothed_beat_strength_has_decay() -> None:
 
 def test_audio_state_dc_bias_no_longer_pins_low_band() -> None:
     state = AudioState()
-    state.feed_samples(np.full(1024, 0.6, dtype=np.float32))
+    state.feed_samples(np.full(FFT_SIZE, 0.6, dtype=np.float32))
     frame = state.frame()
 
     assert frame.rms < 0.1
     assert frame.bands[0] < 0.1
 
 
-def test_audio_state_normalizes_hot_and_quiet_inputs() -> None:
+def test_audio_state_normalization_preserves_hot_and_quiet_contrast() -> None:
     hot = AudioState()
     quiet = AudioState()
-    phase = 2.0 * np.pi * 80.0 * np.arange(1024, dtype=np.float32) / 44_100.0
+    phase = 2.0 * np.pi * 80.0 * np.arange(FFT_SIZE, dtype=np.float32) / 44_100.0
     hot_samples = (np.sin(phase) * 0.9).astype(np.float32)
     quiet_samples = (np.sin(phase) * 0.08).astype(np.float32)
 
@@ -173,13 +183,33 @@ def test_audio_state_normalizes_hot_and_quiet_inputs() -> None:
 
     hot_frame = hot.frame()
     quiet_frame = quiet.frame()
-    assert abs(hot_frame.rms - quiet_frame.rms) < 0.25
-    assert abs(hot_frame.bands[0] - quiet_frame.bands[0]) < 0.25
+    assert hot_frame.rms > quiet_frame.rms + 0.2
+    assert hot.music_features().musical_impact > quiet.music_features().musical_impact
+
+
+def test_audio_state_quiet_passage_does_not_pump_gain_after_loud_music() -> None:
+    state = AudioState()
+    phase = 2.0 * np.pi * 80.0 * np.arange(FFT_SIZE, dtype=np.float32) / 44_100.0
+    loud = (np.sin(phase) * 0.6).astype(np.float32)
+    quiet = (np.sin(phase) * 0.04).astype(np.float32)
+
+    for _ in range(8):
+        state.feed_samples(loud)
+    loud_stats = state.stats()
+    loud_level = state.frame().rms
+
+    for _ in range(8):
+        state.feed_samples(quiet)
+    quiet_stats = state.stats()
+
+    assert quiet_stats.normalization_gain < loud_stats.normalization_gain * 1.1
+    assert quiet_stats.musical_impact < 0.2
+    assert state.frame().rms < loud_level * 0.1
 
 
 def test_audio_state_sustained_music_does_not_saturate() -> None:
     state = AudioState()
-    samples = (np.sin(2.0 * np.pi * 160.0 * np.arange(1024, dtype=np.float32) / 44_100.0) * 0.6).astype(
+    samples = (np.sin(2.0 * np.pi * 160.0 * np.arange(FFT_SIZE, dtype=np.float32) / 44_100.0) * 0.6).astype(
         np.float32
     )
 
@@ -193,8 +223,8 @@ def test_audio_state_sustained_music_does_not_saturate() -> None:
 
 def test_audio_state_silence_does_not_get_amplified() -> None:
     state = AudioState()
-    state.feed_samples(np.zeros(1024, dtype=np.float32))
-    state.feed_samples(np.zeros(1024, dtype=np.float32))
+    state.feed_samples(np.zeros(FFT_SIZE, dtype=np.float32))
+    state.feed_samples(np.zeros(FFT_SIZE, dtype=np.float32))
     frame = state.frame()
 
     assert frame.rms == pytest.approx(0.0, abs=1e-6)
@@ -204,7 +234,9 @@ def test_audio_state_silence_does_not_get_amplified() -> None:
 def test_audio_state_normalization_respects_gain_limits() -> None:
     normalization = AudioNormalization(target_level=0.4, min_gain=0.5, max_gain=2.0)
     state = AudioState(AudioConfig(normalization=normalization))
-    quiet = np.sin(2.0 * np.pi * 4.0 * np.arange(1024, dtype=np.float32) / 1024.0).astype(np.float32) * 0.01
+    quiet = np.sin(
+        2.0 * np.pi * 4.0 * np.arange(FFT_SIZE, dtype=np.float32) / float(FFT_SIZE)
+    ).astype(np.float32) * 0.01
 
     state.feed_samples(quiet)
 
@@ -250,7 +282,7 @@ def test_audio_calibration_requires_frames() -> None:
 def test_audio_state_music_threshold_prevents_gain_runaway() -> None:
     normalization = AudioNormalization(target_level=0.4, max_gain=4.0, music_threshold=0.05, music_max_gain=3.0)
     state = AudioState(AudioConfig(normalization=normalization))
-    samples = (np.sin(2.0 * np.pi * 8.0 * np.arange(1024, dtype=np.float32) / 1024.0) * 0.5).astype(
+    samples = (np.sin(2.0 * np.pi * 8.0 * np.arange(FFT_SIZE, dtype=np.float32) / float(FFT_SIZE)) * 0.5).astype(
         np.float32
     )
 
@@ -261,7 +293,7 @@ def test_audio_state_music_threshold_prevents_gain_runaway() -> None:
     assert state._normalization_gain >= 1.0
 
 
-def test_audio_state_drop_like_input_has_stronger_onset_than_low_tone() -> None:
+def test_audio_state_drop_like_input_produces_measurable_onsets() -> None:
     drop_state = AudioState()
     sample_rate = 44_100.0
 
@@ -271,15 +303,15 @@ def test_audio_state_drop_like_input_has_stronger_onset_than_low_tone() -> None:
         if frame >= 4:
             drop_onsets.append(drop_state.music_features().onset_strength)
 
-    assert max(drop_onsets) > 0.16
-    assert sum(drop_onsets) / len(drop_onsets) > 0.12
+    assert max(drop_onsets) > 0.12
+    assert sum(drop_onsets) / len(drop_onsets) > 0.05
 
 
 def test_audio_state_drop_like_input_has_higher_brightness_than_low_tone() -> None:
     drop_state = AudioState()
     low_state = AudioState()
     sample_rate = 44_100.0
-    low_tone = (np.sin(2.0 * np.pi * 55.0 * np.arange(1024, dtype=np.float32) / sample_rate) * 0.2).astype(np.float32)
+    low_tone = (np.sin(2.0 * np.pi * 55.0 * np.arange(FFT_SIZE, dtype=np.float32) / sample_rate) * 0.2).astype(np.float32)
 
     for frame in range(12):
         drop_state.feed_samples(_drop_like_chunk(frame, sample_rate))
@@ -293,14 +325,14 @@ def test_audio_state_exposes_richer_band_and_spectral_features() -> None:
     low_state = AudioState()
     bright_state = AudioState()
     sample_rate = 44_100.0
-    low_tone = (np.sin(2.0 * np.pi * 55.0 * np.arange(1024, dtype=np.float32) / sample_rate) * 0.2).astype(np.float32)
+    low_tone = (np.sin(2.0 * np.pi * 55.0 * np.arange(FFT_SIZE, dtype=np.float32) / sample_rate) * 0.2).astype(np.float32)
     rng = np.random.default_rng(0)
     low_flux: list[float] = []
     bright_flux: list[float] = []
 
     for frame in range(12):
         low_state.feed_samples(low_tone)
-        bright_noise = rng.normal(0.0, 0.12, 1024).astype(np.float32)
+        bright_noise = rng.normal(0.0, 0.12, FFT_SIZE).astype(np.float32)
         bright_state.feed_samples(bright_noise)
         low_flux.append(low_state.music_features().spectral_flux)
         bright_flux.append(bright_state.music_features().spectral_flux)
@@ -318,7 +350,7 @@ def test_audio_state_exposes_richer_band_and_spectral_features() -> None:
 def test_audio_state_can_detect_bass_drop_event() -> None:
     state = AudioState()
     sample_rate = 44_100.0
-    quiet = np.zeros(1024, dtype=np.float32)
+    quiet = np.zeros(FFT_SIZE, dtype=np.float32)
     drop = _drop_like_chunk(0, sample_rate) * 2.0
 
     for _ in range(8):
@@ -326,15 +358,16 @@ def test_audio_state_can_detect_bass_drop_event() -> None:
 
     seen_drop = False
     for _ in range(12):
-        state.feed_samples(drop)
-        seen_drop = seen_drop or state.music_features().drop_detected
+        for offset in range(0, FFT_SIZE, FFT_HOP_SIZE):
+            state.feed_samples(drop[offset : offset + FFT_HOP_SIZE])
+            seen_drop = seen_drop or state.music_features().drop_detected
 
     assert seen_drop is True
 
 
 def test_audio_state_drop_threshold_is_configurable() -> None:
     sample_rate = 44_100.0
-    quiet = np.zeros(1024, dtype=np.float32)
+    quiet = np.zeros(FFT_SIZE, dtype=np.float32)
     drop = _drop_like_chunk(0, sample_rate) * 2.0
     strict = AudioState(AudioConfig(analysis=AudioAnalysis(drop_bass_threshold=0.98)))
 
@@ -356,7 +389,7 @@ def test_audio_state_silence_suppresses_beat_features() -> None:
     )
     state = AudioState(config)
     sample_rate = 44_100.0
-    quiet_bass = (np.sin(2.0 * np.pi * 55.0 * np.arange(1024, dtype=np.float32) / sample_rate) * 0.012).astype(
+    quiet_bass = (np.sin(2.0 * np.pi * 55.0 * np.arange(FFT_SIZE, dtype=np.float32) / sample_rate) * 0.012).astype(
         np.float32
     )
 
@@ -377,7 +410,7 @@ def test_audio_state_silence_suppresses_beat_features() -> None:
 def test_audio_state_steady_tone_does_not_trigger_semantic_events() -> None:
     state = AudioState()
     sample_rate = 44_100.0
-    tone = (np.sin(2.0 * np.pi * 220.0 * np.arange(1024, dtype=np.float32) / sample_rate) * 0.18).astype(np.float32)
+    tone = (np.sin(2.0 * np.pi * 220.0 * np.arange(FFT_SIZE, dtype=np.float32) / sample_rate) * 0.18).astype(np.float32)
 
     seen_drop = False
     seen_section = False
@@ -393,7 +426,7 @@ def test_audio_state_steady_tone_does_not_trigger_semantic_events() -> None:
 
 def test_audio_state_raw_config_preserves_dc_bias() -> None:
     state = AudioState(AudioConfig.raw())
-    state.feed_samples(np.full(1024, 0.6, dtype=np.float32))
+    state.feed_samples(np.full(FFT_SIZE, 0.6, dtype=np.float32))
     frame = state.frame()
 
     assert frame.bands[0] > 0.1
@@ -402,45 +435,112 @@ def test_audio_state_raw_config_preserves_dc_bias() -> None:
 
 def test_audio_state_waits_for_full_fft_window() -> None:
     state = AudioState(AudioConfig.raw())
-    half = np.sin(2.0 * np.pi * 80.0 * np.arange(512, dtype=np.float32) / 44_100.0).astype(np.float32)
+    first = np.sin(
+        2.0 * np.pi * 80.0 * np.arange(FFT_SIZE - 1, dtype=np.float32) / 44_100.0
+    ).astype(np.float32)
 
-    state.feed_samples(half)
+    state.feed_samples(first)
     assert state.frame() == AudioFrame()
     assert state.stats().fft_count == 0
 
-    state.feed_samples(half)
+    state.feed_samples(np.array([0.1], dtype=np.float32))
     assert state.frame().rms > 0.0
     assert state.frame().sequence == 1
     assert state.frame().fresh is True
     assert state.stats().fft_count == 1
-    assert state.stats().samples_seen == 1024
+    assert state.stats().samples_seen == FFT_SIZE
 
 
-def test_audio_state_uses_half_window_overlap() -> None:
+def test_audio_state_uses_configured_fft_hop() -> None:
     state = AudioState(AudioConfig.raw())
-    half = np.sin(2.0 * np.pi * 80.0 * np.arange(512, dtype=np.float32) / 44_100.0).astype(np.float32)
+    window = np.sin(
+        2.0 * np.pi * 80.0 * np.arange(FFT_SIZE, dtype=np.float32) / 44_100.0
+    ).astype(np.float32)
+    hop = window[:FFT_HOP_SIZE]
 
-    state.feed_samples(half)
-    state.feed_samples(half)
+    state.feed_samples(window)
     assert state.stats().fft_count == 1
 
-    state.feed_samples(half)
+    state.feed_samples(hop)
     assert state.stats().fft_count == 2
     assert state.frame().sequence == 2
 
 
 def test_audio_state_stats_count_multiple_ffts_from_one_feed() -> None:
     state = AudioState(AudioConfig.raw())
-    samples = np.sin(2.0 * np.pi * 80.0 * np.arange(2048, dtype=np.float32) / 44_100.0).astype(np.float32)
+    sample_count = FFT_SIZE + (2 * FFT_HOP_SIZE)
+    samples = np.sin(
+        2.0 * np.pi * 80.0 * np.arange(sample_count, dtype=np.float32) / 44_100.0
+    ).astype(np.float32)
 
     state.feed_samples(samples)
     stats = state.stats()
 
     assert stats.feed_count == 1
-    assert stats.samples_seen == 2048
+    assert stats.samples_seen == sample_count
     assert stats.fft_count == 3
     assert stats.sample_abs_sum > 0.0
     assert stats.normalization_gain == pytest.approx(1.0)
+
+
+def test_audio_stats_expose_level_before_noise_floor() -> None:
+    state = AudioState(
+        AudioConfig(
+            smoothing=AudioSmoothing(noise_floor=0.95),
+            normalization=AudioNormalization(enabled=False, dc_block_enabled=False),
+        )
+    )
+    state.feed_samples(np.full(FFT_SIZE, 0.1, dtype=np.float32))
+
+    assert state.frame().rms == pytest.approx(0.0)
+    assert state.stats().input_rms == pytest.approx(0.1, rel=0.05)
+
+
+def test_audio_state_does_not_raise_agc_for_subthreshold_noise() -> None:
+    normalization = AudioNormalization(
+        target_level=0.36,
+        max_gain=5.0,
+        music_threshold=0.015,
+        adapt_attack=1.0,
+        adapt_release=1.0,
+    )
+    state = AudioState(AudioConfig(normalization=normalization))
+    phase = 2.0 * np.pi * 220.0 * np.arange(FFT_SIZE, dtype=np.float32) / 44_100.0
+    state.feed_samples((np.sin(phase) * 0.008).astype(np.float32))
+
+    stats = state.stats()
+    assert stats.input_rms < normalization.music_threshold
+    assert stats.normalization_gain == pytest.approx(1.0)
+
+
+def test_audio_stats_input_rms_is_measured_before_agc() -> None:
+    normalization = AudioNormalization(
+        target_level=0.36,
+        music_threshold=0.01,
+        adapt_attack=1.0,
+        adapt_release=1.0,
+    )
+    state = AudioState(AudioConfig(normalization=normalization))
+    phase = 2.0 * np.pi * 220.0 * np.arange(FFT_SIZE, dtype=np.float32) / 44_100.0
+    samples = (np.sin(phase) * 0.1).astype(np.float32)
+    state.feed_samples(samples)
+
+    stats = state.stats()
+    assert stats.input_rms == pytest.approx(float(np.sqrt(np.mean(samples**2))), rel=0.03)
+    assert stats.normalization_gain > 1.0
+    assert state.frame().rms > stats.input_rms
+
+
+def test_audio_state_reconfigure_replaces_dsp_without_reusing_old_frame() -> None:
+    state = AudioState(AudioConfig.raw())
+    state.feed_samples(np.full(FFT_SIZE, 0.2, dtype=np.float32))
+    assert state.frame().rms > 0.0
+
+    state.reconfigure(AudioConfig(smoothing=AudioSmoothing(noise_floor=0.95)))
+
+    assert state.frame() == AudioFrame()
+    state.feed_samples(np.full(FFT_SIZE, 0.2, dtype=np.float32))
+    assert state.frame().rms == pytest.approx(0.0)
 
 
 def test_features_from_frame_derives_music_features() -> None:
@@ -711,8 +811,10 @@ def test_audio_input_reads_callback_samples(monkeypatch: pytest.MonkeyPatch) -> 
     assert fake.streams[0].blocksize == 512
     assert fake.streams[0].started is True
 
-    samples = np.sin(2.0 * np.pi * 4.0 * np.arange(1024, dtype=np.float32) / 1024.0).reshape(1024, 1)
-    fake.streams[0].callback(samples, 1024, None, None)
+    samples = np.sin(
+        2.0 * np.pi * 4.0 * np.arange(FFT_SIZE, dtype=np.float32) / float(FFT_SIZE)
+    ).reshape(FFT_SIZE, 1)
+    fake.streams[0].callback(samples, FFT_SIZE, None, None)
     frame = audio_input.read()
 
     assert frame.rms > 0.0
@@ -726,8 +828,10 @@ def test_audio_input_health_tracks_callback_status(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr("lumistripe.audio.importlib.import_module", lambda name: fake)
 
     audio_input = AudioInput.with_device("usb")
-    samples = np.sin(2.0 * np.pi * 4.0 * np.arange(1024, dtype=np.float32) / 1024.0).reshape(1024, 1)
-    fake.streams[0].callback(samples, 1024, None, "input overflow")
+    samples = np.sin(
+        2.0 * np.pi * 4.0 * np.arange(FFT_SIZE, dtype=np.float32) / float(FFT_SIZE)
+    ).reshape(FFT_SIZE, 1)
+    fake.streams[0].callback(samples, FFT_SIZE, None, "input overflow")
     health = audio_input.health()
 
     assert health.callback_count == 1
@@ -736,7 +840,7 @@ def test_audio_input_health_tracks_callback_status(monkeypatch: pytest.MonkeyPat
     assert health.last_callback_age is not None
     assert health.last_frame_age is not None
     assert health.processor.feed_count == 1
-    assert health.processor.samples_seen == 1024
+    assert health.processor.samples_seen == FFT_SIZE
     assert health.processor.fft_count == 1
     audio_input.close()
 

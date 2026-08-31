@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+import numpy as np
 
 from ..audio import AudioFrame
 from ..controller import Controller
@@ -11,6 +13,13 @@ from .reactive import AudioReactive
 
 @dataclass(slots=True)
 class NeonConfetti(Animation):
+    levels: np.ndarray = field(init=False, repr=False)
+    hues: np.ndarray = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.levels = np.zeros((0,), dtype=np.float32)
+        self.hues = np.zeros((0,), dtype=np.int16)
+
     @property
     def name(self) -> str:
         return "neon_confetti"
@@ -24,14 +33,26 @@ class NeonConfetti(Animation):
         self._render(frame, controller, reactive)
 
     def _render(self, frame: int, controller: Controller, reactive: AudioReactive) -> None:
-        density = 0.12 + reactive.rms * 0.38 + reactive.high * 0.28 + reactive.accent * 0.12
-        sparkle_threshold = int((0.2 + reactive.high * 0.6) * 100.0)
+        if len(self.levels) != controller.length:
+            self.levels = np.zeros(controller.length, dtype=np.float32)
+            self.hues = np.zeros(controller.length, dtype=np.int16)
+        self.levels *= 0.84 - reactive.high * 0.04
+        spawn_threshold = int(
+            (0.008 + reactive.drive() * 0.025 + reactive.shimmer() * 0.018 + reactive.accent * 0.04)
+            * 10_000.0
+        )
         controller.clear()
         for index in range(controller.length):
-            seed = frame * 97 + index * 53 + int(reactive.rms * 1000.0)
-            lit = (seed % 1000) < int(density * 1000.0) or (seed % 100) < sparkle_threshold
-            if lit:
-                alpha = min(1.0, 0.42 + reactive.rms * 0.38 + reactive.high * 0.2)
-                controller.set_pixel(index, neon_color(seed + index, alpha=alpha, lightness=64))
-                if (seed // 7) % 3 == 0 and index + 1 < controller.length:
-                    controller.set_pixel(index + 1, neon_color(seed + 19, alpha=min(1.0, alpha * 0.75), lightness=66))
+            seed = (frame * 48271 + index * 69621) & 0xFFFFFFFF
+            if seed % 10_000 < spawn_threshold:
+                self.levels[index] = min(
+                    1.0, self.levels[index] + 0.5 + reactive.high * 0.25
+                )
+                self.hues[index] = (seed // 100 + index * 13) % 360
+            level = float(self.levels[index])
+            if level > 0.015:
+                alpha = min(1.0, 0.12 + level * 0.78)
+                controller.set_pixel(
+                    index,
+                    neon_color(int(self.hues[index]), alpha=alpha, lightness=64),
+                )

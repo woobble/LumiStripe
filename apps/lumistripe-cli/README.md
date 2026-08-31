@@ -2,6 +2,17 @@
 
 Headless GPIO runtime for Lumistripe on Raspberry Pi.
 
+Hardware output uses SPI by default. On a Raspberry Pi 4, enable SPI0 and wire
+GPIO10 (MOSI) to strip data and GPIO11 (SCLK) to strip clock, then run:
+
+```bash
+lumistripe-cli --pixels 80 --spi-device /dev/spidev0.0
+```
+
+Add a mirrored second device with
+`--spi-device-2 /dev/spidev1.0`. Use `--output-backend gpio` with the existing
+data/clock pin flags to select the legacy userspace GPIO backend explicitly.
+
 For live mic tuning without GPIO, run audio debug mode:
 
 ```bash
@@ -36,3 +47,27 @@ gate delay or idle brightness when needed:
 ```bash
 lumistripe-cli --mode dynamic --music-activation-delay 0.75 --dynamic-idle-brightness 0.08
 ```
+
+While music is active, Dynamic runs one stable base animation and adds up to
+two short-lived rhythmic/accent effects. Base changes use a short crossfade;
+strobe-style standalone animations remain available in Static and Cycling but
+are not selected by Dynamic.
+
+## Console diagnostics
+
+Interactive terminals show a live dashboard with separate base-animation and
+effect-layer state, audio meters, music-gate health, transitions, and blend
+budget. Redirected output uses timestamped `STATE`, `BASE`, `GATE`, `FX_START`,
+and `FX_END` records without ANSI control codes.
+
+Enable selector scores plus effect thresholds, cooldowns, and trigger or
+suppression reasons with:
+
+```bash
+lumistripe-cli --mode dynamic --debug-selector
+```
+
+Audio-only diagnostics use the same render-stack model. `--audio-debug-verbose`
+adds the full selector and effect scheduler state, while JSONL recordings retain
+their existing fields and add `effect_layers` and `effect_scheduler` objects.
+Set `NO_COLOR=1` to disable dashboard colors while retaining meters.

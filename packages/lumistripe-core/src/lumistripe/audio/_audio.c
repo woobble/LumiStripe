@@ -6,8 +6,8 @@
 #include <stdlib.h>
 #include "kiss_fftr.h"
 
-#define FFT_SIZE 1024
-#define FFT_HOP_SIZE (FFT_SIZE / 2)
+#define FFT_SIZE 2048
+#define FFT_HOP_SIZE 512
 #define NUM_BANDS 8
 #define RMS_HISTORY_SIZE 200
 #define ONSET_HISTORY_SIZE 512
@@ -16,6 +16,10 @@
 #define ONSET_THRESHOLD 0.12f
 #define BPM_INTERVAL_MIN 0.2
 #define BPM_INTERVAL_MAX 2.0
+#define PROGRAM_ATTACK_SECONDS 0.25f
+#define PROGRAM_RELEASE_SECONDS 6.0f
+#define IMPACT_ATTACK 0.4f
+#define IMPACT_RELEASE 0.08f
 
 typedef struct {
     float noise_floor;
@@ -36,6 +40,8 @@ typedef struct {
     float beat_envelope;
     float level_estimate;
     float normalization_gain;
+    float input_rms;
+    float musical_impact;
     int feed_count;
     long long samples_seen;
     float sample_sum;
@@ -84,6 +90,8 @@ typedef struct {
     float features_spectral_flux;
     float features_beat_confidence;
     float features_rolling_loudness;
+    float features_program_loudness;
+    float features_musical_impact;
     int features_silence;
     int features_drop_detected;
     int features_section_change;
@@ -230,6 +238,8 @@ static void _compute_features(AudioProcessor *self, float rms, float *bands,
     s->onset_idx++;
 
     s->features_rolling_loudness = _smooth(s->features_rolling_loudness, rms, 0.08f, 0.025f);
+    s->features_program_loudness = s->level_estimate;
+    s->features_musical_impact = s->musical_impact;
     float silence_threshold = fmaxf(s->silence_floor * 3.0f, fmaxf(s->noise_floor * 0.8f, 0.012f));
     int silent_now = (
         s->features_rolling_loudness <= silence_threshold
@@ -238,7 +248,7 @@ static void _compute_features(AudioProcessor *self, float rms, float *bands,
 
     if (!silent_now && s->smooth_onset > ONSET_THRESHOLD && s->smooth_onset > s->prev_onset * 1.4f) {
         int interval = s->fft_call_count - s->last_onset_frame;
-        float interval_sec = (float)interval * (float)FFT_SIZE / s->sample_rate;
+        float interval_sec = (float)interval * (float)FFT_HOP_SIZE / s->sample_rate;
         if (interval_sec > BPM_INTERVAL_MIN && interval_sec < BPM_INTERVAL_MAX) {
             if (s->ioi_buffer_len < MAX_IOI_BUFFER) {
                 s->ioi_buffer[s->ioi_buffer_len++] = interval_sec;
@@ -378,23 +388,49 @@ static void _process_fft(AudioProcessor *self) {
         memcpy(normalized, s->buffer, FFT_SIZE * sizeof(float));
     }
 
+    float input_sq_sum = 0.0f;
+    for (int i = 0; i < FFT_SIZE; i++) input_sq_sum += normalized[i] * normalized[i];
+    float input_level = sqrtf(input_sq_sum / (float)FFT_SIZE);
+    if (input_level > 1.0f) input_level = 1.0f;
+    s->input_rms = input_level;
+
+    float reference_floor = fmaxf(
+        s->music_threshold,
+        s->target_level / fmaxf(s->music_max_gain, 1.0f)
+    );
+    float reference_target = fmaxf(input_level, reference_floor);
+    float hop_seconds = (float)FFT_HOP_SIZE / fmaxf(s->sample_rate, 1.0f);
+    float reference_attack = 1.0f - expf(-hop_seconds / PROGRAM_ATTACK_SECONDS);
+    float reference_release = 1.0f - expf(-hop_seconds / PROGRAM_RELEASE_SECONDS);
+    s->level_estimate = _smooth(
+        fmaxf(s->level_estimate, reference_floor),
+        reference_target,
+        reference_attack,
+        reference_release
+    );
+
+    float impact_target = 0.0f;
+    if (input_level >= s->music_threshold) {
+        impact_target = _clamp01f(
+            input_level / fmaxf(s->level_estimate, reference_floor)
+        );
+    }
+    s->musical_impact = _smooth(
+        s->musical_impact,
+        impact_target,
+        IMPACT_ATTACK,
+        IMPACT_RELEASE
+    );
+
     if (s->normalization_enabled) {
-        float sq_sum = 0.0f;
-        for (int i = 0; i < FFT_SIZE; i++) sq_sum += normalized[i] * normalized[i];
-        float level = (FFT_SIZE > 0) ? sqrtf(sq_sum / (float)FFT_SIZE) : 0.0f;
-
-        float level_factor = (level > s->level_estimate) ? s->adapt_attack : s->adapt_release;
-        s->level_estimate = _smooth(s->level_estimate, level, level_factor, level_factor);
-
-        float effective_level = fmaxf(level, s->level_estimate);
+        float effective_level = fmaxf(s->level_estimate, reference_floor);
         float target_gain;
-        if (effective_level <= s->silence_floor) {
-            target_gain = s->min_gain;
+        if (input_level < s->music_threshold) {
+            /* Do not amplify the noise band between the silence and music floors. */
+            target_gain = 1.0f;
         } else {
             target_gain = s->target_level / effective_level;
-            if (effective_level >= s->music_threshold) {
-                target_gain = fminf(target_gain, s->music_max_gain);
-            }
+            target_gain = fminf(target_gain, s->music_max_gain);
             target_gain = fmaxf(s->min_gain, fminf(s->max_gain, target_gain));
         }
 
@@ -636,8 +672,13 @@ static PyObject* AudioProcessor_feed_samples(AudioProcessor *self, PyObject *arg
         offset += chunk;
         if (self->s.buffer_pos >= FFT_SIZE) {
             _process_fft(self);
-            memmove(self->s.buffer, self->s.buffer + FFT_HOP_SIZE, sizeof(float) * FFT_HOP_SIZE);
-            self->s.buffer_pos = FFT_HOP_SIZE;
+            int retained = FFT_SIZE - FFT_HOP_SIZE;
+            memmove(
+                self->s.buffer,
+                self->s.buffer + FFT_HOP_SIZE,
+                sizeof(float) * retained
+            );
+            self->s.buffer_pos = retained;
         }
     }
 
@@ -686,7 +727,7 @@ static PyObject* AudioProcessor_features(AudioProcessor *self, PyObject *Py_UNUS
     PyObject *bands_tuple = _make_bands_tuple(self->s.features_bands);
     if (!bands_tuple) return NULL;
 
-    PyObject *items[19];
+    PyObject *items[21];
     items[0] = PyFloat_FromDouble((double)self->s.features_bpm);
     items[1] = PyFloat_FromDouble((double)self->s.features_energy);
     items[2] = PyFloat_FromDouble((double)self->s.features_bass);
@@ -706,22 +747,24 @@ static PyObject* AudioProcessor_features(AudioProcessor *self, PyObject *Py_UNUS
     items[16] = PyBool_FromLong((long)self->s.features_silence);
     items[17] = PyBool_FromLong((long)self->s.features_drop_detected);
     items[18] = PyBool_FromLong((long)self->s.features_section_change);
+    items[19] = PyFloat_FromDouble((double)self->s.features_program_loudness);
+    items[20] = PyFloat_FromDouble((double)self->s.features_musical_impact);
 
-    for (int i = 0; i < 19; i++) {
+    for (int i = 0; i < 21; i++) {
         if (!items[i]) {
-            for (int j = 0; j < 19; j++) {
+            for (int j = 0; j < 21; j++) {
                 if (items[j]) Py_DECREF(items[j]);
             }
             return NULL;
         }
     }
 
-    PyObject *result = PyTuple_New(19);
+    PyObject *result = PyTuple_New(21);
     if (!result) {
-        for (int i = 0; i < 19; i++) Py_DECREF(items[i]);
+        for (int i = 0; i < 21; i++) Py_DECREF(items[i]);
         return NULL;
     }
-    for (int i = 0; i < 19; i++) PyTuple_SET_ITEM(result, i, items[i]);
+    for (int i = 0; i < 21; i++) PyTuple_SET_ITEM(result, i, items[i]);
     return result;
 }
 
@@ -781,12 +824,15 @@ static PyObject* AudioProcessor_normalization_gain(AudioProcessor *self, PyObjec
 
 static PyObject* AudioProcessor_stats(AudioProcessor *self, PyObject *Py_UNUSED(ignored)) {
     return Py_BuildValue(
-        "(iLifd)",
+        "(iLifdddd)",
         self->s.feed_count,
         self->s.samples_seen,
         self->s.fft_call_count,
         (double)self->s.sample_sum,
-        (double)self->s.normalization_gain
+        (double)self->s.normalization_gain,
+        (double)self->s.input_rms,
+        (double)self->s.level_estimate,
+        (double)self->s.musical_impact
     );
 }
 
