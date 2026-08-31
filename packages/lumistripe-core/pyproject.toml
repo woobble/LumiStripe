@@ -10,12 +10,12 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "typing-extensions>=4.16",
-    "numpy>=2.5.1",
+    "numpy>=2.5.2",
 ]
 
 [project.optional-dependencies]
 audio = [
-    "sounddevice>=0.5",
+    "sounddevice>=0.5.6",
 ]
 hardware-gain = [
     "pyalsaaudio>=0.11",
@@ -28,7 +28,7 @@ spi = [
 ]
 
 [build-system]
-requires = ["setuptools>=83.0.0", "numpy>=2.5.1"]
+requires = ["setuptools>=84.0.0", "numpy>=2.5.2"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]

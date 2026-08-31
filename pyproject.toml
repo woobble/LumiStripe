@@ -34,8 +34,8 @@ dev = [
     "httpx2",
     "pytest>=9.1",
     "pytest-cov>=7.1",
-    "ruff>=0.16.0",
-    "mypy>=2.3.0",
+    "ruff>=0.16.4",
+    "mypy>=2.3.1",
 ]
 
 [tool.pytest.ini_options]
