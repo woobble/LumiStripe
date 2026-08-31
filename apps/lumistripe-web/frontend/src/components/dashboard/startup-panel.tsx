@@ -54,7 +54,6 @@ function StartupPanelView() {
   }
 
   const restore = watch("restore_last_state")
-
   return (
     <SetupPage>
       {!settings ? <Skeleton className="h-64 rounded-xl" /> : (
@@ -95,7 +94,6 @@ function StartupPanelView() {
 }
 
 export const StartupPanel = memo(StartupPanelView)
-
 function Summary({ icon: Icon, label, value }: { icon: typeof PowerIcon; label: string; value: string }) {
   return <div className="min-w-0 rounded-xl bg-white/[0.035] p-3"><Icon className="mb-2 size-4 text-violet-200" /><p className="text-xs text-muted-foreground">{label}</p><p className="truncate text-sm font-medium capitalize">{value}</p></div>
 }

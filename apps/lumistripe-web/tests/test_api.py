@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from lumistripe import AudioInputDevice
 from lumistripe_web.app import build_parser, create_app, main
 from lumistripe_web.runtime import LumiStripeRuntime, RuntimeSettings
+from starlette.websockets import WebSocketDisconnect
 
 
 def test_control_api_round_trip() -> None:
@@ -308,7 +309,7 @@ def test_cli_rejects_incomplete_secondary_spi_configuration() -> None:
         )
 
 
-def test_pairing_code_only_protects_setup_api() -> None:
+def test_pairing_code_protects_api_and_websocket() -> None:
     app = create_app(RuntimeSettings(pixels=8), pairing_code="1234")
     with TestClient(app) as client:
         assert client.get("/api/health").status_code == 200
@@ -316,15 +317,20 @@ def test_pairing_code_only_protects_setup_api() -> None:
             "required": True,
             "authenticated": False,
         }
-        assert client.get("/api/state").status_code == 200
-        assert client.put("/api/brightness", json={"brightness": 0.4}).status_code == 200
-        assert client.get("/api/stripes").status_code == 401
-        assert client.get("/api/audio/settings").status_code == 401
+        assert client.get("/api/state").status_code == 401
 
-        with client.websocket_connect("/ws/state") as websocket:
-            assert websocket.receive_json()["running"] is True
-        with client.websocket_connect("/ws/audio") as websocket:
-            assert websocket.receive_json()["health"] == "inactive"
+        with (
+            pytest.raises(WebSocketDisconnect) as exc_info,
+            client.websocket_connect("/ws/state"),
+        ):
+            pass
+        assert exc_info.value.code == 4401
+        with (
+            pytest.raises(WebSocketDisconnect) as audio_exc_info,
+            client.websocket_connect("/ws/audio"),
+        ):
+            pass
+        assert audio_exc_info.value.code == 4401
 
         rejected = client.post("/api/auth/pair", json={"code": "0000"})
         assert rejected.status_code == 401
@@ -347,7 +353,7 @@ def test_pairing_code_only_protects_setup_api() -> None:
 
         logged_out = client.post("/api/auth/logout")
         assert logged_out.json() == {"required": True, "authenticated": False}
-        assert client.get("/api/state").status_code == 200
+        assert client.get("/api/state").status_code == 401
         assert client.get("/api/stripes").status_code == 401
 
 

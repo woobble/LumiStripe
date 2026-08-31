@@ -10,6 +10,7 @@ from fastapi import (
     Response,
     WebSocket,
     WebSocketDisconnect,
+    WebSocketException,
     status,
 )
 from fastapi.responses import JSONResponse
@@ -26,10 +27,10 @@ from .models import (
     AccessStatus,
     AnimationList,
     AnimationRequest,
-    AudioDeviceRequest,
     AudioCalibrationFinishRequest,
     AudioCalibrationSessionResponse,
     AudioCalibrationStartRequest,
+    AudioDeviceRequest,
     AudioResetRequest,
     AudioSettingsRequest,
     AudioSettingsResponse,
@@ -338,6 +339,9 @@ async def update_startup_settings(
 
 @router.websocket("/ws/state")
 async def websocket_state(websocket: WebSocket) -> None:
+    access: PairingAuth = websocket.app.state.access
+    if not access.authenticated(websocket.cookies.get(SESSION_COOKIE)):
+        raise WebSocketException(code=4401, reason="pairing required")
     await websocket.accept()
     runtime: LumiStripeRuntime = websocket.app.state.runtime
     last_revision = -1
@@ -357,6 +361,9 @@ async def websocket_state(websocket: WebSocket) -> None:
 
 @router.websocket("/ws/audio")
 async def websocket_audio(websocket: WebSocket) -> None:
+    access: PairingAuth = websocket.app.state.access
+    if not access.authenticated(websocket.cookies.get(SESSION_COOKIE)):
+        raise WebSocketException(code=4401, reason="pairing required")
     await websocket.accept()
     runtime: LumiStripeRuntime = websocket.app.state.runtime
     try:

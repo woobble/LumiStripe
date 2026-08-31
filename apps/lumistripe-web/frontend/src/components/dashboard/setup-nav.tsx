@@ -20,7 +20,6 @@ export function SetupPage({ children }: { children: ReactNode }) {
     </div>
   )
 }
-
 export function AudioSetupTabs() {
   return (
     <nav className="grid grid-cols-2 rounded-xl border border-white/5 bg-white/[0.03] p-1" aria-label="Audio setup sections">

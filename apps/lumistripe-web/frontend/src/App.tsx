@@ -27,7 +27,6 @@ const AudioStatusPanel = lazy(async () => {
   const module = await import("@/components/dashboard/audio-status-panel")
   return { default: module.AudioStatusPanel }
 })
-
 const AudioInputPanel = lazy(async () => {
   const module = await import("@/components/dashboard/audio-input-panel")
   return { default: module.AudioInputPanel }
@@ -200,5 +199,25 @@ export default function App() {
 
 function DashboardApp() {
   const access = useAccess()
+  if (access.loading) {
+    return (
+      <div className="relative grid min-h-svh place-items-center overflow-hidden bg-background px-5">
+        <div className="ambient-glow ambient-glow-one" aria-hidden="true" />
+        <div className="w-full max-w-sm">
+          <DashboardSkeleton />
+        </div>
+      </div>
+    )
+  }
+  if (access.required && !access.authenticated) {
+    return (
+      <div className="relative min-h-svh overflow-hidden bg-background">
+        <div className="ambient-glow ambient-glow-one" aria-hidden="true" />
+        <div className="ambient-glow ambient-glow-two" aria-hidden="true" />
+        <PairingScreen access={access} />
+        <Toaster position="top-center" richColors />
+      </div>
+    )
+  }
   return <Dashboard access={access} />
 }

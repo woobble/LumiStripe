@@ -74,10 +74,8 @@ uv run lumistripe-web
 ```
 
 The frontend build is written into the Python package and served by FastAPI.
-Set `--pairing-code` to exactly four digits to protect Setup changes such as
-stripe topology, calibration, audio tuning/device selection, and startup
-behavior. Control, diagnostics, and live audio status remain available without
-unlocking Setup. After entering the code, each browser receives an opaque
+Set `--pairing-code` to exactly four digits to protect dashboard APIs and live
+WebSocket updates. After entering the code, each browser receives an opaque
 HttpOnly session cookie. Five failed attempts from one client trigger a
-temporary one-minute lockout. Without this flag, Setup is unprotected and the
-dashboard should only be exposed on a trusted local network.
+temporary one-minute lockout. Without this flag, the dashboard remains
+unprotected and must only be exposed on a trusted local network.

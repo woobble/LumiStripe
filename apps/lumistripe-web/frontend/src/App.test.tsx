@@ -490,7 +490,7 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument()
   })
 
-  it("keeps Control public and asks for the PIN only when entering Setup", async () => {
+  it("pairs before connecting to the protected dashboard", async () => {
     const protectedFetch = vi.fn((input: string | URL | Request) => {
       const path = String(input)
       if (path === "/api/auth/status") {
@@ -506,14 +506,12 @@ describe("App", () => {
     const user = userEvent.setup()
     render(<App />, { wrapper: Router })
 
-    expect(await screen.findByText(/aurora wave/i)).toBeInTheDocument()
-    expect(MockWebSocket.instances).toHaveLength(1)
-    await user.click(screen.getByRole("link", { name: "Setup" }))
-    const code = await screen.findByLabelText("Setup PIN")
+    const code = await screen.findByLabelText("Pairing code")
+    expect(MockWebSocket.instances).toHaveLength(0)
     await user.type(code, "1234")
-    await user.click(screen.getByRole("button", { name: "Unlock Setup" }))
+    await user.click(screen.getByRole("button", { name: "Pair device" }))
 
-    expect(await screen.findByText("Layout")).toBeInTheDocument()
+    expect(await screen.findByText(/aurora wave/i)).toBeInTheDocument()
     expect(protectedFetch).toHaveBeenCalledWith(
       "/api/auth/pair",
       expect.objectContaining({
@@ -539,7 +537,7 @@ describe("App", () => {
       </MemoryRouter>,
     )
 
-    expect(await screen.findByLabelText("Setup PIN")).toBeInTheDocument()
+    expect(await screen.findByLabelText("Pairing code")).toBeInTheDocument()
     expect(protectedFetch.mock.calls.some(([path]) => String(path) === "/api/audio/settings")).toBe(false)
   })
 })

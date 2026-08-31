@@ -14,7 +14,6 @@ import {
 
 export type ConnectionStatus = "connecting" | "connected" | "reconnecting"
 export type CommandName = "mode" | "brightness" | "solidColor" | "animation" | "blackout" | "calibration" | "stripes" | "stripeTest"
-
 export const dashboardStateQueryKey = ["dashboard-state"] as const
 export const animationsQueryKey = ["animations"] as const
 

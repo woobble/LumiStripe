@@ -22,15 +22,15 @@ export function PairingScreen({ access }: { access: AccessController }) {
           <LockKeyholeIcon className="size-6" aria-hidden="true" />
         </div>
         <div className="mt-5 text-center">
-          <h1 className="text-xl font-semibold">Unlock Setup</h1>
+          <h1 className="text-xl font-semibold">Pair with LumiStripe</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Enter the four-digit PIN configured on the controller to change settings.
+            Enter the four-digit code configured on the controller.
           </p>
         </div>
 
         <form className="mt-6 space-y-4" onSubmit={(event) => void submit(event)}>
           <div>
-            <label htmlFor="pairing-code" className="mb-2 block text-sm font-medium">Setup PIN</label>
+            <label htmlFor="pairing-code" className="mb-2 block text-sm font-medium">Pairing code</label>
             <InputOTP
               id="pairing-code"
               maxLength={4}
@@ -61,7 +61,7 @@ export function PairingScreen({ access }: { access: AccessController }) {
           </div>
           <Button type="submit" size="lg" disabled={code.length !== 4 || access.pairing} className="h-12 w-full rounded-xl">
             {access.pairing ? <LoaderCircleIcon className="animate-spin" aria-hidden="true" /> : <KeyRoundIcon aria-hidden="true" />}
-            {access.pairing ? "Unlocking…" : "Unlock Setup"}
+            {access.pairing ? "Pairing…" : "Pair device"}
           </Button>
         </form>
 

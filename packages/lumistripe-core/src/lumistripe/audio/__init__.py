@@ -11,7 +11,12 @@ import numpy as np
 import numpy.typing as npt
 
 from . import _audio
-from .hardware_gain import HardwareGainController, HardwareGainStatus
+from .hardware_gain import (
+    HardwareGainController as HardwareGainController,
+)
+from .hardware_gain import (
+    HardwareGainStatus as HardwareGainStatus,
+)
 
 FFT_SIZE = 2048
 FFT_HOP_SIZE = 512

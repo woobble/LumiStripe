@@ -81,7 +81,7 @@ export function ControlPanel({ controller }: { controller: DashboardController }
   const [target, setTarget] = useState("all")
 
   if (!state) return null
-  const disabled = !state.running
+  const disabled = !state.running || pendingCommand !== null
   const targetId = target === "all" ? undefined : target
   const targetPlayback = state.stripe_topology.layout === "independent"
     ? (targetId

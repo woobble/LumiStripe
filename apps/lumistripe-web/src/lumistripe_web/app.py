@@ -40,20 +40,14 @@ def create_app(
 
     @app.middleware("http")
     async def require_pairing(request: Request, call_next):
-        # The live dashboard is intentionally usable without unlocking the
-        # setup area.  Keep only configuration and hardware-management APIs
-        # behind the pairing session; control and diagnostics remain public.
-        protected_api_prefixes = (
-            "/api/stripes",
-            "/api/calibration",
-            "/api/audio/settings",
-            "/api/audio/device",
-            "/api/audio/calibration",
-            "/api/startup",
-        )
+        public_api_paths = {
+            "/api/health",
+            "/api/auth/status",
+            "/api/auth/pair",
+        }
         if (
             request.url.path.startswith("/api/")
-            and request.url.path.startswith(protected_api_prefixes)
+            and request.url.path not in public_api_paths
             and not app.state.access.authenticated(request.cookies.get(SESSION_COOKIE))
         ):
             return JSONResponse(
@@ -114,7 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--pairing-code",
         type=_pairing_code,
-        help="Require this four-digit code before allowing Setup changes",
+        help="Require this four-digit code before allowing dashboard access",
     )
     parser.add_argument(
         "--log-level",
