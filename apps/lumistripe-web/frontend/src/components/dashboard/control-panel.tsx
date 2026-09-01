@@ -3,6 +3,7 @@ import { ActivityIcon, ListRestartIcon, Music2Icon, PaletteIcon, PowerIcon, Radi
 import { HexColorPicker } from "react-colorful"
 
 import { AnimationSheet } from "@/components/dashboard/animation-sheet"
+import { LivePreview } from "@/components/dashboard/live-preview"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Slider } from "@/components/ui/slider"
@@ -79,6 +80,7 @@ export function ControlPanel({ controller }: { controller: DashboardController }
   const { state, animations, pendingCommand } = controller
   const [brightnessDraft, setBrightnessDraft] = useState<number | null>(null)
   const [target, setTarget] = useState("all")
+  const [previewEnabled, setPreviewEnabled] = useState(false)
 
   if (!state) return null
   const disabled = !state.running || pendingCommand !== null
@@ -124,6 +126,22 @@ export function ControlPanel({ controller }: { controller: DashboardController }
 
   return (
     <div className="space-y-4 pb-4">
+      {previewEnabled ? (
+        <LivePreview state={state} onDisable={() => setPreviewEnabled(false)} />
+      ) : (
+        <Button
+          variant="outline"
+          className="h-12 w-full justify-between rounded-2xl border-white/10 bg-card/50 px-4 shadow-lg shadow-black/5"
+          onClick={() => setPreviewEnabled(true)}
+          aria-label="Enable live preview"
+        >
+          <span className="flex items-center gap-2">
+            <ActivityIcon className="size-4 text-cyan-300" aria-hidden="true" />
+            Enable live preview
+          </span>
+          <span className="text-xs text-muted-foreground">Off by default</span>
+        </Button>
+      )}
       {state.stripe_topology.layout === "independent" && state.stripe_topology.outputs.length > 0 && (
         <section className="space-y-2" aria-labelledby="control-target-label">
           <div className="flex items-center justify-between px-1 text-xs">

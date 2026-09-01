@@ -35,3 +35,8 @@ Object.defineProperty(document, "elementFromPoint", {
   configurable: true,
   value: () => null,
 })
+
+Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+  configurable: true,
+  value: () => null,
+})

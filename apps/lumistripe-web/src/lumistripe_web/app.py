@@ -68,6 +68,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="LumiStripe web dashboard backend")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument(
+        "--ssl-certfile",
+        type=Path,
+        help="Serve HTTPS with this certificate (use with --ssl-keyfile)",
+    )
+    parser.add_argument(
+        "--ssl-keyfile",
+        type=Path,
+        help="Serve HTTPS with this private key (use with --ssl-certfile)",
+    )
     parser.add_argument("--pixels", type=_positive_int, default=80)
     parser.add_argument(
         "--hardware",
@@ -126,6 +136,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         parser.error("--spi-speed-2 requires --spi-device-2")
     if args.output_backend == "gpio" and args.spi_device_2 is not None:
         parser.error("--spi-device-2 requires --output-backend spi")
+    if (args.ssl_certfile is None) != (args.ssl_keyfile is None):
+        parser.error("--ssl-certfile and --ssl-keyfile must be used together")
     settings = RuntimeSettings(
         pixels=args.pixels,
         hardware=args.hardware,
@@ -147,6 +159,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         host=args.host,
         port=args.port,
         log_level=args.log_level,
+        ssl_certfile=args.ssl_certfile,
+        ssl_keyfile=args.ssl_keyfile,
         workers=1,
     )
 

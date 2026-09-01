@@ -42,12 +42,14 @@ function Router({ children }: { children: ReactNode }) {
 
 class MockWebSocket {
   static instances: MockWebSocket[] = []
+  readonly url: string
   onopen: (() => void) | null = null
   onmessage: ((event: MessageEvent) => void) | null = null
   onerror: (() => void) | null = null
   onclose: ((event: CloseEvent) => void) | null = null
 
-  constructor() {
+  constructor(url: string) {
+    this.url = url
     MockWebSocket.instances.push(this)
     queueMicrotask(() => this.onopen?.())
   }
@@ -165,6 +167,22 @@ describe("App", () => {
       "/api/blackout",
       expect.objectContaining({ method: "POST", body: JSON.stringify({ enabled: true }) })
     )
+  })
+
+  it("keeps the live preview off until it is explicitly enabled", async () => {
+    const user = userEvent.setup()
+    render(<App />, { wrapper: Router })
+    await screen.findByText(/aurora wave/i)
+
+    expect(screen.queryByTestId("live-preview")).not.toBeInTheDocument()
+    expect(MockWebSocket.instances.some((socket) => socket.url.endsWith("/ws/preview"))).toBe(false)
+
+    await user.click(screen.getByRole("button", { name: "Enable live preview" }))
+    expect(await screen.findByTestId("live-preview")).toBeInTheDocument()
+    expect(MockWebSocket.instances.some((socket) => socket.url.endsWith("/ws/preview"))).toBe(true)
+
+    await user.click(screen.getByRole("button", { name: "Hide live preview" }))
+    await waitFor(() => expect(screen.queryByTestId("live-preview")).not.toBeInTheDocument())
   })
 
   it("keeps the routed bottom navigation fixed and evenly sized", async () => {
@@ -399,7 +417,9 @@ describe("App", () => {
     expect(screen.getByText("Live input")).toBeInTheDocument()
     expect(screen.queryByText("USB Mic")).not.toBeInTheDocument()
 
-    act(() => MockWebSocket.instances[1].emit({
+    const audioSocket = MockWebSocket.instances.find((socket) => socket.url.endsWith("/ws/audio"))
+    expect(audioSocket).toBeDefined()
+    act(() => audioSocket!.emit({
       sequence: 4,
       fresh: true,
       input_level: 0.42,
@@ -442,7 +462,9 @@ describe("App", () => {
     expect(screen.getByRole("group", { name: "Calm ↔ Dramatic" })).toBeInTheDocument()
     expect(screen.getByText("0.650")).toBeInTheDocument()
 
-    act(() => MockWebSocket.instances[1].emit({
+    const audioSocket = MockWebSocket.instances.find((socket) => socket.url.endsWith("/ws/audio"))
+    expect(audioSocket).toBeDefined()
+    act(() => audioSocket!.emit({
       sequence: 4,
       fresh: true,
       input_level: 0.42,
@@ -519,7 +541,7 @@ describe("App", () => {
         body: JSON.stringify({ code: "1234" }),
       })
     )
-    expect(MockWebSocket.instances).toHaveLength(1)
+    expect(MockWebSocket.instances.filter((socket) => socket.url.endsWith("/ws/state"))).toHaveLength(1)
   })
 
   it("guards a direct Setup URL before requesting protected settings", async () => {

@@ -120,6 +120,61 @@ def test_output_gate_blackout_preserves_latest_buffered_frame() -> None:
     assert gate.last_successful_update_age_seconds is not None
 
 
+def test_preview_frame_is_an_immutable_rgba_snapshot(tmp_path: Path) -> None:
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(pixels=3, settings_file=tmp_path / "settings.json")
+    )
+    runtime.start()
+    try:
+        deadline = time.monotonic() + 1
+        frame = runtime.preview_frame()
+        while not frame.outputs or not any(frame.outputs[0]):
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+            frame = runtime.preview_frame()
+
+        assert frame.sequence > 0
+        assert len(frame.outputs) == 1
+        assert len(frame.outputs[0]) == 3 * 4
+        captured = frame.outputs[0]
+
+        runtime.set_mode(PlaybackMode.SOLID, solid_color="#FF0000").result(timeout=1)
+        assert frame.outputs[0] == captured
+    finally:
+        runtime.stop()
+
+
+def test_preview_frame_applies_correction_reversal_and_blackout(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    store = CalibrationSettingsStore(path)
+    store.save_stripes(
+        StripeTopologySettings(
+            layout="independent",
+            outputs=(
+                StripeOutputSettings(id="left", name="Left", pixels=2, reversed=True),
+            ),
+        )
+    )
+    store.save({"left": ColorCorrection(red=128)})
+    runtime = LumiStripeRuntime(RuntimeSettings(pixels=2, settings_file=path))
+    runtime.start()
+    try:
+        correction = runtime._correction_controllers[0]
+        correction.set_pixels(
+            np.array([[10, 20, 30, 255], [100, 110, 120, 255]], dtype=np.uint8)
+        )
+        correction.force_flush()
+        runtime._capture_preview_frame()
+
+        assert runtime.preview_frame().outputs[0] == bytes((50, 110, 120, 255, 5, 20, 30, 255))
+
+        runtime._output_gates[0].set_blackout(True)
+        runtime._capture_preview_frame()
+        assert runtime.preview_frame().outputs[0] == bytes(8)
+    finally:
+        runtime.stop()
+
+
 def test_runtime_controls_simulation_and_cleans_up() -> None:
     stripe = TrackingStripe(8)
     runtime = LumiStripeRuntime(

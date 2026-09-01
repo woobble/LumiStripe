@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import struct
 from concurrent.futures import Future
 
 from fastapi import (
@@ -52,6 +53,7 @@ from .models import (
 )
 from .runtime import (
     LumiStripeRuntime,
+    PreviewFrame,
     RuntimeCommandError,
     RuntimeUnavailableError,
     UnknownAnimationError,
@@ -61,6 +63,11 @@ from .settings import AudioTuningProfile, StripeOutputSettings, StripeTopologySe
 COMMAND_TIMEOUT_SECONDS = 5.0
 WEBSOCKET_INTERVAL_SECONDS = 0.25
 AUDIO_WEBSOCKET_INTERVAL_SECONDS = 1.0 / 15.0
+PREVIEW_WEBSOCKET_INTERVAL_SECONDS = 1.0 / 30.0
+PREVIEW_HEADER = struct.Struct("<4sBBIH")
+PREVIEW_OUTPUT_HEADER = struct.Struct("<I")
+PREVIEW_MAGIC = b"LSFP"
+PREVIEW_VERSION = 1
 
 router = APIRouter()
 
@@ -373,6 +380,47 @@ async def websocket_audio(websocket: WebSocket) -> None:
             await asyncio.sleep(AUDIO_WEBSOCKET_INTERVAL_SECONDS)
     except (WebSocketDisconnect, RuntimeError):
         return
+
+
+@router.websocket("/ws/preview")
+async def websocket_preview(websocket: WebSocket) -> None:
+    access: PairingAuth = websocket.app.state.access
+    if not access.authenticated(websocket.cookies.get(SESSION_COOKIE)):
+        raise WebSocketException(code=4401, reason="pairing required")
+    await websocket.accept()
+    runtime: LumiStripeRuntime = websocket.app.state.runtime
+    last_sequence = -1
+    try:
+        while True:
+            frame = runtime.preview_frame()
+            if frame.sequence != last_sequence:
+                await websocket.send_bytes(encode_preview_frame(frame))
+                last_sequence = frame.sequence
+                if not runtime.snapshot().running:
+                    await websocket.close(code=1011, reason="runtime unavailable")
+                    return
+            await asyncio.sleep(PREVIEW_WEBSOCKET_INTERVAL_SECONDS)
+    except (WebSocketDisconnect, RuntimeError):
+        return
+
+
+def encode_preview_frame(frame: PreviewFrame) -> bytes:
+    """Encode an immutable runtime frame for the browser preview stream."""
+    packet = bytearray(
+        PREVIEW_HEADER.pack(
+            PREVIEW_MAGIC,
+            PREVIEW_VERSION,
+            0,
+            frame.sequence & 0xFFFFFFFF,
+            len(frame.outputs),
+        )
+    )
+    for output in frame.outputs:
+        if len(output) % 4:
+            raise ValueError("preview output must contain complete RGBA pixels")
+        packet.extend(PREVIEW_OUTPUT_HEADER.pack(len(output) // 4))
+        packet.extend(output)
+    return bytes(packet)
 
 
 async def _await_command[T](future: Future[T]) -> T:

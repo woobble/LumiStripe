@@ -96,6 +96,23 @@ function SetupGuard({ access, children }: { access: AccessController; children: 
 }
 
 function Dashboard({ access }: { access: AccessController }) {
+  if (access.loading) return <DashboardAccessFrame><DashboardSkeleton /></DashboardAccessFrame>
+  if (access.required && !access.authenticated) return <DashboardAccessFrame><PairingScreen access={access} /></DashboardAccessFrame>
+  return <LiveDashboard access={access} />
+}
+
+function DashboardAccessFrame({ children }: { children: ReactNode }) {
+  return (
+    <div className="relative min-h-svh overflow-x-hidden bg-background">
+      <main className="relative mx-auto flex min-h-svh w-full max-w-lg flex-col justify-center px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]">
+        {children}
+      </main>
+      <Toaster position="top-center" richColors />
+    </div>
+  )
+}
+
+function LiveDashboard({ access }: { access: AccessController }) {
   const controller = useDashboard()
   const { state, connection, loading, loadError } = controller
   return (

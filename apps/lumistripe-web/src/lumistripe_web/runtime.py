@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Literal, cast
 from uuid import uuid4
 
+import numpy as np
 import numpy.typing as npt
 from lumistripe import (
     AnimationPlayer,
@@ -320,6 +321,14 @@ class _BuiltTopology:
     corrections: tuple[ColorCorrectionController, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class PreviewFrame:
+    """An immutable snapshot of the latest rendered output frame."""
+
+    sequence: int
+    outputs: tuple[bytes, ...]
+
+
 @dataclass(slots=True)
 class _StripeTestSession:
     stripe_id: str
@@ -466,7 +475,10 @@ class LumiStripeRuntime:
         self._started_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._snapshot_lock = threading.Lock()
+        self._preview_lock = threading.Lock()
         self._revision = 0
+        self._preview_sequence = 0
+        self._preview_outputs: tuple[bytes, ...] = ()
         self._snapshot = DashboardState(
             runtime=self.settings.kind,
             mode=PlaybackMode.STATIC,
@@ -532,6 +544,10 @@ class LumiStripeRuntime:
     def snapshot(self) -> DashboardState:
         with self._snapshot_lock:
             return self._snapshot
+
+    def preview_frame(self) -> PreviewFrame:
+        with self._preview_lock:
+            return PreviewFrame(self._preview_sequence, self._preview_outputs)
 
     def animations(self) -> tuple[AnimationOption, ...]:
         return tuple(
@@ -1763,6 +1779,7 @@ class LumiStripeRuntime:
         running: bool,
         error: str | None = None,
     ) -> DashboardState:
+        self._capture_preview_frame()
         self._revision += 1
         controller = self._controller
         uptime_seconds = self._uptime_seconds()
@@ -1805,6 +1822,42 @@ class LumiStripeRuntime:
         with self._snapshot_lock:
             self._snapshot = state
         return state
+
+    def _capture_preview_frame(self) -> None:
+        """Copy output pixels before publishing a frame to WebSocket clients.
+
+        The animation thread owns the live NumPy buffers. Keeping immutable byte
+        copies here lets the async API serve a frame without racing a render or
+        holding the runtime thread while a network client is slow.
+        """
+        outputs: list[bytes] = []
+        gates = self._output_gates
+        if gates:
+            for index, gate in enumerate(gates):
+                if gate.blackout:
+                    outputs.append(bytes(gate.length * 4))
+                    continue
+                pixels = gate.pixels().copy()
+                if index < len(self._correction_controllers):
+                    correction = self._correction_controllers[index].correction
+                    channels = np.array(
+                        (correction.red, correction.green, correction.blue),
+                        dtype=np.uint16,
+                    )
+                    scaled = pixels[:, :3].astype(np.uint16) * channels
+                    pixels[:, :3] = (scaled // 255).astype(np.uint8)
+                if index < len(self._topology.outputs) and self._topology.outputs[index].reversed:
+                    pixels = pixels[::-1]
+                outputs.append(pixels.tobytes())
+        elif self._controller is not None:
+            pixels = self._controller.pixels().copy()
+            if self._controller.blackout:
+                pixels[:] = 0
+            outputs.append(pixels.tobytes())
+
+        with self._preview_lock:
+            self._preview_sequence += 1
+            self._preview_outputs = tuple(outputs)
 
     def _output_backend_label(self) -> str:
         if not self.settings.hardware:

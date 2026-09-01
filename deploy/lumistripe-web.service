@@ -1,0 +1,31 @@
+[Unit]
+Description=LumiStripe web dashboard and LED controller
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=woobb
+Group=woobb
+SupplementaryGroups=gpio spi audio
+WorkingDirectory=/home/woobb/lumistripe
+
+# Keep the toolchains available when systemd starts without a login shell.
+Environment=PATH=/home/woobb/.bun/bin:/home/woobb/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/lumistripe/lumistripe-web.env
+
+# Rebuild the bundled frontend on every service start so FastAPI serves the
+# current UI, manifest, and service worker from its static directory.
+ExecStartPre=/bin/bash -c 'cd /home/woobb/lumistripe/apps/lumistripe-web/frontend && bun run build'
+
+ExecStart=/bin/bash -c 'exec /home/woobb/.local/bin/uv run --extra hardware-gain lumistripe-web --hardware --pairing-code "$LUMI_PAIRING_CODE"'
+
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=300
+TimeoutStopSec=30
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target

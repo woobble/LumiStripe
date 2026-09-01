@@ -19,7 +19,9 @@ bun --cwd apps/lumistripe-web/frontend run dev
 ```
 
 Open `http://localhost:5173`, or use the development machine's LAN address from
-a phone on the same trusted network.
+a phone on the same trusted network. WebGPU is available on `localhost`; for a
+LAN address, browsers require the dashboard page to be served over HTTPS, so
+plain HTTP will intentionally use the Canvas fallback.
 
 ## Raspberry Pi 4 hardware
 
@@ -79,3 +81,12 @@ WebSocket updates. After entering the code, each browser receives an opaque
 HttpOnly session cookie. Five failed attempts from one client trigger a
 temporary one-minute lockout. Without this flag, the dashboard remains
 unprotected and must only be exposed on a trusted local network.
+
+To serve the production dashboard over HTTPS directly from Uvicorn, provide a
+certificate and private key. This enables WebGPU for supported browsers on the
+LAN (the certificate must be trusted by each client device):
+
+```bash
+uv run lumistripe-web --ssl-certfile /path/to/cert.pem \
+  --ssl-keyfile /path/to/key.pem --pairing-code 0427
+```

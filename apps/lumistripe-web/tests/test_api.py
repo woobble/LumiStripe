@@ -6,8 +6,9 @@ import lumistripe_web.runtime as runtime_module
 import pytest
 from fastapi.testclient import TestClient
 from lumistripe import AudioInputDevice
+from lumistripe_web.api import encode_preview_frame
 from lumistripe_web.app import build_parser, create_app, main
-from lumistripe_web.runtime import LumiStripeRuntime, RuntimeSettings
+from lumistripe_web.runtime import LumiStripeRuntime, PreviewFrame, RuntimeSettings
 from starlette.websockets import WebSocketDisconnect
 
 
@@ -183,6 +184,35 @@ def test_audio_settings_api_and_telemetry_websocket(
             assert telemetry["gate_preview"] is True
 
 
+def test_preview_packet_contains_sequence_and_rgba_outputs() -> None:
+    frame = PreviewFrame(
+        sequence=17,
+        outputs=(bytes((255, 0, 1, 255, 2, 3, 4, 5)), bytes((9, 8, 7, 6))),
+    )
+
+    packet = encode_preview_frame(frame)
+
+    assert packet[:4] == b"LSFP"
+    assert packet[4] == 1
+    assert int.from_bytes(packet[6:10], "little") == 17
+    assert int.from_bytes(packet[10:12], "little") == 2
+    assert int.from_bytes(packet[12:16], "little") == 2
+    assert packet[16:24] == bytes((255, 0, 1, 255, 2, 3, 4, 5))
+    assert int.from_bytes(packet[24:28], "little") == 1
+    assert packet[28:] == bytes((9, 8, 7, 6))
+
+
+def test_preview_websocket_sends_rendered_frame() -> None:
+    app = create_app(RuntimeSettings(pixels=8))
+    with TestClient(app) as client, client.websocket_connect("/ws/preview") as websocket:
+        packet = websocket.receive_bytes()
+
+        assert packet[:4] == b"LSFP"
+        assert int.from_bytes(packet[10:12], "little") == 1
+        assert int.from_bytes(packet[12:16], "little") == 8
+        assert len(packet) == 16 + 8 * 4
+
+
 def test_startup_settings_api_captures_current_state(tmp_path: Path) -> None:
     app = create_app(RuntimeSettings(pixels=8, settings_file=tmp_path / "settings.json"))
     with TestClient(app) as client:
@@ -292,6 +322,8 @@ def test_cli_defaults_to_simulation() -> None:
     assert args.audio_source == "auto"
     assert args.pixels == 80
     assert args.pairing_code is None
+    assert args.ssl_certfile is None
+    assert args.ssl_keyfile is None
     assert args.settings_file == RuntimeSettings().settings_file
 
 
@@ -307,6 +339,13 @@ def test_cli_rejects_incomplete_secondary_spi_configuration() -> None:
                 "/dev/spidev1.0",
             ]
         )
+
+
+def test_cli_rejects_incomplete_tls_configuration() -> None:
+    with pytest.raises(SystemExit):
+        main(["--ssl-certfile", "cert.pem"])
+    with pytest.raises(SystemExit):
+        main(["--ssl-keyfile", "key.pem"])
 
 
 def test_pairing_code_protects_api_and_websocket() -> None:
@@ -331,6 +370,12 @@ def test_pairing_code_protects_api_and_websocket() -> None:
         ):
             pass
         assert audio_exc_info.value.code == 4401
+        with (
+            pytest.raises(WebSocketDisconnect) as preview_exc_info,
+            client.websocket_connect("/ws/preview"),
+        ):
+            pass
+        assert preview_exc_info.value.code == 4401
 
         rejected = client.post("/api/auth/pair", json={"code": "0000"})
         assert rejected.status_code == 401
@@ -350,6 +395,8 @@ def test_pairing_code_protects_api_and_websocket() -> None:
             assert websocket.receive_json()["running"] is True
         with client.websocket_connect("/ws/audio") as websocket:
             assert websocket.receive_json()["health"] == "inactive"
+        with client.websocket_connect("/ws/preview") as websocket:
+            assert websocket.receive_bytes()[:4] == b"LSFP"
 
         logged_out = client.post("/api/auth/logout")
         assert logged_out.json() == {"required": True, "authenticated": False}
