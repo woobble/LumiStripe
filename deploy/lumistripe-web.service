@@ -1,25 +1,31 @@
+# This unit is a template. deploy/install.sh replaces the @LUMI_*@ values
+# with the selected non-root service account and checkout paths.
 [Unit]
 Description=LumiStripe web dashboard and LED controller
-Wants=network-online.target
-After=network-online.target
+Wants=network-online.target bluetooth.service
+After=network-online.target bluetooth.service
 
 [Service]
 Type=simple
-User=woobb
-Group=woobb
+User=@LUMI_SERVICE_USER@
+Group=@LUMI_SERVICE_GROUP@
 SupplementaryGroups=gpio spi audio
-WorkingDirectory=/home/woobb/lumistripe
+WorkingDirectory=@LUMI_PROJECT_DIR@
 
 # Keep the toolchains available when systemd starts without a login shell.
-Environment=PATH=/home/woobb/.bun/bin:/home/woobb/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PATH=@LUMI_HOME@/.bun/bin:@LUMI_HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=PYTHONUNBUFFERED=1
+# System services do not inherit the user's PipeWire runtime environment.
+# PortAudio's Pulse/ALSA bridge needs this socket to capture the Bluetooth
+# monitor, while bluetooth.py also uses it for wpctl/pactl probes.
+Environment=XDG_RUNTIME_DIR=/run/user/@LUMI_SERVICE_UID@
 EnvironmentFile=/etc/lumistripe/lumistripe-web.env
 
 # Rebuild the bundled frontend on every service start so FastAPI serves the
 # current UI, manifest, and service worker from its static directory.
-ExecStartPre=/bin/bash -c 'cd /home/woobb/lumistripe/apps/lumistripe-web/frontend && bun run build'
+# ExecStartPre=/bin/bash -c 'cd "@LUMI_PROJECT_DIR@/apps/lumistripe-web/frontend" && bun run build'
 
-ExecStart=/bin/bash -c 'exec /home/woobb/.local/bin/uv run --extra hardware-gain lumistripe-web --hardware --pairing-code "$LUMI_PAIRING_CODE"'
+ExecStart=/bin/bash -c 'exec "@LUMI_HOME@/.local/bin/uv" run --extra hardware-gain lumistripe-web --hardware --pairing-code "$LUMI_PAIRING_CODE"'
 
 Restart=on-failure
 RestartSec=3

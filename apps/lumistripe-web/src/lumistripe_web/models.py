@@ -216,6 +216,31 @@ class AudioDeviceOption(BaseModel):
     settings: AudioTuningValues
 
 
+class BluetoothDeviceInfo(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    address: str
+    name: str
+    paired: bool = False
+    connected: bool = False
+
+
+class BluetoothStatusResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    available: bool = False
+    powered: bool = False
+    scanning: bool = False
+    streaming: bool = False
+    devices: tuple[BluetoothDeviceInfo, ...] = ()
+    connected_device: BluetoothDeviceInfo | None = None
+    input_source: str | None = None
+    default_sink: str | None = None
+    output_ready: bool = False
+    operation: str | None = None
+    error: str | None = None
+
+
 class AudioCalibrationStartRequest(BaseModel):
     device: str = Field(min_length=1)
     duration_seconds: float = Field(default=8.0, ge=3.0, le=30.0)
@@ -251,8 +276,10 @@ class AudioSettingsResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     source: str
+    active_source: str = "off"
     monitoring: bool
     active_device: str | None = None
+    fallback_device: str | None = None
     active_device_name: str | None = None
     devices: tuple[AudioDeviceOption, ...] = ()
     settings: AudioTuningValues = AudioTuningValues()
@@ -263,6 +290,7 @@ class AudioSettingsResponse(BaseModel):
     hardware_gain_control: str | None = None
     hardware_gain_value: float | None = None
     hardware_gain_error: str | None = None
+    bluetooth: BluetoothStatusResponse = Field(default_factory=BluetoothStatusResponse)
     error: str | None = None
 
 
@@ -277,6 +305,14 @@ class AudioResetRequest(BaseModel):
 
 class AudioDeviceRequest(BaseModel):
     device: str = Field(min_length=1)
+
+
+class AudioSourceRequest(BaseModel):
+    source: Literal["auto", "off", "demo", "mic", "bluetooth"]
+
+
+class BluetoothDeviceRequest(BaseModel):
+    address: str = Field(min_length=17, max_length=17)
 
 
 class StartupPlaybackState(BaseModel):

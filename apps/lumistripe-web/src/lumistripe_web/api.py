@@ -35,8 +35,11 @@ from .models import (
     AudioResetRequest,
     AudioSettingsRequest,
     AudioSettingsResponse,
+    AudioSourceRequest,
     AudioTelemetry,
     BlackoutRequest,
+    BluetoothDeviceRequest,
+    BluetoothStatusResponse,
     BrightnessRequest,
     CalibrationFinishRequest,
     CalibrationSessionResponse,
@@ -277,6 +280,58 @@ async def finish_calibration(
 @router.get("/api/audio/settings", response_model=AudioSettingsResponse)
 async def audio_settings(request: Request) -> AudioSettingsResponse:
     return _runtime_from_request(request).audio_settings()
+
+
+@router.put("/api/audio/source", response_model=AudioSettingsResponse)
+async def select_audio_source(
+    request: Request, body: AudioSourceRequest
+) -> AudioSettingsResponse:
+    return await _await_command(
+        _runtime_from_request(request).set_audio_source(body.source)
+    )
+
+
+@router.get("/api/audio/bluetooth", response_model=BluetoothStatusResponse)
+async def bluetooth_status(request: Request) -> BluetoothStatusResponse:
+    return _runtime_from_request(request).bluetooth_status()
+
+
+@router.post("/api/audio/bluetooth/scan", response_model=BluetoothStatusResponse)
+async def bluetooth_scan(request: Request) -> BluetoothStatusResponse:
+    try:
+        return _runtime_from_request(request).start_bluetooth_scan()
+    except RuntimeCommandError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/api/audio/bluetooth/pair", response_model=BluetoothStatusResponse)
+async def bluetooth_pair(
+    request: Request, body: BluetoothDeviceRequest
+) -> BluetoothStatusResponse:
+    try:
+        return _runtime_from_request(request).pair_bluetooth_device(body.address)
+    except RuntimeCommandError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/api/audio/bluetooth/connect", response_model=BluetoothStatusResponse)
+async def bluetooth_connect(
+    request: Request, body: BluetoothDeviceRequest
+) -> BluetoothStatusResponse:
+    try:
+        return _runtime_from_request(request).connect_bluetooth_device(body.address)
+    except RuntimeCommandError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/api/audio/bluetooth/forget", response_model=BluetoothStatusResponse)
+async def bluetooth_forget(
+    request: Request, body: BluetoothDeviceRequest
+) -> BluetoothStatusResponse:
+    try:
+        return _runtime_from_request(request).forget_bluetooth_device(body.address)
+    except RuntimeCommandError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.put("/api/audio/device", response_model=AudioSettingsResponse)

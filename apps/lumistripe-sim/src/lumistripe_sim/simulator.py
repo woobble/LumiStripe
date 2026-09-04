@@ -621,7 +621,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--audio-source",
         type=_parse_audio_source,
-        help="Audio source: off, mic, or demo (defaults to mic for dynamic and off otherwise)",
+        help="Audio source: off, mic, or demo (Bluetooth is available in lumistripe-web; defaults to mic for dynamic and off otherwise)",
     )
     parser.add_argument("--cycle-order", type=CycleOrder, choices=tuple(CycleOrder), default=CycleOrder.SEQUENTIAL)
     parser.add_argument("--cycle-timing", type=CycleTiming, choices=tuple(CycleTiming), default=CycleTiming.PER_ANIMATION)
@@ -715,9 +715,14 @@ def _parse_mode(value: str) -> PlaybackMode:
 
 def _parse_audio_source(value: str) -> AudioSource:
     try:
-        return AudioSource(value.lower())
+        source = AudioSource(value.lower())
     except ValueError as exc:
         raise argparse.ArgumentTypeError(f"invalid audio source: {value}") from exc
+    if source is AudioSource.BLUETOOTH:
+        raise argparse.ArgumentTypeError(
+            "Bluetooth audio is only available through lumistripe-web"
+        )
+    return source
 
 
 def _positive_float(value: str) -> float:

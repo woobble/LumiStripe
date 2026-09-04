@@ -184,6 +184,45 @@ def test_audio_settings_api_and_telemetry_websocket(
             assert telemetry["gate_preview"] is True
 
 
+def test_audio_source_and_bluetooth_api(
+    tmp_path: Path,
+) -> None:
+    app = create_app(
+        RuntimeSettings(
+            pixels=8,
+            audio_source="off",
+            settings_file=tmp_path / "settings.json",
+        )
+    )
+    with TestClient(app) as client:
+        initial = client.get("/api/audio/settings")
+        assert initial.status_code == 200
+        assert initial.json()["source"] == "off"
+        assert initial.json()["active_source"] == "off"
+
+        demo = client.put("/api/audio/source", json={"source": "demo"})
+        assert demo.status_code == 200
+        assert demo.json()["source"] == "demo"
+        assert demo.json()["active_source"] == "demo"
+
+        dynamic = client.put("/api/mode", json={"mode": "dynamic"})
+        assert dynamic.status_code == 200
+        blocked_off = client.put("/api/audio/source", json={"source": "off"})
+        assert blocked_off.status_code == 409
+
+        bluetooth = client.get("/api/audio/bluetooth")
+        assert bluetooth.status_code == 200
+        assert bluetooth.json()["available"] is False
+
+        unavailable_scan = client.post("/api/audio/bluetooth/scan")
+        assert unavailable_scan.status_code == 409
+
+        invalid_source = client.put(
+            "/api/audio/source", json={"source": "line-in"}
+        )
+        assert invalid_source.status_code == 422
+
+
 def test_preview_packet_contains_sequence_and_rgba_outputs() -> None:
     frame = PreviewFrame(
         sequence=17,

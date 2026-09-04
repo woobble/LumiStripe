@@ -36,6 +36,7 @@ class AudioSource(str, Enum):
     OFF = "off"
     MIC = "mic"
     DEMO = "demo"
+    BLUETOOTH = "bluetooth"
 
 
 class MusicGateState(str, Enum):

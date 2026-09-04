@@ -50,6 +50,12 @@ from lumistripe import (
 )
 from lumistripe.audio import BandTuple, recommend_audio_calibration
 
+from .bluetooth import (
+    BluetoothCommandError,
+    BluetoothManager,
+    BluetoothStatus,
+    capture_device_selector,
+)
 from .models import (
     AnimationOption,
     AudioCalibrationSessionResponse,
@@ -57,6 +63,8 @@ from .models import (
     AudioSettingsResponse,
     AudioTelemetry,
     AudioTuningValues,
+    BluetoothDeviceInfo,
+    BluetoothStatusResponse,
     CalibrationSessionResponse,
     CalibrationStatus,
     ColorCorrectionProfile,
@@ -81,8 +89,10 @@ from .settings import (
 
 MIN_FRAME_SECONDS = 0.016
 FPS_SAMPLE_SECONDS = 1.0
+AUDIO_ROUTE_POLL_SECONDS = 1.0
 CALIBRATION_FRAME_SECONDS = 0.05
 CALIBRATION_TIMEOUT_SECONDS = 300.0
+BLUETOOTH_PROFILE_KEY = "Bluetooth music"
 CalibrationPattern = Literal["white", "red", "green", "blue"]
 
 try:
@@ -131,7 +141,7 @@ class RuntimeSettings:
             raise ValueError("secondary SPI speed must be greater than zero")
         if self.spi_speed_hz_2 is not None and self.spi_device_2 is None:
             raise ValueError("secondary SPI speed requires a secondary SPI device")
-        if self.audio_source not in {"auto", "off", "demo", "mic"}:
+        if self.audio_source not in {"auto", "off", "demo", "mic", "bluetooth"}:
             raise ValueError(f"invalid audio source: {self.audio_source}")
 
     @property
@@ -140,7 +150,7 @@ class RuntimeSettings:
 
     def dynamic_audio_source(self) -> AudioSource:
         if self.audio_source == "auto":
-            return AudioSource.MIC if self.hardware else AudioSource.DEMO
+            return AudioSource.BLUETOOTH if self.hardware else AudioSource.DEMO
         return AudioSource(self.audio_source)
 
 
@@ -281,6 +291,11 @@ class _AudioSettingsCommand:
 @dataclass(frozen=True, slots=True)
 class _AudioDeviceCommand:
     device: str
+
+
+@dataclass(frozen=True, slots=True)
+class _AudioSourceCommand:
+    source: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -428,6 +443,7 @@ class LumiStripeRuntime:
         *,
         controller_factory: _ControllerFactory = _default_controller_factory,
         audio_factory: _AudioFactory = _default_audio_factory,
+        bluetooth_manager: BluetoothManager | None = None,
     ) -> None:
         self.settings = settings or RuntimeSettings()
         self._controller_factory = controller_factory
@@ -435,6 +451,7 @@ class LumiStripeRuntime:
             controller_factory is _default_controller_factory
         )
         self._audio_factory = audio_factory
+        self._bluetooth = bluetooth_manager or BluetoothManager(enabled=self.settings.hardware)
         self._settings_store = CalibrationSettingsStore(self.settings.settings_file)
         loaded_settings, self._settings_warning = self._settings_store.load_all()
         self._saved_corrections = loaded_settings.color_corrections
@@ -495,8 +512,14 @@ class LumiStripeRuntime:
         self._stripe_test: _StripeTestSession | None = None
         self._audio_input: AudioInput | None = None
         self._hardware_gain: HardwareGainController | None = None
+        self._audio_source_setting = self.settings.audio_source
         self._configured_audio_source = self.settings.dynamic_audio_source()
         self._active_audio_source = AudioSource.OFF
+        self._monitor_audio_source = AudioSource.OFF
+        self._active_audio_device_name: str | None = None
+        self._active_bluetooth_address: str | None = None
+        self._bluetooth_previous_default_source: str | None = None
+        self._next_audio_route_check_at = 0.0
         self._audio_frame = AudioFrame()
         self._music_features = MusicFeatures()
         self._demo_tick = 0
@@ -566,7 +589,7 @@ class LumiStripeRuntime:
     def audio_settings(self) -> AudioSettingsResponse:
         try:
             devices = list_input_device_details()
-            options = tuple(
+            options_list = [
                 AudioDeviceOption(
                     selector=str(device.index),
                     name=device.name,
@@ -575,28 +598,131 @@ class LumiStripeRuntime:
                     ),
                 )
                 for device in devices
-            )
+            ]
+            if self.settings.hardware:
+                options_list.append(
+                    AudioDeviceOption(
+                        selector="bluetooth",
+                        name=BLUETOOTH_PROFILE_KEY,
+                        settings=_profile_values(
+                            self._audio_profiles.get(
+                                BLUETOOTH_PROFILE_KEY, AudioTuningProfile()
+                            )
+                        ),
+                    )
+                )
+            options = tuple(options_list)
             enumeration_error = None
         except RuntimeError as exc:
             options = ()
             enumeration_error = str(exc)
-        active_name = self._audio_input.device_name() if self._audio_input else None
-        selected_name = active_name or self._selected_audio_device
+        active_name = self._active_audio_device_name
+        if active_name is None and self._audio_input is not None:
+            active_name = self._audio_input.device_name()
+        selected_name = (
+            BLUETOOTH_PROFILE_KEY
+            if self._monitor_audio_source is AudioSource.BLUETOOTH
+            else (active_name or self._selected_audio_device)
+        )
         active_selector = next(
             (option.selector for option in options if option.name == selected_name),
-            selected_name,
+            "bluetooth"
+            if self._monitor_audio_source is AudioSource.BLUETOOTH
+            else selected_name,
+        )
+        fallback_selector = next(
+            (
+                option.selector
+                for option in options
+                if option.name == self._selected_audio_device
+            ),
+            self._selected_audio_device,
         )
         return AudioSettingsResponse(
-            source=self._configured_audio_source.value,
+            source=self._audio_source_setting,
+            active_source=self._monitor_audio_source.value,
             monitoring=self._audio_input is not None,
             active_device=active_selector,
+            fallback_device=fallback_selector,
             active_device_name=active_name,
             devices=options,
-            settings=_profile_values(self._audio_profile),
+            settings=_profile_values(
+                self._audio_profiles.get(
+                    BLUETOOTH_PROFILE_KEY
+                    if self._monitor_audio_source is AudioSource.BLUETOOTH
+                    else (active_name or self._selected_audio_device or ""),
+                    self._audio_profile,
+                )
+            ),
             configured_noise_floor=self._audio_profile.audio_config().smoothing.noise_floor,
             **_hardware_gain_values(self._hardware_gain),
+            bluetooth=self._bluetooth_status_response(),
             error=self._audio_monitor_error or enumeration_error,
         )
+
+    def bluetooth_status(self) -> BluetoothStatusResponse:
+        return self._bluetooth_status_response()
+
+    def _bluetooth_status_response(
+        self, status: BluetoothStatus | None = None
+    ) -> BluetoothStatusResponse:
+        current = status or self._bluetooth.status()
+        connected = current.connected_device
+        connected_info = (
+            BluetoothDeviceInfo(
+                address=connected.address,
+                name=connected.name,
+                paired=connected.paired,
+                connected=connected.connected,
+            )
+            if connected is not None
+            else None
+        )
+        return BluetoothStatusResponse(
+            available=current.available,
+            powered=current.powered,
+            scanning=current.scanning,
+            streaming=current.streaming,
+            devices=tuple(
+                BluetoothDeviceInfo(
+                    address=device.address,
+                    name=device.name,
+                    paired=device.paired,
+                    connected=device.connected,
+                )
+                for device in current.devices
+            ),
+            connected_device=connected_info,
+            input_source=current.input_source,
+            default_sink=current.default_sink,
+            output_ready=current.output_ready,
+            operation=current.operation,
+            error=current.error,
+        )
+
+    def start_bluetooth_scan(self) -> BluetoothStatusResponse:
+        try:
+            return self._bluetooth_status_response(self._bluetooth.start_scan())
+        except BluetoothCommandError as exc:
+            raise RuntimeCommandError(str(exc)) from exc
+
+    def pair_bluetooth_device(self, address: str) -> BluetoothStatusResponse:
+        try:
+            return self._bluetooth_status_response(self._bluetooth.pair(address))
+        except BluetoothCommandError as exc:
+            raise RuntimeCommandError(str(exc)) from exc
+
+    def connect_bluetooth_device(self, address: str) -> BluetoothStatusResponse:
+        try:
+            return self._bluetooth_status_response(self._bluetooth.connect(address))
+        except BluetoothCommandError as exc:
+            raise RuntimeCommandError(str(exc)) from exc
+
+    def forget_bluetooth_device(self, address: str) -> BluetoothStatusResponse:
+        try:
+            return self._bluetooth_status_response(self._bluetooth.forget(address))
+        except BluetoothCommandError as exc:
+            raise RuntimeCommandError(str(exc)) from exc
 
     def startup_settings(self) -> StartupSettingsResponse:
         remembered = self._remembered_playback
@@ -615,6 +741,12 @@ class LumiStripeRuntime:
         return cast(
             Future[AudioSettingsResponse],
             self._submit("audio_device", _AudioDeviceCommand(device)),
+        )
+
+    def set_audio_source(self, source: str) -> Future[AudioSettingsResponse]:
+        return cast(
+            Future[AudioSettingsResponse],
+            self._submit("audio_source", _AudioSourceCommand(source)),
         )
 
     def set_startup_restore(
@@ -773,6 +905,7 @@ class LumiStripeRuntime:
                 self._controller = OutputGateController(self._raw_controller)
             self._started_at_s = time.monotonic()
             self._fps_window_started_s = self._started_at_s
+            self._bluetooth.start()
             self._initialize_audio_monitor()
             self._apply_remembered_startup()
             self._publish(running=True)
@@ -979,6 +1112,11 @@ class LumiStripeRuntime:
                 self._select_audio_device(audio_device.device)
                 self._publish(running=True)
                 result = self.audio_settings()
+            elif command.name == "audio_source":
+                audio_source = _expect(command.value, _AudioSourceCommand)
+                self._set_audio_source(audio_source.source)
+                self._publish(running=True)
+                result = self.audio_settings()
             elif command.name == "audio_calibration_start":
                 calibration = _expect(command.value, _AudioCalibrationStartCommand)
                 result = self._start_audio_calibration(calibration.device, calibration.duration_seconds)
@@ -1052,16 +1190,21 @@ class LumiStripeRuntime:
                 raise RuntimeCommandError(
                     "dynamic mode requires demo or microphone audio"
                 )
-            if source is AudioSource.MIC and self._audio_input is None:
+            if source in {AudioSource.MIC, AudioSource.BLUETOOTH} and self._audio_input is None:
                 raise RuntimeCommandError(
-                    self._audio_monitor_error or "microphone input is unavailable"
+                    self._audio_monitor_error
+                    or "the selected audio input is unavailable"
                 )
             self._active_audio_source = source
             self._audio_status = (
                 "Using internal demo beat."
                 if source is AudioSource.DEMO
                 else (
-                    f"Input: {self._audio_input.device_name()}"
+                    (
+                        f"Bluetooth: {self._active_audio_device_name}"
+                        if self._monitor_audio_source is AudioSource.BLUETOOTH
+                        else f"Input: {self._audio_input.device_name()}"
+                    )
                     if self._audio_input is not None
                     else self._audio_status
                 )
@@ -1224,75 +1367,227 @@ class LumiStripeRuntime:
         self._install_topology(built)
 
     def _initialize_audio_monitor(self) -> None:
-        if self._configured_audio_source is not AudioSource.MIC:
+        self._maintain_audio_monitor(force=True)
+
+    def _maintain_audio_monitor(self, *, force: bool = False) -> None:
+        now = time.monotonic()
+        if not force and now < self._next_audio_route_check_at:
             return
-        try:
-            audio_input = self._audio_factory(
-                self._selected_audio_device,
-                self._audio_profile.audio_config(),
-            )
-            device_name = audio_input.device_name()
-            saved_profile = self._audio_profiles.get(device_name)
-            if saved_profile is not None and saved_profile != self._audio_profile:
-                audio_input.reconfigure(saved_profile.audio_config())
-                self._audio_profile = saved_profile
-            self._selected_audio_device = device_name
-            self._audio_input = audio_input
-            self._hardware_gain = HardwareGainController(device_name)
-            if self._audio_profile.hardware_gain_target is not None:
-                self._hardware_gain.set_normalized(self._audio_profile.hardware_gain_target)
-            self.playback.set_activity_config(self._audio_profile.activity_config())
-            self.playback.set_dynamic_response(self._audio_profile.dynamic_response)
-            self._monitor_detector.config = self._audio_profile.activity_config()
-            self._audio_status = f"Input: {device_name}"
+        self._next_audio_route_check_at = now + AUDIO_ROUTE_POLL_SECONDS
+
+        if self._configured_audio_source is AudioSource.DEMO:
+            if self._audio_input is not None:
+                self._close_audio_input()
+            self._monitor_audio_source = AudioSource.DEMO
+            self._active_audio_device_name = None
+            self._audio_status = "Using internal demo beat."
             self._audio_monitor_error = None
+            return
+        if self._configured_audio_source is AudioSource.OFF:
+            if self._audio_input is not None:
+                self._close_audio_input()
+            self._monitor_audio_source = AudioSource.OFF
+            self._audio_status = "No audio source active."
+            self._audio_monitor_error = None
+            return
+
+        bluetooth = self._bluetooth.status()
+        bluetooth_ready = bluetooth.streaming and bluetooth.input_source is not None
+        wants_bluetooth = self._configured_audio_source is AudioSource.BLUETOOTH
+        use_bluetooth = wants_bluetooth and bluetooth_ready
+        if self._audio_source_setting == "auto":
+            use_bluetooth = bluetooth_ready
+
+        if use_bluetooth:
+            connected_address = (
+                bluetooth.connected_device.address
+                if bluetooth.connected_device is not None
+                else None
+            )
+            if (
+                self._audio_input is not None
+                and self._monitor_audio_source is AudioSource.BLUETOOTH
+                and self._active_bluetooth_address == connected_address
+            ):
+                return
+            if self._audio_input is not None:
+                self._close_audio_input()
+            try:
+                self._open_bluetooth_monitor(bluetooth)
+            except (BluetoothCommandError, RuntimeError) as exc:
+                self._audio_monitor_error = str(exc)
+                self._audio_status = f"Bluetooth audio unavailable: {exc}"
+            return
+
+        if self._audio_source_setting == "bluetooth":
+            if self._audio_input is not None:
+                self._close_audio_input()
+            self._monitor_audio_source = AudioSource.BLUETOOTH
+            self._active_audio_device_name = None
+            self._audio_status = (
+                "Bluetooth is connected but its PipeWire input is not ready."
+                if bluetooth.connected_device is not None
+                else "Connect a phone to the LumiStripe Bluetooth receiver."
+            )
+            self._audio_monitor_error = bluetooth.error
+            return
+
+        if (
+            self._audio_input is not None
+            and self._monitor_audio_source is AudioSource.MIC
+        ):
+            return
+        if self._audio_input is not None:
+            self._close_audio_input()
+        try:
+            self._open_microphone_monitor()
         except RuntimeError as exc:
-            self._audio_input = None
             self._audio_monitor_error = str(exc)
             self._audio_status = f"Microphone unavailable: {exc}"
+
+    def _open_microphone_monitor(self) -> None:
+        profile = self._audio_profiles.get(
+            self._selected_audio_device or "", AudioTuningProfile()
+        )
+        audio_input = self._audio_factory(
+            self._selected_audio_device,
+            profile.audio_config(),
+        )
+        device_name = audio_input.device_name()
+        saved_profile = self._audio_profiles.get(device_name)
+        if saved_profile is not None and saved_profile != profile:
+            audio_input.reconfigure(saved_profile.audio_config())
+            profile = saved_profile
+        self._selected_audio_device = device_name
+        self._audio_profile = profile
+        self._audio_input = audio_input
+        self._monitor_audio_source = AudioSource.MIC
+        self._active_audio_device_name = device_name
+        self._active_bluetooth_address = None
+        self._hardware_gain = HardwareGainController(device_name)
+        if profile.hardware_gain_target is not None:
+            self._hardware_gain.set_normalized(profile.hardware_gain_target)
+        self._apply_audio_profile(profile)
+        self._audio_status = f"Input: {device_name}"
+        self._audio_monitor_error = None
+
+    def _open_bluetooth_monitor(self, status: BluetoothStatus) -> None:
+        device = status.connected_device
+        source = status.input_source
+        if device is None or source is None:
+            raise BluetoothCommandError("the connected phone has no PipeWire audio source")
+        selector = capture_device_selector(list_input_device_details())
+        previous_source = self._bluetooth.default_source()
+        self._bluetooth.set_default_source(source)
+        profile = self._audio_profiles.get(BLUETOOTH_PROFILE_KEY, AudioTuningProfile())
+        try:
+            audio_input = self._audio_factory(selector, profile.audio_config())
+        except Exception:
+            self._bluetooth.restore_default_source(previous_source)
+            raise
+        self._audio_input = audio_input
+        self._audio_profile = profile
+        self._monitor_audio_source = AudioSource.BLUETOOTH
+        self._active_audio_device_name = device.name
+        self._active_bluetooth_address = device.address
+        self._bluetooth_previous_default_source = previous_source
+        self._hardware_gain = None
+        self._apply_audio_profile(profile)
+        self._audio_status = f"Bluetooth: {device.name}"
+        self._audio_monitor_error = None
+
+    def _apply_audio_profile(self, profile: AudioTuningProfile) -> None:
+        self.playback.set_activity_config(profile.activity_config())
+        self.playback.set_dynamic_response(profile.dynamic_response)
+        for _, playback in self._playbacks.values():
+            playback.set_activity_config(profile.activity_config())
+            playback.set_dynamic_response(profile.dynamic_response)
+        self._monitor_detector.config = profile.activity_config()
 
     def _apply_audio_settings(self, device: str, profile: AudioTuningProfile) -> None:
         device_name = self._device_name_for_selector(device)
         candidate: AudioInput | None = None
         current = self._audio_input
+        target_is_bluetooth = device_name == BLUETOOTH_PROFILE_KEY
+        current_name = current.device_name() if current is not None else None
+        target_is_active_mic = (
+            not target_is_bluetooth
+            and self._monitor_audio_source is AudioSource.MIC
+            and current_name == device_name
+        )
+        active_bluetooth = (
+            target_is_bluetooth
+            and self._monitor_audio_source is AudioSource.BLUETOOTH
+            and current is not None
+        )
+        should_open_mic = (
+            not target_is_bluetooth
+            and not target_is_active_mic
+            and (
+                self._configured_audio_source is AudioSource.MIC
+                or (
+                    self._audio_source_setting == "auto"
+                    and self._monitor_audio_source is AudioSource.MIC
+                )
+            )
+        )
         try:
-            if self._configured_audio_source is AudioSource.MIC and (
-                current is None or current.device_name() != device_name
-            ):
+            if should_open_mic:
                 candidate = self._audio_factory(device, profile.audio_config())
                 device_name = candidate.device_name()
+                target_is_active_mic = True
 
             next_profiles = dict(self._audio_profiles)
             next_profiles[device_name] = profile
+            selected_device = (
+                device_name
+                if not target_is_bluetooth
+                else self._selected_audio_device or ""
+            )
             with self._settings_io_lock:
-                self._settings_store.save_audio(device_name, next_profiles)
+                self._settings_store.save_audio(selected_device, next_profiles)
 
             if candidate is not None:
                 self._audio_input = candidate
-            elif current is not None:
+            elif active_bluetooth or target_is_active_mic:
+                assert current is not None
                 current.reconfigure(profile.audio_config())
 
             self._audio_profiles = next_profiles
-            self._selected_audio_device = device_name
-            self._audio_profile = profile
-            self._hardware_gain = HardwareGainController(device_name)
-            if profile.hardware_gain_target is not None:
-                self._hardware_gain.set_normalized(profile.hardware_gain_target)
-            activity = profile.activity_config()
-            self.playback.set_activity_config(activity)
-            self.playback.set_dynamic_response(profile.dynamic_response)
-            for _, playback in self._playbacks.values():
-                playback.set_activity_config(activity)
-                playback.set_dynamic_response(profile.dynamic_response)
-            self._monitor_detector.config = activity
-            self._monitor_detector.reset()
-            self._noise_samples.clear()
-            self._audio_monitor_error = None
-            self._audio_status = (
-                f"Input: {device_name}"
-                if self._audio_input is not None
-                else "Microphone monitoring is disabled by the audio source."
+            if not target_is_bluetooth:
+                self._selected_audio_device = device_name
+            applies_to_active_input = (
+                candidate is not None or active_bluetooth or target_is_active_mic
             )
+            if applies_to_active_input or (target_is_bluetooth and current is None):
+                self._audio_profile = profile
+                self._hardware_gain = (
+                    None
+                    if target_is_bluetooth
+                    else HardwareGainController(device_name)
+                )
+                if (
+                    profile.hardware_gain_target is not None
+                    and self._hardware_gain is not None
+                ):
+                    self._hardware_gain.set_normalized(profile.hardware_gain_target)
+                self._apply_audio_profile(profile)
+                self._monitor_detector.reset()
+                self._noise_samples.clear()
+                self._audio_monitor_error = None
+                self._audio_status = (
+                    (
+                        f"Bluetooth: {self._active_audio_device_name}"
+                        if self._monitor_audio_source is AudioSource.BLUETOOTH
+                        else f"Input: {device_name}"
+                    )
+                    if self._audio_input is not None
+                    else (
+                        self._audio_status
+                        if target_is_bluetooth
+                        else "Microphone monitoring is disabled by the audio source."
+                    )
+                )
             if candidate is not None and current is not None:
                 try:
                     current.close()
@@ -1315,7 +1610,12 @@ class LumiStripeRuntime:
         if self._audio_input is None:
             raise RuntimeCommandError(self._audio_monitor_error or "microphone input is unavailable")
         device_name = self._device_name_for_selector(device)
-        if self._audio_input.device_name() != device_name:
+        if device_name == BLUETOOTH_PROFILE_KEY:
+            if self._monitor_audio_source is not AudioSource.BLUETOOTH:
+                raise RuntimeCommandError(
+                    "connect and select the active Bluetooth stream before calibrating"
+                )
+        elif self._audio_input.device_name() != device_name:
             raise RuntimeCommandError("select the active microphone before calibrating")
         session = _AudioCalibrationSession(uuid4().hex, device_name, time.monotonic(), duration_seconds)
         self._audio_calibration = session
@@ -1350,9 +1650,39 @@ class LumiStripeRuntime:
         return self.audio_settings()
 
     def _select_audio_device(self, device: str) -> None:
+        if device == "bluetooth":
+            self._set_audio_source("bluetooth")
+            return
         device_name = self._device_name_for_selector(device)
         profile = self._audio_profiles.get(device_name, AudioTuningProfile())
         self._apply_audio_settings(device, profile)
+
+    def _set_audio_source(self, source: str) -> None:
+        if source not in {"auto", "off", "demo", "mic", "bluetooth"}:
+            raise RuntimeCommandError(f"invalid audio source: {source}")
+        if self.playback.mode is PlaybackMode.DYNAMIC and source == "off":
+            raise RuntimeCommandError("dynamic mode requires demo or microphone audio")
+        self._audio_source_setting = source
+        if source == "auto":
+            self._configured_audio_source = (
+                AudioSource.BLUETOOTH if self.settings.hardware else AudioSource.DEMO
+            )
+        else:
+            self._configured_audio_source = AudioSource(source)
+        self._close_audio_input()
+        self._active_audio_source = AudioSource.OFF
+        self._monitor_audio_source = AudioSource.OFF
+        self._audio_monitor_error = None
+        self._next_audio_route_check_at = 0.0
+        self._maintain_audio_monitor(force=True)
+        self._active_audio_source = (
+            AudioSource.DEMO
+            if (
+                self.playback.mode is PlaybackMode.DYNAMIC
+                and self._monitor_audio_source is AudioSource.DEMO
+            )
+            else AudioSource.OFF
+        )
 
     def _set_startup_restore(self, enabled: bool) -> None:
         if enabled:
@@ -1456,6 +1786,8 @@ class LumiStripeRuntime:
             gate.set_blackout(remembered.blackout)
 
     def _device_name_for_selector(self, selector: str) -> str:
+        if selector == "bluetooth":
+            return BLUETOOTH_PROFILE_KEY
         try:
             devices = list_input_device_details()
         except RuntimeError as exc:
@@ -1479,9 +1811,10 @@ class LumiStripeRuntime:
                 raise RuntimeCommandError(
                     "dynamic mode requires demo or microphone audio"
                 )
-            if next_source is AudioSource.MIC and self._audio_input is None:
+            if next_source in {AudioSource.MIC, AudioSource.BLUETOOTH} and self._audio_input is None:
                 raise RuntimeCommandError(
-                    self._audio_monitor_error or "microphone input is unavailable"
+                    self._audio_monitor_error
+                    or "the selected audio input is unavailable"
                 )
 
         self._active_audio_source = next_source
@@ -1489,7 +1822,11 @@ class LumiStripeRuntime:
         self._audio_frame = AudioFrame()
         self._music_features = MusicFeatures()
         if self._audio_input is not None:
-            self._audio_status = f"Input: {self._audio_input.device_name()}"
+            self._audio_status = (
+                f"Bluetooth: {self._active_audio_device_name}"
+                if self._monitor_audio_source is AudioSource.BLUETOOTH
+                else f"Input: {self._audio_input.device_name()}"
+            )
         elif next_source is AudioSource.DEMO:
             self._audio_status = "Using internal demo beat."
         else:
@@ -1618,6 +1955,7 @@ class LumiStripeRuntime:
 
     def _step(self) -> float:
         assert self._controller is not None
+        self._maintain_audio_monitor()
         session = self._calibration
         if session is not None:
             if (
@@ -2036,12 +2374,12 @@ class LumiStripeRuntime:
         self._fps_window_started_s = now
 
     def _audio_health_status(self, uptime_seconds: float) -> str:
-        if self._configured_audio_source is AudioSource.DEMO:
-            if self._active_audio_source is not AudioSource.DEMO:
+        if self._audio_source_setting == "off":
+            return "inactive"
+        if self._monitor_audio_source is AudioSource.DEMO:
+            if self.playback.mode is not PlaybackMode.DYNAMIC and self._active_audio_source is not AudioSource.DEMO:
                 return "inactive"
             return "demo"
-        if self._configured_audio_source is AudioSource.OFF:
-            return "inactive"
         if self._audio_input is None:
             return "unavailable"
         if self._audio_health.status_count > 0:
@@ -2160,6 +2498,7 @@ class LumiStripeRuntime:
             self._close_audio_input()
         except Exception as exc:  # noqa: BLE001 - cleanup continues after individual failures
             self._fatal_error = self._fatal_error or str(exc)
+        self._bluetooth.stop()
         controller = self._raw_controller
         if controller is None:
             return
@@ -2178,10 +2517,19 @@ class LumiStripeRuntime:
 
     def _close_audio_input(self) -> None:
         audio_input = self._audio_input
+        previous_source = self._bluetooth_previous_default_source
         self._audio_input = None
         self._active_audio_source = AudioSource.OFF
-        if audio_input is not None:
-            audio_input.close()
+        self._monitor_audio_source = AudioSource.OFF
+        self._active_audio_device_name = None
+        self._active_bluetooth_address = None
+        self._bluetooth_previous_default_source = None
+        try:
+            if audio_input is not None:
+                audio_input.close()
+        finally:
+            if previous_source is not None:
+                self._bluetooth.restore_default_source(previous_source)
 
     def _reject_pending(self) -> None:
         while True:

@@ -99,9 +99,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--clock-pin", type=int, default=15)
     parser.add_argument(
         "--audio-source",
-        choices=("auto", "off", "demo", "mic"),
+        choices=("auto", "off", "demo", "mic", "bluetooth"),
         default="auto",
-        help="Dynamic-mode audio source (auto uses demo in simulation and mic on hardware)",
+        help="Dynamic-mode audio source (auto prefers Bluetooth, then mic, on hardware)",
     )
     parser.add_argument("--audio-device")
     parser.add_argument(

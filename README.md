@@ -15,6 +15,38 @@ LumiStripe drives 2-wire addressable LED strips from a Raspberry Pi or other Lin
 - **Three Playback Modes** — Static, Cycling, and music-driven Dynamic playback in both the CLI and simulator
 - **CLI** — Launch the simulator from the terminal with `lumistripe`
 
+## Raspberry Pi party appliance
+
+For a Raspberry Pi OS Trixie installation with physical LED output, the web
+dashboard, Bluetooth music input, PipeWire audio routing, and Nginx HTTPS
+access, run the self-contained installer from the checkout on the Pi:
+
+```bash
+sudo env LUMI_PAIRING_CODE=0427 ./deploy/install.sh
+```
+
+The installer installs the system packages and native build tools, managed
+Python 3.12 through uv, Bun, all locked Python/frontend dependencies, the
+Bluetooth/WirePlumber setup, Raspberry Pi SPI, Nginx, and the systemd service.
+It uses the non-root account invoking `sudo`; set `LUMI_SERVICE_USER` and
+`LUMI_PROJECT_DIR` when the checkout or service account differs. If no pairing
+code is supplied, the installer generates one and prints it.
+
+The HTTPS certificate is generated with mkcert. Trust the generated
+`rootCA.pem` (the installer prints its path) on each iPhone or PC that opens
+the dashboard. Pair the iPhone from **Setup → Audio**, then choose the Pi from
+the iPhone audio-output picker. The incoming stream is sent to the Pi's
+configured physical audio sink and analyzed for the music-reactive animation.
+
+After installing a new revision, update the checkout and run:
+
+```bash
+sudo ./deploy/update.sh origin/main
+```
+
+See [`deploy/README.md`](deploy/README.md) for hardware wiring, output-sink
+selection, certificate trust, troubleshooting, and manual recovery commands.
+
 ## Quick Start
 
 ```bash

@@ -168,12 +168,12 @@ function AudioTuningPanelView() {
       <div className="space-y-4 pb-4">
       <div>
         <h2 className="text-lg font-semibold">Audio tuning</h2>
-        <p className="text-sm text-muted-foreground">See what the microphone hears and tune Music mode in real time.</p>
+        <p className="text-sm text-muted-foreground">See what the active audio input hears and tune Music mode in real time.</p>
       </div>
 
       <Card className="border-white/5 bg-card/80 shadow-xl shadow-black/10 backdrop-blur-xl">
         <CardHeader className="grid-cols-[1fr_auto]">
-          <div><CardTitle className="flex items-center gap-2"><MicIcon className="size-4 text-violet-300" />{activeDeviceName ?? "No input selected"}</CardTitle><CardDescription>{response.monitoring ? "Active microphone" : `Audio source: ${response.source}`}</CardDescription></div>
+          <div><CardTitle className="flex items-center gap-2"><MicIcon className="size-4 text-violet-300" />{activeDeviceName ?? "No input selected"}</CardTitle><CardDescription>{response.monitoring ? (response.active_source === "bluetooth" ? "Active Bluetooth music stream" : "Active microphone") : `Audio source: ${response.source}`}</CardDescription></div>
           <Link to="/setup/audio" className="inline-flex h-9 items-center justify-center rounded-lg border border-border bg-background px-3 text-sm font-medium hover:bg-muted">Change</Link>
         </CardHeader>
         {response.error && <CardContent><p className="rounded-xl bg-red-500/10 p-3 text-sm text-red-200">{response.error}</p></CardContent>}
