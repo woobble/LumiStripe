@@ -5,11 +5,7 @@ import { Navigate, Route, Routes } from "react-router"
 
 import { PairingScreen } from "@/components/auth/pairing-screen"
 import { ConnectionBadge } from "@/components/dashboard/connection-badge"
-import { CalibrationPanel } from "@/components/dashboard/calibration-panel"
-import { ControlPanel } from "@/components/dashboard/control-panel"
-import { StatusPanel } from "@/components/dashboard/status-panel"
 import { SetupPage } from "@/components/dashboard/setup-nav"
-import { StripeManagementPanel } from "@/components/dashboard/stripe-management-panel"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Toaster } from "@/components/ui/sonner"
@@ -21,6 +17,16 @@ import { GuardedNavLink, UnsavedChangesProvider } from "@/hooks/use-unsaved-chan
 const AudioTuningPanel = lazy(async () => {
   const module = await import("@/components/dashboard/audio-tuning-panel")
   return { default: module.AudioTuningPanel }
+})
+
+const CalibrationPanel = lazy(async () => {
+  const module = await import("@/components/dashboard/calibration-panel")
+  return { default: module.CalibrationPanel }
+})
+
+const ControlPanel = lazy(async () => {
+  const module = await import("@/components/dashboard/control-panel")
+  return { default: module.ControlPanel }
 })
 
 const AudioStatusPanel = lazy(async () => {
@@ -35,6 +41,16 @@ const AudioInputPanel = lazy(async () => {
 const StartupPanel = lazy(async () => {
   const module = await import("@/components/dashboard/startup-panel")
   return { default: module.StartupPanel }
+})
+
+const StatusPanel = lazy(async () => {
+  const module = await import("@/components/dashboard/status-panel")
+  return { default: module.StatusPanel }
+})
+
+const StripeManagementPanel = lazy(async () => {
+  const module = await import("@/components/dashboard/stripe-management-panel")
+  return { default: module.StripeManagementPanel }
 })
 
 function DashboardSkeleton() {
@@ -144,16 +160,16 @@ function LiveDashboard({ access }: { access: AccessController }) {
           <UnsavedChangesProvider>
           <div className="min-h-0 flex-1 pb-[calc(5.25rem+env(safe-area-inset-bottom))]">
             <Routes>
-              <Route path="/" element={<ControlPanel controller={controller} />} />
+              <Route path="/" element={<Suspense fallback={<DashboardSkeleton />}><ControlPanel controller={controller} /></Suspense>} />
               <Route path="/audio" element={<Suspense fallback={<DashboardSkeleton />}><AudioStatusPanel /></Suspense>} />
               <Route path="/setup" element={<Navigate to="/setup/stripes" replace />} />
-              <Route path="/setup/stripes" element={<SetupGuard access={access}><StripeManagementPanel controller={controller} /></SetupGuard>} />
-              <Route path="/setup/color" element={<SetupGuard access={access}><SetupPage><CalibrationPanel controller={controller} /></SetupPage></SetupGuard>} />
+              <Route path="/setup/stripes" element={<SetupGuard access={access}><Suspense fallback={<DashboardSkeleton />}><StripeManagementPanel controller={controller} /></Suspense></SetupGuard>} />
+              <Route path="/setup/color" element={<SetupGuard access={access}><SetupPage><Suspense fallback={<DashboardSkeleton />}><CalibrationPanel controller={controller} /></Suspense></SetupPage></SetupGuard>} />
               <Route path="/setup/audio" element={<SetupGuard access={access}><Suspense fallback={<DashboardSkeleton />}><AudioInputPanel /></Suspense></SetupGuard>} />
               <Route path="/setup/audio/tuning" element={<SetupGuard access={access}><Suspense fallback={<DashboardSkeleton />}><AudioTuningPanel /></Suspense></SetupGuard>} />
               <Route path="/setup/startup" element={<SetupGuard access={access}><Suspense fallback={<DashboardSkeleton />}><StartupPanel /></Suspense></SetupGuard>} />
               <Route path="/calibration" element={<Navigate to="/setup/color" replace />} />
-              <Route path="/diagnostics" element={<StatusPanel controller={controller} onLogout={access.required && access.authenticated ? access.logout : undefined} />} />
+              <Route path="/diagnostics" element={<Suspense fallback={<DashboardSkeleton />}><StatusPanel controller={controller} onLogout={access.required && access.authenticated ? access.logout : undefined} /></Suspense>} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
             <div className="fixed inset-x-0 bottom-0 z-40 border-t border-white/5 bg-background/90 backdrop-blur-2xl">

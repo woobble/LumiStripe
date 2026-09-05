@@ -1,9 +1,8 @@
-import { memo, useState } from "react"
+import { lazy, memo, Suspense, useState } from "react"
 import { ActivityIcon, ListRestartIcon, Music2Icon, PaletteIcon, PowerIcon, RadioIcon, SunMediumIcon } from "lucide-react"
 import { HexColorPicker } from "react-colorful"
 
 import { AnimationSheet } from "@/components/dashboard/animation-sheet"
-import { LivePreview } from "@/components/dashboard/live-preview"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Slider } from "@/components/ui/slider"
@@ -12,6 +11,11 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import type { DashboardController } from "@/hooks/use-dashboard"
 import type { PlaybackMode } from "@/lib/api"
+
+const LivePreview = lazy(async () => {
+  const module = await import("@/components/dashboard/live-preview")
+  return { default: module.LivePreview }
+})
 
 const modes: Array<{ value: PlaybackMode; label: string; icon: typeof RadioIcon }> = [
   { value: "solid", label: "Solid", icon: PaletteIcon },
@@ -127,7 +131,9 @@ export function ControlPanel({ controller }: { controller: DashboardController }
   return (
     <div className="space-y-4 pb-4">
       {previewEnabled ? (
-        <LivePreview state={state} onDisable={() => setPreviewEnabled(false)} />
+        <Suspense fallback={<div className="h-64 animate-pulse rounded-2xl border border-white/5 bg-card/80" aria-label="Loading live preview" />}>
+          <LivePreview state={state} onDisable={() => setPreviewEnabled(false)} />
+        </Suspense>
       ) : (
         <Button
           variant="outline"
