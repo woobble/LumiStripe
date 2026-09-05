@@ -60,6 +60,7 @@ from .models import (
     AnimationOption,
     AudioCalibrationSessionResponse,
     AudioDeviceOption,
+    AudioOutputDeviceInfo,
     AudioSettingsResponse,
     AudioTelemetry,
     AudioTuningValues,
@@ -667,35 +668,42 @@ class LumiStripeRuntime:
         self, status: BluetoothStatus | None = None
     ) -> BluetoothStatusResponse:
         current = status or self._bluetooth.status()
-        connected = current.connected_device
-        connected_info = (
-            BluetoothDeviceInfo(
-                address=connected.address,
-                name=connected.name,
-                paired=connected.paired,
-                connected=connected.connected,
+
+        def device_info(device) -> BluetoothDeviceInfo:
+            return BluetoothDeviceInfo(
+                address=device.address,
+                name=device.name,
+                paired=device.paired,
+                connected=device.connected,
+                roles=tuple(device.roles),
             )
-            if connected is not None
-            else None
-        )
+
+        connected = current.connected_device
         return BluetoothStatusResponse(
             available=current.available,
             powered=current.powered,
             adapter_alias=current.adapter_alias,
             scanning=current.scanning,
             streaming=current.streaming,
-            devices=tuple(
-                BluetoothDeviceInfo(
-                    address=device.address,
+            devices=tuple(device_info(device) for device in current.devices),
+            connected_inputs=tuple(device_info(device) for device in current.connected_inputs),
+            connected_outputs=tuple(device_info(device) for device in current.connected_outputs),
+            connected_device=device_info(connected) if connected is not None else None,
+            input_source=current.input_source,
+            output_devices=tuple(
+                AudioOutputDeviceInfo(
+                    selector=device.selector,
                     name=device.name,
-                    paired=device.paired,
+                    volume=device.volume,
+                    muted=device.muted,
+                    bluetooth=device.bluetooth,
                     connected=device.connected,
                 )
-                for device in current.devices
+                for device in current.output_devices
             ),
-            connected_device=connected_info,
-            input_source=current.input_source,
             default_sink=current.default_sink,
+            output_volume=current.output_volume,
+            output_muted=current.output_muted,
             output_ready=current.output_ready,
             operation=current.operation,
             error=current.error,
@@ -725,15 +733,45 @@ class LumiStripeRuntime:
         except BluetoothCommandError as exc:
             raise RuntimeCommandError(str(exc)) from exc
 
-    def connect_bluetooth_device(self, address: str) -> BluetoothStatusResponse:
+    def connect_bluetooth_device(
+        self, address: str, role: str | None = None
+    ) -> BluetoothStatusResponse:
         try:
-            return self._bluetooth_status_response(self._bluetooth.connect(address))
+            return self._bluetooth_status_response(self._bluetooth.connect(address, role))
         except BluetoothCommandError as exc:
             raise RuntimeCommandError(str(exc)) from exc
 
     def forget_bluetooth_device(self, address: str) -> BluetoothStatusResponse:
         try:
             return self._bluetooth_status_response(self._bluetooth.forget(address))
+        except BluetoothCommandError as exc:
+            raise RuntimeCommandError(str(exc)) from exc
+
+    def set_audio_output(self, selector: str) -> BluetoothStatusResponse:
+        try:
+            return self._bluetooth_status_response(
+                self._bluetooth.set_default_sink(selector)
+            )
+        except BluetoothCommandError as exc:
+            raise RuntimeCommandError(str(exc)) from exc
+
+    def set_audio_output_volume(
+        self, selector: str, volume: float
+    ) -> BluetoothStatusResponse:
+        try:
+            return self._bluetooth_status_response(
+                self._bluetooth.set_output_volume(selector, volume)
+            )
+        except BluetoothCommandError as exc:
+            raise RuntimeCommandError(str(exc)) from exc
+
+    def set_audio_output_mute(
+        self, selector: str, muted: bool
+    ) -> BluetoothStatusResponse:
+        try:
+            return self._bluetooth_status_response(
+                self._bluetooth.set_output_mute(selector, muted)
+            )
         except BluetoothCommandError as exc:
             raise RuntimeCommandError(str(exc)) from exc
 
@@ -1440,7 +1478,7 @@ class LumiStripeRuntime:
             self._audio_status = (
                 "Bluetooth is connected but its PipeWire input is not ready."
                 if bluetooth.connected_device is not None
-                else "Connect a phone to the LumiStripe Bluetooth receiver."
+                else "Connect a Bluetooth audio source to LumiStripe."
             )
             self._audio_monitor_error = bluetooth.error
             return
@@ -1488,7 +1526,7 @@ class LumiStripeRuntime:
         device = status.connected_device
         source = status.input_source
         if device is None or source is None:
-            raise BluetoothCommandError("the connected phone has no PipeWire audio source")
+            raise BluetoothCommandError("the connected Bluetooth input has no PipeWire audio source")
         selector = capture_device_selector(list_input_device_details())
         previous_source = self._bluetooth.default_source()
         self._bluetooth.set_default_source(source)

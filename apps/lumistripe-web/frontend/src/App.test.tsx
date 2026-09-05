@@ -280,9 +280,9 @@ describe("App", () => {
     await user.click(screen.getByRole("link", { name: "Setup" }))
     const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
     await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
-    await user.click(await screen.findByRole("combobox", { name: "Input device" }))
+    await user.click(await screen.findByRole("combobox", { name: "Microphone input device" }))
     await user.click(await screen.findByRole("option", { name: "Built-in Mic" }))
-    await user.click(screen.getByRole("button", { name: "Save input device" }))
+    await user.click(screen.getByRole("button", { name: "Save microphone input" }))
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       "/api/audio/device",

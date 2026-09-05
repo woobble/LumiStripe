@@ -36,7 +36,9 @@ The HTTPS certificate is generated with mkcert. Trust the generated
 `rootCA.pem` (the installer prints its path) on each phone or PC that opens
 the dashboard. Pair a phone from **Setup → Audio**, then choose the Pi as the
 phone's audio output. The incoming stream is sent to the Pi's
-configured physical audio sink and analyzed for the music-reactive animation.
+configured audio output (including a Bluetooth speaker) and analyzed for the
+music-reactive animation. The Audio setup page separates input sources from
+output devices and shows the role of each Bluetooth connection.
 
 After installing a new revision, update the checkout and run:
 

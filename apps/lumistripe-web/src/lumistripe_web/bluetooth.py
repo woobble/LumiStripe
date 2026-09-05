@@ -41,6 +41,19 @@ class BluetoothDevice:
     name: str
     paired: bool = False
     connected: bool = False
+    # Roles are relative to the Pi: an advertised Audio Source is an input
+    # into LumiStripe, while an advertised Audio Sink is an output from it.
+    roles: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class AudioOutputDevice:
+    selector: str
+    name: str
+    volume: float | None = None
+    muted: bool = False
+    bluetooth: bool = False
+    connected: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,16 +63,21 @@ class BluetoothStatus:
     adapter_alias: str | None = None
     scanning: bool = False
     devices: tuple[BluetoothDevice, ...] = ()
+    connected_inputs: tuple[BluetoothDevice, ...] = ()
+    connected_outputs: tuple[BluetoothDevice, ...] = ()
     connected_device: BluetoothDevice | None = None
     input_source: str | None = None
+    output_devices: tuple[AudioOutputDevice, ...] = ()
     default_sink: str | None = None
+    output_volume: float | None = None
+    output_muted: bool = False
     output_ready: bool = False
     operation: str | None = None
     error: str | None = None
 
     @property
     def streaming(self) -> bool:
-        return self.connected_device is not None and self.input_source is not None
+        return bool(self.input_source) and bool(self.connected_inputs or self.connected_device)
 
 
 Runner = Callable[[tuple[str, ...], float], str]
@@ -73,7 +91,7 @@ class BluetoothManager:
     incoming A2DP stream to the configured default speaker sink and exposes a
     monitor source. LumiStripe selects that monitor as its analysis input by
     temporarily making it the default capture source for the PipeWire/Pulse
-    client used by sounddevice. Some WirePlumber versions expose the phone
+    client used by sounddevice. Some WirePlumber versions expose the Bluetooth input
     only as an active ``bluez_input`` stream, not as a Pulse source row; in
     that case the default sink monitor is used as the analysis input.
 
@@ -157,15 +175,67 @@ class BluetoothManager:
         self._start_operation(f"pairing:{normalized}", lambda: self._pair(normalized))
         return self.status()
 
-    def connect(self, address: str) -> BluetoothStatus:
+    def connect(self, address: str, role: str | None = None) -> BluetoothStatus:
         normalized = _validate_address(address)
-        self._start_operation(f"connecting:{normalized}", lambda: self._connect(normalized))
+        self._start_operation(
+            f"connecting:{normalized}",
+            lambda: self._connect(normalized, role),
+        )
         return self.status()
 
     def forget(self, address: str) -> BluetoothStatus:
         normalized = _validate_address(address)
         self._start_operation(f"forgetting:{normalized}", lambda: self._forget(normalized))
         return self.status()
+
+    def set_default_sink(self, sink: str) -> BluetoothStatus:
+        if not self.enabled:
+            raise BluetoothCommandError("Audio outputs are only available in hardware mode.")
+        normalized = _validate_selector(sink)
+        self._run(("pactl", "set-default-sink", normalized), timeout=2.0)
+        self._move_sink_inputs(normalized)
+        return self.refresh()
+
+    def set_output_volume(self, sink: str, volume: float) -> BluetoothStatus:
+        if not self.enabled:
+            raise BluetoothCommandError("Audio outputs are only available in hardware mode.")
+        normalized = _validate_selector(sink)
+        if not 0.0 <= volume <= 1.0:
+            raise BluetoothCommandError("Output volume must be between 0 and 1")
+        self._run(
+            ("pactl", "set-sink-volume", normalized, f"{round(volume * 100)}%"),
+            timeout=2.0,
+        )
+        return self.refresh()
+
+    def set_output_mute(self, sink: str, muted: bool) -> BluetoothStatus:
+        if not self.enabled:
+            raise BluetoothCommandError("Audio outputs are only available in hardware mode.")
+        normalized = _validate_selector(sink)
+        self._run(
+            ("pactl", "set-sink-mute", normalized, "1" if muted else "0"),
+            timeout=2.0,
+        )
+        return self.refresh()
+
+    def _move_sink_inputs(self, sink: str) -> None:
+        """Move currently playing streams when the output is changed."""
+        try:
+            inputs = self._run(("pactl", "list", "short", "sink-inputs"), timeout=2.0)
+        except BluetoothCommandError as exc:
+            logger.debug("could not inspect active audio streams: %s", exc)
+            return
+        for line in inputs.splitlines():
+            fields = line.split()
+            if not fields or not fields[0].isdigit():
+                continue
+            try:
+                self._run(
+                    ("pactl", "move-sink-input", fields[0], sink),
+                    timeout=2.0,
+                )
+            except BluetoothCommandError as exc:
+                logger.warning("could not move audio stream %s to %s: %s", fields[0], sink, exc)
 
     def default_source(self) -> str | None:
         try:
@@ -234,15 +304,26 @@ class BluetoothManager:
                     scanning=_parse_bool_property(controller_output, "Discovering")
                     or self._operation == "scanning",
                     devices=previous.devices,
+                    connected_inputs=previous.connected_inputs,
+                    connected_outputs=previous.connected_outputs,
                     connected_device=previous.connected_device,
                     input_source=previous.input_source,
+                    output_devices=previous.output_devices,
                     default_sink=previous.default_sink,
+                    output_volume=previous.output_volume,
+                    output_muted=previous.output_muted,
                     output_ready=previous.output_ready,
                     operation=self._operation,
                     error=str(exc),
                 )
             )
             return
+
+        try:
+            sink_details = self._run(("pactl", "list", "sinks"), timeout=2.0)
+        except BluetoothCommandError as exc:
+            logger.debug("could not inspect detailed audio outputs: %s", exc)
+            sink_details = ""
 
         # On current Raspberry Pi OS/WirePlumber combinations an A2DP
         # receiver can be shown by wpctl as an active bluez_input stream while
@@ -258,28 +339,57 @@ class BluetoothManager:
         all_devices = _parse_devices(devices_output)
         connected = {device.address.casefold() for device in _parse_devices(connected_output)}
         paired = {device.address.casefold() for device in _parse_devices(paired_output)}
-        devices = tuple(
-            BluetoothDevice(
-                address=device.address,
-                name=device.name,
-                paired=device.address.casefold() in paired,
-                connected=device.address.casefold() in connected,
+        previous_roles = {
+            device.address.casefold(): device.roles for device in self.status().devices
+        }
+        devices_list: list[BluetoothDevice] = []
+        for device in all_devices:
+            address_key = device.address.casefold()
+            roles = _parse_bluetooth_roles(self._device_info(device.address))
+            if not roles:
+                roles = previous_roles.get(address_key, ())
+            if _contains_bluetooth_token(sinks, device.address):
+                roles = _merge_roles(roles, ("output",))
+            if _contains_bluetooth_token(sources, device.address) or _has_active_bluetooth_stream(
+                stream_status, device.address
+            ):
+                roles = _merge_roles(roles, ("input",))
+            devices_list.append(
+                BluetoothDevice(
+                    address=device.address,
+                    name=device.name,
+                    paired=address_key in paired,
+                    connected=address_key in connected,
+                    roles=roles,
+                )
             )
-            for device in all_devices
+        devices = tuple(devices_list)
+        connected_inputs = tuple(
+            device for device in devices if device.connected and "input" in device.roles
         )
-        connected_device = next((device for device in devices if device.connected), None)
-        input_source = (
-            _find_bluetooth_source(sources, connected_device.address)
-            if connected_device is not None
-            else None
+        connected_outputs = tuple(
+            device for device in devices if device.connected and "output" in device.roles
+        )
+        connected_device = next(
+            (device for device in connected_inputs),
+            next((device for device in devices if device.connected), None),
         )
         default_sink = _parse_info_value(info, "Default Sink")
-        if (
-            input_source is None
-            and connected_device is not None
-            and _has_active_bluetooth_stream(stream_status, connected_device.address)
-        ):
-            input_source = _find_sink_monitor(sources, default_sink)
+        input_source = None
+        for input_device in connected_inputs:
+            input_source = _find_bluetooth_source(sources, input_device.address)
+            if (
+                input_source is None
+                and _has_active_bluetooth_stream(stream_status, input_device.address)
+            ):
+                input_source = _find_sink_monitor(sources, default_sink)
+            if input_source is not None:
+                break
+        output_devices = _parse_output_devices(sinks, sink_details, devices)
+        default_output = next(
+            (device for device in output_devices if device.selector == default_sink),
+            None,
+        )
         status = BluetoothStatus(
             available=True,
             powered=_parse_bool_property(controller_output, "Powered"),
@@ -287,14 +397,26 @@ class BluetoothManager:
             scanning=_parse_bool_property(controller_output, "Discovering")
             or self._operation == "scanning",
             devices=devices,
+            connected_inputs=connected_inputs,
+            connected_outputs=connected_outputs,
             connected_device=connected_device,
             input_source=input_source,
+            output_devices=output_devices,
             default_sink=default_sink,
-            output_ready=bool(default_sink) and bool(sinks.strip()),
+            output_volume=default_output.volume if default_output is not None else None,
+            output_muted=default_output.muted if default_output is not None else False,
+            output_ready=bool(default_sink) and bool(output_devices),
             operation=self._operation,
             error=self._operation_error,
         )
         self._set_status(status)
+
+    def _device_info(self, address: str) -> str:
+        try:
+            return self._run(("bluetoothctl", "info", address), timeout=2.0)
+        except BluetoothCommandError as exc:
+            logger.debug("could not inspect Bluetooth device %s: %s", address, exc)
+            return ""
 
     def _scan(self) -> None:
         self._run(("bluetoothctl", "power", "on"), timeout=5.0)
@@ -315,7 +437,7 @@ class BluetoothManager:
         # A command-line command puts bluetoothctl into non-interactive mode,
         # where BlueZ intentionally skips registering its --agent handler.
         # Keep the interactive bluetoothctl session alive for the whole
-        # pairing transaction. The `auto` agent accepts the phone's numeric
+        # pairing transaction. The `auto` agent accepts the device's numeric
         # confirmation/authorization requests without a terminal prompt.
         script = "\n".join(
             (
@@ -335,13 +457,30 @@ class BluetoothManager:
         trust_output = self._run(("bluetoothctl", "trust", address), timeout=8.0)
         _raise_for_bluetooth_failure(trust_output)
 
-    def _connect(self, address: str) -> None:
+    def _connect(self, address: str, role: str | None = None) -> None:
         self._run(("bluetoothctl", "power", "on"), timeout=5.0)
-        # The phone advertises itself as an A2DP source. Connecting without a
-        # profile asks BlueZ to try every advertised service (HFP, AVRCP,
-        # networking, ...), and a failure in one of those can mask A2DP.
+        device = next(
+            (
+                item
+                for item in self.status().devices
+                if item.address.casefold() == address.casefold()
+            ),
+            None,
+        )
+        selected_role = role or (
+            "output"
+            if device is not None and "output" in device.roles
+            else "input"
+        )
+        if selected_role not in {"input", "output"}:
+            raise BluetoothCommandError("Bluetooth role must be input or output")
+        profile = "a2dp-sink" if selected_role == "output" else "a2dp-source"
+        # Connecting to a specific A2DP profile avoids unrelated HFP, AVRCP,
+        # or networking services masking the audio connection. A remote
+        # Audio Sink is a speaker for the Pi; a remote Audio Source is a
+        # phone or other device sending music into the Pi.
         output = self._run(
-            ("bluetoothctl", "connect", address, "a2dp-source"), timeout=18.0
+            ("bluetoothctl", "connect", address, profile), timeout=18.0
         )
         _raise_for_bluetooth_failure(output)
 
@@ -424,6 +563,102 @@ def _validate_alias(alias: str) -> str:
     return normalized
 
 
+def _validate_selector(selector: str) -> str:
+    normalized = selector.strip()
+    if not normalized or len(normalized) > 256 or any(char.isspace() for char in normalized):
+        raise BluetoothCommandError("Audio output selector is invalid")
+    return normalized
+
+
+def _parse_bluetooth_roles(output: str) -> tuple[str, ...]:
+    roles: set[str] = set()
+    for line in output.splitlines():
+        lowered = line.casefold()
+        if re.search(r"\baudio source\b", lowered):
+            roles.add("input")
+        if re.search(r"\baudio sink\b", lowered):
+            roles.add("output")
+    return tuple(role for role in ("input", "output") if role in roles)
+
+
+def _merge_roles(current: Sequence[str], additional: Sequence[str]) -> tuple[str, ...]:
+    roles = set(current)
+    roles.update(additional)
+    return tuple(role for role in ("input", "output") if role in roles)
+
+
+def _contains_bluetooth_token(output: str, address: str) -> bool:
+    return address.replace(":", "_").casefold() in output.casefold()
+
+
+def _bluetooth_address_from_node(node: str) -> str | None:
+    match = re.search(
+        r"bluez_(?:input|output)\.([0-9a-f]{2}(?:_[0-9a-f]{2}){5})(?:[._]|$)",
+        node,
+        re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    return match.group(1).replace("_", ":").upper()
+
+
+def _parse_sink_details(output: str) -> dict[str, tuple[str | None, float | None, bool]]:
+    details: dict[str, tuple[str | None, float | None, bool]] = {}
+    blocks = re.split(r"(?=^Sink #)", output, flags=re.MULTILINE)
+    for block in blocks:
+        selector = _parse_info_value(block, "Name")
+        if not selector:
+            continue
+        description = _parse_info_value(block, "Description")
+        muted = _parse_bool_property(block, "Mute")
+        volume: float | None = None
+        for line in block.splitlines():
+            if not line.strip().casefold().startswith("volume:"):
+                continue
+            match = re.search(r"/\s*([0-9]+(?:\.[0-9]+)?)\s*%", line)
+            if match is not None:
+                volume = max(0.0, min(1.0, float(match.group(1)) / 100.0))
+            break
+        details[selector.casefold()] = (description, volume, muted)
+    return details
+
+
+def _parse_output_devices(
+    short_output: str,
+    detailed_output: str,
+    bluetooth_devices: Sequence[BluetoothDevice],
+) -> tuple[AudioOutputDevice, ...]:
+    details = _parse_sink_details(detailed_output)
+    names = {device.address.casefold(): device.name for device in bluetooth_devices}
+    outputs: list[AudioOutputDevice] = []
+    for line in short_output.splitlines():
+        fields = line.split()
+        if len(fields) < 2:
+            continue
+        selector = fields[1]
+        description, volume, muted = details.get(selector.casefold(), (None, None, False))
+        address = _bluetooth_address_from_node(selector)
+        is_bluetooth = address is not None
+        name = description or selector
+        if address is not None:
+            name = names.get(address.casefold(), name)
+        outputs.append(
+            AudioOutputDevice(
+                selector=selector,
+                name=name,
+                volume=volume,
+                muted=muted,
+                bluetooth=is_bluetooth,
+                connected=(
+                    any(device.address.casefold() == address.casefold() and device.connected for device in bluetooth_devices)
+                    if address is not None
+                    else True
+                ),
+            )
+        )
+    return tuple(outputs)
+
+
 def _parse_devices(output: str) -> tuple[BluetoothDevice, ...]:
     devices: list[BluetoothDevice] = []
     seen: set[str] = set()
@@ -477,10 +712,10 @@ def _find_bluetooth_source(output: str, address: str) -> str | None:
 
 
 def _has_active_bluetooth_stream(output: str, address: str) -> bool:
-    """Return whether wpctl reports an active media stream for the phone."""
+    """Return whether wpctl reports an active incoming stream for the Pi."""
     token = address.replace(":", "_").casefold()
     stream_pattern = re.compile(
-        rf"\bbluez_(?:input|output)\.{re.escape(token)}(?:[._\s]|$)",
+        rf"\bbluez_input\.{re.escape(token)}(?:[._\s]|$)",
         re.IGNORECASE,
     )
     lines = output.splitlines()
@@ -536,9 +771,14 @@ def _with_operation(
         adapter_alias=status.adapter_alias,
         scanning=status.scanning or operation == "scanning",
         devices=status.devices,
+        connected_inputs=status.connected_inputs,
+        connected_outputs=status.connected_outputs,
         connected_device=status.connected_device,
         input_source=status.input_source,
+        output_devices=status.output_devices,
         default_sink=status.default_sink,
+        output_volume=status.output_volume,
+        output_muted=status.output_muted,
         output_ready=status.output_ready,
         operation=operation,
         error=error,
@@ -707,6 +947,7 @@ def _clean_command_output(output: str) -> str:
 
 __all__ = [
     "BLUETOOTH_ADDRESS",
+    "AudioOutputDevice",
     "BluetoothCommandError",
     "BluetoothDevice",
     "BluetoothManager",

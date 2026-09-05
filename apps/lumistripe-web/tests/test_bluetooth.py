@@ -30,6 +30,8 @@ from lumistripe_web.settings import AudioTuningProfile
 
 PHONE_ADDRESS = "AA:BB:CC:DD:EE:FF"
 PHONE_SOURCE = "bluez_output.AA_BB_CC_DD_EE_FF.1.monitor"
+SPEAKER_ADDRESS = "11:22:33:44:55:66"
+SPEAKER_SINK = "bluez_output.11_22_33_44_55_66.1"
 
 
 def _pipewire_runner(command: tuple[str, ...], timeout: float) -> str:
@@ -42,13 +44,32 @@ def _pipewire_runner(command: tuple[str, ...], timeout: float) -> str:
         return f"Device {PHONE_ADDRESS} Party iPhone"
     if command == ("bluetoothctl", "devices", "Paired"):
         return f"Device {PHONE_ADDRESS} Party iPhone"
+    if command == ("bluetoothctl", "info", PHONE_ADDRESS):
+        return f"Device {PHONE_ADDRESS}\n\tName: Party iPhone\n\tUUID: Audio Source (0000110a-0000-1000-8000-00805f9b34fb)"
     if command == ("pactl", "list", "short", "sources"):
         return f"42 {PHONE_SOURCE} PipeWire s16le 2ch 48000Hz SUSPENDED"
     if command == ("pactl", "list", "short", "sinks"):
         return "43 alsa_output.usb-speakers PipeWire s16le 2ch 48000Hz RUNNING"
+    if command == ("pactl", "list", "short", "sink-inputs"):
+        return ""
+    if command == ("pactl", "list", "sinks"):
+        return (
+            "Sink #43\n"
+            "\tName: alsa_output.usb-speakers\n"
+            "\tDescription: USB Speakers\n"
+            "\tMute: no\n"
+            "\tVolume: front-left: 65536 / 100% / 0.00 dB, front-right: 65536 / 100% / 0.00 dB"
+        )
     if command == ("pactl", "info"):
         return "Default Sink: alsa_output.usb-speakers\nDefault Source: alsa_input.usb-mic"
     if command[:2] == ("pactl", "set-default-source"):
+        return ""
+    if command[:2] in {
+        ("pactl", "set-default-sink"),
+        ("pactl", "set-sink-volume"),
+        ("pactl", "set-sink-mute"),
+        ("pactl", "move-sink-input"),
+    }:
         return ""
     if command[:2] == ("bluetoothctl", "connect"):
         return "Connection successful"
@@ -82,9 +103,14 @@ def test_bluetooth_status_finds_phone_monitor_and_output() -> None:
         name="Party iPhone",
         paired=True,
         connected=True,
+        roles=("input",),
     )
     assert status.input_source == PHONE_SOURCE
     assert status.default_sink == "alsa_output.usb-speakers"
+    assert status.connected_inputs[0].name == "Party iPhone"
+    assert status.connected_outputs == ()
+    assert status.output_devices[0].name == "USB Speakers"
+    assert status.output_volume == 1.0
     assert status.output_ready is True
 
 
@@ -115,6 +141,97 @@ def test_bluetooth_status_falls_back_to_sink_monitor_for_active_wpctl_stream() -
 
     assert status.streaming is True
     assert status.input_source == "alsa_output.usb-speakers.monitor"
+
+
+def test_bluetooth_status_separates_phone_input_and_speaker_output() -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def runner(command: tuple[str, ...], timeout: float) -> str:
+        del timeout
+        commands.append(command)
+        if command == ("bluetoothctl", "show"):
+            return "Controller 00:11:22:33:44:55 Pi\n\tAlias: LumiStripe\n\tPowered: yes"
+        if command == ("bluetoothctl", "devices"):
+            return (
+                f"Device {PHONE_ADDRESS} Party iPhone\n"
+                f"Device {SPEAKER_ADDRESS} SONY Speaker"
+            )
+        if command in {
+            ("bluetoothctl", "devices", "Connected"),
+            ("bluetoothctl", "devices", "Paired"),
+        }:
+            return (
+                f"Device {PHONE_ADDRESS} Party iPhone\n"
+                f"Device {SPEAKER_ADDRESS} SONY Speaker"
+            )
+        if command == ("bluetoothctl", "info", PHONE_ADDRESS):
+            return "UUID: Audio Source (0000110a-0000-1000-8000-00805f9b34fb)"
+        if command == ("bluetoothctl", "info", SPEAKER_ADDRESS):
+            return "UUID: Audio Sink (0000110b-0000-1000-8000-00805f9b34fb)"
+        if command == ("pactl", "list", "short", "sources"):
+            return "42 alsa_output.usb-speakers.monitor PipeWire s16le 2ch 48000Hz RUNNING"
+        if command == ("pactl", "list", "short", "sinks"):
+            return f"80 {SPEAKER_SINK} PipeWire s16le 2ch 48000Hz RUNNING\n43 alsa_output.usb-speakers PipeWire s16le 2ch 48000Hz IDLE"
+        if command == ("pactl", "list", "short", "sink-inputs"):
+            return ""
+        if command == ("pactl", "list", "sinks"):
+            return (
+                f"Sink #80\n\tName: {SPEAKER_SINK}\n\tDescription: SONY Speaker\n"
+                "\tMute: no\n\tVolume: front-left: 26214 / 40% / -23.88 dB\n"
+                "Sink #43\n\tName: alsa_output.usb-speakers\n\tDescription: USB Speakers\n"
+                "\tMute: no\n\tVolume: front-left: 65536 / 100% / 0.00 dB"
+            )
+        if command == ("pactl", "info"):
+            return f"Default Sink: {SPEAKER_SINK}\nDefault Source: alsa_input.usb-mic"
+        if command == ("wpctl", "status"):
+            return (
+                "Audio\n"
+                " └─ Streams:\n"
+                f"        82. bluez_input.{PHONE_ADDRESS.replace(':', '_')}.2\n"
+                f"             85. output_FL > {SPEAKER_SINK}:playback_FL [active]"
+            )
+        if command[:2] in {
+            ("pactl", "set-default-sink"),
+            ("pactl", "set-sink-volume"),
+            ("pactl", "set-sink-mute"),
+            ("pactl", "move-sink-input"),
+        }:
+            return ""
+        if command == ("bluetoothctl", "power", "on"):
+            return "Changing power on succeeded"
+        if command[:2] == ("bluetoothctl", "connect"):
+            return "Connection successful"
+        raise AssertionError(f"unexpected command: {command}")
+
+    manager = BluetoothManager(
+        runner=runner,
+        command_exists=lambda command: command in {"bluetoothctl", "pactl", "wpctl"},
+    )
+
+    status = manager.refresh()
+
+    assert [device.name for device in status.connected_inputs] == ["Party iPhone"]
+    assert [device.name for device in status.connected_outputs] == ["SONY Speaker"]
+    assert status.input_source == "alsa_output.usb-speakers.monitor"
+    assert status.default_sink == SPEAKER_SINK
+    assert status.output_volume == 0.4
+    assert status.output_devices[0].name == "SONY Speaker"
+    assert status.output_devices[0].bluetooth is True
+
+    manager.set_default_sink(SPEAKER_SINK)
+    assert ("pactl", "set-default-sink", SPEAKER_SINK) in commands
+
+    manager.connect(SPEAKER_ADDRESS)
+    deadline = time.monotonic() + 1.0
+    while manager.status().operation is not None:
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    assert ("bluetoothctl", "connect", SPEAKER_ADDRESS, "a2dp-sink") in commands
+
+    manager.set_output_volume(SPEAKER_SINK, 1.0)
+    manager.set_output_mute(SPEAKER_SINK, False)
+    assert ("pactl", "set-sink-volume", SPEAKER_SINK, "100%") in commands
+    assert ("pactl", "set-sink-mute", SPEAKER_SINK, "0") in commands
 
 
 def test_bluetooth_status_uses_current_bluetoothctl_filter_command() -> None:

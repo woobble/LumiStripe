@@ -32,6 +32,9 @@ from .models import (
     AudioCalibrationSessionResponse,
     AudioCalibrationStartRequest,
     AudioDeviceRequest,
+    AudioOutputMuteRequest,
+    AudioOutputSelectionRequest,
+    AudioOutputVolumeRequest,
     AudioResetRequest,
     AudioSettingsRequest,
     AudioSettingsResponse,
@@ -341,7 +344,9 @@ async def bluetooth_connect(
     request: Request, body: BluetoothDeviceRequest
 ) -> BluetoothStatusResponse:
     try:
-        return _runtime_from_request(request).connect_bluetooth_device(body.address)
+        return _runtime_from_request(request).connect_bluetooth_device(
+            body.address, body.role
+        )
     except RuntimeCommandError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -352,6 +357,40 @@ async def bluetooth_forget(
 ) -> BluetoothStatusResponse:
     try:
         return _runtime_from_request(request).forget_bluetooth_device(body.address)
+    except RuntimeCommandError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.put("/api/audio/output", response_model=BluetoothStatusResponse)
+async def select_audio_output(
+    request: Request, body: AudioOutputSelectionRequest
+) -> BluetoothStatusResponse:
+    try:
+        return _runtime_from_request(request).set_audio_output(body.selector)
+    except RuntimeCommandError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.put("/api/audio/output/volume", response_model=BluetoothStatusResponse)
+async def set_audio_output_volume(
+    request: Request, body: AudioOutputVolumeRequest
+) -> BluetoothStatusResponse:
+    try:
+        return _runtime_from_request(request).set_audio_output_volume(
+            body.selector, body.volume
+        )
+    except RuntimeCommandError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.put("/api/audio/output/mute", response_model=BluetoothStatusResponse)
+async def set_audio_output_mute(
+    request: Request, body: AudioOutputMuteRequest
+) -> BluetoothStatusResponse:
+    try:
+        return _runtime_from_request(request).set_audio_output_mute(
+            body.selector, body.muted
+        )
     except RuntimeCommandError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 

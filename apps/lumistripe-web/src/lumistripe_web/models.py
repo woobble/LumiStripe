@@ -216,6 +216,17 @@ class AudioDeviceOption(BaseModel):
     settings: AudioTuningValues
 
 
+class AudioOutputDeviceInfo(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    selector: str
+    name: str
+    volume: float | None = Field(default=None, ge=0.0, le=1.0)
+    muted: bool = False
+    bluetooth: bool = False
+    connected: bool = True
+
+
 class BluetoothDeviceInfo(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -223,6 +234,7 @@ class BluetoothDeviceInfo(BaseModel):
     name: str
     paired: bool = False
     connected: bool = False
+    roles: tuple[Literal["input", "output"], ...] = ()
 
 
 class BluetoothStatusResponse(BaseModel):
@@ -234,9 +246,14 @@ class BluetoothStatusResponse(BaseModel):
     scanning: bool = False
     streaming: bool = False
     devices: tuple[BluetoothDeviceInfo, ...] = ()
+    connected_inputs: tuple[BluetoothDeviceInfo, ...] = ()
+    connected_outputs: tuple[BluetoothDeviceInfo, ...] = ()
     connected_device: BluetoothDeviceInfo | None = None
     input_source: str | None = None
+    output_devices: tuple[AudioOutputDeviceInfo, ...] = ()
     default_sink: str | None = None
+    output_volume: float | None = Field(default=None, ge=0.0, le=1.0)
+    output_muted: bool = False
     output_ready: bool = False
     operation: str | None = None
     error: str | None = None
@@ -314,6 +331,21 @@ class AudioSourceRequest(BaseModel):
 
 class BluetoothDeviceRequest(BaseModel):
     address: str = Field(min_length=17, max_length=17)
+    role: Literal["input", "output"] | None = None
+
+
+class AudioOutputSelectionRequest(BaseModel):
+    selector: str = Field(min_length=1, max_length=256)
+
+
+class AudioOutputVolumeRequest(BaseModel):
+    selector: str = Field(min_length=1, max_length=256)
+    volume: float = Field(ge=0.0, le=1.0)
+
+
+class AudioOutputMuteRequest(BaseModel):
+    selector: str = Field(min_length=1, max_length=256)
+    muted: bool
 
 
 class BluetoothPowerRequest(BaseModel):

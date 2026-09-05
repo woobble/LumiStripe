@@ -1,12 +1,13 @@
 # Raspberry Pi audio setup
 
-The LumiStripe web runtime can receive music from a phone over Bluetooth
+The LumiStripe web runtime can receive music from a phone or other source over Bluetooth
 while the Pi sends the same stream to the wagon sound system and analyzes it
 for reactive animations.
 
 The supported target is Raspberry Pi OS Trixie using PipeWire/WirePlumber.
-The Pi should be connected to the sound system over USB, HDMI, or a wired
-audio output. Bluetooth speakers are not the target for this first setup.
+The Pi can send audio to USB, HDMI, wired, or Bluetooth speaker outputs. It
+can also receive music from phones and other Bluetooth audio sources; the
+same routed stream drives the music-reactive animation.
 
 ## One-command installation
 
@@ -77,10 +78,10 @@ systemctl --user restart wireplumber pipewire pipewire-pulse
 ```
 
 The rule disables graphical-session seat ownership for this dedicated headless
-dashboard user, enables the A2DP receiver role, reconnects trusted phones, and
-keeps their stream as playback audio. That lets the Pi continue routing music
-to its physical sound-system sink while LumiStripe reads the corresponding
-PipeWire monitor.
+dashboard user, enables both A2DP receiver and transmitter roles, reconnects
+trusted devices, and keeps received streams as playback audio. That lets the
+Pi route phone music to a wired or Bluetooth speaker while LumiStripe reads the
+corresponding PipeWire monitor.
 
 Choose the physical output sink once. `wpctl status` lists the available sink
 IDs; select the USB/HDMI/analog output that feeds the sound system:
@@ -105,11 +106,11 @@ versions the phone can instead appear in `wpctl status` as an active
 `pactl`; LumiStripe detects that layout and uses the physical sink monitor for
 animation analysis without changing the speaker output.
 
-## Pair a phone
+## Pair a Bluetooth device
 
 Start the LumiStripe web service, open Setup → Audio, and press **Scan for
-phones**. Keep the phone’s Bluetooth settings page open, then press **Pair**
-beside the device. BlueZ stores the trusted device, so later party sessions can
+devices**. Keep the device’s Bluetooth settings page open, then press **Pair**
+beside it. BlueZ stores the trusted device, so later party sessions can
 reconnect automatically.
 
 For a service installation, keep the existing `audio` supplementary group in

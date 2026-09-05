@@ -138,11 +138,23 @@ export interface AudioDeviceOption {
   settings: AudioTuningValues
 }
 
+export type BluetoothDeviceRole = "input" | "output"
+
+export interface AudioOutputDeviceInfo {
+  selector: string
+  name: string
+  volume: number | null
+  muted: boolean
+  bluetooth: boolean
+  connected: boolean
+}
+
 export interface BluetoothDeviceInfo {
   address: string
   name: string
   paired: boolean
   connected: boolean
+  roles: BluetoothDeviceRole[]
 }
 
 export interface BluetoothStatusResponse {
@@ -152,9 +164,14 @@ export interface BluetoothStatusResponse {
   scanning: boolean
   streaming: boolean
   devices: BluetoothDeviceInfo[]
+  connected_inputs: BluetoothDeviceInfo[]
+  connected_outputs: BluetoothDeviceInfo[]
   connected_device: BluetoothDeviceInfo | null
   input_source: string | null
+  output_devices: AudioOutputDeviceInfo[]
   default_sink: string | null
+  output_volume: number | null
+  output_muted: boolean
   output_ready: boolean
   operation: string | null
   error: string | null
@@ -254,8 +271,9 @@ const dashboardStateSchema = z.object({
 }).passthrough() as unknown as z.ZodType<DashboardState>
 const animationListSchema = z.object({ items: z.array(z.object({ name: z.string(), mood: z.string(), dynamic_safe: z.boolean() })) }) as unknown as z.ZodType<AnimationList>
 const accessStatusSchema = z.object({ required: z.boolean(), authenticated: z.boolean() }) as unknown as z.ZodType<AccessStatus>
-const bluetoothDeviceSchema = z.object({ address: z.string(), name: z.string(), paired: z.boolean(), connected: z.boolean() })
-const bluetoothStatusSchema = z.object({ available: z.boolean(), powered: z.boolean(), adapter_alias: z.string().nullable(), scanning: z.boolean(), streaming: z.boolean(), devices: z.array(bluetoothDeviceSchema), connected_device: bluetoothDeviceSchema.nullable(), input_source: z.string().nullable(), default_sink: z.string().nullable(), output_ready: z.boolean(), operation: z.string().nullable(), error: z.string().nullable() })
+const bluetoothDeviceSchema = z.object({ address: z.string(), name: z.string(), paired: z.boolean(), connected: z.boolean(), roles: z.array(z.enum(["input", "output"])) })
+const audioOutputDeviceSchema = z.object({ selector: z.string(), name: z.string(), volume: z.number().nullable(), muted: z.boolean(), bluetooth: z.boolean(), connected: z.boolean() })
+const bluetoothStatusSchema = z.object({ available: z.boolean(), powered: z.boolean(), adapter_alias: z.string().nullable(), scanning: z.boolean(), streaming: z.boolean(), devices: z.array(bluetoothDeviceSchema), connected_inputs: z.array(bluetoothDeviceSchema), connected_outputs: z.array(bluetoothDeviceSchema), connected_device: bluetoothDeviceSchema.nullable(), input_source: z.string().nullable(), output_devices: z.array(audioOutputDeviceSchema), default_sink: z.string().nullable(), output_volume: z.number().nullable(), output_muted: z.boolean(), output_ready: z.boolean(), operation: z.string().nullable(), error: z.string().nullable() })
 const audioSettingsSchema = z.object({ source: z.string(), active_source: z.string().optional(), monitoring: z.boolean(), active_device: z.string().nullable(), fallback_device: z.string().nullable().optional(), active_device_name: z.string().nullable(), devices: z.array(z.unknown()), settings: z.object({ target_level: z.number(), hardware_gain_target: z.number().nullable().optional() }).passthrough(), configured_noise_floor: z.number(), bluetooth: bluetoothStatusSchema.optional(), error: z.string().nullable() }).passthrough() as unknown as z.ZodType<AudioSettingsResponse>
 const audioCalibrationSchema = z.object({ session_id: z.string(), status: z.enum(["capturing", "complete"]), elapsed_seconds: z.number(), remaining_seconds: z.number(), result: z.object({ duration_seconds: z.number(), samples: z.number(), measured_floor: z.number(), measured_peak: z.number(), recommended_noise_floor: z.number(), recommended_target_level: z.number(), recommended_hardware_gain: z.number().nullable().optional(), recommended_idle_threshold_scale: z.number() }).nullable(), error: z.string().nullable() }) as z.ZodType<AudioCalibrationSessionResponse>
 const startupSettingsSchema = z.object({ restore_last_state: z.boolean(), remembered: z.object({ mode: playbackModeSchema }).passthrough() }).passthrough() as unknown as z.ZodType<StartupSettingsResponse>
@@ -365,8 +383,11 @@ export const dashboardApi = {
   setBluetoothAlias: (alias: string) => request("/api/audio/bluetooth/alias", { method: "PUT", body: JSON.stringify({ alias }) }, bluetoothStatusSchema),
   scanBluetooth: () => request("/api/audio/bluetooth/scan", { method: "POST" }, bluetoothStatusSchema),
   pairBluetooth: (address: string) => request("/api/audio/bluetooth/pair", { method: "POST", body: JSON.stringify({ address }) }, bluetoothStatusSchema),
-  connectBluetooth: (address: string) => request("/api/audio/bluetooth/connect", { method: "POST", body: JSON.stringify({ address }) }, bluetoothStatusSchema),
+  connectBluetooth: (address: string, role?: BluetoothDeviceRole) => request("/api/audio/bluetooth/connect", { method: "POST", body: JSON.stringify({ address, ...(role ? { role } : {}) }) }, bluetoothStatusSchema),
   forgetBluetooth: (address: string) => request("/api/audio/bluetooth/forget", { method: "POST", body: JSON.stringify({ address }) }, bluetoothStatusSchema),
+  setAudioOutput: (selector: string) => request("/api/audio/output", { method: "PUT", body: JSON.stringify({ selector }) }, bluetoothStatusSchema),
+  setAudioOutputVolume: (selector: string, volume: number) => request("/api/audio/output/volume", { method: "PUT", body: JSON.stringify({ selector, volume }) }, bluetoothStatusSchema),
+  setAudioOutputMute: (selector: string, muted: boolean) => request("/api/audio/output/mute", { method: "PUT", body: JSON.stringify({ selector, muted }) }, bluetoothStatusSchema),
   selectAudioDevice: (device: string) =>
     request("/api/audio/device", {
       method: "PUT",
