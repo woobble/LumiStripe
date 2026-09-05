@@ -361,6 +361,16 @@ async def bluetooth_forget(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+@router.post("/api/audio/bluetooth/disconnect", response_model=BluetoothStatusResponse)
+async def bluetooth_disconnect(
+    request: Request, body: BluetoothDeviceRequest
+) -> BluetoothStatusResponse:
+    try:
+        return _runtime_from_request(request).disconnect_bluetooth_device(body.address)
+    except RuntimeCommandError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.put("/api/audio/output", response_model=BluetoothStatusResponse)
 async def select_audio_output(
     request: Request, body: AudioOutputSelectionRequest

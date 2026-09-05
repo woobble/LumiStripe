@@ -384,6 +384,7 @@ export const dashboardApi = {
   scanBluetooth: () => request("/api/audio/bluetooth/scan", { method: "POST" }, bluetoothStatusSchema),
   pairBluetooth: (address: string) => request("/api/audio/bluetooth/pair", { method: "POST", body: JSON.stringify({ address }) }, bluetoothStatusSchema),
   connectBluetooth: (address: string, role?: BluetoothDeviceRole) => request("/api/audio/bluetooth/connect", { method: "POST", body: JSON.stringify({ address, ...(role ? { role } : {}) }) }, bluetoothStatusSchema),
+  disconnectBluetooth: (address: string) => request("/api/audio/bluetooth/disconnect", { method: "POST", body: JSON.stringify({ address }) }, bluetoothStatusSchema),
   forgetBluetooth: (address: string) => request("/api/audio/bluetooth/forget", { method: "POST", body: JSON.stringify({ address }) }, bluetoothStatusSchema),
   setAudioOutput: (selector: string) => request("/api/audio/output", { method: "PUT", body: JSON.stringify({ selector }) }, bluetoothStatusSchema),
   setAudioOutputVolume: (selector: string, volume: number) => request("/api/audio/output/volume", { method: "PUT", body: JSON.stringify({ selector, volume }) }, bluetoothStatusSchema),

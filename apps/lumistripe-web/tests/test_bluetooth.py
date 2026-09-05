@@ -73,6 +73,8 @@ def _pipewire_runner(command: tuple[str, ...], timeout: float) -> str:
         return ""
     if command[:2] == ("bluetoothctl", "connect"):
         return "Connection successful"
+    if command[:2] == ("bluetoothctl", "disconnect"):
+        return "Successful disconnected"
     if command[:2] == ("bluetoothctl", "power"):
         return "Changing power on succeeded"
     if command[:2] == ("bluetoothctl", "system-alias"):
@@ -409,6 +411,16 @@ def test_bluetooth_connect_targets_phone_a2dp_source() -> None:
         time.sleep(0.01)
 
     assert ("bluetoothctl", "connect", PHONE_ADDRESS, "a2dp-source") in commands
+    assert manager.status().error is None
+
+    manager.disconnect(PHONE_ADDRESS)
+
+    deadline = time.monotonic() + 1.0
+    while manager.status().operation is not None:
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+
+    assert ("bluetoothctl", "disconnect", PHONE_ADDRESS) in commands
     assert manager.status().error is None
 
 

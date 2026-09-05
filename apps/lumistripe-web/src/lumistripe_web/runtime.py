@@ -747,6 +747,12 @@ class LumiStripeRuntime:
         except BluetoothCommandError as exc:
             raise RuntimeCommandError(str(exc)) from exc
 
+    def disconnect_bluetooth_device(self, address: str) -> BluetoothStatusResponse:
+        try:
+            return self._bluetooth_status_response(self._bluetooth.disconnect(address))
+        except BluetoothCommandError as exc:
+            raise RuntimeCommandError(str(exc)) from exc
+
     def set_audio_output(self, selector: str) -> BluetoothStatusResponse:
         try:
             return self._bluetooth_status_response(

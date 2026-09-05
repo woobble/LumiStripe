@@ -188,6 +188,14 @@ class BluetoothManager:
         self._start_operation(f"forgetting:{normalized}", lambda: self._forget(normalized))
         return self.status()
 
+    def disconnect(self, address: str) -> BluetoothStatus:
+        normalized = _validate_address(address)
+        self._start_operation(
+            f"disconnecting:{normalized}",
+            lambda: self._disconnect(normalized),
+        )
+        return self.status()
+
     def set_default_sink(self, sink: str) -> BluetoothStatus:
         if not self.enabled:
             raise BluetoothCommandError("Audio outputs are only available in hardware mode.")
@@ -486,6 +494,10 @@ class BluetoothManager:
 
     def _forget(self, address: str) -> None:
         output = self._run(("bluetoothctl", "remove", address), timeout=8.0)
+        _raise_for_bluetooth_failure(output)
+
+    def _disconnect(self, address: str) -> None:
+        output = self._run(("bluetoothctl", "disconnect", address), timeout=8.0)
         _raise_for_bluetooth_failure(output)
 
     def _start_operation(self, name: str, operation: Callable[[], None]) -> None:
