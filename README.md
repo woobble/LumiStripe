@@ -33,9 +33,9 @@ It uses the non-root account invoking `sudo`; set `LUMI_SERVICE_USER` and
 code is supplied, the installer generates one and prints it.
 
 The HTTPS certificate is generated with mkcert. Trust the generated
-`rootCA.pem` (the installer prints its path) on each iPhone or PC that opens
-the dashboard. Pair the iPhone from **Setup → Audio**, then choose the Pi from
-the iPhone audio-output picker. The incoming stream is sent to the Pi's
+`rootCA.pem` (the installer prints its path) on each phone or PC that opens
+the dashboard. Pair a phone from **Setup → Audio**, then choose the Pi as the
+phone's audio output. The incoming stream is sent to the Pi's
 configured physical audio sink and analyzed for the music-reactive animation.
 
 After installing a new revision, update the checkout and run:

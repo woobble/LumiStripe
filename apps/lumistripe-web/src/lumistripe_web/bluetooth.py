@@ -47,6 +47,7 @@ class BluetoothDevice:
 class BluetoothStatus:
     available: bool = False
     powered: bool = False
+    adapter_alias: str | None = None
     scanning: bool = False
     devices: tuple[BluetoothDevice, ...] = ()
     connected_device: BluetoothDevice | None = None
@@ -136,6 +137,21 @@ class BluetoothManager:
         self._start_operation("scanning", self._scan)
         return self.status()
 
+    def set_power(self, powered: bool) -> BluetoothStatus:
+        self._start_operation(
+            f"power:{'on' if powered else 'off'}",
+            lambda: self._set_power(powered),
+        )
+        return self.status()
+
+    def set_alias(self, alias: str) -> BluetoothStatus:
+        normalized = _validate_alias(alias)
+        self._start_operation(
+            "renaming",
+            lambda: self._set_alias(normalized),
+        )
+        return self.status()
+
     def pair(self, address: str) -> BluetoothStatus:
         normalized = _validate_address(address)
         self._start_operation(f"pairing:{normalized}", lambda: self._pair(normalized))
@@ -213,6 +229,8 @@ class BluetoothManager:
                 BluetoothStatus(
                     available=True,
                     powered=_parse_bool_property(controller_output, "Powered"),
+                    adapter_alias=_parse_info_value(controller_output, "Alias")
+                    or previous.adapter_alias,
                     scanning=_parse_bool_property(controller_output, "Discovering")
                     or self._operation == "scanning",
                     devices=previous.devices,
@@ -265,6 +283,7 @@ class BluetoothManager:
         status = BluetoothStatus(
             available=True,
             powered=_parse_bool_property(controller_output, "Powered"),
+            adapter_alias=_parse_info_value(controller_output, "Alias"),
             scanning=_parse_bool_property(controller_output, "Discovering")
             or self._operation == "scanning",
             devices=devices,
@@ -280,6 +299,17 @@ class BluetoothManager:
     def _scan(self) -> None:
         self._run(("bluetoothctl", "power", "on"), timeout=5.0)
         self._run(("bluetoothctl", "--timeout", "8", "scan", "on"), timeout=12.0)
+
+    def _set_power(self, powered: bool) -> None:
+        output = self._run(
+            ("bluetoothctl", "power", "on" if powered else "off"),
+            timeout=8.0,
+        )
+        _raise_for_bluetooth_failure(output)
+
+    def _set_alias(self, alias: str) -> None:
+        output = self._run(("bluetoothctl", "system-alias", alias), timeout=8.0)
+        _raise_for_bluetooth_failure(output)
 
     def _pair(self, address: str) -> None:
         # A command-line command puts bluetoothctl into non-interactive mode,
@@ -382,6 +412,15 @@ def _validate_address(address: str) -> str:
     normalized = address.strip().upper()
     if not BLUETOOTH_ADDRESS.fullmatch(normalized):
         raise BluetoothCommandError("Bluetooth address must look like AA:BB:CC:DD:EE:FF")
+    return normalized
+
+
+def _validate_alias(alias: str) -> str:
+    normalized = alias.strip()
+    if not normalized:
+        raise BluetoothCommandError("Bluetooth name cannot be empty")
+    if len(normalized) > 64:
+        raise BluetoothCommandError("Bluetooth name must be 64 characters or fewer")
     return normalized
 
 
@@ -494,6 +533,7 @@ def _with_operation(
     return BluetoothStatus(
         available=status.available,
         powered=status.powered,
+        adapter_alias=status.adapter_alias,
         scanning=status.scanning or operation == "scanning",
         devices=status.devices,
         connected_device=status.connected_device,

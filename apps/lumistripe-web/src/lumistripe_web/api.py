@@ -38,7 +38,9 @@ from .models import (
     AudioSourceRequest,
     AudioTelemetry,
     BlackoutRequest,
+    BluetoothAliasRequest,
     BluetoothDeviceRequest,
+    BluetoothPowerRequest,
     BluetoothStatusResponse,
     BrightnessRequest,
     CalibrationFinishRequest,
@@ -294,6 +296,26 @@ async def select_audio_source(
 @router.get("/api/audio/bluetooth", response_model=BluetoothStatusResponse)
 async def bluetooth_status(request: Request) -> BluetoothStatusResponse:
     return _runtime_from_request(request).bluetooth_status()
+
+
+@router.put("/api/audio/bluetooth/power", response_model=BluetoothStatusResponse)
+async def bluetooth_power(
+    request: Request, body: BluetoothPowerRequest
+) -> BluetoothStatusResponse:
+    try:
+        return _runtime_from_request(request).set_bluetooth_power(body.powered)
+    except RuntimeCommandError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.put("/api/audio/bluetooth/alias", response_model=BluetoothStatusResponse)
+async def bluetooth_alias(
+    request: Request, body: BluetoothAliasRequest
+) -> BluetoothStatusResponse:
+    try:
+        return _runtime_from_request(request).set_bluetooth_alias(body.alias)
+    except RuntimeCommandError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/api/audio/bluetooth/scan", response_model=BluetoothStatusResponse)

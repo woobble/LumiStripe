@@ -35,7 +35,7 @@ PHONE_SOURCE = "bluez_output.AA_BB_CC_DD_EE_FF.1.monitor"
 def _pipewire_runner(command: tuple[str, ...], timeout: float) -> str:
     del timeout
     if command == ("bluetoothctl", "show"):
-        return "Controller 00:11:22:33:44:55 Pi\n\tPowered: yes\n\tDiscovering: no"
+        return "Controller 00:11:22:33:44:55 Pi\n\tName: rpi02\n\tAlias: LumiStripe\n\tPowered: yes\n\tDiscovering: no"
     if command == ("bluetoothctl", "devices"):
         return f"Device {PHONE_ADDRESS} Party iPhone"
     if command == ("bluetoothctl", "devices", "Connected"):
@@ -54,6 +54,8 @@ def _pipewire_runner(command: tuple[str, ...], timeout: float) -> str:
         return "Connection successful"
     if command[:2] == ("bluetoothctl", "power"):
         return "Changing power on succeeded"
+    if command[:2] == ("bluetoothctl", "system-alias"):
+        return "Changing system-alias succeeded"
     if command[:2] == ("bluetoothctl", "trust"):
         return "Trust succeeded"
     if command[-2:] == ("pair", PHONE_ADDRESS):
@@ -73,6 +75,7 @@ def test_bluetooth_status_finds_phone_monitor_and_output() -> None:
 
     assert status.available is True
     assert status.powered is True
+    assert status.adapter_alias == "LumiStripe"
     assert status.streaming is True
     assert status.connected_device == BluetoothDevice(
         address=PHONE_ADDRESS,
@@ -290,6 +293,46 @@ def test_bluetooth_connect_targets_phone_a2dp_source() -> None:
 
     assert ("bluetoothctl", "connect", PHONE_ADDRESS, "a2dp-source") in commands
     assert manager.status().error is None
+
+
+def test_bluetooth_power_and_alias_operations_run_in_background() -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def runner(command: tuple[str, ...], timeout: float) -> str:
+        del timeout
+        commands.append(command)
+        return _pipewire_runner(command, timeout=0.0)
+
+    manager = BluetoothManager(
+        runner=runner,
+        command_exists=lambda command: command in {"bluetoothctl", "pactl"},
+    )
+
+    manager.set_power(False)
+    deadline = time.monotonic() + 1.0
+    while manager.status().operation is not None:
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    assert ("bluetoothctl", "power", "off") in commands
+    assert manager.status().error is None
+
+    manager.set_alias("Party Wagon")
+    deadline = time.monotonic() + 1.0
+    while manager.status().operation is not None:
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    assert ("bluetoothctl", "system-alias", "Party Wagon") in commands
+    assert manager.status().error is None
+
+
+def test_bluetooth_rejects_blank_alias() -> None:
+    manager = BluetoothManager(enabled=True)
+    try:
+        manager.set_alias("   ")
+    except BluetoothCommandError as exc:
+        assert "cannot be empty" in str(exc)
+    else:
+        raise AssertionError("blank Bluetooth name was accepted")
 
 
 def test_bluetooth_rejects_invalid_addresses() -> None:

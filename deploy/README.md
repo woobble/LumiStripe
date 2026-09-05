@@ -1,6 +1,6 @@
 # Raspberry Pi audio setup
 
-The LumiStripe web runtime can receive music from an iPhone over Bluetooth
+The LumiStripe web runtime can receive music from a phone over Bluetooth
 while the Pi sends the same stream to the wagon sound system and analyzes it
 for reactive animations.
 
@@ -40,7 +40,7 @@ images are handled with `libgpiod2` when that is the available runtime package.
 The installer needs internet access for apt, uv, Bun, mkcert, and package
 downloads. It can be run again safely after updating the checkout; existing
 pairing and TLS files are kept. The generated CA is stored at the service
-user's mkcert CA path and must be installed/trusted on each iPhone or PC that
+user's mkcert CA path and must be installed/trusted on each phone or PC that
 opens the HTTPS dashboard.
 
 ## Manual audio-stack recovery
@@ -98,18 +98,18 @@ pactl list short sinks
 pactl list short sources
 ```
 
-After an iPhone is connected, `pactl list short sources` may contain a
+After a phone is connected, `pactl list short sources` may contain a
 `bluez_output.*.monitor` or `bluez_input.*` source. On newer WirePlumber
 versions the phone can instead appear in `wpctl status` as an active
 `bluez_input.*` stream while only the physical sink's `.monitor` is listed by
 `pactl`; LumiStripe detects that layout and uses the physical sink monitor for
 animation analysis without changing the speaker output.
 
-## Pair the iPhone
+## Pair a phone
 
 Start the LumiStripe web service, open Setup → Audio, and press **Scan for
-phones**. Keep the iPhone’s Bluetooth settings page open, then press **Pair**
-beside the phone. BlueZ stores the trusted device, so later party sessions can
+phones**. Keep the phone’s Bluetooth settings page open, then press **Pair**
+beside the device. BlueZ stores the trusted device, so later party sessions can
 reconnect automatically.
 
 For a service installation, keep the existing `audio` supplementary group in
@@ -125,7 +125,7 @@ run:
 sudo bluetoothctl remove F4:39:A6:8F:81:3D
 ```
 
-On the iPhone, forget/remove the Pi from Bluetooth settings. Then scan and pair
+On the phone, forget/remove the Pi from Bluetooth settings. Then scan and pair
 again from the dashboard. The pairing operation registers BlueZ's automatic
 agent for the complete transaction and enables the controller's pairable mode.
 
@@ -142,7 +142,7 @@ dashboard.
 
 ## Troubleshooting
 
-- No phone appears: open the iPhone Bluetooth settings and run Scan again.
+- No phone appears: open the phone's Bluetooth settings and run Scan again.
 - Connected but no music: check that the phone is playing audio and that the
   PipeWire source has an A2DP profile.
 - Music plays but the Stripe is quiet: inspect `wpctl status` for an active

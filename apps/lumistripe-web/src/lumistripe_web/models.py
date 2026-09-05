@@ -230,6 +230,7 @@ class BluetoothStatusResponse(BaseModel):
 
     available: bool = False
     powered: bool = False
+    adapter_alias: str | None = None
     scanning: bool = False
     streaming: bool = False
     devices: tuple[BluetoothDeviceInfo, ...] = ()
@@ -313,6 +314,14 @@ class AudioSourceRequest(BaseModel):
 
 class BluetoothDeviceRequest(BaseModel):
     address: str = Field(min_length=17, max_length=17)
+
+
+class BluetoothPowerRequest(BaseModel):
+    powered: bool
+
+
+class BluetoothAliasRequest(BaseModel):
+    alias: str = Field(min_length=1, max_length=64)
 
 
 class StartupPlaybackState(BaseModel):

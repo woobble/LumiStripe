@@ -65,12 +65,11 @@ source prefers a connected Bluetooth phone and falls back to the selected
 microphone. Override that policy with `--audio-source off|demo|mic|bluetooth`
 and optionally select a microphone with `--audio-device PATTERN`.
 
-For iPhone music over Bluetooth, set up BlueZ and PipeWire/WirePlumber using
+For phone music over Bluetooth, set up BlueZ and PipeWire/WirePlumber using
 [`deploy/README.md`](../../deploy/README.md). The Pi remains the Bluetooth
 A2DP receiver, sends the incoming stream to its configured speaker output, and
 uses the PipeWire monitor source for the Stripe animation. Pair phones from
-Setup → Audio in the dashboard, then choose the Pi from the iPhone audio output
-picker.
+Setup → Audio in the dashboard, then choose the Pi as the phone's audio output.
 
 Only one process may own the hardware and audio runtime. Do not start the headless
 CLI alongside the web backend.

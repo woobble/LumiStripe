@@ -681,6 +681,7 @@ class LumiStripeRuntime:
         return BluetoothStatusResponse(
             available=current.available,
             powered=current.powered,
+            adapter_alias=current.adapter_alias,
             scanning=current.scanning,
             streaming=current.streaming,
             devices=tuple(
@@ -703,6 +704,18 @@ class LumiStripeRuntime:
     def start_bluetooth_scan(self) -> BluetoothStatusResponse:
         try:
             return self._bluetooth_status_response(self._bluetooth.start_scan())
+        except BluetoothCommandError as exc:
+            raise RuntimeCommandError(str(exc)) from exc
+
+    def set_bluetooth_power(self, powered: bool) -> BluetoothStatusResponse:
+        try:
+            return self._bluetooth_status_response(self._bluetooth.set_power(powered))
+        except BluetoothCommandError as exc:
+            raise RuntimeCommandError(str(exc)) from exc
+
+    def set_bluetooth_alias(self, alias: str) -> BluetoothStatusResponse:
+        try:
+            return self._bluetooth_status_response(self._bluetooth.set_alias(alias))
         except BluetoothCommandError as exc:
             raise RuntimeCommandError(str(exc)) from exc
 
