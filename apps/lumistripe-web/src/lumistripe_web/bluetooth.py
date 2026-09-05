@@ -177,9 +177,11 @@ class BluetoothManager:
 
     def connect(self, address: str, role: str | None = None) -> BluetoothStatus:
         normalized = _validate_address(address)
+        selected_role = self._resolve_connection_role(normalized, role)
         self._start_operation(
             f"connecting:{normalized}",
-            lambda: self._connect(normalized, role),
+            lambda: self._connect(normalized, selected_role),
+            preflight=lambda: self._ensure_connection_slot(normalized, selected_role),
         )
         return self.status()
 
@@ -467,21 +469,7 @@ class BluetoothManager:
 
     def _connect(self, address: str, role: str | None = None) -> None:
         self._run(("bluetoothctl", "power", "on"), timeout=5.0)
-        device = next(
-            (
-                item
-                for item in self.status().devices
-                if item.address.casefold() == address.casefold()
-            ),
-            None,
-        )
-        selected_role = role or (
-            "output"
-            if device is not None and "output" in device.roles
-            else "input"
-        )
-        if selected_role not in {"input", "output"}:
-            raise BluetoothCommandError("Bluetooth role must be input or output")
+        selected_role = self._resolve_connection_role(address, role)
         profile = "a2dp-sink" if selected_role == "output" else "a2dp-source"
         # Connecting to a specific A2DP profile avoids unrelated HFP, AVRCP,
         # or networking services masking the audio connection. A remote
@@ -500,12 +488,56 @@ class BluetoothManager:
         output = self._run(("bluetoothctl", "disconnect", address), timeout=8.0)
         _raise_for_bluetooth_failure(output)
 
-    def _start_operation(self, name: str, operation: Callable[[], None]) -> None:
+    def _resolve_connection_role(self, address: str, role: str | None) -> str:
+        if role is not None:
+            if role not in {"input", "output"}:
+                raise BluetoothCommandError("Bluetooth role must be input or output")
+            return role
+        device = next(
+            (
+                item
+                for item in self.status().devices
+                if item.address.casefold() == address.casefold()
+            ),
+            None,
+        )
+        return "output" if device is not None and "output" in device.roles else "input"
+
+    def _ensure_connection_slot(self, address: str, role: str) -> None:
+        connected = (
+            self._status.connected_inputs
+            if role == "input"
+            else self._status.connected_outputs
+        )
+        conflict = next(
+            (
+                device
+                for device in connected
+                if device.address.casefold() != address.casefold()
+            ),
+            None,
+        )
+        if conflict is None:
+            return
+        raise BluetoothCommandError(
+            f"Bluetooth {role} is already connected to {conflict.name}. "
+            f"Disconnect it before connecting another {role}."
+        )
+
+    def _start_operation(
+        self,
+        name: str,
+        operation: Callable[[], None],
+        *,
+        preflight: Callable[[], None] | None = None,
+    ) -> None:
         if not self.enabled:
             raise BluetoothCommandError("Bluetooth is only available in hardware mode.")
         with self._lock:
             if self._operation is not None:
                 raise BluetoothCommandError("another Bluetooth operation is already running")
+            if preflight is not None:
+                preflight()
             self._operation = name
             self._operation_error = None
             self._status = _with_operation(self._status, name, None)

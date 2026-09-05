@@ -22,6 +22,26 @@ const audioValues = {
   spectral_balance_ratio: 0.35,
 }
 
+const bluetoothStatus = {
+  available: true,
+  powered: true,
+  adapter_alias: "LumiStripe",
+  scanning: false,
+  streaming: false,
+  devices: [{ address: "AA:BB:CC:DD:EE:FF", name: "Dual-role device", paired: true, connected: false, roles: ["input", "output"] }],
+  connected_inputs: [],
+  connected_outputs: [],
+  connected_device: null,
+  input_source: null,
+  output_devices: [],
+  default_sink: null,
+  output_volume: null,
+  output_muted: false,
+  output_ready: false,
+  operation: null,
+  error: null,
+}
+
 const audioSettings = {
   source: "mic",
   monitoring: true,
@@ -34,6 +54,7 @@ const audioSettings = {
   settings: audioValues,
   configured_noise_floor: 0.015,
   error: null,
+  bluetooth: bluetoothStatus,
 }
 
 function Router({ children }: { children: ReactNode }) {
@@ -71,6 +92,9 @@ describe("App", () => {
     if (path === "/api/animations") return jsonResponse({ items: animations })
     if (path === "/api/audio/settings" || path === "/api/audio/settings/reset") {
       return jsonResponse(audioSettings)
+    }
+    if (path === "/api/audio/bluetooth" || path === "/api/audio/bluetooth/connect") {
+      return jsonResponse(bluetoothStatus)
     }
     if (path === "/api/audio/device") {
       const body = JSON.parse(String(init?.body)) as { device: string }
@@ -287,6 +311,28 @@ describe("App", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       "/api/audio/device",
       expect.objectContaining({ method: "PUT", body: JSON.stringify({ device: "3" }) }),
+    ))
+  })
+
+  it("offers separate connection actions for dual-role Bluetooth devices", async () => {
+    const user = userEvent.setup()
+    render(<App />, { wrapper: Router })
+    await screen.findByText(/aurora wave/i)
+
+    await user.click(screen.getByRole("link", { name: "Setup" }))
+    const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
+    await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
+
+    expect(await screen.findByRole("button", { name: "Connect as input" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Connect as output" })).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Connect as input" }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/audio/bluetooth/connect",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ address: "AA:BB:CC:DD:EE:FF", role: "input" }),
+      }),
     ))
   })
 

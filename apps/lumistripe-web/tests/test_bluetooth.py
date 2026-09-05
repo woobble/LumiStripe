@@ -220,6 +220,22 @@ def test_bluetooth_status_separates_phone_input_and_speaker_output() -> None:
     assert status.output_devices[0].name == "SONY Speaker"
     assert status.output_devices[0].bluetooth is True
 
+    try:
+        manager.connect(SPEAKER_ADDRESS, role="input")
+    except BluetoothCommandError as exc:
+        assert "Party iPhone" in str(exc)
+        assert "Bluetooth input" in str(exc)
+    else:
+        raise AssertionError("a second Bluetooth input connection was accepted")
+
+    try:
+        manager.connect(PHONE_ADDRESS, role="output")
+    except BluetoothCommandError as exc:
+        assert "SONY Speaker" in str(exc)
+        assert "Bluetooth output" in str(exc)
+    else:
+        raise AssertionError("a second Bluetooth output connection was accepted")
+
     manager.set_default_sink(SPEAKER_SINK)
     assert ("pactl", "set-default-sink", SPEAKER_SINK) in commands
 

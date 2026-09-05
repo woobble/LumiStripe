@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton"
 import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch"
-import { dashboardApi, type AudioSettingsResponse, type BluetoothDeviceRole, type BluetoothStatusResponse } from "@/lib/api"
+import { dashboardApi, type AudioSettingsResponse, type BluetoothStatusResponse } from "@/lib/api"
 import { useUnsavedChangesGuard } from "@/hooks/use-unsaved-changes"
 
 const inputSelectionSchema = z.object({ selected: z.string().trim().min(1, "Choose an input device.") })
@@ -196,9 +196,6 @@ function AudioInputPanelView() {
   const selectedOutput = bluetooth?.output_devices.find((device) => device.selector === outputSelector)
   const outputBusyState = Boolean(outputBusy || bluetoothOperationBusy)
 
-  const connectRole = (roles: BluetoothDeviceRole[]): BluetoothDeviceRole | undefined =>
-    roles.includes("output") ? "output" : roles.includes("input") ? "input" : undefined
-
   return (
     <AudioSetupPage>
       {loading && !response ? <Skeleton className="h-56 rounded-xl" /> : (
@@ -299,7 +296,32 @@ function AudioInputPanelView() {
                 {bluetooth.connected_outputs.map((device) => <div key={`output-${device.address}`} className="rounded-xl border border-emerald-300/15 bg-emerald-300/5 p-3"><div className="flex items-center justify-between gap-2"><span className="truncate text-sm font-medium">{device.name}</span><Badge variant="outline">Output</Badge></div><p className="mt-1 text-xs text-muted-foreground">Connected speaker output</p></div>)}
               </div> : null}
               <div className="space-y-2">
-                {bluetooth?.devices.map((device) => <div key={device.address} className="flex items-center gap-3 rounded-xl border border-white/5 bg-white/[0.03] p-3"><div className="min-w-0 flex-1"><div className="truncate text-sm font-medium">{device.name}</div><div className="mt-1 flex flex-wrap items-center gap-1.5">{device.roles.map((role) => <Badge key={role} variant="outline">{role === "input" ? "Input" : "Output"}</Badge>)}<span className="text-xs text-muted-foreground">{device.address}{device.connected ? " · Connected" : device.paired ? " · Paired" : " · New"}</span></div></div><div className="flex shrink-0 items-center gap-2">{device.connected ? <><Badge>Connected</Badge><Button variant="outline" className="h-9 rounded-lg px-3 text-xs" disabled={bluetoothOperationBusy} onClick={() => void runBluetoothAction(`disconnect:${device.address}`, () => dashboardApi.disconnectBluetooth(device.address))}>Disconnect</Button></> : <Button variant="outline" className="h-9 rounded-lg px-3 text-xs" disabled={bluetoothOperationBusy || !bluetooth?.powered} onClick={() => void runBluetoothAction(`connect:${device.address}`, device.paired ? () => dashboardApi.connectBluetooth(device.address, connectRole(device.roles)) : () => dashboardApi.pairBluetooth(device.address))}>{device.paired ? "Connect" : "Pair"}</Button>}{device.paired && <Button variant="ghost" size="icon" className="size-9 shrink-0 rounded-lg" disabled={bluetoothOperationBusy} onClick={() => void runBluetoothAction(`forget:${device.address}`, () => dashboardApi.forgetBluetooth(device.address))} aria-label={`Forget ${device.name}`}><Trash2Icon /></Button>}</div></div>)}
+                {bluetooth?.devices.map((device) => (
+                  <div key={device.address} className="flex items-start gap-3 rounded-xl border border-white/5 bg-white/[0.03] p-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium">{device.name}</div>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                        {device.roles.map((role) => <Badge key={role} variant="outline">{role === "input" ? "Input" : "Output"}</Badge>)}
+                        <span className="text-xs text-muted-foreground">{device.address}{device.connected ? " · Connected" : device.paired ? " · Paired" : " · New"}</span>
+                      </div>
+                    </div>
+                    <div className="flex max-w-[62%] shrink-0 flex-wrap justify-end gap-2">
+                      {device.connected ? (
+                        <>
+                          <Badge>Connected</Badge>
+                          <Button variant="outline" className="h-9 rounded-lg px-3 text-xs" disabled={bluetoothOperationBusy} onClick={() => void runBluetoothAction(`disconnect:${device.address}`, () => dashboardApi.disconnectBluetooth(device.address))}>Disconnect</Button>
+                        </>
+                      ) : !device.paired ? (
+                        <Button variant="outline" className="h-9 rounded-lg px-3 text-xs" disabled={bluetoothOperationBusy || !bluetooth?.powered} onClick={() => void runBluetoothAction(`pair:${device.address}`, () => dashboardApi.pairBluetooth(device.address))}>Pair</Button>
+                      ) : device.roles.length > 0 ? (
+                        device.roles.map((role) => <Button key={role} variant="outline" className="h-9 rounded-lg px-3 text-xs" disabled={bluetoothOperationBusy || !bluetooth?.powered} onClick={() => void runBluetoothAction(`connect:${role}:${device.address}`, () => dashboardApi.connectBluetooth(device.address, role))}>Connect as {role}</Button>)
+                      ) : (
+                        <Button variant="outline" className="h-9 rounded-lg px-3 text-xs" disabled={bluetoothOperationBusy || !bluetooth?.powered} onClick={() => void runBluetoothAction(`connect:${device.address}`, () => dashboardApi.connectBluetooth(device.address))}>Connect</Button>
+                      )}
+                      {device.paired && <Button variant="ghost" size="icon" className="size-9 shrink-0 rounded-lg" disabled={bluetoothOperationBusy} onClick={() => void runBluetoothAction(`forget:${device.address}`, () => dashboardApi.forgetBluetooth(device.address))} aria-label={`Forget ${device.name}`}><Trash2Icon /></Button>}
+                    </div>
+                  </div>
+                ))}
               </div>
               {!bluetooth?.available && <div className="flex gap-2 rounded-xl bg-amber-500/10 p-3 text-sm text-amber-100"><CircleAlertIcon className="mt-0.5 size-4 shrink-0" /><span>Bluetooth tools are unavailable. Install the Pi Bluetooth/PipeWire setup from the deployment guide.</span></div>}
               {bluetooth?.error && <div className="flex gap-2 rounded-xl bg-red-500/10 p-3 text-sm text-red-200"><CircleAlertIcon className="mt-0.5 size-4 shrink-0" /><span>{bluetooth.error}</span></div>}
