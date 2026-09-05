@@ -169,7 +169,7 @@ def test_bluetooth_status_separates_phone_input_and_speaker_output() -> None:
         if command == ("bluetoothctl", "info", SPEAKER_ADDRESS):
             return "UUID: Audio Sink (0000110b-0000-1000-8000-00805f9b34fb)"
         if command == ("pactl", "list", "short", "sources"):
-            return "42 alsa_output.usb-speakers.monitor PipeWire s16le 2ch 48000Hz RUNNING"
+            return f"42 {SPEAKER_SINK}.monitor PipeWire s16le 2ch 48000Hz RUNNING"
         if command == ("pactl", "list", "short", "sinks"):
             return f"80 {SPEAKER_SINK} PipeWire s16le 2ch 48000Hz RUNNING\n43 alsa_output.usb-speakers PipeWire s16le 2ch 48000Hz IDLE"
         if command == ("pactl", "list", "short", "sink-inputs"):
@@ -212,7 +212,7 @@ def test_bluetooth_status_separates_phone_input_and_speaker_output() -> None:
 
     assert [device.name for device in status.connected_inputs] == ["Party iPhone"]
     assert [device.name for device in status.connected_outputs] == ["SONY Speaker"]
-    assert status.input_source == "alsa_output.usb-speakers.monitor"
+    assert status.input_source == f"{SPEAKER_SINK}.monitor"
     assert status.default_sink == SPEAKER_SINK
     assert status.output_volume == 0.4
     assert status.output_devices[0].name == "SONY Speaker"

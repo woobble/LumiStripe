@@ -350,7 +350,7 @@ class BluetoothManager:
                 roles = previous_roles.get(address_key, ())
             if _contains_bluetooth_token(sinks, device.address):
                 roles = _merge_roles(roles, ("output",))
-            if _contains_bluetooth_token(sources, device.address) or _has_active_bluetooth_stream(
+            if _has_bluetooth_input_source(sources, device.address) or _has_active_bluetooth_stream(
                 stream_status, device.address
             ):
                 roles = _merge_roles(roles, ("input",))
@@ -589,6 +589,24 @@ def _merge_roles(current: Sequence[str], additional: Sequence[str]) -> tuple[str
 
 def _contains_bluetooth_token(output: str, address: str) -> bool:
     return address.replace(":", "_").casefold() in output.casefold()
+
+
+def _has_bluetooth_input_source(output: str, address: str) -> bool:
+    """Return whether PipeWire exposes a real Bluetooth input for an address.
+
+    A Bluetooth speaker also exposes a ``bluez_output.*.monitor`` source. That
+    monitor is a copy of audio being sent to the speaker, not an input role
+    provided by the speaker, so it must not classify the speaker as an input.
+    """
+    token = address.replace(":", "_").casefold()
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) < 2:
+            continue
+        source = fields[1].casefold()
+        if source.startswith("bluez_input.") and token in source:
+            return True
+    return False
 
 
 def _bluetooth_address_from_node(node: str) -> str | None:
