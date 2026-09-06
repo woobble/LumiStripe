@@ -9,7 +9,9 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Literal, Protocol
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,24 @@ _PAIRING_FAILURE = re.compile(
 
 class BluetoothCommandError(RuntimeError):
     """A Bluetooth or PipeWire command could not be completed."""
+
+
+BluetoothOperationState = Literal["idle", "running", "complete", "failed"]
+
+
+@dataclass(frozen=True, slots=True)
+class BluetoothCapabilities:
+    """Operations supported by the active Bluetooth/audio provider.
+
+    The web client uses this instead of assuming that every BlueZ/PipeWire
+    installation exposes the same controls. The limits retain the current
+    single-input/single-output behavior while allowing another provider to
+    advertise a different topology later.
+    """
+
+    operations: tuple[str, ...] = ()
+    max_inputs: int = 1
+    max_outputs: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,7 +92,10 @@ class BluetoothStatus:
     output_volume: float | None = None
     output_muted: bool = False
     output_ready: bool = False
+    capabilities: BluetoothCapabilities = field(default_factory=BluetoothCapabilities)
     operation: str | None = None
+    operation_id: str | None = None
+    operation_state: BluetoothOperationState = "idle"
     error: str | None = None
 
     @property
@@ -82,6 +105,50 @@ class BluetoothStatus:
 
 Runner = Callable[[tuple[str, ...], float], str]
 ScriptRunner = Callable[[tuple[str, ...], str, float], str]
+
+
+class BluetoothDeviceBackend(Protocol):
+    """Provider boundary for Bluetooth discovery and device operations."""
+
+    def status(self) -> BluetoothStatus: ...
+
+    def start(self) -> None: ...
+
+    def stop(self) -> None: ...
+
+    def start_scan(self) -> BluetoothStatus: ...
+
+    def set_power(self, powered: bool) -> BluetoothStatus: ...
+
+    def set_alias(self, alias: str) -> BluetoothStatus: ...
+
+    def pair(self, address: str) -> BluetoothStatus: ...
+
+    def connect(self, address: str, role: str | None = None) -> BluetoothStatus: ...
+
+    def forget(self, address: str) -> BluetoothStatus: ...
+
+    def disconnect(self, address: str) -> BluetoothStatus: ...
+
+
+class AudioRoutingBackend(Protocol):
+    """Provider boundary for the audio graph used by Bluetooth streams."""
+
+    def set_default_sink(self, sink: str) -> BluetoothStatus: ...
+
+    def set_output_volume(self, sink: str, volume: float) -> BluetoothStatus: ...
+
+    def set_output_mute(self, sink: str, muted: bool) -> BluetoothStatus: ...
+
+    def default_source(self) -> str | None: ...
+
+    def set_default_source(self, source: str) -> None: ...
+
+    def restore_default_source(self, source: str | None) -> None: ...
+
+
+class BluetoothAudioBackend(BluetoothDeviceBackend, AudioRoutingBackend, Protocol):
+    """Combined backend consumed by the runtime and HTTP layer."""
 
 
 class BluetoothManager:
@@ -106,20 +173,29 @@ class BluetoothManager:
         *,
         enabled: bool = True,
         poll_interval: float = 1.0,
+        max_inputs: int = 1,
+        max_outputs: int = 1,
         runner: Runner | None = None,
         script_runner: ScriptRunner | None = None,
         command_exists: Callable[[str], bool] | None = None,
     ) -> None:
         self.enabled = enabled
         self._poll_interval = max(0.25, poll_interval)
+        if max_inputs < 1 or max_outputs < 1:
+            raise ValueError("Bluetooth connection limits must be at least one")
+        self._max_inputs = max_inputs
+        self._max_outputs = max_outputs
         self._runner = runner or _run_command
         self._script_runner = script_runner
         self._command_exists = command_exists or (lambda command: shutil.which(command) is not None)
         self._lock = threading.RLock()
+        self._command_lock = threading.RLock()
         self._status = BluetoothStatus()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._operation: str | None = None
+        self._operation_id: str | None = None
+        self._operation_state: BluetoothOperationState = "idle"
         self._operation_error: str | None = None
 
     def start(self) -> None:
@@ -284,7 +360,13 @@ class BluetoothManager:
             self._set_status(
                 BluetoothStatus(
                     available=False,
+                    capabilities=BluetoothCapabilities(
+                        max_inputs=self._max_inputs,
+                        max_outputs=self._max_outputs,
+                    ),
                     operation=self._operation,
+                    operation_id=self._operation_id,
+                    operation_state=self._operation_state,
                     error=f"{', '.join(missing_commands)} is not installed.",
                 )
             )
@@ -323,7 +405,10 @@ class BluetoothManager:
                     output_volume=previous.output_volume,
                     output_muted=previous.output_muted,
                     output_ready=previous.output_ready,
+                    capabilities=previous.capabilities,
                     operation=self._operation,
+                    operation_id=self._operation_id,
+                    operation_state=self._operation_state,
                     error=str(exc),
                 )
             )
@@ -416,7 +501,10 @@ class BluetoothManager:
             output_volume=default_output.volume if default_output is not None else None,
             output_muted=default_output.muted if default_output is not None else False,
             output_ready=bool(default_sink) and bool(output_devices),
+            capabilities=self._capabilities(),
             operation=self._operation,
+            operation_id=self._operation_id,
+            operation_state=self._operation_state,
             error=self._operation_error,
         )
         self._set_status(status)
@@ -509,16 +597,15 @@ class BluetoothManager:
             if role == "input"
             else self._status.connected_outputs
         )
-        conflict = next(
-            (
-                device
-                for device in connected
-                if device.address.casefold() != address.casefold()
-            ),
-            None,
-        )
-        if conflict is None:
+        limit = self._max_inputs if role == "input" else self._max_outputs
+        active = [
+            device
+            for device in connected
+            if device.address.casefold() != address.casefold()
+        ]
+        if len(active) < limit:
             return
+        conflict = active[0]
         raise BluetoothCommandError(
             f"Bluetooth {role} is already connected to {conflict.name}. "
             f"Disconnect it before connecting another {role}."
@@ -539,8 +626,16 @@ class BluetoothManager:
             if preflight is not None:
                 preflight()
             self._operation = name
+            self._operation_id = uuid4().hex
+            self._operation_state = "running"
             self._operation_error = None
-            self._status = _with_operation(self._status, name, None)
+            self._status = _with_operation(
+                self._status,
+                name,
+                self._operation_id,
+                "running",
+                None,
+            )
 
         def run() -> None:
             error: str | None = None
@@ -549,12 +644,26 @@ class BluetoothManager:
             except (BluetoothCommandError, OSError, subprocess.SubprocessError) as exc:
                 error = str(exc)
                 logger.warning("Bluetooth operation %s failed: %s", name, exc)
+            except Exception as exc:
+                error = str(exc) or exc.__class__.__name__
+                logger.exception("Unexpected Bluetooth operation failure: %s", name)
             finally:
                 with self._lock:
                     self._operation = None
+                    self._operation_state = "failed" if error else "complete"
                     self._operation_error = error
-                    self._status = _with_operation(self._status, None, error)
+                    self._status = _with_operation(
+                        self._status,
+                        None,
+                        self._operation_id,
+                        self._operation_state,
+                        error,
+                    )
                 self._refresh_once()
+                with self._lock:
+                    if self._operation is None and self._operation_state in {"complete", "failed"}:
+                        self._operation_state = "idle"
+                        self._operation_error = None
 
         threading.Thread(
             target=run,
@@ -563,12 +672,33 @@ class BluetoothManager:
         ).start()
 
     def _run(self, command: tuple[str, ...], *, timeout: float) -> str:
-        return self._runner(command, timeout)
+        with self._command_lock:
+            return self._runner(command, timeout)
 
     def _run_script(self, command: tuple[str, ...], script: str, timeout: float) -> str:
-        if self._script_runner is not None:
-            return self._script_runner(command, script, timeout)
-        return _run_bluetoothctl_script(command, script, timeout)
+        with self._command_lock:
+            if self._script_runner is not None:
+                return self._script_runner(command, script, timeout)
+            return _run_bluetoothctl_script(command, script, timeout)
+
+    def _capabilities(self) -> BluetoothCapabilities:
+        operations = [
+            "power",
+            "rename",
+            "scan",
+            "pair",
+            "connect",
+            "disconnect",
+            "forget",
+            "output_select",
+            "output_volume",
+            "output_mute",
+        ]
+        return BluetoothCapabilities(
+            operations=tuple(operations),
+            max_inputs=self._max_inputs,
+            max_outputs=self._max_outputs,
+        )
 
     def _set_status(self, status: BluetoothStatus) -> None:
         with self._lock:
@@ -825,7 +955,11 @@ def _raise_for_bluetooth_failure(output: str) -> None:
 
 
 def _with_operation(
-    status: BluetoothStatus, operation: str | None, error: str | None
+    status: BluetoothStatus,
+    operation: str | None,
+    operation_id: str | None,
+    operation_state: BluetoothOperationState,
+    error: str | None,
 ) -> BluetoothStatus:
     return BluetoothStatus(
         available=status.available,
@@ -842,7 +976,10 @@ def _with_operation(
         output_volume=status.output_volume,
         output_muted=status.output_muted,
         output_ready=status.output_ready,
+        capabilities=status.capabilities,
         operation=operation,
+        operation_id=operation_id,
+        operation_state=operation_state,
         error=error,
     )
 
@@ -1010,8 +1147,12 @@ def _clean_command_output(output: str) -> str:
 __all__ = [
     "BLUETOOTH_ADDRESS",
     "AudioOutputDevice",
+    "AudioRoutingBackend",
+    "BluetoothAudioBackend",
+    "BluetoothCapabilities",
     "BluetoothCommandError",
     "BluetoothDevice",
+    "BluetoothDeviceBackend",
     "BluetoothManager",
     "BluetoothStatus",
     "capture_device_selector",

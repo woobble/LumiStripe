@@ -213,6 +213,8 @@ def test_audio_source_and_bluetooth_api(
         bluetooth = client.get("/api/audio/bluetooth")
         assert bluetooth.status_code == 200
         assert bluetooth.json()["available"] is False
+        assert bluetooth.json()["capabilities"]["max_inputs"] == 1
+        assert bluetooth.json()["operation_state"] == "idle"
 
         unavailable_scan = client.post("/api/audio/bluetooth/scan")
         assert unavailable_scan.status_code == 409

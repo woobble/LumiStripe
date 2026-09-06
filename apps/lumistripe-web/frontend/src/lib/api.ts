@@ -139,6 +139,23 @@ export interface AudioDeviceOption {
 }
 
 export type BluetoothDeviceRole = "input" | "output"
+export type BluetoothOperation =
+  | "power"
+  | "rename"
+  | "scan"
+  | "pair"
+  | "connect"
+  | "disconnect"
+  | "forget"
+  | "output_select"
+  | "output_volume"
+  | "output_mute"
+
+export interface BluetoothCapabilities {
+  operations: BluetoothOperation[]
+  max_inputs: number
+  max_outputs: number
+}
 
 export interface AudioOutputDeviceInfo {
   selector: string
@@ -173,7 +190,10 @@ export interface BluetoothStatusResponse {
   output_volume: number | null
   output_muted: boolean
   output_ready: boolean
+  capabilities: BluetoothCapabilities
   operation: string | null
+  operation_id: string | null
+  operation_state: "idle" | "running" | "complete" | "failed"
   error: string | null
 }
 
@@ -273,7 +293,18 @@ const animationListSchema = z.object({ items: z.array(z.object({ name: z.string(
 const accessStatusSchema = z.object({ required: z.boolean(), authenticated: z.boolean() }) as unknown as z.ZodType<AccessStatus>
 const bluetoothDeviceSchema = z.object({ address: z.string(), name: z.string(), paired: z.boolean(), connected: z.boolean(), roles: z.array(z.enum(["input", "output"])) })
 const audioOutputDeviceSchema = z.object({ selector: z.string(), name: z.string(), volume: z.number().nullable(), muted: z.boolean(), bluetooth: z.boolean(), connected: z.boolean() })
-const bluetoothStatusSchema = z.object({ available: z.boolean(), powered: z.boolean(), adapter_alias: z.string().nullable(), scanning: z.boolean(), streaming: z.boolean(), devices: z.array(bluetoothDeviceSchema), connected_inputs: z.array(bluetoothDeviceSchema), connected_outputs: z.array(bluetoothDeviceSchema), connected_device: bluetoothDeviceSchema.nullable(), input_source: z.string().nullable(), output_devices: z.array(audioOutputDeviceSchema), default_sink: z.string().nullable(), output_volume: z.number().nullable(), output_muted: z.boolean(), output_ready: z.boolean(), operation: z.string().nullable(), error: z.string().nullable() })
+const bluetoothCapabilitiesSchema = z.object({
+  operations: z.array(z.enum(["power", "rename", "scan", "pair", "connect", "disconnect", "forget", "output_select", "output_volume", "output_mute"])).default([]),
+  max_inputs: z.number().int().min(1).default(1),
+  max_outputs: z.number().int().min(1).default(1),
+})
+const bluetoothStatusSchema = z.object({
+  available: z.boolean(), powered: z.boolean(), adapter_alias: z.string().nullable(), scanning: z.boolean(), streaming: z.boolean(),
+  devices: z.array(bluetoothDeviceSchema), connected_inputs: z.array(bluetoothDeviceSchema), connected_outputs: z.array(bluetoothDeviceSchema), connected_device: bluetoothDeviceSchema.nullable(),
+  input_source: z.string().nullable(), output_devices: z.array(audioOutputDeviceSchema), default_sink: z.string().nullable(), output_volume: z.number().nullable(), output_muted: z.boolean(), output_ready: z.boolean(),
+  capabilities: bluetoothCapabilitiesSchema.default({ operations: [], max_inputs: 1, max_outputs: 1 }),
+  operation: z.string().nullable(), operation_id: z.string().nullable().optional().default(null), operation_state: z.enum(["idle", "running", "complete", "failed"]).default("idle"), error: z.string().nullable(),
+}) as z.ZodType<BluetoothStatusResponse>
 const audioSettingsSchema = z.object({ source: z.string(), active_source: z.string().optional(), monitoring: z.boolean(), active_device: z.string().nullable(), fallback_device: z.string().nullable().optional(), active_device_name: z.string().nullable(), devices: z.array(z.unknown()), settings: z.object({ target_level: z.number(), hardware_gain_target: z.number().nullable().optional() }).passthrough(), configured_noise_floor: z.number(), bluetooth: bluetoothStatusSchema.optional(), error: z.string().nullable() }).passthrough() as unknown as z.ZodType<AudioSettingsResponse>
 const audioCalibrationSchema = z.object({ session_id: z.string(), status: z.enum(["capturing", "complete"]), elapsed_seconds: z.number(), remaining_seconds: z.number(), result: z.object({ duration_seconds: z.number(), samples: z.number(), measured_floor: z.number(), measured_peak: z.number(), recommended_noise_floor: z.number(), recommended_target_level: z.number(), recommended_hardware_gain: z.number().nullable().optional(), recommended_idle_threshold_scale: z.number() }).nullable(), error: z.string().nullable() }) as z.ZodType<AudioCalibrationSessionResponse>
 const startupSettingsSchema = z.object({ restore_last_state: z.boolean(), remembered: z.object({ mode: playbackModeSchema }).passthrough() }).passthrough() as unknown as z.ZodType<StartupSettingsResponse>

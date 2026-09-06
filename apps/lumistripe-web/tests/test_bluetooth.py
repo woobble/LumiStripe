@@ -114,6 +114,9 @@ def test_bluetooth_status_finds_phone_monitor_and_output() -> None:
     assert status.output_devices[0].name == "USB Speakers"
     assert status.output_volume == 1.0
     assert status.output_ready is True
+    assert "connect" in status.capabilities.operations
+    assert status.capabilities.max_inputs == 1
+    assert status.capabilities.max_outputs == 1
 
 
 def test_bluetooth_status_falls_back_to_sink_monitor_for_active_wpctl_stream() -> None:
@@ -240,10 +243,13 @@ def test_bluetooth_status_separates_phone_input_and_speaker_output() -> None:
     assert ("pactl", "set-default-sink", SPEAKER_SINK) in commands
 
     manager.connect(SPEAKER_ADDRESS)
+    operation_id = manager.status().operation_id
+    assert operation_id is not None
     deadline = time.monotonic() + 1.0
     while manager.status().operation is not None:
         assert time.monotonic() < deadline
         time.sleep(0.01)
+    assert manager.status().operation_id == operation_id
     assert ("bluetoothctl", "connect", SPEAKER_ADDRESS, "a2dp-sink") in commands
 
     manager.set_output_volume(SPEAKER_SINK, 1.0)

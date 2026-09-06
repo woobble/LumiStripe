@@ -28,4 +28,32 @@ describe("dashboardApi", () => {
   it("builds the websocket URL from the current origin", () => {
     expect(websocketUrl()).toBe("ws://localhost:3000/ws/state")
   })
+
+  it("normalizes legacy Bluetooth responses without capability metadata", async () => {
+    fetchMock.mockReturnValueOnce(jsonResponse({
+      available: true,
+      powered: true,
+      adapter_alias: "LumiStripe",
+      scanning: false,
+      streaming: false,
+      devices: [],
+      connected_inputs: [],
+      connected_outputs: [],
+      connected_device: null,
+      input_source: null,
+      output_devices: [],
+      default_sink: null,
+      output_volume: null,
+      output_muted: false,
+      output_ready: false,
+      operation: null,
+      error: null,
+    }))
+
+    const status = await dashboardApi.getBluetoothStatus()
+
+    expect(status.capabilities).toEqual({ operations: [], max_inputs: 1, max_outputs: 1 })
+    expect(status.operation_id).toBeNull()
+    expect(status.operation_state).toBe("idle")
+  })
 })

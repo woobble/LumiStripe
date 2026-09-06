@@ -51,6 +51,7 @@ from lumistripe import (
 from lumistripe.audio import BandTuple, recommend_audio_calibration
 
 from .bluetooth import (
+    BluetoothAudioBackend,
     BluetoothCommandError,
     BluetoothManager,
     BluetoothStatus,
@@ -64,6 +65,7 @@ from .models import (
     AudioSettingsResponse,
     AudioTelemetry,
     AudioTuningValues,
+    BluetoothCapabilities,
     BluetoothDeviceInfo,
     BluetoothStatusResponse,
     CalibrationSessionResponse,
@@ -444,7 +446,7 @@ class LumiStripeRuntime:
         *,
         controller_factory: _ControllerFactory = _default_controller_factory,
         audio_factory: _AudioFactory = _default_audio_factory,
-        bluetooth_manager: BluetoothManager | None = None,
+        bluetooth_manager: BluetoothAudioBackend | None = None,
     ) -> None:
         self.settings = settings or RuntimeSettings()
         self._controller_factory = controller_factory
@@ -705,7 +707,14 @@ class LumiStripeRuntime:
             output_volume=current.output_volume,
             output_muted=current.output_muted,
             output_ready=current.output_ready,
+            capabilities=BluetoothCapabilities(
+                operations=tuple(current.capabilities.operations),
+                max_inputs=current.capabilities.max_inputs,
+                max_outputs=current.capabilities.max_outputs,
+            ),
             operation=current.operation,
+            operation_id=current.operation_id,
+            operation_state=current.operation_state,
             error=current.error,
         )
 

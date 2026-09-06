@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useState } from "react"
 import { Controller, useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
-import { AudioLinesIcon, BluetoothIcon, CircleAlertIcon, MicIcon, RefreshCwIcon, SaveIcon, SearchIcon, Trash2Icon, Volume2Icon, VolumeXIcon } from "lucide-react"
+import { AudioLinesIcon, CircleAlertIcon, MicIcon, RefreshCwIcon, SaveIcon, Volume2Icon, VolumeXIcon } from "lucide-react"
 import { z } from "zod"
 import { toast } from "sonner"
 
@@ -9,12 +9,13 @@ import { AudioSetupPage } from "@/components/dashboard/setup-nav"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch"
-import { dashboardApi, type AudioSettingsResponse, type BluetoothStatusResponse } from "@/lib/api"
+import { BluetoothDevicePanel } from "@/components/dashboard/bluetooth-device-panel"
+import { useBluetooth, type BluetoothAction } from "@/hooks/use-bluetooth"
+import { dashboardApi, type AudioSettingsResponse, type BluetoothOperation, type BluetoothStatusResponse } from "@/lib/api"
 import { useUnsavedChangesGuard } from "@/hooks/use-unsaved-changes"
 
 const inputSelectionSchema = z.object({ selected: z.string().trim().min(1, "Choose an input device.") })
@@ -37,19 +38,6 @@ function audioSourceLabel(value: string | null | undefined) {
   return value && isAudioSource(value) ? audioSourceLabels[value] : "Select audio source"
 }
 
-function bluetoothLabel(status: BluetoothStatusResponse | undefined) {
-  if (!status?.available) return "Unavailable"
-  if (status.operation?.startsWith("power:")) return status.operation.endsWith(":on") ? "Enabling…" : "Disabling…"
-  if (status.operation === "renaming") return "Renaming…"
-  if (!status.powered) return "Off"
-  if (status.operation?.startsWith("pairing:")) return "Pairing…"
-  if (status.operation?.startsWith("connecting:")) return "Connecting…"
-  if (status.operation === "scanning" || status.scanning) return "Scanning…"
-  if (status.streaming) return "Input streaming"
-  if (status.connected_inputs.length || status.connected_outputs.length) return "Connected"
-  return "Ready to pair"
-}
-
 function firstSliderValue(value: number | readonly number[]) {
   return Array.isArray(value) ? value[0] ?? 0 : value
 }
@@ -60,19 +48,21 @@ function AudioInputPanelView() {
   const [saving, setSaving] = useState(false)
   const [source, setSource] = useState<AudioSourceValue>("auto")
   const [sourceSaving, setSourceSaving] = useState(false)
-  const [bluetoothBusy, setBluetoothBusy] = useState<string | null>(null)
   const [bluetoothAlias, setBluetoothAlias] = useState("")
-  const [outputBusy, setOutputBusy] = useState<string | null>(null)
   const [outputVolumeDraft, setOutputVolumeDraft] = useState<number | null>(null)
   const form = useForm<InputFormValues>({ resolver: zodResolver(inputSelectionSchema), defaultValues: { selected: "" } })
   const { control, handleSubmit, reset, formState: { isDirty, errors } } = form
   useUnsavedChangesGuard(isDirty)
+  const bluetoothController = useBluetooth(response?.bluetooth)
+  const { status: bluetoothStatus, busy: bluetoothBusy, replaceStatus, refresh: refreshBluetooth, run: runBluetooth } = bluetoothController
+  const bluetooth = bluetoothStatus ?? response?.bluetooth
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
       const next = await dashboardApi.getAudioSettings()
       setResponse(next)
+      if (next.bluetooth) replaceStatus(next.bluetooth)
       if (next.bluetooth?.adapter_alias) setBluetoothAlias(next.bluetooth.adapter_alias)
       setOutputVolumeDraft(next.bluetooth?.output_volume ?? null)
       if (isAudioSource(next.source)) setSource(next.source)
@@ -82,17 +72,10 @@ function AudioInputPanelView() {
     } finally {
       setLoading(false)
     }
-  }, [reset])
+  }, [replaceStatus, reset])
 
   useEffect(() => {
     void load()
-    const timer = window.setInterval(() => {
-      void dashboardApi.getBluetoothStatus().then((status) => {
-        setResponse((current) => current ? { ...current, bluetooth: status } : current)
-        setOutputVolumeDraft(status.output_volume)
-      }).catch(() => undefined)
-    }, 2000)
-    return () => window.clearInterval(timer)
   }, [load])
 
   const saveSource = async () => {
@@ -101,6 +84,7 @@ function AudioInputPanelView() {
     try {
       const next = await dashboardApi.setAudioSource(source)
       setResponse(next)
+      if (next.bluetooth) replaceStatus(next.bluetooth)
       setOutputVolumeDraft(next.bluetooth?.output_volume ?? null)
       if (isAudioSource(next.source)) setSource(next.source)
       toast.success("Audio input applied.")
@@ -112,60 +96,33 @@ function AudioInputPanelView() {
   }
 
   const runBluetoothAction = async (
-    action: string,
+    action: BluetoothAction,
     operation: () => Promise<BluetoothStatusResponse>,
+    message?: string,
+    onSuccess?: () => void,
   ) => {
-    if (bluetoothBusy) return
-    setBluetoothBusy(action)
     try {
-      const status = await operation()
-      setResponse((current) => current ? { ...current, bluetooth: status } : current)
+      const status = await runBluetooth(action, operation)
+      if (!status) return
       setOutputVolumeDraft(status.output_volume)
-      if (action === "scan") toast.success("Bluetooth scan started.")
-      else if (action === "power:on") toast.success("Bluetooth enabled.")
-      else if (action === "power:off") toast.success("Bluetooth disabled.")
-      else if (action.startsWith("pair")) toast.success("Pairing started. Keep the device's Bluetooth settings open.")
-      else if (action.startsWith("disconnect")) toast.success("Bluetooth device disconnected.")
-      else if (action.startsWith("forget")) toast.success("Bluetooth device removed.")
+      onSuccess?.()
+      if (message) toast.success(message)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Bluetooth operation failed.")
-    } finally {
-      setBluetoothBusy(null)
     }
   }
 
   const saveBluetoothAlias = async () => {
     const alias = bluetoothAlias.trim()
-    if (!alias || bluetoothBusy) return
-    setBluetoothBusy("alias")
-    try {
-      const status = await dashboardApi.setBluetoothAlias(alias)
-      setResponse((current) => current ? { ...current, bluetooth: status } : current)
-      setOutputVolumeDraft(status.output_volume)
-      setBluetoothAlias(alias)
-      toast.success("Bluetooth device name saved.")
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Bluetooth device name could not be changed.")
-    } finally {
-      setBluetoothBusy(null)
-    }
+    if (!alias) return
+    void runBluetoothAction("alias", () => dashboardApi.setBluetoothAlias(alias), "Bluetooth device name saved.", () => setBluetoothAlias(alias))
   }
 
   const runOutputAction = async (
-    action: string,
+    action: BluetoothAction,
     operation: () => Promise<BluetoothStatusResponse>,
   ) => {
-    if (outputBusy || bluetoothBusy) return
-    setOutputBusy(action)
-    try {
-      const status = await operation()
-      setResponse((current) => current ? { ...current, bluetooth: status } : current)
-      setOutputVolumeDraft(status.output_volume)
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Audio output could not be changed.")
-    } finally {
-      setOutputBusy(null)
-    }
+    void runBluetoothAction(action, operation)
   }
 
   const save = async ({ selected }: InputFormValues) => {
@@ -174,6 +131,7 @@ function AudioInputPanelView() {
     try {
       const next = await dashboardApi.selectAudioDevice(selected)
       setResponse(next)
+      if (next.bluetooth) replaceStatus(next.bluetooth)
       setOutputVolumeDraft(next.bluetooth?.output_volume ?? null)
       reset({ selected: next.fallback_device ?? next.active_device ?? "" })
       toast.success("Microphone input applied and saved.")
@@ -189,12 +147,15 @@ function AudioInputPanelView() {
     ?? response?.active_device_name
     ?? "Select microphone"
   const dirty = isDirty
-  const bluetooth = response?.bluetooth
-  const bluetoothOperationBusy = Boolean(bluetoothBusy || bluetooth?.operation)
+  const bluetoothOperationBusy = bluetoothBusy
   const outputSelector = bluetooth?.default_sink ?? bluetooth?.output_devices[0]?.selector ?? ""
   const outputVolume = outputVolumeDraft ?? bluetooth?.output_volume ?? 0
   const selectedOutput = bluetooth?.output_devices.find((device) => device.selector === outputSelector)
-  const outputBusyState = Boolean(outputBusy || bluetoothOperationBusy)
+  const outputBusyState = Boolean(bluetoothOperationBusy)
+  const supportsBluetoothOperation = (operation: BluetoothOperation) => {
+    const operations = bluetooth?.capabilities?.operations
+    return operations?.length ? operations.includes(operation) : true
+  }
 
   return (
     <AudioSetupPage>
@@ -232,7 +193,7 @@ function AudioInputPanelView() {
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
-              <Select value={outputSelector} onValueChange={(value) => value && void runOutputAction("select-output", () => dashboardApi.setAudioOutput(value))} disabled={!bluetooth?.output_devices.length || outputBusyState}>
+              <Select value={outputSelector} onValueChange={(value) => value && void runOutputAction("select-output", () => dashboardApi.setAudioOutput(value))} disabled={!bluetooth?.output_devices.length || outputBusyState || !supportsBluetoothOperation("output_select")}>
                 <SelectTrigger aria-label="Audio output device" className="h-11 rounded-xl"><SelectValue>{selectedOutput?.name ?? "Select audio output"}</SelectValue></SelectTrigger>
                 <SelectContent>
                   {bluetooth?.output_devices.map((device) => <SelectItem key={device.selector} value={device.selector}>{device.name}{device.bluetooth ? " · Bluetooth" : ""}</SelectItem>)}
@@ -249,11 +210,11 @@ function AudioInputPanelView() {
                   </div>
                   <div className="space-y-2">
                     <div className="flex items-center justify-between gap-3 text-sm"><span>Output volume</span><span className="font-mono text-muted-foreground">{Math.round(outputVolume * 100)}%</span></div>
-                    <Slider aria-label="Audio output volume" min={0} max={1} step={0.01} value={[outputVolume]} disabled={outputBusyState || (outputVolumeDraft === null && selectedOutput.volume === null)} onValueChange={(value) => setOutputVolumeDraft(firstSliderValue(value))} onValueCommitted={(value) => { const next = firstSliderValue(value); void runOutputAction("output-volume", () => dashboardApi.setAudioOutputVolume(outputSelector, next)) }} className="py-3 [&_[data-slot=slider-track]]:h-2 [&_[data-slot=slider-thumb]]:size-5" />
+                    <Slider aria-label="Audio output volume" min={0} max={1} step={0.01} value={[outputVolume]} disabled={outputBusyState || !supportsBluetoothOperation("output_volume") || (outputVolumeDraft === null && selectedOutput.volume === null)} onValueChange={(value) => setOutputVolumeDraft(firstSliderValue(value))} onValueCommitted={(value) => { const next = firstSliderValue(value); void runOutputAction("output-volume", () => dashboardApi.setAudioOutputVolume(outputSelector, next)) }} className="py-3 [&_[data-slot=slider-track]]:h-2 [&_[data-slot=slider-thumb]]:size-5" />
                   </div>
                   <div className="flex items-center justify-between gap-3 rounded-lg bg-black/20 p-2.5">
                     <div className="flex items-center gap-2 text-sm">{bluetooth?.output_muted ? <VolumeXIcon className="size-4 text-amber-300" /> : <Volume2Icon className="size-4 text-emerald-300" />}<span>{bluetooth?.output_muted ? "Muted" : "Output enabled"}</span></div>
-                    <Switch checked={!bluetooth?.output_muted} disabled={outputBusyState} onCheckedChange={(checked) => void runOutputAction("output-mute", () => dashboardApi.setAudioOutputMute(outputSelector, !checked))} aria-label="Enable audio output" />
+                    <Switch checked={!bluetooth?.output_muted} disabled={outputBusyState || !supportsBluetoothOperation("output_mute")} onCheckedChange={(checked) => void runOutputAction("output-mute", () => dashboardApi.setAudioOutputMute(outputSelector, !checked))} aria-label="Enable audio output" />
                   </div>
                 </div>
               ) : <p className="text-sm text-muted-foreground">No PipeWire output devices were found.</p>}
@@ -261,75 +222,15 @@ function AudioInputPanelView() {
             </CardContent>
           </Card>
 
-          <Card className="border-white/5 bg-card/80">
-            <CardHeader>
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <CardTitle className="flex items-center gap-2"><BluetoothIcon className="size-4 text-violet-300" />Bluetooth devices</CardTitle>
-                  <CardDescription>Pair phones, speakers, and other Bluetooth audio devices. Role badges describe the direction relative to the Pi.</CardDescription>
-                </div>
-                <Badge variant={bluetooth?.streaming ? "default" : "outline"}>{bluetoothLabel(bluetooth)}</Badge>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center justify-between gap-3 rounded-xl border border-white/5 bg-white/[0.03] p-3">
-                <div className="min-w-0">
-                  <div className="text-sm font-medium">Bluetooth radio</div>
-                  <p className="text-xs text-muted-foreground">Turn Bluetooth off to disconnect devices and stop new connections.</p>
-                </div>
-                <Switch checked={Boolean(bluetooth?.powered)} disabled={!bluetooth?.available || bluetoothOperationBusy} onCheckedChange={(checked) => void runBluetoothAction(`power:${checked ? "on" : "off"}`, () => dashboardApi.setBluetoothPower(checked))} aria-label="Enable Bluetooth" />
-              </div>
-              <div className="space-y-2">
-                <label htmlFor="bluetooth-alias" className="text-sm font-medium">Visible Bluetooth name</label>
-                <div className="flex gap-2">
-                  <Input id="bluetooth-alias" value={bluetoothAlias} maxLength={64} disabled={!bluetooth?.available || bluetoothOperationBusy} onChange={(event) => setBluetoothAlias(event.target.value)} placeholder="LumiStripe" className="h-11 min-w-0 rounded-xl" />
-                  <Button variant="outline" className="h-11 shrink-0 rounded-xl" disabled={!bluetooth?.available || bluetoothOperationBusy || !bluetoothAlias.trim() || bluetoothAlias.trim() === bluetooth?.adapter_alias} onClick={() => void saveBluetoothAlias()}><SaveIcon />Save name</Button>
-                </div>
-                <p className="text-xs text-muted-foreground">This is the name phones, speakers, and other Bluetooth devices see when connecting to the Pi.</p>
-              </div>
-              <div className="flex gap-2">
-                <Button className="h-11 flex-1 rounded-xl" disabled={bluetoothOperationBusy || !bluetooth?.available || !bluetooth?.powered} onClick={() => void runBluetoothAction("scan", dashboardApi.scanBluetooth)}><SearchIcon />{bluetooth?.scanning ? "Scanning…" : "Scan for devices"}</Button>
-                <Button variant="outline" size="icon" className="size-11 rounded-xl" disabled={bluetoothOperationBusy} onClick={() => void load()} aria-label="Refresh Bluetooth status"><RefreshCwIcon /></Button>
-              </div>
-              {(bluetooth?.connected_inputs.length || bluetooth?.connected_outputs.length) ? <div className="grid gap-2 sm:grid-cols-2">
-                {bluetooth.connected_inputs.map((device) => <div key={`input-${device.address}`} className="rounded-xl border border-cyan-300/15 bg-cyan-300/5 p-3"><div className="flex items-center justify-between gap-2"><span className="truncate text-sm font-medium">{device.name}</span><Badge variant="outline">Input</Badge></div><p className="mt-1 text-xs text-muted-foreground">{bluetooth.streaming ? "Music stream detected" : "Connected; waiting for audio"}</p></div>)}
-                {bluetooth.connected_outputs.map((device) => <div key={`output-${device.address}`} className="rounded-xl border border-emerald-300/15 bg-emerald-300/5 p-3"><div className="flex items-center justify-between gap-2"><span className="truncate text-sm font-medium">{device.name}</span><Badge variant="outline">Output</Badge></div><p className="mt-1 text-xs text-muted-foreground">Connected speaker output</p></div>)}
-              </div> : null}
-              <div className="space-y-2">
-                {bluetooth?.devices.map((device) => (
-                  <div key={device.address} className="flex items-start gap-3 rounded-xl border border-white/5 bg-white/[0.03] p-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium">{device.name}</div>
-                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                        {device.roles.map((role) => <Badge key={role} variant="outline">{role === "input" ? "Input" : "Output"}</Badge>)}
-                        <span className="text-xs text-muted-foreground">{device.address}{device.connected ? " · Connected" : device.paired ? " · Paired" : " · New"}</span>
-                      </div>
-                    </div>
-                    <div className="flex max-w-[62%] shrink-0 flex-wrap justify-end gap-2">
-                      {device.connected ? (
-                        <>
-                          <Badge>Connected</Badge>
-                          <Button variant="outline" className="h-9 rounded-lg px-3 text-xs" disabled={bluetoothOperationBusy} onClick={() => void runBluetoothAction(`disconnect:${device.address}`, () => dashboardApi.disconnectBluetooth(device.address))}>Disconnect</Button>
-                        </>
-                      ) : !device.paired ? (
-                        <Button variant="outline" className="h-9 rounded-lg px-3 text-xs" disabled={bluetoothOperationBusy || !bluetooth?.powered} onClick={() => void runBluetoothAction(`pair:${device.address}`, () => dashboardApi.pairBluetooth(device.address))}>Pair</Button>
-                      ) : device.roles.length > 0 ? (
-                        device.roles.map((role) => <Button key={role} variant="outline" className="h-9 rounded-lg px-3 text-xs" disabled={bluetoothOperationBusy || !bluetooth?.powered} onClick={() => void runBluetoothAction(`connect:${role}:${device.address}`, () => dashboardApi.connectBluetooth(device.address, role))}>Connect as {role}</Button>)
-                      ) : (
-                        <Button variant="outline" className="h-9 rounded-lg px-3 text-xs" disabled={bluetoothOperationBusy || !bluetooth?.powered} onClick={() => void runBluetoothAction(`connect:${device.address}`, () => dashboardApi.connectBluetooth(device.address))}>Connect</Button>
-                      )}
-                      {device.paired && <Button variant="ghost" size="icon" className="size-9 shrink-0 rounded-lg" disabled={bluetoothOperationBusy} onClick={() => void runBluetoothAction(`forget:${device.address}`, () => dashboardApi.forgetBluetooth(device.address))} aria-label={`Forget ${device.name}`}><Trash2Icon /></Button>}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              {!bluetooth?.available && <div className="flex gap-2 rounded-xl bg-amber-500/10 p-3 text-sm text-amber-100"><CircleAlertIcon className="mt-0.5 size-4 shrink-0" /><span>Bluetooth tools are unavailable. Install the Pi Bluetooth/PipeWire setup from the deployment guide.</span></div>}
-              {bluetooth?.error && <div className="flex gap-2 rounded-xl bg-red-500/10 p-3 text-sm text-red-200"><CircleAlertIcon className="mt-0.5 size-4 shrink-0" /><span>{bluetooth.error}</span></div>}
-              {bluetooth?.available && !bluetooth.powered && !bluetooth.operation && <p className="text-sm text-muted-foreground">Bluetooth is off. Turn it on to scan, pair, or connect a device.</p>}
-              {bluetooth?.available && bluetooth.powered && !bluetooth.devices.length && !bluetooth.operation && <p className="text-sm text-muted-foreground">No devices found yet. Put a phone, speaker, or other Bluetooth audio device in pairing mode, then scan.</p>}
-              <p className="text-xs text-muted-foreground">Input devices send music to the Pi for animation analysis. Output devices receive the Pi’s audio stream.</p>
-            </CardContent>
-          </Card>
+          <BluetoothDevicePanel
+            status={bluetooth}
+            alias={bluetoothAlias}
+            busy={bluetoothOperationBusy}
+            onAliasChange={setBluetoothAlias}
+            onAliasSave={() => void saveBluetoothAlias()}
+            onAction={(action, operation, message) => void runBluetoothAction(action, operation, message)}
+            onRefresh={() => void refreshBluetooth()}
+          />
 
           <Card className="border-white/5 bg-card/80">
             <CardHeader>

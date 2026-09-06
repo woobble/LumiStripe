@@ -227,6 +227,28 @@ class AudioOutputDeviceInfo(BaseModel):
     connected: bool = True
 
 
+BluetoothOperation = Literal[
+    "power",
+    "rename",
+    "scan",
+    "pair",
+    "connect",
+    "disconnect",
+    "forget",
+    "output_select",
+    "output_volume",
+    "output_mute",
+]
+
+
+class BluetoothCapabilities(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    operations: tuple[BluetoothOperation, ...] = ()
+    max_inputs: int = Field(default=1, ge=1)
+    max_outputs: int = Field(default=1, ge=1)
+
+
 class BluetoothDeviceInfo(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -255,7 +277,10 @@ class BluetoothStatusResponse(BaseModel):
     output_volume: float | None = Field(default=None, ge=0.0, le=1.0)
     output_muted: bool = False
     output_ready: bool = False
+    capabilities: BluetoothCapabilities = Field(default_factory=BluetoothCapabilities)
     operation: str | None = None
+    operation_id: str | None = None
+    operation_state: Literal["idle", "running", "complete", "failed"] = "idle"
     error: str | None = None
 
 
