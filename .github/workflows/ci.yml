@@ -3,54 +3,134 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  test:
+  python:
+    name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
+    env:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          submodules: recursive          
+          persist-credentials: false
+          submodules: recursive
+
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           enable-cache: true
           python-version: ${{ matrix.python-version }}
+
       - name: Install native audio dependencies
         run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libasound2-dev
+
       - name: Install dependencies
-        run: uv sync --all-extras --dev
-      - name: Lint
+        run: uv sync --locked --all-extras --dev
+
+      - name: Lint Python
         run: uv run ruff check .
-      - name: Type check
-        run: uv run mypy packages/lumistripe-core/src/lumistripe apps/lumistripe-cli/src/lumistripe_cli apps/lumistripe-sim/src/lumistripe_sim
-      - name: Test
+
+      - name: Type check Python
+        run: >-
+          uv run mypy
+          packages/lumistripe-core/src/lumistripe
+          apps/lumistripe-cli/src/lumistripe_cli
+          apps/lumistripe-sim/src/lumistripe_sim
+          apps/lumistripe-web/src/lumistripe_web
+
+      - name: Test Python
         run: uv run python -m pytest -q --junitxml=junit.xml -o junit_family=legacy
+
       - name: Upload coverage to Codecov
-        if: matrix.python-version == '3.12'
-        uses: codecov/codecov-action@v7
+        if: matrix.python-version == '3.12' && env.CODECOV_TOKEN != ''
+        uses: codecov/codecov-action@a99c28d3f0da835de33ff2feb2e15691c7b9641f # v7
         with:
           files: ./coverage.xml
-          token: ${{ secrets.CODECOV_TOKEN }}
+          token: ${{ env.CODECOV_TOKEN }}
           flags: py3.12
           name: coverage-3.12
           fail_ci_if_error: true
+
       - name: Upload test results to Codecov
-        if: matrix.python-version == '3.12' && !cancelled()
-        uses: codecov/codecov-action@v7
+        if: matrix.python-version == '3.12' && !cancelled() && env.CODECOV_TOKEN != ''
+        uses: codecov/codecov-action@a99c28d3f0da835de33ff2feb2e15691c7b9641f # v7
         with:
           files: ./junit.xml
-          token: ${{ secrets.CODECOV_TOKEN }}
+          token: ${{ env.CODECOV_TOKEN }}
           flags: py3.12
           name: test-results-3.12
           report_type: test_results
           fail_ci_if_error: true
-      - name: Upload coverage
-        uses: actions/upload-artifact@v7
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: coverage-${{ matrix.python-version }}
           path: coverage.xml
+          if-no-files-found: warn
+          retention-days: 7
+
+  frontend:
+    name: Frontend and package build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/lumistripe-web/frontend
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Lint frontend
+        run: bun run lint
+
+      - name: Test frontend
+        run: bun run test
+
+      - name: Build frontend
+        run: bun run build
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Build Python distributions
+        working-directory: .
+        run: uv build --all-packages --out-dir dist
+
+      - name: Upload Python distributions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: python-distributions
+          path: dist/
           if-no-files-found: error
+          retention-days: 7

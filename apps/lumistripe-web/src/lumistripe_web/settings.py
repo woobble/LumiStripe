@@ -6,7 +6,7 @@ import re
 import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal, cast
 
 from lumistripe import (
     AudioConfig,
@@ -267,17 +267,18 @@ class CalibrationSettingsStore:
                                 f"audio profile {device_name!r} must be an object"
                             )
                         defaults = AudioTuningProfile()
+                        profile_values = {
+                            field_name: (
+                                _optional_float_field(encoded, field_name, device_name)
+                                if field_name == "hardware_gain_target"
+                                else _float_field(encoded, field_name, device_name)
+                                if field_name in encoded
+                                else getattr(defaults, field_name)
+                            )
+                            for field_name in AudioTuningProfile.__dataclass_fields__
+                        }
                         settings.audio_profiles[device_name] = AudioTuningProfile(
-                            **{
-                                field_name: (
-                                    _optional_float_field(encoded, field_name, device_name)
-                                    if field_name == "hardware_gain_target"
-                                    else _float_field(encoded, field_name, device_name)
-                                    if field_name in encoded
-                                    else getattr(defaults, field_name)
-                                )
-                                for field_name in AudioTuningProfile.__dataclass_fields__
-                            }
+                            **cast(dict[str, Any], profile_values)
                         )
                     except (TypeError, ValueError) as exc:
                         warnings.append(str(exc))

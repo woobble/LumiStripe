@@ -10,7 +10,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from importlib import metadata
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal, TypedDict, cast
 from uuid import uuid4
 
 import numpy as np
@@ -67,6 +67,7 @@ from .models import (
     AudioTuningValues,
     BluetoothCapabilities,
     BluetoothDeviceInfo,
+    BluetoothOperation,
     BluetoothStatusResponse,
     CalibrationSessionResponse,
     CalibrationStatus,
@@ -363,8 +364,19 @@ class _AudioCalibrationSession:
     duration_seconds: float
     frames: list[AudioFrame] = field(default_factory=list)
     features: list[MusicFeatures] = field(default_factory=list)
-    result: object | None = None
+    result: _AudioCalibrationResult | None = None
     error: str | None = None
+
+
+class _AudioCalibrationResult(TypedDict):
+    duration_seconds: float
+    samples: int
+    measured_floor: float
+    measured_peak: float
+    recommended_noise_floor: float
+    recommended_target_level: float
+    recommended_hardware_gain: float | None
+    recommended_idle_threshold_scale: float
 
 
 _ControllerFactory = Callable[[RuntimeSettings], Controller]
@@ -708,7 +720,10 @@ class LumiStripeRuntime:
             output_muted=current.output_muted,
             output_ready=current.output_ready,
             capabilities=BluetoothCapabilities(
-                operations=tuple(current.capabilities.operations),
+                operations=cast(
+                    tuple[BluetoothOperation, ...],
+                    tuple(current.capabilities.operations),
+                ),
                 max_inputs=current.capabilities.max_inputs,
                 max_outputs=current.capabilities.max_outputs,
             ),
@@ -1187,8 +1202,10 @@ class LumiStripeRuntime:
                 calibration = _expect(command.value, _AudioCalibrationStartCommand)
                 result = self._start_audio_calibration(calibration.device, calibration.duration_seconds)
             elif command.name == "audio_calibration_finish":
-                calibration = _expect(command.value, _AudioCalibrationFinishCommand)
-                result = self._finish_audio_calibration(calibration)
+                calibration_finish = _expect(
+                    command.value, _AudioCalibrationFinishCommand
+                )
+                result = self._finish_audio_calibration(calibration_finish)
             elif command.name == "startup_settings":
                 startup = _expect(command.value, _StartupSettingsCommand)
                 self._set_startup_restore(startup.restore_last_state)
@@ -2061,17 +2078,17 @@ class LumiStripeRuntime:
                 self._noise_samples.append(
                     min(1.0, max(0.0, self._audio_health.processor.input_rms))
                 )
-                session = self._audio_calibration
-                if session is not None and session.result is None:
-                    session.frames.append(self._audio_frame)
-                    session.features.append(self._music_features)
-                    if time.monotonic() - session.started_at >= session.duration_seconds:
+                audio_session = self._audio_calibration
+                if audio_session is not None and audio_session.result is None:
+                    audio_session.frames.append(self._audio_frame)
+                    audio_session.features.append(self._music_features)
+                    if time.monotonic() - audio_session.started_at >= audio_session.duration_seconds:
                         recommendation = recommend_audio_calibration(
-                            session.frames,
-                            session.features,
-                            duration=session.duration_seconds,
+                            audio_session.frames,
+                            audio_session.features,
+                            duration=audio_session.duration_seconds,
                         )
-                        session.result = {
+                        audio_session.result = {
                             "duration_seconds": recommendation.duration,
                             "samples": recommendation.samples,
                             "measured_floor": recommendation.measured_floor,
@@ -2648,7 +2665,18 @@ def _profile_values(profile: AudioTuningProfile) -> AudioTuningValues:
     )
 
 
-def _hardware_gain_values(controller: HardwareGainController | None) -> dict[str, object]:
+class _HardwareGainValues(TypedDict):
+    hardware_gain_supported: bool
+    hardware_gain_writable: bool
+    hardware_gain_backend: str | None
+    hardware_gain_control: str | None
+    hardware_gain_value: float | None
+    hardware_gain_error: str | None
+
+
+def _hardware_gain_values(
+    controller: HardwareGainController | None,
+) -> _HardwareGainValues:
     status = controller.status if controller is not None else None
     return {
         "hardware_gain_supported": bool(status and status.supported),

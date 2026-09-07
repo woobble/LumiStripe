@@ -1,5 +1,6 @@
 # LumiStripe
 
+[![CI](https://github.com/woobble/LumiStripe/actions/workflows/ci.yml/badge.svg)](https://github.com/woobble/LumiStripe/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/github/woobble/LumiStripe/graph/badge.svg?token=2ZJDBFMOOW)](https://codecov.io/github/woobble/LumiStripe)
 
 **Python-powered LED animation engine with audio-reactive lighting.**
@@ -186,5 +187,18 @@ uv run python -m pytest -q --cov-report=term-missing --cov-report=xml
 
 # Lint and type-check
 uv run ruff check .
-uv run mypy packages/lumistripe-core/src/lumistripe apps/lumistripe-cli/src/lumistripe_cli apps/lumistripe-sim/src/lumistripe_sim
+uv run mypy packages/lumistripe-core/src/lumistripe apps/lumistripe-cli/src/lumistripe_cli apps/lumistripe-sim/src/lumistripe_sim apps/lumistripe-web/src/lumistripe_web
+
+# Frontend checks
+cd apps/lumistripe-web/frontend
+bun install --frozen-lockfile
+bun run lint
+bun run test
+bun run build
+cd ../../..
+
+# Build all Python distributions after the frontend build
+uv build --all-packages --out-dir dist
 ```
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full development workflow and pull request expectations.
