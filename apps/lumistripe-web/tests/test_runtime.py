@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 
@@ -58,6 +59,23 @@ class FakeSPIStripe(TrackingStripe):
     def __init__(self, config, length: int) -> None:
         super().__init__(length)
         self.config = config
+
+
+class FailingStripe(TrackingStripe):
+    def flush(self) -> None:
+        raise RuntimeError("render failed")
+
+
+class BlockingStripe(TrackingStripe):
+    def __init__(self, length: int) -> None:
+        super().__init__(length)
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def flush(self) -> None:
+        self.entered.set()
+        self.release.wait()
+        super().flush()
 
 
 class FakeAudioInput:
@@ -221,6 +239,73 @@ def test_runtime_controls_simulation_and_cleans_up() -> None:
     assert runtime.snapshot().running is False
     assert stripe.close_count == 1
     assert stripe.force_flush_count >= 3
+
+
+def test_brightness_commands_coalesce_while_a_frame_is_in_progress() -> None:
+    stripe = BlockingStripe(8)
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(pixels=8),
+        controller_factory=lambda settings: stripe,
+    )
+    runtime.start()
+    assert stripe.entered.wait(1)
+
+    first = runtime.set_brightness(0.2)
+    second = runtime.set_brightness(0.8)
+    stripe.release.set()
+    try:
+        assert first.result(timeout=1).brightness == pytest.approx(0.8)
+        assert second.result(timeout=1).brightness == pytest.approx(0.8)
+    finally:
+        runtime.stop()
+
+
+def test_fatal_worker_failure_invokes_exit_callback_after_cleanup() -> None:
+    stripe = FailingStripe(8)
+    exits: list[int] = []
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(pixels=8),
+        controller_factory=lambda settings: stripe,
+        fatal_exit=exits.append,
+    )
+    runtime.start()
+    try:
+        deadline = time.monotonic() + 1
+        while not exits and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert exits == [1]
+        assert runtime.snapshot().error == "render failed"
+        assert stripe.close_count == 1
+    finally:
+        runtime.stop()
+
+
+def test_stalled_worker_invokes_exit_callback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runtime_module, "WORKER_STARTUP_GRACE_SECONDS", 0.01)
+    monkeypatch.setattr(runtime_module, "WORKER_WATCHDOG_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(runtime_module, "WORKER_STOP_GRACE_SECONDS", 0.01)
+    monkeypatch.setattr(runtime_module, "FRAME_STALL_GRACE_SECONDS", 0.01)
+    monkeypatch.setattr(runtime_module, "FRAME_STALL_MIN_SECONDS", 0.02)
+    monkeypatch.setattr(runtime_module, "FRAME_STALL_MAX_SECONDS", 0.05)
+
+    stripe = BlockingStripe(8)
+    exits: list[int] = []
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(pixels=8),
+        controller_factory=lambda settings: stripe,
+        fatal_exit=exits.append,
+    )
+    runtime.start()
+    assert stripe.entered.wait(1)
+    try:
+        deadline = time.monotonic() + 1
+        while not exits and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert exits == [1]
+    finally:
+        stripe.release.set()
+        runtime.stop(timeout=1)
+    assert "stopped making progress" in (runtime.snapshot().error or "")
 
 
 def test_microphone_monitor_stays_active_outside_dynamic_mode_and_saves_profile(

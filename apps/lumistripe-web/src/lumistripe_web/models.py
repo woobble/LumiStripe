@@ -101,6 +101,9 @@ class DashboardState(BaseModel):
     active_effects: tuple[str, ...] = ()
     uptime_seconds: float = 0.0
     frame_rate: float = 0.0
+    worker_heartbeat_age_seconds: float | None = None
+    missed_frame_count: int = 0
+    command_queue_depth: int = 0
     audio_health: str = "inactive"
     audio_callback_age_seconds: float | None = None
     audio_frame_age_seconds: float | None = None

@@ -86,6 +86,9 @@ export interface DashboardState {
   active_effects: string[]
   uptime_seconds: number
   frame_rate: number
+  worker_heartbeat_age_seconds: number | null
+  missed_frame_count: number
+  command_queue_depth: number
   audio_health: string
   audio_callback_age_seconds: number | null
   audio_frame_age_seconds: number | null

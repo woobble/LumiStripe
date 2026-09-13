@@ -4,6 +4,8 @@
 Description=LumiStripe web dashboard and LED controller
 Wants=network-online.target bluetooth.service
 After=network-online.target bluetooth.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -29,6 +31,8 @@ ExecStart=/bin/bash -c 'exec "@LUMI_HOME@/.local/bin/uv" run --extra hardware-ga
 
 Restart=on-failure
 RestartSec=3
+# The runtime exits after cleaning up when its renderer fails or stalls.
+# Restart=on-failure brings the complete hardware owner back in that case.
 TimeoutStartSec=300
 TimeoutStopSec=30
 KillSignal=SIGINT

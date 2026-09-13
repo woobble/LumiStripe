@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from collections.abc import Callable, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -28,6 +29,12 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         runtime = runtime_factory(resolved_settings)
+        # The default production runtime must terminate the process after it
+        # has cleaned up hardware following an unexpected worker failure. The
+        # service manager then applies its configured restart policy. Custom
+        # factories remain injectable for tests and embedded use.
+        if runtime_factory is LumiStripeRuntime:
+            runtime.set_fatal_exit(os._exit)
         app.state.runtime = runtime
         runtime.start()
         try:

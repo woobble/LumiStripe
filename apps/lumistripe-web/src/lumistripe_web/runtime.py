@@ -96,6 +96,12 @@ FPS_SAMPLE_SECONDS = 1.0
 AUDIO_ROUTE_POLL_SECONDS = 1.0
 CALIBRATION_FRAME_SECONDS = 0.05
 CALIBRATION_TIMEOUT_SECONDS = 300.0
+WORKER_STARTUP_GRACE_SECONDS = 3.0
+WORKER_WATCHDOG_INTERVAL_SECONDS = 0.1
+WORKER_STOP_GRACE_SECONDS = 0.5
+FRAME_STALL_GRACE_SECONDS = 0.5
+FRAME_STALL_MIN_SECONDS = 0.75
+FRAME_STALL_MAX_SECONDS = 5.0
 BLUETOOTH_PROFILE_KEY = "Bluetooth music"
 CalibrationPattern = Literal["white", "red", "green", "blue"]
 
@@ -240,6 +246,10 @@ class _Command:
     name: str
     value: object
     future: Future[object]
+    coalesced_futures: list[Future[object]] = field(default_factory=list)
+
+    def futures(self) -> tuple[Future[object], ...]:
+        return (self.future, *self.coalesced_futures)
 
 
 @dataclass(frozen=True, slots=True)
@@ -459,6 +469,7 @@ class LumiStripeRuntime:
         controller_factory: _ControllerFactory = _default_controller_factory,
         audio_factory: _AudioFactory = _default_audio_factory,
         bluetooth_manager: BluetoothAudioBackend | None = None,
+        fatal_exit: Callable[[int], None] | None = None,
     ) -> None:
         self.settings = settings or RuntimeSettings()
         self._controller_factory = controller_factory
@@ -503,9 +514,13 @@ class LumiStripeRuntime:
         self.player.set_brightness(1.0)
 
         self._commands: queue.Queue[_Command | None] = queue.Queue()
+        self._command_lock = threading.Lock()
+        self._coalesced_commands: dict[tuple[str, str | None], _Command] = {}
         self._stop_event = threading.Event()
+        self._watchdog_stop_event = threading.Event()
         self._started_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._watchdog_thread: threading.Thread | None = None
         self._snapshot_lock = threading.Lock()
         self._preview_lock = threading.Lock()
         self._revision = 0
@@ -549,6 +564,15 @@ class LumiStripeRuntime:
         self._fps_window_frames = 0
         self._frame_rate = 0.0
         self._audio_health = AudioInputHealth()
+        self._fatal_exit = fatal_exit
+        self._fatal_exit_lock = threading.Lock()
+        self._fatal_exit_requested = False
+        self._fatal_failure = threading.Event()
+        self._worker_state_lock = threading.Lock()
+        self._last_step_completed_s: float | None = None
+        self._last_step_expected_delay_s = MIN_FRAME_SECONDS
+        self._last_step_started_s: float | None = None
+        self._missed_frame_count = 0
 
     @property
     def healthy(self) -> bool:
@@ -559,18 +583,35 @@ class LumiStripeRuntime:
         if self._thread is not None and self._thread.is_alive():
             return
         self._stop_event.clear()
+        self._watchdog_stop_event.clear()
         self._started_event.clear()
+        self._fatal_exit_requested = False
+        self._fatal_failure.clear()
+        self._fatal_error = None
+        self._last_command_error = None
+        with self._worker_state_lock:
+            self._last_step_completed_s = None
+            self._last_step_started_s = None
+            self._last_step_expected_delay_s = MIN_FRAME_SECONDS
+            self._missed_frame_count = 0
         self._thread = threading.Thread(
             target=self._run,
             name="lumistripe-runtime",
             daemon=False,
         )
         self._thread.start()
+        self._watchdog_thread = threading.Thread(
+            target=self._watchdog_loop,
+            name="lumistripe-runtime-watchdog",
+            daemon=False,
+        )
+        self._watchdog_thread.start()
         if not self._started_event.wait(timeout):
             raise RuntimeUnavailableError("runtime startup timed out")
 
     def stop(self, *, timeout: float = 5.0) -> None:
         self._stop_event.set()
+        self._watchdog_stop_event.set()
         self._commands.put(None)
         thread = self._thread
         if thread is not None and thread is not threading.current_thread():
@@ -578,6 +619,18 @@ class LumiStripeRuntime:
             if thread.is_alive():
                 raise RuntimeUnavailableError("runtime shutdown timed out")
         self._thread = None
+        watchdog = self._watchdog_thread
+        if watchdog is not None and watchdog is not threading.current_thread():
+            watchdog.join(timeout)
+            if watchdog.is_alive():
+                raise RuntimeUnavailableError("runtime watchdog shutdown timed out")
+        self._watchdog_thread = None
+
+    def set_fatal_exit(self, callback: Callable[[int], None] | None) -> None:
+        """Set the process-exit callback used after an unexpected worker failure."""
+        if self._thread is not None and self._thread.is_alive():
+            raise RuntimeCommandError("fatal exit callback must be set before start")
+        self._fatal_exit = callback
 
     def snapshot(self) -> DashboardState:
         with self._snapshot_lock:
@@ -972,10 +1025,48 @@ class LumiStripeRuntime:
                 RuntimeUnavailableError(self._fatal_error or "runtime is not running")
             )
             return future
-        self._commands.put(_Command(name, value, future))
+        coalesce_key = self._coalesce_key(name, value)
+        with self._command_lock:
+            if coalesce_key is not None:
+                existing = self._coalesced_commands.get(coalesce_key)
+                if existing is not None:
+                    existing.value = value
+                    existing.coalesced_futures.append(future)
+                    return future
+            command = _Command(name, value, future)
+            if coalesce_key is not None:
+                self._coalesced_commands[coalesce_key] = command
+            self._commands.put(command)
         return future
 
+    @staticmethod
+    def _coalesce_key(name: str, value: object) -> tuple[str, str | None] | None:
+        if name != "brightness" or not isinstance(value, _TargetCommand):
+            return None
+        return (name, value.stripe_id)
+
+    def _take_command(self, command: _Command) -> None:
+        coalesce_key = self._coalesce_key(command.name, command.value)
+        if coalesce_key is None:
+            return
+        with self._command_lock:
+            if self._coalesced_commands.get(coalesce_key) is command:
+                del self._coalesced_commands[coalesce_key]
+
+    @staticmethod
+    def _resolve_command(
+        command: _Command, *, result: object | None = None, error: Exception | None = None
+    ) -> None:
+        for future in command.futures():
+            if future.done():
+                continue
+            if error is None:
+                future.set_result(result)
+            else:
+                future.set_exception(error)
+
     def _run(self) -> None:
+        unexpected_failure = False
         try:
             if self._uses_default_controller_factory:
                 built = self._build_topology(self._topology)
@@ -993,6 +1084,8 @@ class LumiStripeRuntime:
             self._started_event.set()
             self._frame_loop()
         except Exception as exc:  # noqa: BLE001 - a thread boundary must publish all failures
+            unexpected_failure = True
+            self._fatal_failure.set()
             self._fatal_error = str(exc)
             self._publish(running=False, error=self._fatal_error)
             self._started_event.set()
@@ -1000,6 +1093,61 @@ class LumiStripeRuntime:
             self._cleanup()
             self._reject_pending()
             self._publish(running=False, error=self._fatal_error)
+            if unexpected_failure or self._fatal_failure.is_set():
+                self._request_fatal_exit()
+
+    def _request_fatal_exit(self) -> None:
+        callback = self._fatal_exit
+        if callback is None:
+            return
+        with self._fatal_exit_lock:
+            if self._fatal_exit_requested:
+                return
+            self._fatal_exit_requested = True
+        callback(1)
+
+    def _watchdog_loop(self) -> None:
+        while not self._watchdog_stop_event.wait(WORKER_WATCHDOG_INTERVAL_SECONDS):
+            thread = self._thread
+            if thread is None or not thread.is_alive():
+                return
+            if not self._worker_is_stalled():
+                continue
+
+            self._fatal_failure.set()
+            self._fatal_error = (
+                "the rendering worker stopped making progress before its frame deadline"
+            )
+            self._stop_event.set()
+            self._commands.put(None)
+            thread.join(WORKER_STOP_GRACE_SECONDS)
+            if thread.is_alive():
+                self._request_fatal_exit()
+            return
+
+    def _worker_is_stalled(self) -> bool:
+        if self._stop_event.is_set() or not self._started_event.is_set():
+            return False
+        started_at = self._started_at_s
+        if started_at is None or time.monotonic() - started_at < WORKER_STARTUP_GRACE_SECONDS:
+            return False
+        if self._calibration is not None or self._stripe_test is not None:
+            return False
+        if self._output_gates and all(gate.blackout for gate in self._output_gates):
+            return False
+        with self._worker_state_lock:
+            completed_at = self._last_step_completed_s
+            expected_delay = self._last_step_expected_delay_s
+        if completed_at is None:
+            return False
+        timeout = min(
+            FRAME_STALL_MAX_SECONDS,
+            max(
+                FRAME_STALL_MIN_SECONDS,
+                expected_delay * 4.0 + FRAME_STALL_GRACE_SECONDS,
+            ),
+        )
+        return time.monotonic() - completed_at > timeout
 
     def _build_topology(self, topology: StripeTopologySettings) -> _BuiltTopology:
         physical: list[Controller] = []
@@ -1095,25 +1243,53 @@ class LumiStripeRuntime:
 
     def _frame_loop(self) -> None:
         next_frame_at = time.monotonic()
+        pending_command: _Command | None = None
+        with self._worker_state_lock:
+            self._last_step_completed_s = next_frame_at
+            self._last_step_expected_delay_s = MIN_FRAME_SECONDS
         while not self._stop_event.is_set():
             now = time.monotonic()
-            timeout = max(0.0, min(next_frame_at - now, 0.05))
-            try:
-                command = self._commands.get(timeout=timeout)
-            except queue.Empty:
-                command = None
-            if command is not None:
+            if now >= next_frame_at:
+                with self._worker_state_lock:
+                    self._last_step_started_s = now
+                delay = self._step()
+                completed_at = time.monotonic()
+                with self._worker_state_lock:
+                    if completed_at > next_frame_at + MIN_FRAME_SECONDS:
+                        self._missed_frame_count += 1
+                    self._last_step_completed_s = completed_at
+                    self._last_step_expected_delay_s = max(delay, MIN_FRAME_SECONDS)
+                next_frame_at = completed_at + max(delay, MIN_FRAME_SECONDS)
+                continue
+
+            if pending_command is not None:
+                self._take_command(pending_command)
+                command = pending_command
+                pending_command = None
                 self._execute(command)
                 continue
-            if self._stop_event.is_set():
-                break
-            now = time.monotonic()
-            if now < next_frame_at:
+
+            timeout = max(0.0, min(next_frame_at - now, 0.05))
+            next_command: _Command | None
+            try:
+                next_command = self._commands.get(timeout=timeout)
+            except queue.Empty:
                 continue
-            next_frame_at = now + self._step()
+            if next_command is None:
+                break
+            pending_command = next_command
+
+        if pending_command is not None:
+            self._take_command(pending_command)
+            self._resolve_command(
+                pending_command,
+                error=RuntimeUnavailableError(
+                    self._fatal_error or "runtime stopped"
+                ),
+            )
 
     def _execute(self, command: _Command) -> None:
-        if command.future.cancelled():
+        if all(future.cancelled() or future.done() for future in command.futures()):
             return
         try:
             self._last_command_error = None
@@ -1220,13 +1396,11 @@ class LumiStripeRuntime:
                 result = self._publish(running=True)
             else:
                 raise RuntimeCommandError(f"unknown runtime command: {command.name}")
-            if not command.future.done():
-                command.future.set_result(result)
+            self._resolve_command(command, result=result)
         except Exception as exc:  # noqa: BLE001 - every command must resolve its future
             self._last_command_error = str(exc)
             self._publish(running=True)
-            if not command.future.done():
-                command.future.set_exception(exc)
+            self._resolve_command(command, error=exc)
 
     def _target_playbacks(
         self, stripe_id: str | None
@@ -2194,6 +2368,17 @@ class LumiStripeRuntime:
         with self._snapshot_lock:
             self._audio_telemetry = telemetry
 
+    def _worker_heartbeat_age(self) -> float | None:
+        with self._worker_state_lock:
+            completed_at = self._last_step_completed_s
+        if completed_at is None:
+            return None
+        return max(0.0, time.monotonic() - completed_at)
+
+    def _command_queue_depth(self) -> int:
+        with self._command_lock:
+            return self._commands.qsize()
+
     def _publish(
         self,
         *,
@@ -2224,6 +2409,9 @@ class LumiStripeRuntime:
             active_effects=self.playback.active_effect_names,
             uptime_seconds=uptime_seconds,
             frame_rate=self._frame_rate,
+            worker_heartbeat_age_seconds=self._worker_heartbeat_age(),
+            missed_frame_count=self._missed_frame_count,
+            command_queue_depth=self._command_queue_depth(),
             audio_health=self._audio_health_status(uptime_seconds),
             audio_callback_age_seconds=self._audio_health.last_callback_age,
             audio_frame_age_seconds=self._audio_health.last_frame_age,
@@ -2571,6 +2759,25 @@ class LumiStripeRuntime:
                     action="Check CPU load and audio stability, or choose a less demanding animation.",
                 )
             )
+        queue_depth = self._command_queue_depth()
+        if running and queue_depth > 8:
+            issues.append(
+                DiagnosticIssue(
+                    severity="warning",
+                    title="Dashboard command queue is backed up",
+                    message=f"{queue_depth} lighting commands are waiting to be applied.",
+                    action="Wait for the current command burst to finish or reduce repeated control updates.",
+                )
+            )
+        if running and self._missed_frame_count > 3:
+            issues.append(
+                DiagnosticIssue(
+                    severity="warning",
+                    title="Renderer missed frame deadlines",
+                    message=f"{self._missed_frame_count} frame deadlines have been missed.",
+                    action="Check CPU load, hardware output latency, and animation complexity.",
+                )
+            )
         return tuple(issues)
 
     def _cleanup(self) -> None:
@@ -2615,14 +2822,19 @@ class LumiStripeRuntime:
                 self._bluetooth.restore_default_source(previous_source)
 
     def _reject_pending(self) -> None:
+        with self._command_lock:
+            self._coalesced_commands.clear()
         while True:
             try:
                 command = self._commands.get_nowait()
             except queue.Empty:
                 return
-            if command is not None and not command.future.done():
-                command.future.set_exception(
-                    RuntimeUnavailableError(self._fatal_error or "runtime stopped")
+            if command is not None:
+                self._resolve_command(
+                    command,
+                    error=RuntimeUnavailableError(
+                        self._fatal_error or "runtime stopped"
+                    ),
                 )
 
 
