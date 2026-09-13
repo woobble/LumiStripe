@@ -33,15 +33,28 @@ const layouts: Array<{ value: StripeLayout; label: string; detail: string }> = [
 
 const stripeTopologySchema = z.object({
   layout: z.enum(["mirrored", "continuous", "independent"]),
+  power_budget_enabled: z.boolean(),
+  power_budget_watts: z.number().positive("Set a positive wagon power limit.").nullable(),
   outputs: z.array(z.object({
     id: z.string().min(1),
     name: z.string().trim().min(1, "Every stripe needs a name.").max(40),
     pixels: z.number().int().min(1).max(4096),
+    voltage_v: z.number().positive("Voltage must be greater than zero."),
+    full_white_current_a: z.number().positive("Current must be greater than zero."),
+    power_limit_watts: z.number().positive("Limit must be greater than zero.").nullable(),
   }).passthrough()).min(1).max(2),
+}).refine((value) => !value.power_budget_enabled || value.power_budget_watts !== null, {
+  path: ["power_budget_watts"],
+  message: "Set a positive wagon power limit when the budget is enabled.",
 })
 
 function copyTopology(topology: StripeTopology): StripeTopology {
-  return { layout: topology.layout, outputs: topology.outputs.map((output) => ({ ...output })) }
+  return {
+    layout: topology.layout,
+    power_budget_enabled: topology.power_budget_enabled,
+    power_budget_watts: topology.power_budget_watts,
+    outputs: topology.outputs.map((output) => ({ ...output })),
+  }
 }
 
 function newStripeId() {
@@ -62,12 +75,15 @@ function newStripe(existing: StripeOutputConfig[]): StripeOutputConfig {
     chip: "/dev/gpiochip0",
     data_pin: existing.length === 0 ? 10 : 20,
     clock_pin: existing.length === 0 ? 11 : 21,
+    voltage_v: existing[0]?.voltage_v ?? 5,
+    full_white_current_a: existing[0]?.full_white_current_a ?? 0.06,
+    power_limit_watts: null,
   }
 }
 
 export function StripeManagementPanel({ controller }: { controller: DashboardController }) {
   const { state, pendingCommand } = controller
-  const form = useForm<StripeTopology>({ resolver: zodResolver(stripeTopologySchema) as never, defaultValues: { layout: "mirrored", outputs: [] } })
+  const form = useForm<StripeTopology>({ resolver: zodResolver(stripeTopologySchema) as never, defaultValues: { layout: "mirrored", power_budget_enabled: false, power_budget_watts: null, outputs: [] } })
   const { control, watch, setValue, reset, handleSubmit, formState: { isDirty, errors } } = form
   const { fields, append, remove: removeField, move: moveField } = useFieldArray({ control, name: "outputs" })
   const draft = watch()
@@ -124,6 +140,40 @@ export function StripeManagementPanel({ controller }: { controller: DashboardCon
         </CardContent>
       </Card>
 
+      <Card className="border-white/5 bg-card/80">
+        <CardHeader>
+          <CardTitle>Power budget</CardTitle>
+          <CardDescription>Estimate LED load and cap all outputs together to protect the wagon supply.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <Toggle
+            pressed={draft.power_budget_enabled}
+            onPressedChange={(pressed) => setValue("power_budget_enabled", pressed, { shouldDirty: true, shouldValidate: true })}
+            variant="outline"
+            aria-label={`Power budget ${draft.power_budget_enabled ? "on" : "off"}`}
+            className="h-11 w-full justify-between px-3 data-pressed:border-violet-300/30 data-pressed:bg-violet-400/15 data-pressed:text-violet-100"
+          >
+            <span>Limit total LED power</span>
+            <span className="text-xs text-muted-foreground">{draft.power_budget_enabled ? "On" : "Off"}</span>
+          </Toggle>
+          {draft.power_budget_enabled && (
+            <Field label="Wagon limit (watts)">
+              <Input
+                type="number"
+                min={0.1}
+                step={0.1}
+                inputMode="decimal"
+                value={draft.power_budget_watts ?? ""}
+                aria-invalid={errors.power_budget_watts ? true : undefined}
+                onChange={(event) => setValue("power_budget_watts", event.target.value === "" ? null : Number(event.target.value), { shouldDirty: true, shouldValidate: true })}
+              />
+              <InlineError message={errors.power_budget_watts?.message} />
+            </Field>
+          )}
+          <p className="text-xs text-muted-foreground">The estimate uses each strip’s voltage and full-white current calibration. The cap changes output brightness without changing animation settings.</p>
+        </CardContent>
+      </Card>
+
       {fields.map((field, index) => {
         const output = draft.outputs[index]
         if (!output) return null
@@ -141,6 +191,11 @@ export function StripeManagementPanel({ controller }: { controller: DashboardCon
           <CardContent className="space-y-4">
             <Field label="Name"><Input value={output.name} maxLength={40} aria-invalid={errors.outputs?.[index]?.name ? true : undefined} onChange={(event) => updateOutput(index, { name: event.target.value })} />{errors.outputs?.[index]?.name && <InlineError message={errors.outputs[index]?.name?.message} />}</Field>
             <Field label="Pixel count"><Input type="number" min={1} max={4096} inputMode="numeric" value={output.pixels} aria-invalid={errors.outputs?.[index]?.pixels ? true : undefined} onChange={(event) => updateOutput(index, { pixels: Number(event.target.value) })} />{errors.outputs?.[index]?.pixels && <InlineError message={errors.outputs[index]?.pixels?.message} />}</Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Voltage (V)"><Input type="number" min={0.1} step={0.1} inputMode="decimal" value={output.voltage_v} aria-invalid={errors.outputs?.[index]?.voltage_v ? true : undefined} onChange={(event) => updateOutput(index, { voltage_v: Number(event.target.value) })} />{errors.outputs?.[index]?.voltage_v && <InlineError message={errors.outputs[index]?.voltage_v?.message} />}</Field>
+              <Field label="Full-white current / pixel (mA)"><Input type="number" min={0.1} step={0.1} inputMode="decimal" value={output.full_white_current_a * 1000} aria-invalid={errors.outputs?.[index]?.full_white_current_a ? true : undefined} onChange={(event) => updateOutput(index, { full_white_current_a: Number(event.target.value) / 1000 })} />{errors.outputs?.[index]?.full_white_current_a && <InlineError message={errors.outputs[index]?.full_white_current_a?.message} />}</Field>
+            </div>
+            <Field label="Optional output limit (watts)"><Input type="number" min={0.1} step={0.1} inputMode="decimal" placeholder="No separate limit" value={output.power_limit_watts ?? ""} aria-invalid={errors.outputs?.[index]?.power_limit_watts ? true : undefined} onChange={(event) => updateOutput(index, { power_limit_watts: event.target.value === "" ? null : Number(event.target.value) })} />{errors.outputs?.[index]?.power_limit_watts && <InlineError message={errors.outputs[index]?.power_limit_watts?.message} />}</Field>
             <div className="grid grid-cols-2 gap-2">
               {(["spi", "gpio"] as StripeBackend[]).map((backend) => <Button key={backend} type="button" variant={output.backend === backend ? "default" : "outline"} className="h-11 uppercase" onClick={() => updateOutput(index, { backend })}>{backend}</Button>)}
             </div>

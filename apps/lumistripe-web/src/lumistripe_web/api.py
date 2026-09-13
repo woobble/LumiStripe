@@ -231,6 +231,8 @@ async def test_stripe(request: Request, body: StripeTestRequest) -> DashboardSta
 def _topology_settings(body: StripeTopologyRequest) -> StripeTopologySettings:
     return StripeTopologySettings(
         layout=body.layout,
+        power_budget_enabled=body.power_budget_enabled,
+        power_budget_watts=body.power_budget_watts,
         outputs=tuple(
             StripeOutputSettings(
                 **output.model_dump(exclude={"last_output_at", "error"})

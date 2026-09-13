@@ -35,6 +35,7 @@ from lumistripe import (
     MusicActivityDetector,
     MusicFeatures,
     NullController,
+    OutputPowerEstimate,
     PixelBuffer,
     PlaybackConfig,
     PlaybackEngine,
@@ -45,7 +46,9 @@ from lumistripe import (
     SPIConfig,
     SPIStripe,
     Stripe,
+    apply_power_budget,
     demo_snapshot,
+    estimate_frame_power,
     list_input_device_details,
 )
 from lumistripe.audio import BandTuple, recommend_audio_calibration
@@ -74,6 +77,8 @@ from .models import (
     ColorCorrectionProfile,
     DashboardState,
     DiagnosticIssue,
+    PowerBudgetState,
+    PowerOutputState,
     RuntimeKind,
     StartupPlaybackState,
     StartupSettingsResponse,
@@ -526,6 +531,11 @@ class LumiStripeRuntime:
         self._revision = 0
         self._preview_sequence = 0
         self._preview_outputs: tuple[bytes, ...] = ()
+        self._power_preview_override: tuple[bytes, ...] | None = None
+        self._power_budget_state = PowerBudgetState(
+            enabled=self._topology.power_budget_enabled,
+            budget_watts=self._topology.power_budget_watts,
+        )
         self._snapshot = DashboardState(
             runtime=self.settings.kind,
             mode=PlaybackMode.STATIC,
@@ -1075,6 +1085,12 @@ class LumiStripeRuntime:
                 physical_controller = self._controller_factory(self.settings)
                 self._raw_controller = self._with_color_correction(physical_controller)
                 self._controller = OutputGateController(self._raw_controller)
+                if len(self._correction_controllers) == len(self._topology.outputs):
+                    self._output_gates = tuple(
+                        OutputGateController(controller)
+                        for controller in self._correction_controllers
+                    )
+                    self._sync_independent_playbacks()
             self._started_at_s = time.monotonic()
             self._fps_window_started_s = self._started_at_s
             self._bluetooth.start()
@@ -1515,6 +1531,11 @@ class LumiStripeRuntime:
         elif previous.layout != "independent" and topology.layout == "independent":
             self._playbacks.clear()
         self._topology = topology
+        self._power_budget_state = PowerBudgetState(
+            enabled=topology.power_budget_enabled,
+            budget_watts=topology.power_budget_watts,
+        )
+        self._power_preview_override = None
         self._install_topology(built)
         try:
             with self._settings_io_lock:
@@ -1621,6 +1642,11 @@ class LumiStripeRuntime:
                 raise RuntimeCommandError(self._fatal_error) from rollback_exc
             raise RuntimeCommandError(f"temporary configuration failed: {exc}") from exc
         self._topology = topology
+        self._power_budget_state = PowerBudgetState(
+            enabled=topology.power_budget_enabled,
+            budget_watts=topology.power_budget_watts,
+        )
+        self._power_preview_override = None
         self._install_topology(built)
 
     def _initialize_audio_monitor(self) -> None:
@@ -2284,18 +2310,138 @@ class LumiStripeRuntime:
 
         if self._topology.layout == "independent" and self._output_gates:
             delays = [
-                self._playbacks[output.id][1].step(gate, snapshot=snapshot)
+                self._playbacks[output.id][1].step(
+                    gate, snapshot=snapshot, flush=False
+                )
                 for output, gate in zip(
                     self._topology.outputs, self._output_gates, strict=True
                 )
             ]
             delay = min(delays)
         else:
-            delay = self.playback.step(self._controller, snapshot=snapshot)
+            delay = self.playback.step(
+                self._controller, snapshot=snapshot, flush=False
+            )
+        self._flush_power_limited_outputs()
         self._update_audio_telemetry()
         self._record_frame()
         self._publish(running=True)
         return max(delay, MIN_FRAME_SECONDS)
+
+    def _flush_power_limited_outputs(self) -> None:
+        """Estimate the rendered frame, apply one cap, and flush each output once."""
+        gates = self._output_gates
+        if not gates:
+            assert self._controller is not None
+            self._controller.flush()
+            self._power_budget_state = PowerBudgetState(
+                enabled=self._topology.power_budget_enabled,
+                budget_watts=self._topology.power_budget_watts,
+            )
+            self._power_preview_override = None
+            return
+
+        shared_blackout = (
+            self._topology.layout != "independent"
+            and self._controller is not None
+            and self._controller.blackout
+        )
+        raw = self._raw_controller
+        original_frames = [gate.pixels().copy() for gate in gates]
+        if self._topology.layout == "mirrored" and isinstance(raw, ScaledMultiController):
+            mapped_frames = raw.output_pixels()
+            for gate, frame in zip(gates, mapped_frames, strict=True):
+                gate.set_pixels(frame)
+            original_frames = [gate.pixels().copy() for gate in gates]
+
+        estimates: list[OutputPowerEstimate] = []
+        corrected_frames: list[np.ndarray] = []
+        for index, (output, gate) in enumerate(
+            zip(self._topology.outputs, gates, strict=True)
+        ):
+            frame = gate.pixels().copy()
+            corrected = frame.copy()
+            if index < len(self._correction_controllers):
+                correction = self._correction_controllers[index].correction
+                channels = np.array(
+                    (correction.red, correction.green, correction.blue),
+                    dtype=np.uint16,
+                )
+                corrected[:, :3] = (
+                    corrected[:, :3].astype(np.uint16) * channels // 255
+                ).astype(np.uint8)
+            corrected_frames.append(corrected)
+            watts = 0.0
+            if not shared_blackout and not gate.blackout:
+                watts = estimate_frame_power(
+                    corrected,
+                    voltage_v=output.voltage_v,
+                    full_white_current_a=output.full_white_current_a,
+                )
+            estimates.append(
+                OutputPowerEstimate(
+                    output_id=output.id,
+                    watts=watts,
+                    limit_watts=output.power_limit_watts,
+                )
+            )
+
+        result = apply_power_budget(
+            estimates,
+            enabled=self._topology.power_budget_enabled and not shared_blackout,
+            budget_watts=self._topology.power_budget_watts,
+        )
+        self._power_budget_state = PowerBudgetState(
+            enabled=self._topology.power_budget_enabled,
+            budget_watts=self._topology.power_budget_watts,
+            estimated_watts=result.estimated_watts,
+            applied_scale=result.applied_scale,
+            limiting_output_id=result.limiting_output_id,
+            outputs=tuple(
+                PowerOutputState(
+                    output_id=estimate.output_id,
+                    estimated_watts=estimate.watts,
+                    limit_watts=estimate.limit_watts,
+                    applied_scale=result.applied_scale,
+                )
+                for estimate in result.outputs
+            ),
+        )
+
+        scaled_frames: list[np.ndarray] = []
+        try:
+            for index, (gate, frame) in enumerate(zip(gates, original_frames, strict=True)):
+                scaled = frame.copy()
+                if not shared_blackout and not gate.blackout:
+                    scaled[:, 3] = np.floor(
+                        scaled[:, 3].astype(np.float64) * result.applied_scale
+                    ).astype(np.uint8)
+                    gate.set_pixels(scaled)
+                    gate.flush()
+                    physical = corrected_frames[index].copy()
+                    physical[:, 3] = scaled[:, 3]
+                    scaled_frames.append(physical)
+                else:
+                    scaled_frames.append(np.zeros_like(frame))
+        finally:
+            for gate, frame in zip(gates, original_frames, strict=True):
+                gate.set_pixels(frame)
+
+        if shared_blackout:
+            self._power_preview_override = tuple(
+                bytes(output.pixels * 4) for output in self._topology.outputs
+            )
+        else:
+            self._power_preview_override = tuple(
+                self._preview_bytes(frame, index)
+                for index, frame in enumerate(scaled_frames)
+            )
+
+    def _preview_bytes(self, pixels: np.ndarray, index: int) -> bytes:
+        frame = pixels.copy()
+        if index < len(self._topology.outputs) and self._topology.outputs[index].reversed:
+            frame = frame[::-1]
+        return frame.tobytes()
 
     def _update_audio_telemetry(self) -> None:
         preview = self.playback.mode is not PlaybackMode.DYNAMIC
@@ -2421,6 +2567,7 @@ class LumiStripeRuntime:
             color_corrections=self._color_correction_profiles(),
             calibration=self._calibration_status(),
             stripe_topology=self._stripe_topology_state(),
+            power_budget=self._power_budget_state,
             stripe_playback=self._stripe_playback_state(),
             diagnostic_issues=self._diagnostic_issues(
                 running=running,
@@ -2439,11 +2586,22 @@ class LumiStripeRuntime:
         copies here lets the async API serve a frame without racing a render or
         holding the runtime thread while a network client is slow.
         """
+        if self._power_preview_override is not None:
+            override = self._power_preview_override
+            self._power_preview_override = None
+            with self._preview_lock:
+                self._preview_sequence += 1
+                self._preview_outputs = override
+            return
         outputs: list[bytes] = []
         gates = self._output_gates
         if gates:
             for index, gate in enumerate(gates):
-                if gate.blackout:
+                if gate.blackout or (
+                    self._topology.layout != "independent"
+                    and self._controller is not None
+                    and self._controller.blackout
+                ):
                     outputs.append(bytes(gate.length * 4))
                     continue
                 pixels = gate.pixels().copy()
@@ -2538,6 +2696,8 @@ class LumiStripeRuntime:
     def _stripe_topology_state(self) -> StripeTopology:
         return StripeTopology(
             layout=self._topology.layout,
+            power_budget_enabled=self._topology.power_budget_enabled,
+            power_budget_watts=self._topology.power_budget_watts,
             outputs=tuple(
                 StripeOutputConfig(
                     id=output.id,
@@ -2550,6 +2710,9 @@ class LumiStripeRuntime:
                     chip=output.chip,
                     data_pin=output.data_pin,
                     clock_pin=output.clock_pin,
+                    voltage_v=output.voltage_v,
+                    full_white_current_a=output.full_white_current_a,
+                    power_limit_watts=output.power_limit_watts,
                     last_output_at=(
                         self._output_gates[index].last_successful_update_at
                         if index < len(self._output_gates)
@@ -2707,6 +2870,44 @@ class LumiStripeRuntime:
                     action=(
                         "Check the dashboard settings file, then save the affected profile again."
                     ),
+                )
+            )
+
+        power = self._power_budget_state
+        if power.enabled and power.applied_scale < 0.999999:
+            limiting = (
+                next(
+                    (
+                        output.name
+                        for output in self._topology.outputs
+                        if output.id == power.limiting_output_id
+                    ),
+                    "Global budget",
+                )
+                if power.limiting_output_id is not None
+                else "Global budget"
+            )
+            cap = power.budget_watts or 0.0
+            if power.limiting_output_id is not None:
+                cap = next(
+                    (
+                        output.power_limit_watts
+                        for output in self._topology.outputs
+                        if output.id == power.limiting_output_id
+                        and output.power_limit_watts is not None
+                    ),
+                    cap,
+                )
+            issues.append(
+                DiagnosticIssue(
+                    severity="warning",
+                    title="Power budget is limiting brightness",
+                    message=(
+                        f"The rendered frame is estimated at {power.estimated_watts:.1f} W; "
+                        f"{limiting} limited it to {cap:.1f} W "
+                        f"({power.applied_scale * 100:.0f}% brightness)."
+                    ),
+                    action="Lower the effect brightness or update the power budget and electrical calibration.",
                 )
             )
 

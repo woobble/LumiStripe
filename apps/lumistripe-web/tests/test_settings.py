@@ -38,7 +38,7 @@ def test_settings_round_trip_both_profiles_atomically(tmp_path: Path) -> None:
     assert warning is None
     assert profiles["primary"] == ColorCorrection(255, 220, 180)
     assert profiles["secondary"] == ColorCorrection(200, 210, 220)
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 4
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 5
     assert not list(path.parent.glob("*.tmp"))
 
 
@@ -71,6 +71,50 @@ def test_stripe_topology_round_trip_preserves_empty_and_mixed_outputs(
     store.save_stripes(StripeTopologySettings(layout="independent"))
     loaded, _ = store.load_all()
     assert loaded.stripe_topology == StripeTopologySettings(layout="independent")
+
+
+def test_power_budget_round_trip_and_legacy_defaults(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    store = CalibrationSettingsStore(path)
+    topology = StripeTopologySettings(
+        layout="mirrored",
+        power_budget_enabled=True,
+        power_budget_watts=18.5,
+        outputs=(
+            StripeOutputSettings(
+                id="left",
+                name="Left",
+                pixels=60,
+                voltage_v=5.1,
+                full_white_current_a=0.055,
+                power_limit_watts=12.0,
+            ),
+        ),
+    )
+    store.save_stripes(topology)
+    loaded, warning = store.load_all()
+    assert warning is None
+    assert loaded.stripe_topology == topology
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 5
+
+    path.write_text(
+        json.dumps(
+            {
+                "version": 4,
+                "color_correction": {},
+                "stripes": {
+                    "layout": "mirrored",
+                    "outputs": [{"id": "legacy", "name": "Legacy", "pixels": 10}],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    legacy, warning = store.load_all()
+    assert warning is None
+    assert legacy.stripe_topology == StripeTopologySettings(
+        outputs=(StripeOutputSettings(id="legacy", name="Legacy", pixels=10),)
+    )
 
 
 def test_invalid_settings_fall_back_to_neutral_with_warning(tmp_path: Path) -> None:

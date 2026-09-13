@@ -46,6 +46,9 @@ export interface StripeOutputConfig {
   chip: string
   data_pin: number
   clock_pin: number
+  voltage_v: number
+  full_white_current_a: number
+  power_limit_watts: number | null
   last_output_at?: string | null
   error?: string | null
 }
@@ -53,6 +56,24 @@ export interface StripeOutputConfig {
 export interface StripeTopology {
   layout: StripeLayout
   outputs: StripeOutputConfig[]
+  power_budget_enabled: boolean
+  power_budget_watts: number | null
+}
+
+export interface PowerOutputState {
+  output_id: string
+  estimated_watts: number
+  limit_watts: number | null
+  applied_scale: number
+}
+
+export interface PowerBudgetState {
+  enabled: boolean
+  budget_watts: number | null
+  estimated_watts: number
+  applied_scale: number
+  limiting_output_id: string | null
+  outputs: PowerOutputState[]
 }
 
 export interface StripePlaybackState {
@@ -98,6 +119,7 @@ export interface DashboardState {
   color_corrections: ColorCorrectionProfile[]
   calibration: CalibrationStatus
   stripe_topology: StripeTopology
+  power_budget: PowerBudgetState
   stripe_playback: StripePlaybackState[]
   diagnostic_issues: DiagnosticIssue[]
   error: string | null
@@ -284,13 +306,32 @@ const playbackModeSchema = z.enum(["solid", "static", "cycling", "dynamic"])
 const stripeOutputSchema = z.object({
   id: z.string(), name: z.string(), pixels: z.number(), backend: z.enum(["spi", "gpio"]),
   reversed: z.boolean(), spi_device: z.string(), spi_speed_hz: z.number(), chip: z.string(),
-  data_pin: z.number(), clock_pin: z.number(), last_output_at: z.string().nullable().optional(), error: z.string().nullable().optional(),
+  data_pin: z.number(), clock_pin: z.number(), voltage_v: z.number().default(5),
+  full_white_current_a: z.number().default(0.06), power_limit_watts: z.number().nullable().default(null),
+  last_output_at: z.string().nullable().optional(), error: z.string().nullable().optional(),
 })
-const stripeTopologySchema = z.object({ layout: z.enum(["mirrored", "continuous", "independent"]), outputs: z.array(stripeOutputSchema) }) as z.ZodType<StripeTopology>
+const stripeTopologySchema = z.object({
+  layout: z.enum(["mirrored", "continuous", "independent"]),
+  outputs: z.array(stripeOutputSchema),
+  power_budget_enabled: z.boolean().default(false),
+  power_budget_watts: z.number().nullable().default(null),
+}) as z.ZodType<StripeTopology>
+const powerBudgetSchema = z.object({
+  enabled: z.boolean().default(false),
+  budget_watts: z.number().nullable().default(null),
+  estimated_watts: z.number().default(0),
+  applied_scale: z.number().default(1),
+  limiting_output_id: z.string().nullable().default(null),
+  outputs: z.array(z.object({
+    output_id: z.string(), estimated_watts: z.number(), limit_watts: z.number().nullable(), applied_scale: z.number(),
+  })).default([]),
+})
 const dashboardStateSchema = z.object({
   revision: z.number(), runtime: z.enum(["simulation", "hardware"]), running: z.boolean(),
   mode: playbackModeSchema, solid_color: z.string(), animation: z.string(), brightness: z.number(),
-  stripe_topology: stripeTopologySchema, stripe_playback: z.array(z.unknown()),
+  stripe_topology: stripeTopologySchema,
+  power_budget: powerBudgetSchema.default({ enabled: false, budget_watts: null, estimated_watts: 0, applied_scale: 1, limiting_output_id: null, outputs: [] }),
+  stripe_playback: z.array(z.unknown()),
 }).passthrough() as unknown as z.ZodType<DashboardState>
 const animationListSchema = z.object({ items: z.array(z.object({ name: z.string(), mood: z.string(), dynamic_safe: z.boolean() })) }) as unknown as z.ZodType<AnimationList>
 const accessStatusSchema = z.object({ required: z.boolean(), authenticated: z.boolean() }) as unknown as z.ZodType<AccessStatus>

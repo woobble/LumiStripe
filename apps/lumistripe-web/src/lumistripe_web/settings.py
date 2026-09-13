@@ -17,7 +17,7 @@ from lumistripe import (
     PlaybackMode,
 )
 
-SETTINGS_VERSION = 4
+SETTINGS_VERSION = 5
 PROFILE_NAMES = ("primary", "secondary")
 StripeLayout = Literal["mirrored", "continuous", "independent"]
 StripeBackend = Literal["spi", "gpio"]
@@ -58,6 +58,9 @@ class StripeOutputSettings:
     chip: str = "/dev/gpiochip0"
     data_pin: int = 10
     clock_pin: int = 11
+    voltage_v: float = 5.0
+    full_white_current_a: float = 0.06
+    power_limit_watts: float | None = None
 
     def __post_init__(self) -> None:
         if not self.id.strip() or not self.name.strip():
@@ -72,18 +75,32 @@ class StripeOutputSettings:
             raise ValueError("GPIO pins must not be negative")
         if self.data_pin == self.clock_pin:
             raise ValueError("GPIO data and clock pins must differ")
+        if self.voltage_v <= 0.0:
+            raise ValueError("stripe voltage must be greater than zero")
+        if self.full_white_current_a <= 0.0:
+            raise ValueError("full-white current must be greater than zero")
+        if self.power_limit_watts is not None and self.power_limit_watts <= 0.0:
+            raise ValueError("stripe power limit must be greater than zero")
 
 
 @dataclass(frozen=True, slots=True)
 class StripeTopologySettings:
     layout: StripeLayout = "mirrored"
     outputs: tuple[StripeOutputSettings, ...] = ()
+    power_budget_enabled: bool = False
+    power_budget_watts: float | None = None
 
     def __post_init__(self) -> None:
         if self.layout not in {"mirrored", "continuous", "independent"}:
             raise ValueError("invalid stripe layout")
         if len(self.outputs) > 2:
             raise ValueError("at most two stripes can be configured")
+        if not isinstance(self.power_budget_enabled, bool):
+            raise TypeError("power_budget_enabled must be a boolean")
+        if self.power_budget_watts is not None and self.power_budget_watts <= 0.0:
+            raise ValueError("power budget must be greater than zero")
+        if self.power_budget_enabled and self.power_budget_watts is None:
+            raise ValueError("an enabled power budget requires a watt limit")
         ids = [output.id for output in self.outputs]
         if len(ids) != len(set(ids)):
             raise ValueError("stripe ids must be unique")
@@ -218,9 +235,9 @@ class CalibrationSettingsStore:
             if not isinstance(payload, dict):
                 raise TypeError("settings must be an object")
             version = payload.get("version")
-            if version not in {1, 2, 3, SETTINGS_VERSION}:
+            if version not in {1, 2, 3, 4, SETTINGS_VERSION}:
                 raise ValueError(
-                    f"expected settings version 1, 2, 3, or {SETTINGS_VERSION}"
+                    f"expected settings version 1, 2, 3, 4, or {SETTINGS_VERSION}"
                 )
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             return settings, f"Dashboard settings are invalid: {exc}"
@@ -245,7 +262,7 @@ class CalibrationSettingsStore:
                 except (TypeError, ValueError) as exc:
                     warnings.append(str(exc))
 
-        if payload.get("version") in {2, 3, SETTINGS_VERSION}:
+        if payload.get("version") in {2, 3, 4, SETTINGS_VERSION}:
             selected = payload.get("selected_audio_device")
             if selected is not None and not isinstance(selected, str):
                 warnings.append("selected_audio_device must be a string or null")
@@ -283,13 +300,13 @@ class CalibrationSettingsStore:
                     except (TypeError, ValueError) as exc:
                         warnings.append(str(exc))
 
-        if payload.get("version") in {3, SETTINGS_VERSION} and "stripes" in payload:
+        if payload.get("version") in {3, 4, SETTINGS_VERSION} and "stripes" in payload:
             try:
                 settings.stripe_topology = _decode_stripes(payload["stripes"])
             except (TypeError, ValueError) as exc:
                 warnings.append(str(exc))
 
-        if payload.get("version") == SETTINGS_VERSION:
+        if payload.get("version") in {4, SETTINGS_VERSION}:
             restore = payload.get("restore_last_state", False)
             if not isinstance(restore, bool):
                 warnings.append("restore_last_state must be a boolean")
@@ -376,6 +393,8 @@ class CalibrationSettingsStore:
                 if settings.stripe_topology is None
                 else {
                     "layout": settings.stripe_topology.layout,
+                    "power_budget_enabled": settings.stripe_topology.power_budget_enabled,
+                    "power_budget_watts": settings.stripe_topology.power_budget_watts,
                     "outputs": [
                         {
                             field_name: getattr(output, field_name)
@@ -424,6 +443,8 @@ def _decode_stripes(encoded: object) -> StripeTopologySettings | None:
         raise TypeError("stripes must be an object or null")
     layout = encoded.get("layout", "mirrored")
     outputs = encoded.get("outputs", [])
+    power_budget_enabled = encoded.get("power_budget_enabled", False)
+    power_budget_watts = encoded.get("power_budget_watts")
     if not isinstance(layout, str) or not isinstance(outputs, list):
         raise TypeError("stripe layout must be a string and outputs must be a list")
     decoded: list[StripeOutputSettings] = []
@@ -439,7 +460,14 @@ def _decode_stripes(encoded: object) -> StripeTopologySettings | None:
             decoded.append(StripeOutputSettings(**values))
         except TypeError as exc:
             raise TypeError(f"invalid stripe {index + 1}: {exc}") from exc
-    return StripeTopologySettings(layout=layout, outputs=tuple(decoded))  # type: ignore[arg-type]
+    return StripeTopologySettings(
+        layout=cast(StripeLayout, layout),
+        outputs=tuple(decoded),
+        power_budget_enabled=power_budget_enabled,
+        power_budget_watts=(
+            None if power_budget_watts is None else float(power_budget_watts)
+        ),
+    )  # type: ignore[arg-type]
 
 
 def _channel(encoded: dict[object, object], channel: str, profile: str) -> int:

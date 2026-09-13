@@ -427,6 +427,7 @@ class LayeredRenderer:
         snapshot: AudioSnapshot,
         *,
         now_s: float,
+        flush: bool = True,
     ) -> float:
         if self._base_buffer is None or self._base_buffer.length != controller.length:
             self._base_buffer = Stripe(controller.length)
@@ -437,7 +438,7 @@ class LayeredRenderer:
         transitioning = player.transition_active
         if transitioning:
             self.scheduler.clear_active()
-        delay = player.step(self._base_buffer, audio_frame=snapshot.frame)
+        delay = player.step(self._base_buffer, audio_frame=snapshot.frame, flush=False)
         self.scheduler.update(
             player,
             snapshot,
@@ -484,7 +485,8 @@ class LayeredRenderer:
         output[:, :3] = np.clip(composed * 255.0, 0.0, 255.0).astype(np.uint8)
         output[:, 3] = 255
         controller.set_pixels(output)
-        controller.flush()
+        if flush:
+            controller.flush()
         return delay
 
 

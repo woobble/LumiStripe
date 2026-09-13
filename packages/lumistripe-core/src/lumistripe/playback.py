@@ -363,6 +363,7 @@ class PlaybackEngine:
         *,
         snapshot: AudioSnapshot | None = None,
         now_s: float | None = None,
+        flush: bool = True,
     ) -> float:
         now = time.monotonic() if now_s is None else now_s
         if self._cycle_started_at_s is None:
@@ -376,7 +377,8 @@ class PlaybackEngine:
             BrightnessController(controller, self.player.brightness).fill(
                 self.solid_color
             )
-            controller.flush()
+            if flush:
+                controller.flush()
             self.player.audio_enabled = False
             return 0.05
 
@@ -404,7 +406,8 @@ class PlaybackEngine:
                 )
                 if not self._idle_rendered:
                     controller.clear()
-                    controller.flush()
+                    if flush:
+                        controller.flush()
                     self._idle_rendered = True
                 return 0.05
 
@@ -443,12 +446,13 @@ class PlaybackEngine:
                 controller,
                 active_snapshot,
                 now_s=now,
+                flush=flush,
             )
         elif self.music_recognition_enabled and snapshot is not None and not snapshot.silence:
             audio_frame = snapshot.frame
 
         self.player.audio_enabled = audio_frame is not None
-        return self.player.step(controller, audio_frame=audio_frame)
+        return self.player.step(controller, audio_frame=audio_frame, flush=flush)
 
     def _cycling_due(self, now_s: float) -> bool:
         if not self.player.animations:

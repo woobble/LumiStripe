@@ -138,6 +138,47 @@ def test_stripe_management_api_applies_and_targets_independent_outputs(
         )
 
 
+def test_stripe_power_budget_api_round_trip_and_validation(tmp_path: Path) -> None:
+    app = create_app(
+        RuntimeSettings(pixels=8, settings_file=tmp_path / "settings.json")
+    )
+    topology = {
+        "layout": "mirrored",
+        "power_budget_enabled": True,
+        "power_budget_watts": 24.0,
+        "outputs": [
+            {
+                "id": "primary",
+                "name": "Primary",
+                "pixels": 80,
+                "voltage_v": 5.1,
+                "full_white_current_a": 0.055,
+                "power_limit_watts": 18.0,
+            }
+        ],
+    }
+    with TestClient(app) as client:
+        applied = client.put("/api/stripes", json=topology)
+        assert applied.status_code == 200
+        state = applied.json()
+        assert state["stripe_topology"]["power_budget_enabled"] is True
+        assert state["stripe_topology"]["power_budget_watts"] == 24.0
+        assert state["stripe_topology"]["outputs"][0]["voltage_v"] == 5.1
+        assert state["power_budget"]["enabled"] is True
+        assert client.get("/api/stripes").json()["outputs"][0]["power_limit_watts"] == 18.0
+
+        invalid = client.put(
+            "/api/stripes",
+            json={
+                "layout": "mirrored",
+                "power_budget_enabled": True,
+                "power_budget_watts": None,
+                "outputs": [],
+            },
+        )
+        assert invalid.status_code == 422
+
+
 def test_audio_settings_api_and_telemetry_websocket(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

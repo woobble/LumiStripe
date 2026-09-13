@@ -96,6 +96,20 @@ def test_solid_mode_fills_every_pixel_with_selected_color_and_brightness() -> No
     assert player.audio_enabled is False
 
 
+def test_playback_can_render_without_flushing_for_frame_coordination() -> None:
+    player = AnimationPlayer.party()
+    engine = PlaybackEngine(
+        player,
+        PlaybackConfig(mode=PlaybackMode.SOLID, solid_color=Rgb(20, 40, 60)),
+    )
+    stripe = CountingStripe(4)
+
+    engine.step(stripe, now_s=0.0, flush=False)
+
+    assert stripe.pixels().tolist() == [[20, 40, 60, 255]] * 4
+    assert stripe.flush_calls == 0
+
+
 def test_solid_color_can_be_changed_without_rebuilding_playback() -> None:
     engine = PlaybackEngine(
         AnimationPlayer.party(), PlaybackConfig(mode=PlaybackMode.SOLID)

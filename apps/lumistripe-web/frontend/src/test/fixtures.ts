@@ -43,7 +43,18 @@ export const initialState: DashboardState = {
       id: "primary", name: "Primary", pixels: 41, backend: "spi", reversed: false,
       spi_device: "/dev/spidev0.0", spi_speed_hz: 1_000_000,
       chip: "/dev/gpiochip0", data_pin: 10, clock_pin: 11,
+      voltage_v: 5, full_white_current_a: 0.06, power_limit_watts: null,
     }],
+    power_budget_enabled: false,
+    power_budget_watts: null,
+  },
+  power_budget: {
+    enabled: false,
+    budget_watts: null,
+    estimated_watts: 0,
+    applied_scale: 1,
+    limiting_output_id: null,
+    outputs: [],
   },
   stripe_playback: [{
     stripe_id: "primary", mode: "static", solid_color: "#7C3AED",

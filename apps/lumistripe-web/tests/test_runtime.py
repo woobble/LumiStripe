@@ -138,6 +138,71 @@ def test_output_gate_blackout_preserves_latest_buffered_frame() -> None:
     assert gate.last_successful_update_age_seconds is not None
 
 
+def test_power_budget_scales_rendered_frame_without_changing_requested_brightness(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.json"
+    CalibrationSettingsStore(path).save_stripes(
+        StripeTopologySettings(
+            outputs=(StripeOutputSettings(id="left", name="Left", pixels=4),),
+            power_budget_enabled=True,
+            power_budget_watts=0.6,
+        )
+    )
+    runtime = LumiStripeRuntime(RuntimeSettings(pixels=4, settings_file=path))
+    runtime.start()
+    try:
+        runtime.set_mode(PlaybackMode.SOLID, solid_color="#FFFFFF").result(timeout=1)
+        deadline = time.monotonic() + 1
+        while runtime.snapshot().power_budget.estimated_watts < 1.0:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        state = runtime.snapshot()
+        assert state.brightness == pytest.approx(1.0)
+        assert state.power_budget.applied_scale == pytest.approx(0.5)
+        assert state.power_budget.limiting_output_id is None
+        assert any(issue.title == "Power budget is limiting brightness" for issue in state.diagnostic_issues)
+        assert runtime.preview_frame().outputs[0][3] == 127
+    finally:
+        runtime.stop()
+
+
+def test_power_budget_uses_tighter_per_output_limit_for_independent_outputs(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.json"
+    CalibrationSettingsStore(path).save_stripes(
+        StripeTopologySettings(
+            layout="independent",
+            outputs=(
+                StripeOutputSettings(id="left", name="Left", pixels=2, power_limit_watts=0.3),
+                StripeOutputSettings(
+                    id="right",
+                    name="Right",
+                    pixels=2,
+                    spi_device="/dev/spidev1.0",
+                    power_limit_watts=10.0,
+                ),
+            ),
+            power_budget_enabled=True,
+            power_budget_watts=10.0,
+        )
+    )
+    runtime = LumiStripeRuntime(RuntimeSettings(pixels=2, settings_file=path))
+    runtime.start()
+    try:
+        runtime.set_mode(PlaybackMode.SOLID, solid_color="#FFFFFF").result(timeout=1)
+        deadline = time.monotonic() + 1
+        while runtime.snapshot().power_budget.applied_scale >= 1.0:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        state = runtime.snapshot()
+        assert state.power_budget.limiting_output_id == "left"
+        assert state.power_budget.applied_scale == pytest.approx(0.5)
+    finally:
+        runtime.stop()
+
+
 def test_preview_frame_is_an_immutable_rgba_snapshot(tmp_path: Path) -> None:
     runtime = LumiStripeRuntime(
         RuntimeSettings(pixels=3, settings_file=tmp_path / "settings.json")

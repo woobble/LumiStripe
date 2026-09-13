@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Literal
 
 from lumistripe import PlaybackMode
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class RuntimeKind(str, Enum):
@@ -55,6 +55,9 @@ class StripeOutputConfig(BaseModel):
     chip: str = Field(default="/dev/gpiochip0", min_length=1)
     data_pin: int = Field(default=10, ge=0)
     clock_pin: int = Field(default=11, ge=0)
+    voltage_v: float = Field(default=5.0, gt=0.0)
+    full_white_current_a: float = Field(default=0.06, gt=0.0)
+    power_limit_watts: float | None = Field(default=None, gt=0.0)
     last_output_at: datetime | None = None
     error: str | None = None
 
@@ -64,6 +67,34 @@ class StripeTopology(BaseModel):
 
     layout: Literal["mirrored", "continuous", "independent"] = "mirrored"
     outputs: tuple[StripeOutputConfig, ...] = Field(default=(), max_length=2)
+    power_budget_enabled: bool = False
+    power_budget_watts: float | None = Field(default=None, gt=0.0)
+
+    @model_validator(mode="after")
+    def validate_power_budget(self) -> StripeTopology:
+        if self.power_budget_enabled and self.power_budget_watts is None:
+            raise ValueError("an enabled power budget requires a watt limit")
+        return self
+
+
+class PowerOutputState(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    output_id: str
+    estimated_watts: float = Field(ge=0.0)
+    limit_watts: float | None = Field(default=None, gt=0.0)
+    applied_scale: float = Field(ge=0.0, le=1.0)
+
+
+class PowerBudgetState(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool = False
+    budget_watts: float | None = Field(default=None, gt=0.0)
+    estimated_watts: float = Field(default=0.0, ge=0.0)
+    applied_scale: float = Field(default=1.0, ge=0.0, le=1.0)
+    limiting_output_id: str | None = None
+    outputs: tuple[PowerOutputState, ...] = ()
 
 
 class StripePlaybackState(BaseModel):
@@ -113,6 +144,7 @@ class DashboardState(BaseModel):
     color_corrections: tuple[ColorCorrectionProfile, ...] = ()
     calibration: CalibrationStatus = CalibrationStatus()
     stripe_topology: StripeTopology = StripeTopology()
+    power_budget: PowerBudgetState = PowerBudgetState()
     stripe_playback: tuple[StripePlaybackState, ...] = ()
     diagnostic_issues: tuple[DiagnosticIssue, ...] = ()
     error: str | None = None
@@ -155,6 +187,14 @@ class BlackoutRequest(BaseModel):
 class StripeTopologyRequest(BaseModel):
     layout: Literal["mirrored", "continuous", "independent"]
     outputs: tuple[StripeOutputConfig, ...] = Field(max_length=2)
+    power_budget_enabled: bool = False
+    power_budget_watts: float | None = Field(default=None, gt=0.0)
+
+    @model_validator(mode="after")
+    def validate_power_budget(self) -> StripeTopologyRequest:
+        if self.power_budget_enabled and self.power_budget_watts is None:
+            raise ValueError("an enabled power budget requires a watt limit")
+        return self
 
 
 class StripeTestRequest(BaseModel):

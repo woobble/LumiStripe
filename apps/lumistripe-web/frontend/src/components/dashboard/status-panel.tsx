@@ -14,6 +14,7 @@ import {
   TriangleAlertIcon,
   ShieldCheckIcon,
   WrenchIcon,
+  ZapIcon,
 } from "lucide-react"
 
 import { ConnectionBadge } from "@/components/dashboard/connection-badge"
@@ -48,6 +49,11 @@ function formatFrequency(hertz: number | null) {
   if (hertz === null) return "—"
   const megahertz = hertz / 1_000_000
   return `${Number.isInteger(megahertz) ? megahertz.toFixed(0) : megahertz.toFixed(2)} MHz`
+}
+
+function formatWatts(watts: number | null) {
+  if (watts === null) return "—"
+  return `${watts.toFixed(1)} W`
 }
 
 function Metric({ icon: Icon, label, value }: { icon: typeof GaugeIcon; label: string; value: string }) {
@@ -120,6 +126,25 @@ export function StatusPanel({ controller, onLogout }: { controller: DashboardCon
             ))}
           </CardContent>
         )}
+      </Card>
+
+      <Card className="border-white/5 bg-card/80 shadow-xl shadow-black/10 backdrop-blur-xl">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><ZapIcon className="size-4 text-amber-300" aria-hidden="true" />Power budget</CardTitle>
+          <CardDescription>
+            {state.power_budget.enabled ? "Estimated LED load and active brightness cap." : "Power limiting is disabled."}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid grid-cols-2 gap-2">
+          <Metric icon={ZapIcon} label="Estimated load" value={formatWatts(state.power_budget.estimated_watts)} />
+          <Metric icon={GaugeIcon} label="Configured cap" value={formatWatts(state.power_budget.budget_watts)} />
+          <Metric icon={GaugeIcon} label="Applied scale" value={`${Math.round(state.power_budget.applied_scale * 100)}%`} />
+          <Metric
+            icon={ZapIcon}
+            label="Limiting scope"
+            value={state.power_budget.enabled ? (state.power_budget.limiting_output_id ? state.stripe_topology.outputs.find((output) => output.id === state.power_budget.limiting_output_id)?.name ?? state.power_budget.limiting_output_id : "Global") : "Inactive"}
+          />
+        </CardContent>
       </Card>
 
       <Card className="border-white/5 bg-card/80 shadow-xl shadow-black/10 backdrop-blur-xl">

@@ -203,7 +203,11 @@ class AnimationPlayer:
         self._audio_snapshot = None
 
     def step(
-        self, controller: Controller, *, audio_frame: AudioFrame | None = None
+        self,
+        controller: Controller,
+        *,
+        audio_frame: AudioFrame | None = None,
+        flush: bool = True,
     ) -> float:
         if not self.animations:
             return 0.05
@@ -238,8 +242,8 @@ class AnimationPlayer:
         else:
             entry.animation.tick_audio(self.frame, bright, audio_frame)
         if self.transition_active:
-            self._write_transition(controller, entry.frame_ms)
-        else:
+            self._write_transition(controller, entry.frame_ms, flush=flush)
+        elif flush:
             controller.flush()
         self.frame += 1
         return entry.frame_ms / 1000.0
@@ -310,7 +314,9 @@ class AnimationPlayer:
             return None
         return self.animations[index].fresh_animation()
 
-    def _write_transition(self, controller: Controller, frame_ms: int) -> None:
+    def _write_transition(
+        self, controller: Controller, frame_ms: int, *, flush: bool = True
+    ) -> None:
         assert self._transition_source is not None
         assert self._transition_buffer is not None
         self._transition_elapsed_ms = min(
@@ -324,7 +330,8 @@ class AnimationPlayer:
             np.uint8
         )
         controller.set_pixels(blended)
-        controller.flush()
+        if flush:
+            controller.flush()
         if amount >= 1.0:
             self.cancel_transition()
 

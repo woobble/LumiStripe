@@ -139,6 +139,12 @@ from .playback import (
     PlaybackMode,
     demo_snapshot,
 )
+from .power import (
+    OutputPowerEstimate,
+    PowerBudgetResult,
+    apply_power_budget,
+    estimate_frame_power,
+)
 from .selector import (
     AnimationScore,
     AnimationScoringEngine,
@@ -245,6 +251,7 @@ __all__ = [
     "NeonConfetti",
     "NeonStorm",
     "NullController",
+    "OutputPowerEstimate",
     "PeakMirror",
     "PixelBuffer",
     "PixelExplosion",
@@ -253,6 +260,7 @@ __all__ = [
     "PlaybackEngine",
     "PlaybackMode",
     "Police",
+    "PowerBudgetResult",
     "Pulse",
     "Rainbow",
     "RainbowCycle",
@@ -282,9 +290,11 @@ __all__ = [
     "Wave",
     "animation_metadata",
     "apply_brightness_rgb",
+    "apply_power_budget",
     "calibrate_audio_input",
     "clear",
     "demo_snapshot",
+    "estimate_frame_power",
     "fade",
     "features_from_frame",
     "fill_rgb",

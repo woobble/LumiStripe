@@ -404,6 +404,10 @@ class ScaledMultiController(Controller):
     def controllers(self) -> tuple[Controller, ...]:
         return tuple(self._controllers)
 
+    def output_pixels(self) -> tuple[PixelBuffer, ...]:
+        """Return the mapped frame for each physical child without flushing."""
+        return tuple(self._pixels[indices] for indices in self._indices)
+
     @property
     def length(self) -> int:
         return self._length
