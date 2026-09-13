@@ -5,6 +5,7 @@ import { toast } from "sonner"
 import {
   dashboardApi,
   ACCESS_REVOKED_EVENT,
+  parseDashboardState,
   websocketUrl,
   type CalibrationPattern,
   type DashboardState,
@@ -63,7 +64,7 @@ export function useDashboard() {
       }
       socket.onmessage = (event) => {
         try {
-          const incoming = JSON.parse(String(event.data)) as DashboardState
+          const incoming = parseDashboardState(JSON.parse(String(event.data)))
           queryClient.setQueryData<DashboardState>(dashboardStateQueryKey, (current) => newerState(current ?? null, incoming))
         } catch {
           socket?.close()

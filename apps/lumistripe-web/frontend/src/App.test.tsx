@@ -453,6 +453,19 @@ describe("App", () => {
     expect(screen.getByText("No problems detected.")).toBeInTheDocument()
   })
 
+  it("keeps diagnostics available when live state omits optional power telemetry", async () => {
+    const user = userEvent.setup()
+    render(<App />, { wrapper: Router })
+    await screen.findByText(/aurora wave/i)
+
+    const { power_budget: _powerBudget, ...legacyState } = initialState
+    act(() => MockWebSocket.instances[0].emit({ ...legacyState, revision: 2 }))
+    await user.click(screen.getByRole("link", { name: "Status" }))
+
+    expect(await screen.findByRole("heading", { name: "Diagnostics" })).toBeInTheDocument()
+    expect(screen.getByText("Power limiting is disabled.")).toBeInTheDocument()
+  })
+
   it("shows live audio telemetry without unlocking Setup", async () => {
     const user = userEvent.setup()
     render(<App />, { wrapper: Router })

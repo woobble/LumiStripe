@@ -333,6 +333,11 @@ const dashboardStateSchema = z.object({
   power_budget: powerBudgetSchema.default({ enabled: false, budget_watts: null, estimated_watts: 0, applied_scale: 1, limiting_output_id: null, outputs: [] }),
   stripe_playback: z.array(z.unknown()),
 }).passthrough() as unknown as z.ZodType<DashboardState>
+
+export function parseDashboardState(value: unknown): DashboardState {
+  return dashboardStateSchema.parse(value)
+}
+
 const animationListSchema = z.object({ items: z.array(z.object({ name: z.string(), mood: z.string(), dynamic_safe: z.boolean() })) }) as unknown as z.ZodType<AnimationList>
 const accessStatusSchema = z.object({ required: z.boolean(), authenticated: z.boolean() }) as unknown as z.ZodType<AccessStatus>
 const bluetoothDeviceSchema = z.object({ address: z.string(), name: z.string(), paired: z.boolean(), connected: z.boolean(), roles: z.array(z.enum(["input", "output"])) })

@@ -67,6 +67,23 @@ describe("useDashboard", () => {
     expect(result.current.state?.brightness).toBe(0.25)
   })
 
+  it("normalizes websocket states from a backend without power telemetry", async () => {
+    const { result } = renderHook(() => useDashboard(), { wrapper })
+    await waitFor(() => expect(result.current.state?.revision).toBe(1))
+
+    const { power_budget: _powerBudget, ...legacyState } = initialState
+    act(() => MockWebSocket.instances[0].emit({ ...legacyState, revision: 2 }))
+
+    await waitFor(() => expect(result.current.state?.power_budget).toEqual({
+      enabled: false,
+      budget_watts: null,
+      estimated_watts: 0,
+      applied_scale: 1,
+      limiting_output_id: null,
+      outputs: [],
+    }))
+  })
+
   it("marks a dropped socket as reconnecting and opens a replacement", async () => {
     const { result } = renderHook(() => useDashboard(), { wrapper })
     await waitFor(() => expect(result.current.connection).toBe("connected"))
