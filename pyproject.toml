@@ -31,10 +31,10 @@ lumistripe-web = { workspace = true }
 
 [dependency-groups]
 dev = [
-    "httpx2>=2.12",
+    "httpx2>=2.13.0",
     "pytest>=9.1",
     "pytest-cov>=7.1",
-    "ruff>=0.16.7",
+    "ruff>=0.16.8",
     "mypy>=2.3.1",
 ]
 
