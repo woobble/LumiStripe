@@ -27,5 +27,7 @@ code from forks cannot execute on the persistent home/device runner.
 The runner must be pre-provisioned with the GitHub Actions service, Linux
 ARM64/aarch64, Git submodule support, a C compiler, `make`, and the native
 development libraries required by the `all` profile. The workflow provisions
-Python 3.12 and `uv`; CI checks the remaining prerequisites but does not
-upgrade the runner's operating-system packages on every run.
+Python 3.12 and `uv`, and installs `libasound2-dev` only when the ALSA headers
+are missing because `--all-extras` builds `pyalsaaudio`. Pre-provisioning that
+package avoids the package-manager step; CI does not perform broad operating-
+system upgrades.

@@ -23,10 +23,10 @@ jobs:
         python-version: ["3.12", "3.13", "3.14"]
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-      # The test suite exercises the native DSP backend explicitly. Release
-      # builds are covered separately below with the default pure-Python
-      # profile and each supported native profile.
-      LUMISTRIPE_BUILD_EXTENSIONS: audio
+      # The full suite imports and exercises audio, GPIO, and SPI native
+      # backends. Release builds are covered separately below with the default
+      # pure-Python profile and each supported native profile.
+      LUMISTRIPE_BUILD_EXTENSIONS: all
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -231,6 +231,16 @@ jobs:
         run: |
           set -eu
           uv --version
+
+      - name: Install Raspberry Pi audio build dependency
+        run: |
+          set -eu
+          if test -f /usr/include/alsa/asoundlib.h; then
+            echo "ALSA development headers already installed"
+          else
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends libasound2-dev
+          fi
 
       - name: Install Raspberry Pi native profile
         env:
