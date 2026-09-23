@@ -194,9 +194,12 @@ jobs:
           PY
 
   raspberry-pi:
-    name: Raspberry Pi arm64 native smoke
-    if: ${{ vars.LUMISTRIPE_PI_RUNNER_ENABLED == 'true' }}
-    runs-on: [self-hosted, linux, ARM64, raspberry-pi]
+    name: Raspberry Pi 5 arm64 native smoke
+    # This runner is a persistent home/device host. Keep untrusted pull request
+    # code on the hosted runners above and use the RPi only for trusted pushes
+    # and explicit manual validation.
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' }}
+    runs-on: [self-hosted, linux, ARM64, rpi5]
     timeout-minutes: 30
     steps:
       - name: Check out repository
@@ -205,20 +208,82 @@ jobs:
           persist-credentials: false
           submodules: recursive
 
+      - name: Verify Raspberry Pi runner
+        run: |
+          set -eu
+          test "$(uname -m)" = "aarch64"
+          python3 --version
+          uname -a
+          if test -f /etc/os-release; then
+            cat /etc/os-release
+          fi
+          command -v cc
+          command -v make
+          cc --version
+          git submodule status --recursive
+
       - name: Install uv
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: true
           python-version: "3.12"
 
+      - name: Verify build environment
+        run: |
+          set -eu
+          uv --version
+          uv run python -c 'import platform, sys; assert sys.version_info[:2] == (3, 12); print(platform.platform())'
+
       - name: Install Raspberry Pi native profile
         env:
           LUMISTRIPE_BUILD_EXTENSIONS: all
         run: uv sync --locked --all-extras --dev
 
-      - name: Build and smoke-test arm64 core
+      - name: Test native core on arm64
+        env:
+          LUMISTRIPE_BUILD_EXTENSIONS: all
+        run: uv run python -m pytest -q packages/lumistripe-core/tests
+
+      - name: Build and verify arm64 core distributions
         env:
           LUMISTRIPE_BUILD_EXTENSIONS: all
         run: |
           uv build --package lumistripe-core --out-dir dist/raspberry-pi
-          uv run python -m pytest -q packages/lumistripe-core/tests/test_boundaries.py
+          uv run python - <<'PY'
+          import platform
+          import tarfile
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          if platform.machine() != "aarch64":
+              raise SystemExit(f"unexpected machine: {platform.machine()}")
+
+          output = Path("dist/raspberry-pi")
+          wheels = list(output.glob("*.whl"))
+          sdists = list(output.glob("*.tar.gz"))
+          if len(wheels) != 1 or len(sdists) != 1:
+              raise SystemExit(f"expected one wheel and sdist, found {wheels} and {sdists}")
+
+          with ZipFile(wheels[0]) as archive:
+              native = [name for name in archive.namelist() if name.endswith(".so")]
+              if not native:
+                  raise SystemExit("arm64 wheel does not contain native extensions")
+
+          required_sources = {
+              "kiss_fft.c",
+              "kiss_fft.h",
+              "kiss_fftr.c",
+              "kiss_fftr.h",
+              "_kiss_fft_guts.h",
+          }
+          with tarfile.open(sdists[0], "r:gz") as archive:
+              bundled = {
+                  Path(name).name
+                  for name in archive.getnames()
+                  if "/src/lumistripe/audio/kissfft/" in name
+              }
+          missing = required_sources - bundled
+          if missing:
+              raise SystemExit(f"sdist is missing KISS FFT sources: {sorted(missing)}")
+          print(f"verified {len(native)} native extensions and KISS FFT sources")
+          PY
