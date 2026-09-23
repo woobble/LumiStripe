@@ -102,7 +102,7 @@ function AudioTuningPanelView() {
     try {
       const next = await dashboardApi.getAudioSettings()
       setResponse(next)
-      const selector = next.active_device
+      const selector = next.active_device ?? null
       setSelectedDevice(selector)
       formReset(next.settings)
     } catch (error) {

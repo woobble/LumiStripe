@@ -1,7 +1,7 @@
 import type { StripeTopology } from "@/lib/api"
 
-const PREVIEW_MAGIC = [0x4c, 0x53, 0x46, 0x50]
-const PREVIEW_VERSION = 1
+export const PREVIEW_MAGIC = [0x4c, 0x53, 0x46, 0x50] as const
+export const PREVIEW_PROTOCOL_VERSION = 1
 const PREVIEW_HEADER_BYTES = 12
 const PREVIEW_OUTPUT_HEADER_BYTES = 4
 const MAX_OUTPUTS = 2
@@ -40,7 +40,7 @@ export async function decodePreviewFrame(data: unknown): Promise<PreviewFrame | 
   if (buffer.byteLength < PREVIEW_HEADER_BYTES) return null
   const view = new DataView(buffer)
   if (PREVIEW_MAGIC.some((value, index) => view.getUint8(index) !== value)) return null
-  if (view.getUint8(4) !== PREVIEW_VERSION) return null
+  if (view.getUint8(4) !== PREVIEW_PROTOCOL_VERSION) return null
 
   const outputCount = view.getUint16(10, true)
   if (outputCount > MAX_OUTPUTS) return null

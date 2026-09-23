@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
 import selectors
 import shutil
@@ -9,15 +8,30 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
-from typing import Literal, Protocol
 from uuid import uuid4
+
+from .bluetooth_models import (
+    AudioOutputDevice,
+    AudioRoutingBackend,
+    BluetoothAudioBackend,
+    BluetoothCapabilities,
+    BluetoothDevice,
+    BluetoothDeviceBackend,
+    BluetoothOperationState,
+    BluetoothStatus,
+    Runner,
+    ScriptRunner,
+)
+from .bluetooth_operations import OperationCoordinator
+from .bluetooth_polling import StatusPoller
+from .bluetooth_process import clean_command_output as _clean_command_output
+from .bluetooth_process import pipewire_environment as _pipewire_environment
+from .bluetooth_providers import BlueZProvider, PipeWireProvider
 
 logger = logging.getLogger(__name__)
 
 BLUETOOTH_ADDRESS = re.compile(r"^[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}$")
 _DEVICE_LINE = re.compile(r"^Device\s+([0-9A-Fa-f:]{17})\s*(.*)$")
-_ANSI_ESCAPE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 _AGENT_REGISTERED = re.compile(r"\bagent registered\b", re.IGNORECASE)
 _AGENT_FAILURE = re.compile(
     r"failed to (?:register agent(?: object)?|call register agent)|"
@@ -35,121 +49,6 @@ _PAIRING_FAILURE = re.compile(
 
 class BluetoothCommandError(RuntimeError):
     """A Bluetooth or PipeWire command could not be completed."""
-
-
-BluetoothOperationState = Literal["idle", "running", "complete", "failed"]
-
-
-@dataclass(frozen=True, slots=True)
-class BluetoothCapabilities:
-    """Operations supported by the active Bluetooth/audio provider.
-
-    The web client uses this instead of assuming that every BlueZ/PipeWire
-    installation exposes the same controls. The limits retain the current
-    single-input/single-output behavior while allowing another provider to
-    advertise a different topology later.
-    """
-
-    operations: tuple[str, ...] = ()
-    max_inputs: int = 1
-    max_outputs: int = 1
-
-
-@dataclass(frozen=True, slots=True)
-class BluetoothDevice:
-    address: str
-    name: str
-    paired: bool = False
-    connected: bool = False
-    # Roles are relative to the Pi: an advertised Audio Source is an input
-    # into LumiStripe, while an advertised Audio Sink is an output from it.
-    roles: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class AudioOutputDevice:
-    selector: str
-    name: str
-    volume: float | None = None
-    muted: bool = False
-    bluetooth: bool = False
-    connected: bool = True
-
-
-@dataclass(frozen=True, slots=True)
-class BluetoothStatus:
-    available: bool = False
-    powered: bool = False
-    adapter_alias: str | None = None
-    scanning: bool = False
-    devices: tuple[BluetoothDevice, ...] = ()
-    connected_inputs: tuple[BluetoothDevice, ...] = ()
-    connected_outputs: tuple[BluetoothDevice, ...] = ()
-    connected_device: BluetoothDevice | None = None
-    input_source: str | None = None
-    output_devices: tuple[AudioOutputDevice, ...] = ()
-    default_sink: str | None = None
-    output_volume: float | None = None
-    output_muted: bool = False
-    output_ready: bool = False
-    capabilities: BluetoothCapabilities = field(default_factory=BluetoothCapabilities)
-    operation: str | None = None
-    operation_id: str | None = None
-    operation_state: BluetoothOperationState = "idle"
-    error: str | None = None
-
-    @property
-    def streaming(self) -> bool:
-        return bool(self.input_source) and bool(self.connected_inputs or self.connected_device)
-
-
-Runner = Callable[[tuple[str, ...], float], str]
-ScriptRunner = Callable[[tuple[str, ...], str, float], str]
-
-
-class BluetoothDeviceBackend(Protocol):
-    """Provider boundary for Bluetooth discovery and device operations."""
-
-    def status(self) -> BluetoothStatus: ...
-
-    def start(self) -> None: ...
-
-    def stop(self) -> None: ...
-
-    def start_scan(self) -> BluetoothStatus: ...
-
-    def set_power(self, powered: bool) -> BluetoothStatus: ...
-
-    def set_alias(self, alias: str) -> BluetoothStatus: ...
-
-    def pair(self, address: str) -> BluetoothStatus: ...
-
-    def connect(self, address: str, role: str | None = None) -> BluetoothStatus: ...
-
-    def forget(self, address: str) -> BluetoothStatus: ...
-
-    def disconnect(self, address: str) -> BluetoothStatus: ...
-
-
-class AudioRoutingBackend(Protocol):
-    """Provider boundary for the audio graph used by Bluetooth streams."""
-
-    def set_default_sink(self, sink: str) -> BluetoothStatus: ...
-
-    def set_output_volume(self, sink: str, volume: float) -> BluetoothStatus: ...
-
-    def set_output_mute(self, sink: str, muted: bool) -> BluetoothStatus: ...
-
-    def default_source(self) -> str | None: ...
-
-    def set_default_source(self, source: str) -> None: ...
-
-    def restore_default_source(self, source: str | None) -> None: ...
-
-
-class BluetoothAudioBackend(BluetoothDeviceBackend, AudioRoutingBackend, Protocol):
-    """Combined backend consumed by the runtime and HTTP layer."""
-
 
 class BluetoothManager:
     """Best-effort BlueZ and PipeWire bridge for a headless Pi.
@@ -188,33 +87,25 @@ class BluetoothManager:
         self._runner = runner or _run_command
         self._script_runner = script_runner
         self._command_exists = command_exists or (lambda command: shutil.which(command) is not None)
+        self._bluez = BlueZProvider(self._run, self._run_script)
+        self._pipewire = PipeWireProvider(self._run, self._command_exists)
         self._lock = threading.RLock()
         self._command_lock = threading.RLock()
         self._status = BluetoothStatus()
-        self._stop_event = threading.Event()
-        self._thread: threading.Thread | None = None
         self._operation: str | None = None
         self._operation_id: str | None = None
         self._operation_state: BluetoothOperationState = "idle"
         self._operation_error: str | None = None
+        self._operation_coordinator = OperationCoordinator()
+        self._poller = StatusPoller(self._refresh_once, self._poll_interval)
 
     def start(self) -> None:
-        if not self.enabled or (self._thread is not None and self._thread.is_alive()):
+        if not self.enabled or self._poller.running:
             return
-        self._stop_event.clear()
-        self._thread = threading.Thread(
-            target=self._poll_loop,
-            name="lumistripe-bluetooth",
-            daemon=True,
-        )
-        self._thread.start()
+        self._poller.start()
 
     def stop(self) -> None:
-        self._stop_event.set()
-        thread = self._thread
-        if thread is not None and thread is not threading.current_thread():
-            thread.join(timeout=min(2.0, self._poll_interval + 0.5))
-        self._thread = None
+        self._poller.stop()
 
     def status(self) -> BluetoothStatus:
         with self._lock:
@@ -278,7 +169,7 @@ class BluetoothManager:
         if not self.enabled:
             raise BluetoothCommandError("Audio outputs are only available in hardware mode.")
         normalized = _validate_selector(sink)
-        self._run(("pactl", "set-default-sink", normalized), timeout=2.0)
+        self._pipewire.set_default_sink(normalized)
         self._move_sink_inputs(normalized)
         return self.refresh()
 
@@ -288,26 +179,20 @@ class BluetoothManager:
         normalized = _validate_selector(sink)
         if not 0.0 <= volume <= 1.0:
             raise BluetoothCommandError("Output volume must be between 0 and 1")
-        self._run(
-            ("pactl", "set-sink-volume", normalized, f"{round(volume * 100)}%"),
-            timeout=2.0,
-        )
+        self._pipewire.set_volume(normalized, volume)
         return self.refresh()
 
     def set_output_mute(self, sink: str, muted: bool) -> BluetoothStatus:
         if not self.enabled:
             raise BluetoothCommandError("Audio outputs are only available in hardware mode.")
         normalized = _validate_selector(sink)
-        self._run(
-            ("pactl", "set-sink-mute", normalized, "1" if muted else "0"),
-            timeout=2.0,
-        )
+        self._pipewire.set_mute(normalized, muted)
         return self.refresh()
 
     def _move_sink_inputs(self, sink: str) -> None:
         """Move currently playing streams when the output is changed."""
         try:
-            inputs = self._run(("pactl", "list", "short", "sink-inputs"), timeout=2.0)
+            inputs = self._pipewire.sink_inputs()
         except BluetoothCommandError as exc:
             logger.debug("could not inspect active audio streams: %s", exc)
             return
@@ -316,16 +201,13 @@ class BluetoothManager:
             if not fields or not fields[0].isdigit():
                 continue
             try:
-                self._run(
-                    ("pactl", "move-sink-input", fields[0], sink),
-                    timeout=2.0,
-                )
+                self._pipewire.move_sink_input(fields[0], sink)
             except BluetoothCommandError as exc:
                 logger.warning("could not move audio stream %s to %s: %s", fields[0], sink, exc)
 
     def default_source(self) -> str | None:
         try:
-            output = self._run(("pactl", "info"), timeout=2.0)
+            output = self._pipewire.info()
         except BluetoothCommandError:
             return None
         for line in output.splitlines():
@@ -335,7 +217,7 @@ class BluetoothManager:
         return None
 
     def set_default_source(self, source: str) -> None:
-        self._run(("pactl", "set-default-source", source), timeout=2.0)
+        self._pipewire.set_default_source(source)
 
     def restore_default_source(self, source: str | None) -> None:
         if not source:
@@ -344,11 +226,6 @@ class BluetoothManager:
             self.set_default_source(source)
         except BluetoothCommandError as exc:
             logger.warning("could not restore PipeWire default source %r: %s", source, exc)
-
-    def _poll_loop(self) -> None:
-        self._refresh_once()
-        while not self._stop_event.wait(self._poll_interval):
-            self._refresh_once()
 
     def _refresh_once(self) -> None:
         missing_commands = tuple(
@@ -374,17 +251,13 @@ class BluetoothManager:
 
         controller_output = ""
         try:
-            controller_output = self._run(("bluetoothctl", "show"), timeout=2.0)
-            devices_output = self._run(("bluetoothctl", "devices"), timeout=2.0)
-            connected_output = self._run(
-                ("bluetoothctl", "devices", "Connected"), timeout=2.0
-            )
-            paired_output = self._run(
-                ("bluetoothctl", "devices", "Paired"), timeout=2.0
-            )
-            sources = self._run(("pactl", "list", "short", "sources"), timeout=2.0)
-            sinks = self._run(("pactl", "list", "short", "sinks"), timeout=2.0)
-            info = self._run(("pactl", "info"), timeout=2.0)
+            controller_output = self._bluez.show()
+            devices_output = self._bluez.devices()
+            connected_output = self._bluez.connected_devices()
+            paired_output = self._bluez.paired_devices()
+            sources = self._pipewire.sources()
+            sinks = self._pipewire.sinks()
+            info = self._pipewire.info()
         except BluetoothCommandError as exc:
             previous = self.status()
             self._set_status(
@@ -415,7 +288,7 @@ class BluetoothManager:
             return
 
         try:
-            sink_details = self._run(("pactl", "list", "sinks"), timeout=2.0)
+            sink_details = self._pipewire.sink_details()
         except BluetoothCommandError as exc:
             logger.debug("could not inspect detailed audio outputs: %s", exc)
             sink_details = ""
@@ -425,9 +298,9 @@ class BluetoothManager:
         # pactl exposes only the physical sink monitor. Keep this probe
         # optional so development/simulation environments do not need wpctl.
         stream_status = ""
-        if self._command_exists("wpctl"):
+        if self._pipewire.command_exists("wpctl"):
             try:
-                stream_status = self._run(("wpctl", "status"), timeout=2.0)
+                stream_status = self._pipewire.stream_status()
             except BluetoothCommandError as exc:
                 logger.debug("could not inspect PipeWire streams with wpctl: %s", exc)
 
@@ -511,24 +384,20 @@ class BluetoothManager:
 
     def _device_info(self, address: str) -> str:
         try:
-            return self._run(("bluetoothctl", "info", address), timeout=2.0)
+            return self._bluez.info(address)
         except BluetoothCommandError as exc:
             logger.debug("could not inspect Bluetooth device %s: %s", address, exc)
             return ""
 
     def _scan(self) -> None:
-        self._run(("bluetoothctl", "power", "on"), timeout=5.0)
-        self._run(("bluetoothctl", "--timeout", "8", "scan", "on"), timeout=12.0)
+        self._bluez.scan()
 
     def _set_power(self, powered: bool) -> None:
-        output = self._run(
-            ("bluetoothctl", "power", "on" if powered else "off"),
-            timeout=8.0,
-        )
+        output = self._bluez.power(powered)
         _raise_for_bluetooth_failure(output)
 
     def _set_alias(self, alias: str) -> None:
-        output = self._run(("bluetoothctl", "system-alias", alias), timeout=8.0)
+        output = self._bluez.set_alias(alias)
         _raise_for_bluetooth_failure(output)
 
     def _pair(self, address: str) -> None:
@@ -537,43 +406,28 @@ class BluetoothManager:
         # Keep the interactive bluetoothctl session alive for the whole
         # pairing transaction. The `auto` agent accepts the device's numeric
         # confirmation/authorization requests without a terminal prompt.
-        script = "\n".join(
-            (
-                "default-agent",
-                "power on",
-                "pairable on",
-                f"pair {address}",
-            )
-        )
-        output = self._run_script(
-            ("bluetoothctl", "--agent", "auto", "--timeout", "35"),
-            script,
-            40.0,
-        )
+        output = self._bluez.pair(address)
         _raise_for_bluetooth_failure(output)
 
-        trust_output = self._run(("bluetoothctl", "trust", address), timeout=8.0)
+        trust_output = self._bluez.trust(address)
         _raise_for_bluetooth_failure(trust_output)
 
     def _connect(self, address: str, role: str | None = None) -> None:
-        self._run(("bluetoothctl", "power", "on"), timeout=5.0)
         selected_role = self._resolve_connection_role(address, role)
         profile = "a2dp-sink" if selected_role == "output" else "a2dp-source"
         # Connecting to a specific A2DP profile avoids unrelated HFP, AVRCP,
         # or networking services masking the audio connection. A remote
         # Audio Sink is a speaker for the Pi; a remote Audio Source is a
         # phone or other device sending music into the Pi.
-        output = self._run(
-            ("bluetoothctl", "connect", address, profile), timeout=18.0
-        )
+        output = self._bluez.connect(address, profile)
         _raise_for_bluetooth_failure(output)
 
     def _forget(self, address: str) -> None:
-        output = self._run(("bluetoothctl", "remove", address), timeout=8.0)
+        output = self._bluez.forget(address)
         _raise_for_bluetooth_failure(output)
 
     def _disconnect(self, address: str) -> None:
-        output = self._run(("bluetoothctl", "disconnect", address), timeout=8.0)
+        output = self._bluez.disconnect(address)
         _raise_for_bluetooth_failure(output)
 
     def _resolve_connection_role(self, address: str, role: str | None) -> str:
@@ -637,41 +491,33 @@ class BluetoothManager:
                 None,
             )
 
-        def run() -> None:
-            error: str | None = None
-            try:
-                operation()
-            except (BluetoothCommandError, OSError, subprocess.SubprocessError) as exc:
-                error = str(exc)
-                logger.warning("Bluetooth operation %s failed: %s", name, exc)
-            except Exception as exc:
-                error = str(exc) or exc.__class__.__name__
-                logger.exception("Unexpected Bluetooth operation failure: %s", name)
-            finally:
-                with self._lock:
-                    self._operation = None
-                    self._operation_state = "failed" if error else "complete"
-                    self._operation_error = error
-                    self._status = _with_operation(
-                        self._status,
-                        None,
-                        self._operation_id,
-                        self._operation_state,
-                        error,
-                    )
-                self._refresh_once()
-                with self._lock:
-                    if self._operation is None and self._operation_state in {"complete", "failed"}:
-                        self._operation_state = "idle"
-                        self._operation_error = None
+        def complete(exception: Exception | None) -> None:
+            error = None if exception is None else str(exception) or exception.__class__.__name__
+            if exception is not None:
+                if isinstance(exception, (BluetoothCommandError, OSError, subprocess.SubprocessError)):
+                    logger.warning("Bluetooth operation %s failed: %s", name, exception)
+                else:
+                    logger.exception("Unexpected Bluetooth operation failure: %s", name, exc_info=exception)
+            with self._lock:
+                self._operation = None
+                self._operation_state = "failed" if error else "complete"
+                self._operation_error = error
+                self._status = _with_operation(
+                    self._status,
+                    None,
+                    self._operation_id,
+                    self._operation_state,
+                    error,
+                )
+            self._refresh_once()
+            with self._lock:
+                if self._operation is None and self._operation_state in {"complete", "failed"}:
+                    self._operation_state = "idle"
+                    self._operation_error = None
 
-        threading.Thread(
-            target=run,
-            name=f"lumistripe-{name.split(':', 1)[0]}",
-            daemon=True,
-        ).start()
+        self._operation_coordinator.submit(name, operation, complete)
 
-    def _run(self, command: tuple[str, ...], *, timeout: float) -> str:
+    def _run(self, command: tuple[str, ...], timeout: float) -> str:
         with self._command_lock:
             return self._runner(command, timeout)
 
@@ -1122,26 +968,6 @@ def _read_bluetoothctl_until(
                 return
     finally:
         selector.close()
-
-
-def _pipewire_environment() -> dict[str, str]:
-    environment = os.environ.copy()
-    if "XDG_RUNTIME_DIR" not in environment:
-        candidate = f"/run/user/{os.getuid()}"
-        if os.path.isdir(candidate):
-            environment["XDG_RUNTIME_DIR"] = candidate
-    return environment
-
-
-def _clean_command_output(output: str) -> str:
-    """Remove terminal formatting emitted by bluetoothctl from captured output."""
-    prompt = re.compile(r"^\[bluetoothctl\][>#]\s*")
-    lines: list[str] = []
-    for raw_line in _ANSI_ESCAPE.sub("", output).replace("\r", "").splitlines():
-        line = prompt.sub("", raw_line.strip())
-        if line:
-            lines.append(line)
-    return "\n".join(lines)
 
 
 __all__ = [

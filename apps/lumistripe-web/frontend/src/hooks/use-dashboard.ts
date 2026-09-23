@@ -4,7 +4,6 @@ import { toast } from "sonner"
 
 import {
   dashboardApi,
-  ACCESS_REVOKED_EVENT,
   parseDashboardState,
   websocketUrl,
   type CalibrationPattern,
@@ -12,6 +11,7 @@ import {
   type PlaybackMode,
   type StripeTopology,
 } from "@/lib/api"
+import { useWebSocketStream } from "@/hooks/use-websocket-stream"
 
 export type ConnectionStatus = "connecting" | "connected" | "reconnecting"
 export type CommandName = "mode" | "brightness" | "solidColor" | "animation" | "blackout" | "calibration" | "stripes" | "stripeTest"
@@ -20,6 +20,10 @@ export const animationsQueryKey = ["animations"] as const
 
 function newerState(current: DashboardState | null, incoming: DashboardState) {
   return current === null || incoming.revision >= current.revision ? incoming : current
+}
+
+function parseDashboardMessage(value: unknown): DashboardState {
+  return parseDashboardState(JSON.parse(String(value)))
 }
 
 export function useDashboard() {
@@ -32,9 +36,13 @@ export function useDashboard() {
     retry: false,
   })
   const animationsQuery = useQuery({ queryKey: animationsQueryKey, queryFn: dashboardApi.getAnimations, staleTime: 5 * 60_000, refetchOnWindowFocus: false, retry: false })
-  const [connection, setConnection] = useState<ConnectionStatus>("connecting")
   const [pendingCommand, setPendingCommand] = useState<CommandName | null>(null)
   const commandActive = useRef(false)
+
+  const { data: incomingState, status: connection } = useWebSocketStream<DashboardState>({
+    url: websocketUrl(),
+    parse: parseDashboardMessage,
+  })
 
   const state = stateQuery.data ?? null
   const animations = animationsQuery.data ?? []
@@ -48,49 +56,9 @@ export function useDashboard() {
   }, [animationsQuery, stateQuery])
 
   useEffect(() => {
-    let disposed = false
-    let socket: WebSocket | null = null
-    let reconnectTimer: number | undefined
-    let attempts = 0
-
-    const connect = () => {
-      if (disposed) return
-      setConnection(attempts === 0 ? "connecting" : "reconnecting")
-      socket = new WebSocket(websocketUrl())
-
-      socket.onopen = () => {
-        attempts = 0
-        setConnection("connected")
-      }
-      socket.onmessage = (event) => {
-        try {
-          const incoming = parseDashboardState(JSON.parse(String(event.data)))
-          queryClient.setQueryData<DashboardState>(dashboardStateQueryKey, (current) => newerState(current ?? null, incoming))
-        } catch {
-          socket?.close()
-        }
-      }
-      socket.onerror = () => socket?.close()
-      socket.onclose = (event) => {
-        if (disposed) return
-        if (event.code === 4401) {
-          window.dispatchEvent(new Event(ACCESS_REVOKED_EVENT))
-          return
-        }
-        attempts += 1
-        setConnection("reconnecting")
-        const delay = Math.min(1000 * 2 ** (attempts - 1), 10_000)
-        reconnectTimer = window.setTimeout(connect, delay)
-      }
-    }
-
-    connect()
-    return () => {
-      disposed = true
-      if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer)
-      socket?.close()
-    }
-  }, [queryClient])
+    if (incomingState === null) return
+    queryClient.setQueryData<DashboardState>(dashboardStateQueryKey, (current) => newerState(current ?? null, incomingState))
+  }, [incomingState, queryClient])
 
   const runCommand = useCallback(
     async (name: CommandName, command: () => Promise<DashboardState>) => {

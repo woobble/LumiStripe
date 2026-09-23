@@ -64,3 +64,4 @@ export type StripeBackend = RestSchema<"StripeOutputConfig">["backend"]
 export type BluetoothDeviceRole = RestSchema<"BluetoothDeviceRequest">["role"]
 export type BluetoothOperation = RestSchema<"BluetoothCapabilities">["operations"][number]
 export type AudioSource = RestSchema<"AudioSourceRequest">["source"]
+export type RuntimeKind = RestSchema<"RuntimeKind">

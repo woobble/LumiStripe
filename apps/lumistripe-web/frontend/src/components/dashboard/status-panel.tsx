@@ -39,20 +39,20 @@ function formatDuration(totalSeconds: number) {
   return `${seconds}s`
 }
 
-function formatAge(age: number | null) {
-  if (age === null) return "Not yet"
+function formatAge(age: number | null | undefined) {
+  if (age == null) return "Not yet"
   if (age < 1) return "Just now"
   return `${formatDuration(age)} ago`
 }
 
-function formatFrequency(hertz: number | null) {
-  if (hertz === null) return "—"
+function formatFrequency(hertz: number | null | undefined) {
+  if (hertz == null) return "—"
   const megahertz = hertz / 1_000_000
   return `${Number.isInteger(megahertz) ? megahertz.toFixed(0) : megahertz.toFixed(2)} MHz`
 }
 
-function formatWatts(watts: number | null) {
-  if (watts === null) return "—"
+function formatWatts(watts: number | null | undefined) {
+  if (watts == null) return "—"
   return `${watts.toFixed(1)} W`
 }
 

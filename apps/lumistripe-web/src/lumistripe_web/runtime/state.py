@@ -17,6 +17,7 @@ from lumistripe.playback import AudioSource
 from ..models import RuntimeKind
 from ..settings import StripeTopologySettings, default_settings_path
 from .outputs import OutputGateController
+from .preview import PreviewFrame
 
 CalibrationPattern = Literal["white", "red", "green", "blue"]
 
@@ -79,14 +80,6 @@ class _BuiltTopology:
     shared: OutputGateController
     outputs: tuple[OutputGateController, ...]
     corrections: tuple[ColorCorrectionController, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class PreviewFrame:
-    """An immutable snapshot of the latest rendered output frame."""
-
-    sequence: int
-    outputs: tuple[bytes, ...]
 
 
 @dataclass(slots=True)

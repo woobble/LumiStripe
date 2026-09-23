@@ -29,7 +29,9 @@ function supports(status: BluetoothStatusResponse | undefined, operation: Blueto
 function canConnect(status: BluetoothStatusResponse | undefined, role: "input" | "output") {
   if (!supports(status, "connect")) return false
   if (!status) return true
-  const maximum = role === "input" ? status.capabilities.max_inputs : status.capabilities.max_outputs
+  const maximum = role === "input"
+    ? status.capabilities?.max_inputs ?? 1
+    : status.capabilities?.max_outputs ?? 1
   const connected = role === "input" ? status.connected_inputs.length : status.connected_outputs.length
   return connected < maximum
 }

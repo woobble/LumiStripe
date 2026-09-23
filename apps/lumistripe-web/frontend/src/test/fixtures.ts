@@ -13,6 +13,7 @@ export const initialState: DashboardState = {
   brightness: 0.72,
   blackout: false,
   music_active: false,
+  music_recognition_enabled: true,
   music_gate: "calm",
   bpm: 0,
   audio_status: "No audio source active.",
@@ -59,6 +60,7 @@ export const initialState: DashboardState = {
   stripe_playback: [{
     stripe_id: "primary", mode: "static", solid_color: "#7C3AED",
     animation: "aurora_wave", brightness: 0.72, blackout: false, music_active: false,
+    music_recognition_enabled: true,
   }],
   diagnostic_issues: [],
   error: null,

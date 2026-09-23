@@ -1,57 +1,17 @@
-import { ActivityIcon, AudioLinesIcon, CircleAlertIcon, LightbulbIcon, Settings2Icon, SlidersHorizontalIcon } from "lucide-react"
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { lazy, Suspense, useEffect, useState, type ReactNode } from "react"
-import { Navigate, Route, Routes } from "react-router"
+import { CircleAlertIcon, LightbulbIcon } from "lucide-react"
+import { useEffect, useState, type ReactNode } from "react"
 
 import { PairingScreen } from "@/components/auth/pairing-screen"
 import { ConnectionBadge } from "@/components/dashboard/connection-badge"
-import { SetupPage } from "@/components/dashboard/setup-nav"
+import { DashboardNavigation } from "@/components/dashboard/dashboard-navigation"
+import { DashboardRoutes } from "@/components/dashboard/dashboard-routes"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Toaster } from "@/components/ui/sonner"
 import { useAccess, type AccessController } from "@/hooks/use-access"
 import { useDashboard } from "@/hooks/use-dashboard"
-import { cn } from "@/lib/utils"
-import { GuardedNavLink, UnsavedChangesProvider } from "@/hooks/use-unsaved-changes"
-
-const AudioTuningPanel = lazy(async () => {
-  const module = await import("@/components/dashboard/audio-tuning-panel")
-  return { default: module.AudioTuningPanel }
-})
-
-const CalibrationPanel = lazy(async () => {
-  const module = await import("@/components/dashboard/calibration-panel")
-  return { default: module.CalibrationPanel }
-})
-
-const ControlPanel = lazy(async () => {
-  const module = await import("@/components/dashboard/control-panel")
-  return { default: module.ControlPanel }
-})
-
-const AudioStatusPanel = lazy(async () => {
-  const module = await import("@/components/dashboard/audio-status-panel")
-  return { default: module.AudioStatusPanel }
-})
-const AudioInputPanel = lazy(async () => {
-  const module = await import("@/components/dashboard/audio-input-panel")
-  return { default: module.AudioInputPanel }
-})
-
-const StartupPanel = lazy(async () => {
-  const module = await import("@/components/dashboard/startup-panel")
-  return { default: module.StartupPanel }
-})
-
-const StatusPanel = lazy(async () => {
-  const module = await import("@/components/dashboard/status-panel")
-  return { default: module.StatusPanel }
-})
-
-const StripeManagementPanel = lazy(async () => {
-  const module = await import("@/components/dashboard/stripe-management-panel")
-  return { default: module.StripeManagementPanel }
-})
+import { UnsavedChangesProvider } from "@/hooks/use-unsaved-changes"
+import { AppProviders } from "@/app/providers"
 
 function DashboardSkeleton() {
   return (
@@ -105,12 +65,6 @@ function PwaStatus() {
   )
 }
 
-function SetupGuard({ access, children }: { access: AccessController; children: ReactNode }) {
-  if (access.loading) return <DashboardSkeleton />
-  if (access.required && !access.authenticated) return <PairingScreen access={access} />
-  return children
-}
-
 function Dashboard({ access }: { access: AccessController }) {
   if (access.loading) return <DashboardAccessFrame><DashboardSkeleton /></DashboardAccessFrame>
   if (access.required && !access.authenticated) return <DashboardAccessFrame><PairingScreen access={access} /></DashboardAccessFrame>
@@ -159,54 +113,8 @@ function LiveDashboard({ access }: { access: AccessController }) {
         ) : (
           <UnsavedChangesProvider>
           <div className="min-h-0 flex-1 pb-[calc(5.25rem+env(safe-area-inset-bottom))]">
-            <Routes>
-              <Route path="/" element={<Suspense fallback={<DashboardSkeleton />}><ControlPanel controller={controller} /></Suspense>} />
-              <Route path="/audio" element={<Suspense fallback={<DashboardSkeleton />}><AudioStatusPanel /></Suspense>} />
-              <Route path="/setup" element={<Navigate to="/setup/stripes" replace />} />
-              <Route path="/setup/stripes" element={<SetupGuard access={access}><Suspense fallback={<DashboardSkeleton />}><StripeManagementPanel controller={controller} /></Suspense></SetupGuard>} />
-              <Route path="/setup/color" element={<SetupGuard access={access}><SetupPage><Suspense fallback={<DashboardSkeleton />}><CalibrationPanel controller={controller} /></Suspense></SetupPage></SetupGuard>} />
-              <Route path="/setup/audio" element={<SetupGuard access={access}><Suspense fallback={<DashboardSkeleton />}><AudioInputPanel /></Suspense></SetupGuard>} />
-              <Route path="/setup/audio/tuning" element={<SetupGuard access={access}><Suspense fallback={<DashboardSkeleton />}><AudioTuningPanel /></Suspense></SetupGuard>} />
-              <Route path="/setup/startup" element={<SetupGuard access={access}><Suspense fallback={<DashboardSkeleton />}><StartupPanel /></Suspense></SetupGuard>} />
-              <Route path="/calibration" element={<Navigate to="/setup/color" replace />} />
-              <Route path="/diagnostics" element={<Suspense fallback={<DashboardSkeleton />}><StatusPanel controller={controller} onLogout={access.required && access.authenticated ? access.logout : undefined} /></Suspense>} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-            <div className="fixed inset-x-0 bottom-0 z-40 border-t border-white/5 bg-background/90 backdrop-blur-2xl">
-              <div className="mx-auto w-full max-w-lg px-4 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-                <nav aria-label="Dashboard" className="grid h-14 w-full grid-cols-4 items-stretch rounded-2xl border border-white/5 bg-white/[0.04] p-1">
-                  <GuardedNavLink
-                    to="/"
-                    end
-                    className={({ isActive }) => cn("flex h-full w-full flex-col items-center justify-center gap-0.5 rounded-xl text-[10px] font-medium text-foreground/60 transition-colors", isActive && "bg-background text-foreground shadow-sm")}
-                  >
-                    <SlidersHorizontalIcon aria-hidden="true" />
-                    Control
-                  </GuardedNavLink>
-                  <GuardedNavLink
-                    to="/audio"
-                    className={({ isActive }) => cn("flex h-full w-full flex-col items-center justify-center gap-0.5 rounded-xl text-[10px] font-medium text-foreground/60 transition-colors", isActive && "bg-background text-foreground shadow-sm")}
-                  >
-                    <AudioLinesIcon aria-hidden="true" />
-                    Audio
-                  </GuardedNavLink>
-                  <GuardedNavLink
-                    to="/setup"
-                    className={({ isActive }) => cn("flex h-full w-full flex-col items-center justify-center gap-0.5 rounded-xl text-[10px] font-medium text-foreground/60 transition-colors", isActive && "bg-background text-foreground shadow-sm")}
-                  >
-                    <Settings2Icon aria-hidden="true" />
-                    Setup
-                  </GuardedNavLink>
-                  <GuardedNavLink
-                    to="/diagnostics"
-                    className={({ isActive }) => cn("flex h-full w-full flex-col items-center justify-center gap-0.5 rounded-xl text-[10px] font-medium text-foreground/60 transition-colors", isActive && "bg-background text-foreground shadow-sm")}
-                  >
-                    <ActivityIcon aria-hidden="true" />
-                    Status
-                  </GuardedNavLink>
-                </nav>
-              </div>
-            </div>
+            <DashboardRoutes access={access} controller={controller} fallback={<DashboardSkeleton />} />
+            <DashboardNavigation />
           </div>
           </UnsavedChangesProvider>
         )}
@@ -218,15 +126,10 @@ function LiveDashboard({ access }: { access: AccessController }) {
 }
 
 export default function App() {
-  const [queryClient] = useState(() => new QueryClient({
-    defaultOptions: {
-      queries: { retry: false, refetchOnWindowFocus: false },
-    },
-  }))
   return (
-    <QueryClientProvider client={queryClient}>
+    <AppProviders>
       <DashboardApp />
-    </QueryClientProvider>
+    </AppProviders>
   )
 }
 

@@ -104,7 +104,7 @@ function AudioInputPanelView() {
     try {
       const status = await runBluetooth(action, operation)
       if (!status) return
-      setOutputVolumeDraft(status.output_volume)
+      setOutputVolumeDraft(status.output_volume ?? null)
       onSuccess?.()
       if (message) toast.success(message)
     } catch (error) {

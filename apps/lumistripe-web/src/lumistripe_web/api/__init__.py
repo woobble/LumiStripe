@@ -6,6 +6,7 @@ from .protocols.preview import encode_preview_frame as encode_preview_frame
 from .routes import (
     audio_router,
     auth_router,
+    bluetooth_router,
     control_router,
     startup_router,
     stripes_router,
@@ -20,6 +21,7 @@ for feature_router in (
     control_router,
     stripes_router,
     audio_router,
+    bluetooth_router,
     startup_router,
     websocket_router,
 ):
