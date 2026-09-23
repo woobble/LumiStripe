@@ -24,6 +24,8 @@ def test_control_api_round_trip() -> None:
         assert initial.json()["application_version"]
         assert initial.json()["uptime_seconds"] >= 0
         assert "frame_rate" in initial.json()
+        assert "render_time_ms" in initial.json()
+        assert "recent_frame_miss_rate" in initial.json()
         assert "audio_health" in initial.json()
         assert "last_output_at" in initial.json()
         assert "diagnostic_issues" in initial.json()

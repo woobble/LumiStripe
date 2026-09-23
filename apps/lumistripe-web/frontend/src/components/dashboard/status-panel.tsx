@@ -155,6 +155,8 @@ export function StatusPanel({ controller, onLogout }: { controller: DashboardCon
         <CardContent className="grid grid-cols-2 gap-2">
           <Metric icon={Clock3Icon} label="Uptime" value={formatDuration(state.uptime_seconds)} />
           <Metric icon={GaugeIcon} label="Frame rate" value={state.frame_rate > 0 ? `${state.frame_rate.toFixed(1)} FPS` : "Measuring…"} />
+          <Metric icon={Clock3Icon} label="Latest render" value={state.render_time_ms > 0 ? `${state.render_time_ms.toFixed(1)} ms` : "Measuring…"} />
+          <Metric icon={TriangleAlertIcon} label="Recent deadline misses" value={state.recent_frame_miss_rate > 0 ? `${(state.recent_frame_miss_rate * 100).toFixed(1)}%` : "None"} />
           <Metric icon={RefreshCwIcon} label="Last hardware update" value={outputValue} />
           <Metric icon={PackageIcon} label="Version" value={state.application_version} />
           <Metric icon={CpuIcon} label="Runtime" value={displayName(state.runtime)} />

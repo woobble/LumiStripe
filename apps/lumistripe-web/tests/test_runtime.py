@@ -27,6 +27,7 @@ from lumistripe_web.runtime import (
     UnknownAnimationError,
     _default_controller_factory,
 )
+from lumistripe_web.runtime.worker import _frame_deadline_missed, _FrameTimingWindow
 from lumistripe_web.settings import (
     AudioTuningProfile,
     CalibrationSettingsStore,
@@ -136,6 +137,60 @@ def test_output_gate_blackout_preserves_latest_buffered_frame() -> None:
     assert stripe.force_flush_count == 2
     assert gate.last_successful_update_at is not None
     assert gate.last_successful_update_age_seconds is not None
+
+
+def test_frame_deadline_uses_the_effective_animation_interval() -> None:
+    assert not _frame_deadline_missed(
+        due_at_s=0.0,
+        completed_at_s=0.020,
+        expected_delay_s=0.050,
+    )
+    assert _frame_deadline_missed(
+        due_at_s=0.0,
+        completed_at_s=0.020,
+        expected_delay_s=0.010,
+    )
+
+
+def test_frame_timing_window_prunes_old_outcomes() -> None:
+    window = _FrameTimingWindow(window_seconds=10.0)
+    window.record(0.0, missed_deadline=True)
+    window.record(5.0, missed_deadline=False)
+
+    current = window.stats(5.0)
+    assert current.frame_count == 2
+    assert current.missed_frame_count == 1
+    assert current.miss_rate == pytest.approx(0.5)
+
+    recent = window.stats(10.1)
+    assert recent.frame_count == 1
+    assert recent.missed_frame_count == 0
+    assert recent.miss_rate == 0.0
+
+
+def test_renderer_deadline_diagnostic_uses_recent_miss_rate() -> None:
+    runtime = LumiStripeRuntime(RuntimeSettings(pixels=2))
+    runtime._frame_rate = 20.0
+    runtime._last_render_time_ms = 18.0
+    runtime._missed_frame_count = 947
+    now = time.monotonic()
+    for index in range(40):
+        runtime._frame_timing.record(
+            now - 1.0 + index * 0.01,
+            missed_deadline=index < 4,
+        )
+
+    issues = runtime._diagnostic_issues(running=True, uptime_seconds=10.0)
+    assert not any(issue.title == "Renderer missed frame deadlines" for issue in issues)
+
+    for index in range(2):
+        runtime._frame_timing.record(now, missed_deadline=True)
+    issues = runtime._diagnostic_issues(running=True, uptime_seconds=10.0)
+    issue = next(
+        issue for issue in issues if issue.title == "Renderer missed frame deadlines"
+    )
+    assert "6 of the last 42 frames" in issue.message
+    assert "947 misses have been recorded since startup" in issue.message
 
 
 def test_power_budget_scales_rendered_frame_without_changing_requested_brightness(

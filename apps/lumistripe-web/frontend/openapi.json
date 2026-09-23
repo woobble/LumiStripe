@@ -1419,6 +1419,19 @@
               "outputs": []
             }
           },
+          "recent_frame_miss_rate": {
+            "default": 0.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Recent Frame Miss Rate",
+            "type": "number"
+          },
+          "render_time_ms": {
+            "default": 0.0,
+            "minimum": 0.0,
+            "title": "Render Time Ms",
+            "type": "number"
+          },
           "revision": {
             "default": 0,
             "title": "Revision",

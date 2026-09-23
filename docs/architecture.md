@@ -55,6 +55,21 @@ The API package follows the same feature boundary:
 
 Further service extraction should preserve the single-worker invariant.
 
+### Renderer timing diagnostics
+
+The worker records the duration of each completed render step and compares it
+with the effective animation interval returned by playback, clamped to the
+16 ms minimum frame interval. A frame deadline miss is therefore a rendering
+step that completes after its scheduled presentation budget; it is not the
+same as a stalled worker.
+
+`missed_frame_count` is cumulative for the current runtime session and is
+useful for historical telemetry. The Diagnostics page uses a separate rolling
+10-second window, requiring at least five misses and a 10% miss rate before it
+reports an active warning. This prevents a transient startup spike from
+remaining visible indefinitely while still surfacing sustained CPU, animation,
+or hardware-output pressure.
+
 ## Core boundaries
 
 The core package keeps compatibility exports in `lumistripe.__init__`, while

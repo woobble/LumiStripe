@@ -1212,6 +1212,16 @@ export interface components {
              */
             power_budget: components["schemas"]["PowerBudgetState"];
             /**
+             * Recent Frame Miss Rate
+             * @default 0
+             */
+            recent_frame_miss_rate: number;
+            /**
+             * Render Time Ms
+             * @default 0
+             */
+            render_time_ms: number;
+            /**
              * Revision
              * @default 0
              */

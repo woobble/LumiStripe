@@ -8,7 +8,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 from concurrent.futures import Future
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 from importlib import metadata
 from typing import TypedDict, cast
@@ -158,6 +158,9 @@ WORKER_STOP_GRACE_SECONDS = 0.5
 FRAME_STALL_GRACE_SECONDS = 0.5
 FRAME_STALL_MIN_SECONDS = 0.75
 FRAME_STALL_MAX_SECONDS = 5.0
+FRAME_TIMING_WINDOW_SECONDS = 10.0
+FRAME_TIMING_MIN_MISSES = 5
+FRAME_TIMING_MISS_RATE_THRESHOLD = 0.10
 BLUETOOTH_PROFILE_KEY = "Bluetooth music"
 
 try:
@@ -176,6 +179,56 @@ class UnknownAnimationError(RuntimeCommandError):
 
 class RuntimeUnavailableError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class _FrameTimingStats:
+    frame_count: int = 0
+    missed_frame_count: int = 0
+    miss_rate: float = 0.0
+
+
+class _FrameTimingWindow:
+    """Bounded recent frame outcomes used for renderer health diagnostics."""
+
+    def __init__(self, *, window_seconds: float = FRAME_TIMING_WINDOW_SECONDS) -> None:
+        if window_seconds <= 0.0:
+            raise ValueError("frame timing window must be greater than zero")
+        self._window_seconds = window_seconds
+        self._samples: deque[tuple[float, bool]] = deque()
+
+    def reset(self) -> None:
+        self._samples.clear()
+
+    def record(self, completed_at_s: float, *, missed_deadline: bool) -> None:
+        self._samples.append((completed_at_s, missed_deadline))
+        self._prune(completed_at_s)
+
+    def stats(self, now_s: float) -> _FrameTimingStats:
+        self._prune(now_s)
+        frame_count = len(self._samples)
+        missed_frame_count = sum(
+            missed_deadline for _, missed_deadline in self._samples
+        )
+        return _FrameTimingStats(
+            frame_count=frame_count,
+            missed_frame_count=missed_frame_count,
+            miss_rate=(missed_frame_count / frame_count if frame_count else 0.0),
+        )
+
+    def _prune(self, now_s: float) -> None:
+        cutoff = now_s - self._window_seconds
+        while self._samples and self._samples[0][0] < cutoff:
+            self._samples.popleft()
+
+
+def _frame_deadline_missed(
+    *, due_at_s: float, completed_at_s: float, expected_delay_s: float
+) -> bool:
+    """Return whether a frame completed after its effective presentation budget."""
+
+    deadline = due_at_s + max(expected_delay_s, MIN_FRAME_SECONDS)
+    return completed_at_s > deadline
 
 
 class RuntimeWorker:
@@ -296,6 +349,8 @@ class RuntimeWorker:
         self._last_step_expected_delay_s = MIN_FRAME_SECONDS
         self._last_step_started_s: float | None = None
         self._missed_frame_count = 0
+        self._last_render_time_ms = 0.0
+        self._frame_timing = _FrameTimingWindow()
 
     @property
     def healthy(self) -> bool:
@@ -317,6 +372,8 @@ class RuntimeWorker:
             self._last_step_started_s = None
             self._last_step_expected_delay_s = MIN_FRAME_SECONDS
             self._missed_frame_count = 0
+            self._last_render_time_ms = 0.0
+            self._frame_timing.reset()
         self._thread = threading.Thread(
             target=self._run,
             name="lumistripe-runtime",
@@ -983,11 +1040,21 @@ class RuntimeWorker:
                     self._last_step_started_s = now
                 delay = self._step()
                 completed_at = time.monotonic()
+                missed_deadline = _frame_deadline_missed(
+                    due_at_s=next_frame_at,
+                    completed_at_s=completed_at,
+                    expected_delay_s=delay,
+                )
                 with self._worker_state_lock:
-                    if completed_at > next_frame_at + MIN_FRAME_SECONDS:
+                    if missed_deadline:
                         self._missed_frame_count += 1
+                    self._last_render_time_ms = max(0.0, completed_at - now) * 1000.0
                     self._last_step_completed_s = completed_at
                     self._last_step_expected_delay_s = max(delay, MIN_FRAME_SECONDS)
+                self._frame_timing.record(
+                    completed_at,
+                    missed_deadline=missed_deadline,
+                )
                 next_frame_at = completed_at + max(delay, MIN_FRAME_SECONDS)
                 continue
 
@@ -2251,8 +2318,12 @@ class RuntimeWorker:
             active_effects=self.playback.active_effect_names,
             uptime_seconds=uptime_seconds,
             frame_rate=self._frame_rate,
+            render_time_ms=self._last_render_time_ms,
             worker_heartbeat_age_seconds=self._worker_heartbeat_age(),
             missed_frame_count=self._missed_frame_count,
+            recent_frame_miss_rate=self._frame_timing.stats(
+                time.monotonic()
+            ).miss_rate,
             command_queue_depth=self._command_queue_depth(),
             audio_health=self._audio_health_status(uptime_seconds),
             audio_callback_age_seconds=self._audio_health.last_callback_age,
@@ -2666,12 +2737,24 @@ class RuntimeWorker:
                     action="Wait for the current command burst to finish or reduce repeated control updates.",
                 )
             )
-        if running and self._missed_frame_count > 3:
+        frame_timing = self._frame_timing.stats(time.monotonic())
+        if (
+            running
+            and uptime_seconds > WORKER_STARTUP_GRACE_SECONDS
+            and frame_timing.missed_frame_count >= FRAME_TIMING_MIN_MISSES
+            and frame_timing.miss_rate >= FRAME_TIMING_MISS_RATE_THRESHOLD
+        ):
             issues.append(
                 DiagnosticIssue(
                     severity="warning",
                     title="Renderer missed frame deadlines",
-                    message=f"{self._missed_frame_count} frame deadlines have been missed.",
+                    message=(
+                        f"{frame_timing.missed_frame_count} of the last "
+                        f"{frame_timing.frame_count} frames missed their deadlines "
+                        f"({frame_timing.miss_rate * 100:.0f}%). The latest render "
+                        f"took {self._last_render_time_ms:.1f} ms; "
+                        f"{self._missed_frame_count} misses have been recorded since startup."
+                    ),
                     action="Check CPU load, hardware output latency, and animation complexity.",
                 )
             )
