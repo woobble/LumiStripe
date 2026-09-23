@@ -1,23 +1,7 @@
-[project]
-name = "lumistripe"
-version = "0.1.0"
-requires-python = ">=3.12"
-license = "MIT"
-dependencies = [
-    "lumistripe-core",
-    "lumistripe-cli",
-    "lumistripe-sim",
-    "lumistripe-web",
-]
-
-[project.optional-dependencies]
-hardware-gain = [
-    "pyalsaaudio>=0.11",
-]
-
 [tool.uv.workspace]
 members = [
     "packages/lumistripe-core",
+    "packages/lumistripe-app-support",
     "apps/lumistripe-cli",
     "apps/lumistripe-sim",
     "apps/lumistripe-web",
@@ -25,6 +9,7 @@ members = [
 
 [tool.uv.sources]
 lumistripe-core = { workspace = true }
+lumistripe-app-support = { workspace = true }
 lumistripe-cli = { workspace = true }
 lumistripe-sim = { workspace = true }
 lumistripe-web = { workspace = true }
@@ -45,6 +30,7 @@ addopts = [
     "--cov=lumistripe_cli",
     "--cov=lumistripe_sim",
     "--cov=lumistripe_web",
+    "--cov=lumistripe_app_support",
     "--cov-report=term-missing",
     "--cov-report=xml",
 ]
@@ -56,6 +42,7 @@ source = [
     "lumistripe_cli",
     "lumistripe_sim",
     "lumistripe_web",
+    "lumistripe_app_support",
 ]
 omit = [
     "*/tests/*",

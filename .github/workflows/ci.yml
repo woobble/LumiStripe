@@ -52,6 +52,7 @@ jobs:
           apps/lumistripe-cli/src/lumistripe_cli
           apps/lumistripe-sim/src/lumistripe_sim
           apps/lumistripe-web/src/lumistripe_web
+          packages/lumistripe-app-support/src/lumistripe_app_support
 
       - name: Test Python
         run: uv run python -m pytest -q --junitxml=junit.xml -o junit_family=legacy
@@ -108,6 +109,15 @@ jobs:
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Verify generated REST contract
+        run: bun run generate:api && git diff --exit-code -- openapi.json src/generated/api.ts
+
       - name: Lint frontend
         run: bun run lint
 
@@ -116,12 +126,6 @@ jobs:
 
       - name: Build frontend
         run: bun run build
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
-        with:
-          enable-cache: true
-          python-version: "3.12"
 
       - name: Build Python distributions
         working-directory: .

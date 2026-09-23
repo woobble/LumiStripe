@@ -1,0 +1,109 @@
+"""Feature-oriented exports for the HTTP contract models.
+
+The original model module remains available for compatibility while route
+modules migrate to these narrower contract namespaces.
+"""
+
+from .audio import (
+    AudioCalibrationFinishRequest,
+    AudioCalibrationResult,
+    AudioCalibrationSessionResponse,
+    AudioCalibrationStartRequest,
+    AudioDeviceOption,
+    AudioDeviceRequest,
+    AudioResetRequest,
+    AudioSettingsRequest,
+    AudioSettingsResponse,
+    AudioSourceRequest,
+    AudioTelemetry,
+    AudioTuningValues,
+)
+from .bluetooth import (
+    AudioOutputDeviceInfo,
+    AudioOutputMuteRequest,
+    AudioOutputSelectionRequest,
+    AudioOutputVolumeRequest,
+    BluetoothAliasRequest,
+    BluetoothCapabilities,
+    BluetoothDeviceInfo,
+    BluetoothDeviceRequest,
+    BluetoothPowerRequest,
+    BluetoothStatusResponse,
+)
+from .common import (
+    AccessStatus,
+    AnimationList,
+    AnimationOption,
+    DashboardState,
+    DiagnosticIssue,
+    PairingRequest,
+    RuntimeKind,
+)
+from .control import (
+    AnimationRequest,
+    BlackoutRequest,
+    BrightnessRequest,
+    CalibrationFinishRequest,
+    CalibrationSessionResponse,
+    CalibrationStartRequest,
+    CalibrationUpdateRequest,
+    ModeRequest,
+)
+from .startup import (
+    StartupPlaybackState,
+    StartupSettingsRequest,
+    StartupSettingsResponse,
+)
+from .stripes import (
+    StripeOutputConfig,
+    StripeTestRequest,
+    StripeTopology,
+    StripeTopologyRequest,
+)
+
+__all__ = [
+    "AccessStatus",
+    "AnimationList",
+    "AnimationOption",
+    "AnimationRequest",
+    "AudioCalibrationFinishRequest",
+    "AudioCalibrationResult",
+    "AudioCalibrationSessionResponse",
+    "AudioCalibrationStartRequest",
+    "AudioDeviceOption",
+    "AudioDeviceRequest",
+    "AudioOutputDeviceInfo",
+    "AudioOutputMuteRequest",
+    "AudioOutputSelectionRequest",
+    "AudioOutputVolumeRequest",
+    "AudioResetRequest",
+    "AudioSettingsRequest",
+    "AudioSettingsResponse",
+    "AudioSourceRequest",
+    "AudioTelemetry",
+    "AudioTuningValues",
+    "BlackoutRequest",
+    "BluetoothAliasRequest",
+    "BluetoothCapabilities",
+    "BluetoothDeviceInfo",
+    "BluetoothDeviceRequest",
+    "BluetoothPowerRequest",
+    "BluetoothStatusResponse",
+    "BrightnessRequest",
+    "CalibrationFinishRequest",
+    "CalibrationSessionResponse",
+    "CalibrationStartRequest",
+    "CalibrationUpdateRequest",
+    "DashboardState",
+    "DiagnosticIssue",
+    "ModeRequest",
+    "PairingRequest",
+    "RuntimeKind",
+    "StartupPlaybackState",
+    "StartupSettingsRequest",
+    "StartupSettingsResponse",
+    "StripeOutputConfig",
+    "StripeTestRequest",
+    "StripeTopology",
+    "StripeTopologyRequest",
+]

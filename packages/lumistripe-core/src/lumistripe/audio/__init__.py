@@ -4,13 +4,17 @@ import importlib
 import threading
 import time
 from dataclasses import dataclass, field, replace
-from types import TracebackType
+from types import ModuleType, TracebackType
 from typing import Any, Self, cast
 
 import numpy as np
 import numpy.typing as npt
 
-from . import _audio
+_audio: ModuleType | None
+try:
+    from . import _audio as _audio
+except (ImportError, OSError):
+    _audio = None
 from .hardware_gain import (
     HardwareGainController as HardwareGainController,
 )
@@ -480,9 +484,10 @@ def _config_to_dict(config: AudioConfig) -> dict[str, float | int]:
 
 class AudioState:
     def __init__(self, config: AudioConfig | None = None, sample_rate: float = DEFAULT_SAMPLE_RATE) -> None:
+        native_audio = _require_native_audio()
         self._config = config or AudioConfig()
         self._sample_rate = float(sample_rate)
-        self._processor = _audio.AudioProcessor(
+        self._processor = native_audio.AudioProcessor(
             _config_to_dict(self._config), self._sample_rate)
         self._frame = AudioFrame()
         self._features = MusicFeatures()
@@ -528,8 +533,9 @@ class AudioState:
 
     def reconfigure(self, config: AudioConfig) -> None:
         """Atomically replace DSP configuration while keeping the input stream alive."""
+        native_audio = _require_native_audio()
         self._config = config
-        self._processor = _audio.AudioProcessor(
+        self._processor = native_audio.AudioProcessor(
             _config_to_dict(config), self._sample_rate
         )
         self._frame = AudioFrame()
@@ -766,6 +772,15 @@ def _load_sounddevice() -> Any:
         raise RuntimeError(
             "sounddevice is required for AudioInput; install lumistripe-core[audio]"
         ) from exc
+
+
+def _require_native_audio() -> Any:
+    if _audio is None:
+        raise RuntimeError(
+            "the native audio processor is not installed; build lumistripe-core "
+            "with LUMISTRIPE_BUILD_EXTENSIONS=audio or install a native wheel"
+        )
+    return _audio
 
 
 def _device_name(device: Any) -> str:

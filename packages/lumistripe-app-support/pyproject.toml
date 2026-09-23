@@ -1,0 +1,23 @@
+[project]
+name = "lumistripe-app-support"
+version = "0.1.0"
+description = "Shared configuration and policies for LumiStripe applications"
+readme = "README.md"
+license = "MIT"
+authors = [
+    { name = "Felix Sternberg", email = "felix@sternberg.cx" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "lumistripe-core",
+]
+
+[tool.uv.sources]
+lumistripe-core = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.12.13,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "lumistripe_app_support"

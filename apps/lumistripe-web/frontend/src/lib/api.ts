@@ -1,3 +1,5 @@
+import { z } from "zod"
+
 export type PlaybackMode = "solid" | "static" | "cycling" | "dynamic"
 export type RuntimeKind = "simulation" | "hardware"
 export const ACCESS_REVOKED_EVENT = "lumistripe:access-revoked"
@@ -316,6 +318,11 @@ const stripeTopologySchema = z.object({
   power_budget_enabled: z.boolean().default(false),
   power_budget_watts: z.number().nullable().default(null),
 }) as z.ZodType<StripeTopology>
+const stripePlaybackSchema = z.object({
+  stripe_id: z.string(), mode: playbackModeSchema, solid_color: z.string(),
+  animation: z.string(), brightness: z.number(), blackout: z.boolean(),
+  music_active: z.boolean(), music_recognition_enabled: z.boolean().optional(),
+}) as z.ZodType<StripePlaybackState>
 const powerBudgetSchema = z.object({
   enabled: z.boolean().default(false),
   budget_watts: z.number().nullable().default(null),
@@ -326,20 +333,44 @@ const powerBudgetSchema = z.object({
     output_id: z.string(), estimated_watts: z.number(), limit_watts: z.number().nullable(), applied_scale: z.number(),
   })).default([]),
 })
+const diagnosticIssueSchema = z.object({
+  severity: z.enum(["info", "warning", "critical"]),
+  title: z.string(), message: z.string(), action: z.string(),
+})
+const calibrationStatusSchema = z.object({
+  active: z.boolean(), output_index: z.number().int().nullable().optional(),
+  pattern: z.enum(["white", "red", "green", "blue"]).nullable().optional(),
+  expires_in_seconds: z.number().nullable().optional(),
+})
+const colorCorrectionProfileSchema = z.object({
+  output_index: z.number().int(), name: z.string(), device: z.string(),
+  red: z.number().int(), green: z.number().int(), blue: z.number().int(),
+})
 const dashboardStateSchema = z.object({
-  revision: z.number(), runtime: z.enum(["simulation", "hardware"]), running: z.boolean(),
-  mode: playbackModeSchema, solid_color: z.string(), animation: z.string(), brightness: z.number(),
-  stripe_topology: stripeTopologySchema,
-  power_budget: powerBudgetSchema.default({ enabled: false, budget_watts: null, estimated_watts: 0, applied_scale: 1, limiting_output_id: null, outputs: [] }),
-  stripe_playback: z.array(z.unknown()),
-}).passthrough() as unknown as z.ZodType<DashboardState>
+  revision: z.number().int(), runtime: z.enum(["simulation", "hardware"]),
+  output_backend: z.string(), output_devices: z.array(z.string()),
+  spi_speed_hz: z.number().int().nullable(), running: z.boolean(),
+  mode: playbackModeSchema, solid_color: z.string(), animation: z.string(),
+  brightness: z.number(), blackout: z.boolean(), music_active: z.boolean(),
+  music_recognition_enabled: z.boolean().optional(), music_gate: z.string(),
+  bpm: z.number(), audio_status: z.string(), active_effects: z.array(z.string()),
+  uptime_seconds: z.number(), frame_rate: z.number(),
+  worker_heartbeat_age_seconds: z.number().nullable(), missed_frame_count: z.number().int(),
+  command_queue_depth: z.number().int(), audio_health: z.string(),
+  audio_callback_age_seconds: z.number().nullable(), audio_frame_age_seconds: z.number().nullable(),
+  last_output_at: z.string().nullable(), last_output_age_seconds: z.number().nullable(),
+  application_version: z.string(), color_corrections: z.array(colorCorrectionProfileSchema),
+  calibration: calibrationStatusSchema, stripe_topology: stripeTopologySchema,
+  power_budget: powerBudgetSchema, stripe_playback: z.array(stripePlaybackSchema),
+  diagnostic_issues: z.array(diagnosticIssueSchema), error: z.string().nullable(),
+}) as z.ZodType<DashboardState>
 
 export function parseDashboardState(value: unknown): DashboardState {
   return dashboardStateSchema.parse(value)
 }
 
-const animationListSchema = z.object({ items: z.array(z.object({ name: z.string(), mood: z.string(), dynamic_safe: z.boolean() })) }) as unknown as z.ZodType<AnimationList>
-const accessStatusSchema = z.object({ required: z.boolean(), authenticated: z.boolean() }) as unknown as z.ZodType<AccessStatus>
+const animationListSchema = z.object({ items: z.array(z.object({ name: z.string(), mood: z.string(), dynamic_safe: z.boolean() })) }) as z.ZodType<AnimationList>
+const accessStatusSchema = z.object({ required: z.boolean(), authenticated: z.boolean() }) as z.ZodType<AccessStatus>
 const bluetoothDeviceSchema = z.object({ address: z.string(), name: z.string(), paired: z.boolean(), connected: z.boolean(), roles: z.array(z.enum(["input", "output"])) })
 const audioOutputDeviceSchema = z.object({ selector: z.string(), name: z.string(), volume: z.number().nullable(), muted: z.boolean(), bluetooth: z.boolean(), connected: z.boolean() })
 const bluetoothCapabilitiesSchema = z.object({
@@ -354,10 +385,45 @@ const bluetoothStatusSchema = z.object({
   capabilities: bluetoothCapabilitiesSchema.default({ operations: [], max_inputs: 1, max_outputs: 1 }),
   operation: z.string().nullable(), operation_id: z.string().nullable().optional().default(null), operation_state: z.enum(["idle", "running", "complete", "failed"]).default("idle"), error: z.string().nullable(),
 }) as z.ZodType<BluetoothStatusResponse>
-const audioSettingsSchema = z.object({ source: z.string(), active_source: z.string().optional(), monitoring: z.boolean(), active_device: z.string().nullable(), fallback_device: z.string().nullable().optional(), active_device_name: z.string().nullable(), devices: z.array(z.unknown()), settings: z.object({ target_level: z.number(), hardware_gain_target: z.number().nullable().optional() }).passthrough(), configured_noise_floor: z.number(), bluetooth: bluetoothStatusSchema.optional(), error: z.string().nullable() }).passthrough() as unknown as z.ZodType<AudioSettingsResponse>
+const audioTuningSchema = z.object({
+  target_level: z.number(), hardware_gain_target: z.number().nullable().optional(),
+  noise_floor: z.number(), dynamic_response: z.number(), rms_attack: z.number(),
+  rms_release: z.number(), band_attack: z.number(), band_release: z.number(),
+  beat_release: z.number(), energy_threshold: z.number(), onset_threshold: z.number(),
+  beat_density_threshold: z.number(), brightness_threshold: z.number(),
+  spectral_balance_ratio: z.number(),
+})
+const audioDeviceSchema = z.object({
+  selector: z.string(), name: z.string(), settings: audioTuningSchema,
+})
+const audioSettingsSchema = z.object({
+  source: z.string(), active_source: z.string(), monitoring: z.boolean(),
+  active_device: z.string().nullable(), fallback_device: z.string().nullable(),
+  active_device_name: z.string().nullable(), devices: z.array(audioDeviceSchema),
+  settings: audioTuningSchema, configured_noise_floor: z.number(),
+  hardware_gain_supported: z.boolean(), hardware_gain_writable: z.boolean(),
+  hardware_gain_backend: z.string().nullable(), hardware_gain_control: z.string().nullable(),
+  hardware_gain_value: z.number().nullable(), hardware_gain_error: z.string().nullable(),
+  bluetooth: bluetoothStatusSchema.optional(), error: z.string().nullable(),
+}) as z.ZodType<AudioSettingsResponse>
 const audioCalibrationSchema = z.object({ session_id: z.string(), status: z.enum(["capturing", "complete"]), elapsed_seconds: z.number(), remaining_seconds: z.number(), result: z.object({ duration_seconds: z.number(), samples: z.number(), measured_floor: z.number(), measured_peak: z.number(), recommended_noise_floor: z.number(), recommended_target_level: z.number(), recommended_hardware_gain: z.number().nullable().optional(), recommended_idle_threshold_scale: z.number() }).nullable(), error: z.string().nullable() }) as z.ZodType<AudioCalibrationSessionResponse>
-const startupSettingsSchema = z.object({ restore_last_state: z.boolean(), remembered: z.object({ mode: playbackModeSchema }).passthrough() }).passthrough() as unknown as z.ZodType<StartupSettingsResponse>
-const calibrationSessionSchema = z.object({ session_id: z.string(), state: dashboardStateSchema }) as unknown as z.ZodType<CalibrationSessionResponse>
+const startupSettingsSchema = z.object({ restore_last_state: z.boolean(), remembered: z.object({ mode: playbackModeSchema, solid_color: z.string(), animation: z.string(), brightness: z.number(), blackout: z.boolean() }) }) as z.ZodType<StartupSettingsResponse>
+const calibrationSessionSchema = z.object({ session_id: z.string(), state: dashboardStateSchema }) as z.ZodType<CalibrationSessionResponse>
+const audioTelemetrySchema = z.object({
+  sequence: z.number().int(), fresh: z.boolean(), input_level: z.number(), processed_level: z.number(),
+  bands: z.tuple([z.number(), z.number(), z.number(), z.number(), z.number(), z.number(), z.number(), z.number()]),
+  beat: z.boolean(), beat_strength: z.number(), bpm: z.number(), estimated_noise_floor: z.number(),
+  configured_noise_floor: z.number(), normalization_gain: z.number(), hardware_gain_value: z.number().nullable().optional(),
+  program_loudness: z.number(), musical_impact: z.number(), gate: z.string(), gate_preview: z.boolean(),
+  gate_energy: z.number(), gate_onset: z.number(), gate_beat_density: z.number(), gate_brightness: z.number(),
+  gate_spectral_balance: z.number().optional(), gate_reason: z.string().optional(),
+  gate_checks: z.array(z.object({ id: z.string(), label: z.string(), value: z.number(), threshold: z.number(), passed: z.boolean() })).optional(),
+  health: z.string(),
+}) as z.ZodType<AudioTelemetry>
+
+export function parseAudioTelemetry(value: unknown): AudioTelemetry {
+  return audioTelemetrySchema.parse(value)
+}
 
 export class ApiError extends Error {
   readonly status: number
@@ -524,4 +590,3 @@ export function previewWebsocketUrl(): string {
   const scheme = window.location.protocol === "https:" ? "wss:" : "ws:"
   return `${scheme}//${window.location.host}/ws/preview`
 }
-import { z } from "zod"

@@ -1,1 +1,2 @@
 include src/lumistripe/audio/kissfft/*.h
+include src/lumistripe/audio/kissfft/*.c

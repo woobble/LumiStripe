@@ -39,6 +39,7 @@ from .aurora import Aurora
 from .base import Animation, AnimationPlayer
 from .bouncing_ball import BouncingBall
 from .bpm import Bpm
+from .catalog import AnimationDefinition, animation_catalog, validate_animation_catalog
 from .color_wipe import ColorWipe
 from .comet import Comet
 from .comet_storm import CometStorm
@@ -76,6 +77,7 @@ __all__ = [
     "ACCENT_EFFECTS",
     "RHYTHMIC_EFFECTS",
     "Animation",
+    "AnimationDefinition",
     "AnimationMetadata",
     "AnimationPlayer",
     "AnimationRole",
@@ -147,4 +149,6 @@ __all__ = [
     "TheaterChase",
     "Twinkle",
     "Wave",
+    "animation_catalog",
+    "validate_animation_catalog",
 ]

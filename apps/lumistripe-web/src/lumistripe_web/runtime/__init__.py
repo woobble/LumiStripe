@@ -1,23 +1,22 @@
+"""Runtime façade and worker-backed services for the web application."""
+
 from __future__ import annotations
 
 import queue
 import threading
 import time
 from collections import deque
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from concurrent.futures import Future
-from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import datetime
 from importlib import metadata
-from pathlib import Path
-from typing import Literal, TypedDict, cast
+from typing import TypedDict, cast
 from uuid import uuid4
 
 import numpy as np
-import numpy.typing as npt
 from lumistripe import (
     AnimationPlayer,
-    AudioConfig,
     AudioFrame,
     AudioInput,
     AudioInputHealth,
@@ -36,7 +35,6 @@ from lumistripe import (
     MusicFeatures,
     NullController,
     OutputPowerEstimate,
-    PixelBuffer,
     PlaybackConfig,
     PlaybackEngine,
     PlaybackMode,
@@ -53,14 +51,14 @@ from lumistripe import (
 )
 from lumistripe.audio import BandTuple, recommend_audio_calibration
 
-from .bluetooth import (
+from ..bluetooth import (
     BluetoothAudioBackend,
     BluetoothCommandError,
     BluetoothManager,
     BluetoothStatus,
     capture_device_selector,
 )
-from .models import (
+from ..models import (
     AnimationOption,
     AudioCalibrationSessionResponse,
     AudioDeviceOption,
@@ -79,22 +77,69 @@ from .models import (
     DiagnosticIssue,
     PowerBudgetState,
     PowerOutputState,
-    RuntimeKind,
     StartupPlaybackState,
     StartupSettingsResponse,
     StripeOutputConfig,
     StripePlaybackState,
     StripeTopology,
 )
-from .models import AudioCalibrationResult as AudioCalibrationResultModel
-from .settings import (
+from ..models import AudioCalibrationResult as AudioCalibrationResultModel
+from ..settings import (
     AudioTuningProfile,
     CalibrationSettingsStore,
     StartupPlaybackSettings,
-    StripeOutputSettings,
     StripeTopologySettings,
-    default_settings_path,
 )
+from .audio import default_audio_factory
+from .commands import (
+    _AudioCalibrationFinishCommand,
+    _AudioCalibrationStartCommand,
+    _AudioDeviceCommand,
+    _AudioSettingsCommand,
+    _AudioSourceCommand,
+    _CalibrationFinishCommand,
+    _CalibrationStartCommand,
+    _CalibrationUpdateCommand,
+    _Command,
+    _ModeCommand,
+    _StartupSettingsCommand,
+    _StripeTestCommand,
+    _StripeTopologyCommand,
+    _TargetCommand,
+)
+from .outputs import OutputGateController
+from .state import (
+    CalibrationPattern,
+    PreviewFrame,
+    RuntimeSettings,
+    _AudioCalibrationSession,
+    _AudioFactory,
+    _BuiltTopology,
+    _CalibrationSession,
+    _ControllerFactory,
+    _StripeTestSession,
+)
+from .topology import (
+    default_controller_factory as topology_controller_factory,
+)
+from .topology import (
+    topology_from_runtime,
+)
+
+# Keep the historical private names importable while the implementation moves
+# into focused runtime modules.
+_default_audio_factory = default_audio_factory
+_topology_from_runtime = topology_from_runtime
+
+
+def _default_controller_factory(settings: RuntimeSettings) -> Controller:
+    """Preserve injectable hardware symbols for existing integrations/tests."""
+
+    return topology_controller_factory(
+        settings,
+        gpio_factory=GPIOStripe,
+        spi_factory=SPIStripe,
+    )
 
 MIN_FRAME_SECONDS = 0.016
 FPS_SAMPLE_SECONDS = 1.0
@@ -108,7 +153,6 @@ FRAME_STALL_GRACE_SECONDS = 0.5
 FRAME_STALL_MIN_SECONDS = 0.75
 FRAME_STALL_MAX_SECONDS = 5.0
 BLUETOOTH_PROFILE_KEY = "Bluetooth music"
-CalibrationPattern = Literal["white", "red", "green", "blue"]
 
 try:
     APPLICATION_VERSION = metadata.version("lumistripe-web")
@@ -126,344 +170,6 @@ class UnknownAnimationError(RuntimeCommandError):
 
 class RuntimeUnavailableError(RuntimeError):
     pass
-
-
-@dataclass(frozen=True, slots=True)
-class RuntimeSettings:
-    pixels: int = 80
-    hardware: bool = False
-    output_backend: str = "spi"
-    spi_device: str = "/dev/spidev0.0"
-    spi_speed_hz: int = 1_000_000
-    spi_device_2: str | None = None
-    spi_speed_hz_2: int | None = None
-    chip: str = "/dev/gpiochip0"
-    data_pin: int = 14
-    clock_pin: int = 15
-    audio_source: str = "auto"
-    audio_device: str | None = None
-    settings_file: Path = field(default_factory=default_settings_path)
-    ignore_saved_stripes: bool = False
-
-    def __post_init__(self) -> None:
-        if self.pixels <= 0:
-            raise ValueError("pixels must be greater than zero")
-        if self.output_backend not in {"spi", "gpio"}:
-            raise ValueError(f"invalid output backend: {self.output_backend}")
-        if self.spi_speed_hz <= 0:
-            raise ValueError("SPI speed must be greater than zero")
-        if self.spi_speed_hz_2 is not None and self.spi_speed_hz_2 <= 0:
-            raise ValueError("secondary SPI speed must be greater than zero")
-        if self.spi_speed_hz_2 is not None and self.spi_device_2 is None:
-            raise ValueError("secondary SPI speed requires a secondary SPI device")
-        if self.audio_source not in {"auto", "off", "demo", "mic", "bluetooth"}:
-            raise ValueError(f"invalid audio source: {self.audio_source}")
-
-    @property
-    def kind(self) -> RuntimeKind:
-        return RuntimeKind.HARDWARE if self.hardware else RuntimeKind.SIMULATION
-
-    def dynamic_audio_source(self) -> AudioSource:
-        if self.audio_source == "auto":
-            return AudioSource.BLUETOOTH if self.hardware else AudioSource.DEMO
-        return AudioSource(self.audio_source)
-
-
-class OutputGateController(Controller):
-    """Suppress output flushes while preserving the latest rendered frame."""
-
-    def __init__(self, inner: Controller) -> None:
-        self._inner = inner
-        self._blackout = False
-        self._last_successful_update_at: datetime | None = None
-        self._last_successful_update_monotonic: float | None = None
-
-    @property
-    def blackout(self) -> bool:
-        return self._blackout
-
-    @property
-    def last_successful_update_at(self) -> datetime | None:
-        return self._last_successful_update_at
-
-    @property
-    def last_successful_update_age_seconds(self) -> float | None:
-        if self._last_successful_update_monotonic is None:
-            return None
-        return max(0.0, time.monotonic() - self._last_successful_update_monotonic)
-
-    def _record_successful_update(self) -> None:
-        self._last_successful_update_at = datetime.now(UTC)
-        self._last_successful_update_monotonic = time.monotonic()
-
-    def set_blackout(self, enabled: bool) -> None:
-        if enabled == self._blackout:
-            return
-        if enabled:
-            buffered_frame = self._inner.pixels().copy()
-            self._inner.clear()
-            self._inner.force_flush()
-            self._record_successful_update()
-            self._inner.set_pixels(buffered_frame)
-            self._blackout = True
-            return
-        self._blackout = False
-        self.force_flush()
-
-    @property
-    def length(self) -> int:
-        return self._inner.length
-
-    def pixels(self) -> PixelBuffer:
-        return self._inner.pixels()
-
-    def pixel(self, index: int) -> Color:
-        return self._inner.pixel(index)
-
-    def set_pixel(self, index: int, color: Color) -> None:
-        self._inner.set_pixel(index, color)
-
-    def set_pixels(self, colors: Sequence[Color] | npt.ArrayLike) -> None:
-        self._inner.set_pixels(colors)
-
-    def fill(self, color: Color) -> None:
-        self._inner.fill(color)
-
-    def clear(self) -> None:
-        self._inner.clear()
-
-    def flush(self) -> None:
-        if not self._blackout:
-            self._inner.flush()
-            self._record_successful_update()
-
-    def force_flush(self) -> None:
-        if not self._blackout:
-            self._inner.force_flush()
-            self._record_successful_update()
-
-    def close(self) -> None:
-        self._inner.close()
-
-
-@dataclass(slots=True)
-class _Command:
-    name: str
-    value: object
-    future: Future[object]
-    coalesced_futures: list[Future[object]] = field(default_factory=list)
-
-    def futures(self) -> tuple[Future[object], ...]:
-        return (self.future, *self.coalesced_futures)
-
-
-@dataclass(frozen=True, slots=True)
-class _ModeCommand:
-    mode: PlaybackMode
-    color: str | None = None
-    stripe_id: str | None = None
-    music_recognition_enabled: bool | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class _TargetCommand:
-    value: object
-    stripe_id: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class _StripeTopologyCommand:
-    topology: StripeTopologySettings
-
-
-@dataclass(frozen=True, slots=True)
-class _StripeTestCommand:
-    stripe_id: str
-    pattern: str
-    topology: StripeTopologySettings | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class _CalibrationStartCommand:
-    output_index: int
-
-
-@dataclass(frozen=True, slots=True)
-class _CalibrationUpdateCommand:
-    session_id: str
-    correction: ColorCorrection
-    pattern: CalibrationPattern
-
-
-@dataclass(frozen=True, slots=True)
-class _CalibrationFinishCommand:
-    session_id: str
-    save: bool
-
-
-@dataclass(frozen=True, slots=True)
-class _AudioSettingsCommand:
-    device: str
-    profile: AudioTuningProfile
-
-
-@dataclass(frozen=True, slots=True)
-class _AudioDeviceCommand:
-    device: str
-
-
-@dataclass(frozen=True, slots=True)
-class _AudioSourceCommand:
-    source: str
-
-
-@dataclass(frozen=True, slots=True)
-class _AudioCalibrationStartCommand:
-    device: str
-    duration_seconds: float
-
-
-@dataclass(frozen=True, slots=True)
-class _AudioCalibrationFinishCommand:
-    session_id: str
-    apply: bool
-    target_level: float | None = None
-    noise_floor: float | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class _StartupSettingsCommand:
-    restore_last_state: bool
-
-
-@dataclass(slots=True)
-class _CalibrationSession:
-    session_id: str
-    output_index: int
-    pattern: CalibrationPattern
-    original_corrections: tuple[ColorCorrection, ...]
-    original_frames: tuple[PixelBuffer, ...]
-    original_blackout: bool
-    last_activity_at: float
-
-
-@dataclass(slots=True)
-class _BuiltTopology:
-    raw: Controller
-    shared: OutputGateController
-    outputs: tuple[OutputGateController, ...]
-    corrections: tuple[ColorCorrectionController, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class PreviewFrame:
-    """An immutable snapshot of the latest rendered output frame."""
-
-    sequence: int
-    outputs: tuple[bytes, ...]
-
-
-@dataclass(slots=True)
-class _StripeTestSession:
-    stripe_id: str
-    pattern: str
-    expires_at: float
-    restore_topology: StripeTopologySettings | None = None
-
-
-@dataclass(slots=True)
-class _AudioCalibrationSession:
-    session_id: str
-    device: str
-    started_at: float
-    duration_seconds: float
-    frames: list[AudioFrame] = field(default_factory=list)
-    features: list[MusicFeatures] = field(default_factory=list)
-    result: _AudioCalibrationResult | None = None
-    error: str | None = None
-
-
-class _AudioCalibrationResult(TypedDict):
-    duration_seconds: float
-    samples: int
-    measured_floor: float
-    measured_peak: float
-    recommended_noise_floor: float
-    recommended_target_level: float
-    recommended_hardware_gain: float | None
-    recommended_idle_threshold_scale: float
-
-
-_ControllerFactory = Callable[[RuntimeSettings], Controller]
-_AudioFactory = Callable[[str | None, AudioConfig], AudioInput]
-
-
-def _default_controller_factory(settings: RuntimeSettings) -> Controller:
-    if not settings.hardware:
-        return Stripe(settings.pixels)
-    if settings.output_backend == "gpio":
-        return GPIOStripe(
-            Config(
-                chip=settings.chip,
-                gpio_data=settings.data_pin,
-                gpio_clock=settings.clock_pin,
-                consumer="lumistripe-web",
-            ),
-            settings.pixels,
-        )
-    primary = SPIStripe(
-        SPIConfig(device=settings.spi_device, speed_hz=settings.spi_speed_hz),
-        settings.pixels,
-    )
-    if settings.spi_device_2 is None:
-        return primary
-    try:
-        secondary = SPIStripe(
-            SPIConfig(
-                device=settings.spi_device_2,
-                speed_hz=settings.spi_speed_hz_2 or settings.spi_speed_hz,
-            ),
-            settings.pixels,
-        )
-    except Exception:
-        primary.close()
-        raise
-    return MultiController([primary, secondary])
-
-
-def _default_audio_factory(device: str | None, config: AudioConfig) -> AudioInput:
-    return (
-        AudioInput.with_device_config(device, config)
-        if device
-        else AudioInput.with_config(config)
-    )
-
-
-def _topology_from_runtime(settings: RuntimeSettings) -> StripeTopologySettings:
-    primary = StripeOutputSettings(
-        id="primary",
-        name="Primary",
-        pixels=settings.pixels,
-        backend=cast(Literal["spi", "gpio"], settings.output_backend),
-        spi_device=settings.spi_device,
-        spi_speed_hz=settings.spi_speed_hz,
-        chip=settings.chip,
-        data_pin=settings.data_pin,
-        clock_pin=settings.clock_pin,
-    )
-    outputs = [primary]
-    if settings.output_backend == "spi" and settings.spi_device_2 is not None:
-        outputs.append(
-            StripeOutputSettings(
-                id="secondary",
-                name="Secondary",
-                pixels=settings.pixels,
-                backend="spi",
-                spi_device=settings.spi_device_2,
-                spi_speed_hz=settings.spi_speed_hz_2 or settings.spi_speed_hz,
-            )
-        )
-    return StripeTopologySettings(layout="mirrored", outputs=tuple(outputs))
 
 
 class LumiStripeRuntime:

@@ -187,11 +187,17 @@ uv run python -m pytest -q --cov-report=term-missing --cov-report=xml
 
 # Lint and type-check
 uv run ruff check .
-uv run mypy packages/lumistripe-core/src/lumistripe apps/lumistripe-cli/src/lumistripe_cli apps/lumistripe-sim/src/lumistripe_sim apps/lumistripe-web/src/lumistripe_web
+uv run mypy \
+  packages/lumistripe-core/src/lumistripe \
+  apps/lumistripe-cli/src/lumistripe_cli \
+  apps/lumistripe-sim/src/lumistripe_sim \
+  apps/lumistripe-web/src/lumistripe_web \
+  packages/lumistripe-app-support/src/lumistripe_app_support
 
 # Frontend checks
 cd apps/lumistripe-web/frontend
 bun install --frozen-lockfile
+bun run generate:api
 bun run lint
 bun run test
 bun run build

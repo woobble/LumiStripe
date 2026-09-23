@@ -9,6 +9,7 @@ import { animations, initialState, jsonResponse } from "@/test/fixtures"
 
 const audioValues = {
   target_level: 0.36,
+  noise_floor: 0.015,
   dynamic_response: 0.65,
   rms_attack: 0.45,
   rms_release: 0.12,
@@ -38,14 +39,19 @@ const bluetoothStatus = {
   output_volume: null,
   output_muted: false,
   output_ready: false,
+  capabilities: { operations: [], max_inputs: 1, max_outputs: 1 },
   operation: null,
+  operation_id: null,
+  operation_state: "idle",
   error: null,
 }
 
 const audioSettings = {
   source: "mic",
+  active_source: "mic",
   monitoring: true,
   active_device: "2",
+  fallback_device: "2",
   active_device_name: "USB Mic",
   devices: [
     { selector: "2", name: "USB Mic", settings: audioValues },
@@ -53,6 +59,12 @@ const audioSettings = {
   ],
   settings: audioValues,
   configured_noise_floor: 0.015,
+  hardware_gain_supported: false,
+  hardware_gain_writable: false,
+  hardware_gain_backend: null,
+  hardware_gain_control: null,
+  hardware_gain_value: null,
+  hardware_gain_error: null,
   error: null,
   bluetooth: bluetoothStatus,
 }

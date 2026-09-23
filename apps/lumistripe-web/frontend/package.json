@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "generate:api": "uv run --project .. python ../scripts/export_openapi.py > openapi.json && bunx --bun --package typescript@5.9.3 --package openapi-typescript@7.13.0 openapi-typescript openapi.json -o src/generated/api.ts",
     "lint": "oxlint",
     "test": "vitest run",
     "preview": "vite preview"
@@ -46,6 +47,7 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
     "jsdom": "^30.0.1",
+    "openapi-typescript": "^7.13.0",
     "oxlint": "^1.82.0",
     "typescript": "~7.0.2",
     "vite": "^8.3.0",

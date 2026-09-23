@@ -48,6 +48,14 @@ from lumistripe import (
     load_mic_profile,
     write_mic_profile,
 )
+from lumistripe_app_support import (
+    ActivityPolicyOptions,
+    build_activity_config,
+    build_audio_config,
+    build_cycling_config,
+    build_dynamic_selector_config,
+    parse_audio_source,
+)
 
 from .encoder import (
     ControlEvent,
@@ -1220,13 +1228,9 @@ def _parse_mode(value: str) -> PlaybackMode:
 
 def _parse_audio_source(value: str) -> AudioSource:
     try:
-        source = AudioSource(value.lower())
+        source = parse_audio_source(value)
     except ValueError as exc:
-        raise argparse.ArgumentTypeError(f"invalid audio source: {value}") from exc
-    if source is AudioSource.BLUETOOTH:
-        raise argparse.ArgumentTypeError(
-            "Bluetooth audio is only available through lumistripe-web"
-        )
+        raise argparse.ArgumentTypeError(str(exc)) from exc
     return source
 
 
@@ -1498,32 +1502,19 @@ def _encoder_pins_from_args(args: argparse.Namespace, prefix: str) -> EncoderPin
 
 
 def _build_audio_config(*, target_level: float, noise_floor: float, analysis: AudioAnalysis | None = None) -> AudioConfig:
-    return AudioConfig(
-        smoothing=AudioSmoothing(noise_floor=noise_floor),
-        normalization=AudioNormalization(target_level=target_level),
-        analysis=analysis or AudioAnalysis(),
+    return build_audio_config(
+        target_level=target_level,
+        noise_floor=noise_floor,
+        analysis=analysis,
     )
 
 
 def _build_cycling_config(args: argparse.Namespace) -> CyclingConfig:
-    return CyclingConfig(
-        order=args.cycle_order,
-        timing=args.cycle_timing,
-        interval_s=args.cycle_interval,
-        seed=args.dynamic_seed,
-    )
+    return build_cycling_config(args)
 
 
 def _build_dynamic_selector_config(args: argparse.Namespace) -> DynamicSelectorConfig:
-    return DynamicSelectorConfig(
-        min_duration_s=args.dynamic_min_duration,
-        max_duration_s=args.dynamic_max_duration,
-        switch_cooldown_s=args.dynamic_switch_cooldown,
-        drop_cooldown_s=args.dynamic_drop_cooldown,
-        randomness=args.dynamic_randomness,
-        history_size=args.dynamic_history_size,
-        seed=args.dynamic_seed,
-    )
+    return build_dynamic_selector_config(args)
 
 
 def _build_activity_config(
@@ -1532,14 +1523,10 @@ def _build_activity_config(
     idle_threshold_scale: float,
     activation_delay_s: float,
 ) -> MusicActivityConfig:
-    defaults = MusicActivityConfig()
-    return MusicActivityConfig(
-        feature_attack=defaults.feature_attack,
-        feature_release=defaults.feature_release,
-        idle_enter_frames=idle_enter_frames,
-        activation_delay_s=activation_delay_s,
-        energy_threshold=defaults.energy_threshold * idle_threshold_scale,
-        onset_threshold=defaults.onset_threshold * idle_threshold_scale,
-        beat_density_threshold=defaults.beat_density_threshold * idle_threshold_scale,
-        brightness_threshold=defaults.brightness_threshold * idle_threshold_scale,
+    return build_activity_config(
+        ActivityPolicyOptions(
+            idle_enter_frames=idle_enter_frames,
+            idle_threshold_scale=idle_threshold_scale,
+            activation_delay_s=activation_delay_s,
+        )
     )

@@ -16,6 +16,7 @@ from lumistripe import (
     MusicActivityConfig,
     PlaybackMode,
 )
+from lumistripe_app_support import build_audio_config
 
 SETTINGS_VERSION = 5
 PROFILE_NAMES = ("primary", "secondary")
@@ -167,12 +168,14 @@ class AudioTuningProfile:
                 raise ValueError(f"{name} must be between 0 and 1")
 
     def audio_config(self) -> AudioConfig:
-        defaults = AudioConfig()
+        defaults = build_audio_config(
+            target_level=self.target_level,
+            noise_floor=self.noise_floor,
+        )
         return replace(
             defaults,
             smoothing=replace(
                 defaults.smoothing,
-                noise_floor=self.noise_floor,
                 rms_attack=self.rms_attack,
                 rms_release=self.rms_release,
                 band_attack=self.band_attack,

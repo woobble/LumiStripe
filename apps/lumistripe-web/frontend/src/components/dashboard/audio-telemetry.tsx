@@ -8,7 +8,9 @@ import {
 
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { audioWebsocketUrl, type AudioTelemetry } from "@/lib/api"
+import { audioWebsocketUrl, parseAudioTelemetry } from "@/lib/api"
+import type { AudioTelemetry } from "@/lib/api/contracts"
+import { useWebSocketStream } from "@/hooks/use-websocket-stream"
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 import type { TooltipContentProps } from "recharts"
 
@@ -49,55 +51,33 @@ export type AudioHistoryPoint = {
   gate: number
 }
 
+function parseAudioMessage(value: unknown): AudioTelemetry {
+  return parseAudioTelemetry(JSON.parse(String(value)))
+}
+
 export function useAudioTelemetry() {
-  const [telemetry, setTelemetry] = useState<AudioTelemetry>(emptyTelemetry)
   const [history, setHistory] = useState<AudioHistoryPoint[]>([])
   const lastSample = useRef(0)
 
+  const { data } = useWebSocketStream<AudioTelemetry>({
+    url: audioWebsocketUrl(),
+    parse: parseAudioMessage,
+  })
+
+  const telemetry = data ?? emptyTelemetry
   useEffect(() => {
-    let disposed = false
-    let socket: WebSocket | null = null
-    let timer: number | undefined
-    let attempts = 0
-
-    const connect = () => {
-      if (disposed) return
-      socket = new WebSocket(audioWebsocketUrl())
-      socket.onopen = () => { attempts = 0 }
-      socket.onmessage = (event) => {
-        try {
-          const next = JSON.parse(String(event.data)) as AudioTelemetry
-          setTelemetry(next)
-          const now = Date.now()
-          if (now - lastSample.current >= 200) {
-            lastSample.current = now
-            setHistory((current) => [...current.slice(-149), {
-              time: now,
-              input: next.input_level,
-              processed: next.processed_level,
-              impact: next.musical_impact,
-              gate: next.gate === "music" ? 1 : 0,
-            }])
-          }
-        } catch {
-          socket?.close()
-        }
-      }
-      socket.onerror = () => socket?.close()
-      socket.onclose = () => {
-        if (disposed) return
-        attempts += 1
-        timer = window.setTimeout(connect, Math.min(1000 * 2 ** (attempts - 1), 10_000))
-      }
-    }
-
-    connect()
-    return () => {
-      disposed = true
-      if (timer !== undefined) window.clearTimeout(timer)
-      socket?.close()
-    }
-  }, [])
+    if (data === null) return
+    const now = Date.now()
+    if (now - lastSample.current < 200) return
+    lastSample.current = now
+    setHistory((current) => [...current.slice(-149), {
+      time: now,
+      input: data.input_level,
+      processed: data.processed_level,
+      impact: data.musical_impact,
+      gate: data.gate === "music" ? 1 : 0,
+    }])
+  }, [data])
 
   return { telemetry, history }
 }

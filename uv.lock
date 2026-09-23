@@ -8,11 +8,20 @@ resolution-markers = [
 
 [manifest]
 members = [
-    "lumistripe",
+    "lumistripe-app-support",
     "lumistripe-cli",
     "lumistripe-core",
     "lumistripe-sim",
     "lumistripe-web",
+]
+
+[manifest.dependency-groups]
+dev = [
+    { name = "httpx2", specifier = ">=2.12" },
+    { name = "mypy", specifier = ">=2.3.1" },
+    { name = "pytest", specifier = ">=9.1" },
+    { name = "pytest-cov", specifier = ">=7.1" },
+    { name = "ruff", specifier = ">=0.16.7" },
 ]
 
 [[package]]
@@ -556,59 +565,30 @@ wheels = [
 ]
 
 [[package]]
-name = "lumistripe"
+name = "lumistripe-app-support"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "packages/lumistripe-app-support" }
 dependencies = [
-    { name = "lumistripe-cli" },
     { name = "lumistripe-core" },
-    { name = "lumistripe-sim" },
-    { name = "lumistripe-web" },
-]
-
-[package.optional-dependencies]
-hardware-gain = [
-    { name = "pyalsaaudio" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "httpx2" },
-    { name = "mypy" },
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "lumistripe-cli", editable = "apps/lumistripe-cli" },
-    { name = "lumistripe-core", editable = "packages/lumistripe-core" },
-    { name = "lumistripe-sim", editable = "apps/lumistripe-sim" },
-    { name = "lumistripe-web", editable = "apps/lumistripe-web" },
-    { name = "pyalsaaudio", marker = "extra == 'hardware-gain'", specifier = ">=0.11" },
-]
-provides-extras = ["hardware-gain"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "httpx2", specifier = ">=2.12" },
-    { name = "mypy", specifier = ">=2.3.1" },
-    { name = "pytest", specifier = ">=9.1" },
-    { name = "pytest-cov", specifier = ">=7.1" },
-    { name = "ruff", specifier = ">=0.16.7" },
-]
+requires-dist = [{ name = "lumistripe-core", editable = "packages/lumistripe-core" }]
 
 [[package]]
 name = "lumistripe-cli"
 version = "0.1.0"
 source = { editable = "apps/lumistripe-cli" }
 dependencies = [
+    { name = "lumistripe-app-support" },
     { name = "lumistripe-core", extra = ["audio", "gpio", "spi"] },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "lumistripe-core", extras = ["audio", "gpio", "spi"], editable = "packages/lumistripe-core" }]
+requires-dist = [
+    { name = "lumistripe-app-support", editable = "packages/lumistripe-app-support" },
+    { name = "lumistripe-core", extras = ["audio", "gpio", "spi"], editable = "packages/lumistripe-core" },
+]
 
 [[package]]
 name = "lumistripe-core"
@@ -649,11 +629,15 @@ name = "lumistripe-sim"
 version = "0.1.0"
 source = { editable = "apps/lumistripe-sim" }
 dependencies = [
+    { name = "lumistripe-app-support" },
     { name = "lumistripe-core", extra = ["audio"] },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "lumistripe-core", extras = ["audio"], editable = "packages/lumistripe-core" }]
+requires-dist = [
+    { name = "lumistripe-app-support", editable = "packages/lumistripe-app-support" },
+    { name = "lumistripe-core", extras = ["audio"], editable = "packages/lumistripe-core" },
+]
 
 [[package]]
 name = "lumistripe-web"
@@ -661,6 +645,7 @@ version = "0.1.0"
 source = { editable = "apps/lumistripe-web" }
 dependencies = [
     { name = "fastapi" },
+    { name = "lumistripe-app-support" },
     { name = "lumistripe-core", extra = ["audio", "gpio", "spi"] },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -668,6 +653,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.141.1" },
+    { name = "lumistripe-app-support", editable = "packages/lumistripe-app-support" },
     { name = "lumistripe-core", extras = ["audio", "gpio", "spi"], editable = "packages/lumistripe-core" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.52.4" },
 ]

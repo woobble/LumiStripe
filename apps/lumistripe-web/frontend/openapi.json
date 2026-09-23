@@ -1,0 +1,3335 @@
+{
+  "components": {
+    "schemas": {
+      "AccessStatus": {
+        "properties": {
+          "authenticated": {
+            "title": "Authenticated",
+            "type": "boolean"
+          },
+          "required": {
+            "title": "Required",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "required",
+          "authenticated"
+        ],
+        "title": "AccessStatus",
+        "type": "object"
+      },
+      "AnimationList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AnimationOption"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "AnimationList",
+        "type": "object"
+      },
+      "AnimationOption": {
+        "properties": {
+          "dynamic_safe": {
+            "title": "Dynamic Safe",
+            "type": "boolean"
+          },
+          "mood": {
+            "title": "Mood",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "mood",
+          "dynamic_safe"
+        ],
+        "title": "AnimationOption",
+        "type": "object"
+      },
+      "AnimationRequest": {
+        "properties": {
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "stripe_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stripe Id"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "AnimationRequest",
+        "type": "object"
+      },
+      "AudioCalibrationFinishRequest": {
+        "properties": {
+          "apply": {
+            "title": "Apply",
+            "type": "boolean"
+          },
+          "noise_floor": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Noise Floor"
+          },
+          "target_level": {
+            "anyOf": [
+              {
+                "maximum": 0.8,
+                "minimum": 0.1,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Level"
+          }
+        },
+        "required": [
+          "apply"
+        ],
+        "title": "AudioCalibrationFinishRequest",
+        "type": "object"
+      },
+      "AudioCalibrationResult": {
+        "properties": {
+          "duration_seconds": {
+            "title": "Duration Seconds",
+            "type": "number"
+          },
+          "measured_floor": {
+            "title": "Measured Floor",
+            "type": "number"
+          },
+          "measured_peak": {
+            "title": "Measured Peak",
+            "type": "number"
+          },
+          "recommended_hardware_gain": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recommended Hardware Gain"
+          },
+          "recommended_idle_threshold_scale": {
+            "title": "Recommended Idle Threshold Scale",
+            "type": "number"
+          },
+          "recommended_noise_floor": {
+            "title": "Recommended Noise Floor",
+            "type": "number"
+          },
+          "recommended_target_level": {
+            "title": "Recommended Target Level",
+            "type": "number"
+          },
+          "samples": {
+            "title": "Samples",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "duration_seconds",
+          "samples",
+          "measured_floor",
+          "measured_peak",
+          "recommended_noise_floor",
+          "recommended_target_level",
+          "recommended_idle_threshold_scale"
+        ],
+        "title": "AudioCalibrationResult",
+        "type": "object"
+      },
+      "AudioCalibrationSessionResponse": {
+        "properties": {
+          "elapsed_seconds": {
+            "default": 0.0,
+            "title": "Elapsed Seconds",
+            "type": "number"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "remaining_seconds": {
+            "default": 0.0,
+            "title": "Remaining Seconds",
+            "type": "number"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AudioCalibrationResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "status"
+        ],
+        "title": "AudioCalibrationSessionResponse",
+        "type": "object"
+      },
+      "AudioCalibrationStartRequest": {
+        "properties": {
+          "device": {
+            "minLength": 1,
+            "title": "Device",
+            "type": "string"
+          },
+          "duration_seconds": {
+            "default": 8.0,
+            "maximum": 30.0,
+            "minimum": 3.0,
+            "title": "Duration Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "device"
+        ],
+        "title": "AudioCalibrationStartRequest",
+        "type": "object"
+      },
+      "AudioDeviceOption": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "selector": {
+            "title": "Selector",
+            "type": "string"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/AudioTuningValues"
+          }
+        },
+        "required": [
+          "selector",
+          "name",
+          "settings"
+        ],
+        "title": "AudioDeviceOption",
+        "type": "object"
+      },
+      "AudioDeviceRequest": {
+        "properties": {
+          "device": {
+            "minLength": 1,
+            "title": "Device",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device"
+        ],
+        "title": "AudioDeviceRequest",
+        "type": "object"
+      },
+      "AudioOutputDeviceInfo": {
+        "properties": {
+          "bluetooth": {
+            "default": false,
+            "title": "Bluetooth",
+            "type": "boolean"
+          },
+          "connected": {
+            "default": true,
+            "title": "Connected",
+            "type": "boolean"
+          },
+          "muted": {
+            "default": false,
+            "title": "Muted",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "selector": {
+            "title": "Selector",
+            "type": "string"
+          },
+          "volume": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Volume"
+          }
+        },
+        "required": [
+          "selector",
+          "name"
+        ],
+        "title": "AudioOutputDeviceInfo",
+        "type": "object"
+      },
+      "AudioOutputMuteRequest": {
+        "properties": {
+          "muted": {
+            "title": "Muted",
+            "type": "boolean"
+          },
+          "selector": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Selector",
+            "type": "string"
+          }
+        },
+        "required": [
+          "selector",
+          "muted"
+        ],
+        "title": "AudioOutputMuteRequest",
+        "type": "object"
+      },
+      "AudioOutputSelectionRequest": {
+        "properties": {
+          "selector": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Selector",
+            "type": "string"
+          }
+        },
+        "required": [
+          "selector"
+        ],
+        "title": "AudioOutputSelectionRequest",
+        "type": "object"
+      },
+      "AudioOutputVolumeRequest": {
+        "properties": {
+          "selector": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Selector",
+            "type": "string"
+          },
+          "volume": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Volume",
+            "type": "number"
+          }
+        },
+        "required": [
+          "selector",
+          "volume"
+        ],
+        "title": "AudioOutputVolumeRequest",
+        "type": "object"
+      },
+      "AudioResetRequest": {
+        "properties": {
+          "device": {
+            "minLength": 1,
+            "title": "Device",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device"
+        ],
+        "title": "AudioResetRequest",
+        "type": "object"
+      },
+      "AudioSettingsRequest": {
+        "properties": {
+          "device": {
+            "minLength": 1,
+            "title": "Device",
+            "type": "string"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/AudioTuningValues"
+          }
+        },
+        "required": [
+          "device",
+          "settings"
+        ],
+        "title": "AudioSettingsRequest",
+        "type": "object"
+      },
+      "AudioSettingsResponse": {
+        "properties": {
+          "active_device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Device"
+          },
+          "active_device_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Device Name"
+          },
+          "active_source": {
+            "default": "off",
+            "title": "Active Source",
+            "type": "string"
+          },
+          "bluetooth": {
+            "$ref": "#/components/schemas/BluetoothStatusResponse"
+          },
+          "configured_noise_floor": {
+            "default": 0.015,
+            "title": "Configured Noise Floor",
+            "type": "number"
+          },
+          "devices": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/AudioDeviceOption"
+            },
+            "title": "Devices",
+            "type": "array"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "fallback_device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fallback Device"
+          },
+          "hardware_gain_backend": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hardware Gain Backend"
+          },
+          "hardware_gain_control": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hardware Gain Control"
+          },
+          "hardware_gain_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hardware Gain Error"
+          },
+          "hardware_gain_supported": {
+            "default": false,
+            "title": "Hardware Gain Supported",
+            "type": "boolean"
+          },
+          "hardware_gain_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hardware Gain Value"
+          },
+          "hardware_gain_writable": {
+            "default": false,
+            "title": "Hardware Gain Writable",
+            "type": "boolean"
+          },
+          "monitoring": {
+            "title": "Monitoring",
+            "type": "boolean"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/AudioTuningValues",
+            "default": {
+              "band_attack": 0.4,
+              "band_release": 0.1,
+              "beat_density_threshold": 0.05,
+              "beat_release": 0.18,
+              "brightness_threshold": 0.08,
+              "dynamic_response": 0.65,
+              "energy_threshold": 0.03,
+              "noise_floor": 0.015,
+              "onset_threshold": 0.025,
+              "rms_attack": 0.45,
+              "rms_release": 0.12,
+              "spectral_balance_ratio": 0.35,
+              "target_level": 0.36
+            }
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "monitoring"
+        ],
+        "title": "AudioSettingsResponse",
+        "type": "object"
+      },
+      "AudioSourceRequest": {
+        "properties": {
+          "source": {
+            "enum": [
+              "auto",
+              "off",
+              "demo",
+              "mic",
+              "bluetooth"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "title": "AudioSourceRequest",
+        "type": "object"
+      },
+      "AudioTuningValues": {
+        "properties": {
+          "band_attack": {
+            "default": 0.4,
+            "maximum": 1.0,
+            "minimum": 0.01,
+            "title": "Band Attack",
+            "type": "number"
+          },
+          "band_release": {
+            "default": 0.1,
+            "maximum": 1.0,
+            "minimum": 0.01,
+            "title": "Band Release",
+            "type": "number"
+          },
+          "beat_density_threshold": {
+            "default": 0.05,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Beat Density Threshold",
+            "type": "number"
+          },
+          "beat_release": {
+            "default": 0.18,
+            "maximum": 1.0,
+            "minimum": 0.01,
+            "title": "Beat Release",
+            "type": "number"
+          },
+          "brightness_threshold": {
+            "default": 0.08,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Brightness Threshold",
+            "type": "number"
+          },
+          "dynamic_response": {
+            "default": 0.65,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Dynamic Response",
+            "type": "number"
+          },
+          "energy_threshold": {
+            "default": 0.03,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Energy Threshold",
+            "type": "number"
+          },
+          "hardware_gain_target": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hardware Gain Target"
+          },
+          "noise_floor": {
+            "default": 0.015,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Noise Floor",
+            "type": "number"
+          },
+          "onset_threshold": {
+            "default": 0.025,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Onset Threshold",
+            "type": "number"
+          },
+          "rms_attack": {
+            "default": 0.45,
+            "maximum": 1.0,
+            "minimum": 0.01,
+            "title": "Rms Attack",
+            "type": "number"
+          },
+          "rms_release": {
+            "default": 0.12,
+            "maximum": 1.0,
+            "minimum": 0.01,
+            "title": "Rms Release",
+            "type": "number"
+          },
+          "spectral_balance_ratio": {
+            "default": 0.35,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Spectral Balance Ratio",
+            "type": "number"
+          },
+          "target_level": {
+            "default": 0.36,
+            "maximum": 0.8,
+            "minimum": 0.1,
+            "title": "Target Level",
+            "type": "number"
+          }
+        },
+        "title": "AudioTuningValues",
+        "type": "object"
+      },
+      "BlackoutRequest": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "stripe_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stripe Id"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "BlackoutRequest",
+        "type": "object"
+      },
+      "BluetoothAliasRequest": {
+        "properties": {
+          "alias": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Alias",
+            "type": "string"
+          }
+        },
+        "required": [
+          "alias"
+        ],
+        "title": "BluetoothAliasRequest",
+        "type": "object"
+      },
+      "BluetoothCapabilities": {
+        "properties": {
+          "max_inputs": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "Max Inputs",
+            "type": "integer"
+          },
+          "max_outputs": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "Max Outputs",
+            "type": "integer"
+          },
+          "operations": {
+            "default": [],
+            "items": {
+              "enum": [
+                "power",
+                "rename",
+                "scan",
+                "pair",
+                "connect",
+                "disconnect",
+                "forget",
+                "output_select",
+                "output_volume",
+                "output_mute"
+              ],
+              "type": "string"
+            },
+            "title": "Operations",
+            "type": "array"
+          }
+        },
+        "title": "BluetoothCapabilities",
+        "type": "object"
+      },
+      "BluetoothDeviceInfo": {
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "connected": {
+            "default": false,
+            "title": "Connected",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "paired": {
+            "default": false,
+            "title": "Paired",
+            "type": "boolean"
+          },
+          "roles": {
+            "default": [],
+            "items": {
+              "enum": [
+                "input",
+                "output"
+              ],
+              "type": "string"
+            },
+            "title": "Roles",
+            "type": "array"
+          }
+        },
+        "required": [
+          "address",
+          "name"
+        ],
+        "title": "BluetoothDeviceInfo",
+        "type": "object"
+      },
+      "BluetoothDeviceRequest": {
+        "properties": {
+          "address": {
+            "maxLength": 17,
+            "minLength": 17,
+            "title": "Address",
+            "type": "string"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "enum": [
+                  "input",
+                  "output"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
+          }
+        },
+        "required": [
+          "address"
+        ],
+        "title": "BluetoothDeviceRequest",
+        "type": "object"
+      },
+      "BluetoothPowerRequest": {
+        "properties": {
+          "powered": {
+            "title": "Powered",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "powered"
+        ],
+        "title": "BluetoothPowerRequest",
+        "type": "object"
+      },
+      "BluetoothStatusResponse": {
+        "properties": {
+          "adapter_alias": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adapter Alias"
+          },
+          "available": {
+            "default": false,
+            "title": "Available",
+            "type": "boolean"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/BluetoothCapabilities"
+          },
+          "connected_device": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BluetoothDeviceInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "connected_inputs": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/BluetoothDeviceInfo"
+            },
+            "title": "Connected Inputs",
+            "type": "array"
+          },
+          "connected_outputs": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/BluetoothDeviceInfo"
+            },
+            "title": "Connected Outputs",
+            "type": "array"
+          },
+          "default_sink": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Sink"
+          },
+          "devices": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/BluetoothDeviceInfo"
+            },
+            "title": "Devices",
+            "type": "array"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "input_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Source"
+          },
+          "operation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Id"
+          },
+          "operation_state": {
+            "default": "idle",
+            "enum": [
+              "idle",
+              "running",
+              "complete",
+              "failed"
+            ],
+            "title": "Operation State",
+            "type": "string"
+          },
+          "output_devices": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/AudioOutputDeviceInfo"
+            },
+            "title": "Output Devices",
+            "type": "array"
+          },
+          "output_muted": {
+            "default": false,
+            "title": "Output Muted",
+            "type": "boolean"
+          },
+          "output_ready": {
+            "default": false,
+            "title": "Output Ready",
+            "type": "boolean"
+          },
+          "output_volume": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Volume"
+          },
+          "powered": {
+            "default": false,
+            "title": "Powered",
+            "type": "boolean"
+          },
+          "scanning": {
+            "default": false,
+            "title": "Scanning",
+            "type": "boolean"
+          },
+          "streaming": {
+            "default": false,
+            "title": "Streaming",
+            "type": "boolean"
+          }
+        },
+        "title": "BluetoothStatusResponse",
+        "type": "object"
+      },
+      "BrightnessRequest": {
+        "properties": {
+          "brightness": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Brightness",
+            "type": "number"
+          },
+          "stripe_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stripe Id"
+          }
+        },
+        "required": [
+          "brightness"
+        ],
+        "title": "BrightnessRequest",
+        "type": "object"
+      },
+      "CalibrationFinishRequest": {
+        "properties": {
+          "save": {
+            "title": "Save",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "save"
+        ],
+        "title": "CalibrationFinishRequest",
+        "type": "object"
+      },
+      "CalibrationSessionResponse": {
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/DashboardState"
+          }
+        },
+        "required": [
+          "session_id",
+          "state"
+        ],
+        "title": "CalibrationSessionResponse",
+        "type": "object"
+      },
+      "CalibrationStartRequest": {
+        "properties": {
+          "output_index": {
+            "minimum": 0.0,
+            "title": "Output Index",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "output_index"
+        ],
+        "title": "CalibrationStartRequest",
+        "type": "object"
+      },
+      "CalibrationStatus": {
+        "properties": {
+          "active": {
+            "default": false,
+            "title": "Active",
+            "type": "boolean"
+          },
+          "expires_in_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires In Seconds"
+          },
+          "output_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Index"
+          },
+          "pattern": {
+            "anyOf": [
+              {
+                "enum": [
+                  "white",
+                  "red",
+                  "green",
+                  "blue"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pattern"
+          }
+        },
+        "title": "CalibrationStatus",
+        "type": "object"
+      },
+      "CalibrationUpdateRequest": {
+        "properties": {
+          "blue": {
+            "maximum": 255.0,
+            "minimum": 0.0,
+            "title": "Blue",
+            "type": "integer"
+          },
+          "green": {
+            "maximum": 255.0,
+            "minimum": 0.0,
+            "title": "Green",
+            "type": "integer"
+          },
+          "pattern": {
+            "enum": [
+              "white",
+              "red",
+              "green",
+              "blue"
+            ],
+            "title": "Pattern",
+            "type": "string"
+          },
+          "red": {
+            "maximum": 255.0,
+            "minimum": 0.0,
+            "title": "Red",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "red",
+          "green",
+          "blue",
+          "pattern"
+        ],
+        "title": "CalibrationUpdateRequest",
+        "type": "object"
+      },
+      "ColorCorrectionProfile": {
+        "properties": {
+          "blue": {
+            "maximum": 255.0,
+            "minimum": 0.0,
+            "title": "Blue",
+            "type": "integer"
+          },
+          "device": {
+            "title": "Device",
+            "type": "string"
+          },
+          "green": {
+            "maximum": 255.0,
+            "minimum": 0.0,
+            "title": "Green",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "output_index": {
+            "minimum": 0.0,
+            "title": "Output Index",
+            "type": "integer"
+          },
+          "red": {
+            "maximum": 255.0,
+            "minimum": 0.0,
+            "title": "Red",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "output_index",
+          "name",
+          "device",
+          "red",
+          "green",
+          "blue"
+        ],
+        "title": "ColorCorrectionProfile",
+        "type": "object"
+      },
+      "DashboardState": {
+        "properties": {
+          "active_effects": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Active Effects",
+            "type": "array"
+          },
+          "animation": {
+            "default": "",
+            "title": "Animation",
+            "type": "string"
+          },
+          "application_version": {
+            "default": "development",
+            "title": "Application Version",
+            "type": "string"
+          },
+          "audio_callback_age_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audio Callback Age Seconds"
+          },
+          "audio_frame_age_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audio Frame Age Seconds"
+          },
+          "audio_health": {
+            "default": "inactive",
+            "title": "Audio Health",
+            "type": "string"
+          },
+          "audio_status": {
+            "default": "No audio source active.",
+            "title": "Audio Status",
+            "type": "string"
+          },
+          "blackout": {
+            "default": false,
+            "title": "Blackout",
+            "type": "boolean"
+          },
+          "bpm": {
+            "default": 0.0,
+            "title": "Bpm",
+            "type": "number"
+          },
+          "brightness": {
+            "default": 1.0,
+            "title": "Brightness",
+            "type": "number"
+          },
+          "calibration": {
+            "$ref": "#/components/schemas/CalibrationStatus",
+            "default": {
+              "active": false
+            }
+          },
+          "color_corrections": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ColorCorrectionProfile"
+            },
+            "title": "Color Corrections",
+            "type": "array"
+          },
+          "command_queue_depth": {
+            "default": 0,
+            "title": "Command Queue Depth",
+            "type": "integer"
+          },
+          "diagnostic_issues": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticIssue"
+            },
+            "title": "Diagnostic Issues",
+            "type": "array"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "frame_rate": {
+            "default": 0.0,
+            "title": "Frame Rate",
+            "type": "number"
+          },
+          "last_output_age_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Output Age Seconds"
+          },
+          "last_output_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Output At"
+          },
+          "missed_frame_count": {
+            "default": 0,
+            "title": "Missed Frame Count",
+            "type": "integer"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/PlaybackMode",
+            "default": "static"
+          },
+          "music_active": {
+            "default": false,
+            "title": "Music Active",
+            "type": "boolean"
+          },
+          "music_gate": {
+            "default": "calm",
+            "title": "Music Gate",
+            "type": "string"
+          },
+          "music_recognition_enabled": {
+            "default": true,
+            "title": "Music Recognition Enabled",
+            "type": "boolean"
+          },
+          "output_backend": {
+            "default": "simulation",
+            "title": "Output Backend",
+            "type": "string"
+          },
+          "output_devices": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Output Devices",
+            "type": "array"
+          },
+          "power_budget": {
+            "$ref": "#/components/schemas/PowerBudgetState",
+            "default": {
+              "applied_scale": 1.0,
+              "enabled": false,
+              "estimated_watts": 0.0,
+              "outputs": []
+            }
+          },
+          "revision": {
+            "default": 0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "running": {
+            "default": false,
+            "title": "Running",
+            "type": "boolean"
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/RuntimeKind"
+          },
+          "solid_color": {
+            "default": "#7C3AED",
+            "title": "Solid Color",
+            "type": "string"
+          },
+          "spi_speed_hz": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spi Speed Hz"
+          },
+          "stripe_playback": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/StripePlaybackState"
+            },
+            "title": "Stripe Playback",
+            "type": "array"
+          },
+          "stripe_topology": {
+            "$ref": "#/components/schemas/StripeTopology",
+            "default": {
+              "layout": "mirrored",
+              "outputs": [],
+              "power_budget_enabled": false
+            }
+          },
+          "uptime_seconds": {
+            "default": 0.0,
+            "title": "Uptime Seconds",
+            "type": "number"
+          },
+          "worker_heartbeat_age_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worker Heartbeat Age Seconds"
+          }
+        },
+        "required": [
+          "runtime"
+        ],
+        "title": "DashboardState",
+        "type": "object"
+      },
+      "DiagnosticIssue": {
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "severity": {
+            "title": "Severity",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "severity",
+          "title",
+          "message",
+          "action"
+        ],
+        "title": "DiagnosticIssue",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "ModeRequest": {
+        "properties": {
+          "color": {
+            "anyOf": [
+              {
+                "pattern": "^#[0-9A-Fa-f]{6}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/PlaybackMode"
+          },
+          "music_recognition_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Music Recognition Enabled"
+          },
+          "stripe_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stripe Id"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "ModeRequest",
+        "type": "object"
+      },
+      "PairingRequest": {
+        "properties": {
+          "code": {
+            "pattern": "^[0-9]{4}$",
+            "title": "Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "PairingRequest",
+        "type": "object"
+      },
+      "PlaybackMode": {
+        "enum": [
+          "solid",
+          "static",
+          "cycling",
+          "dynamic"
+        ],
+        "title": "PlaybackMode",
+        "type": "string"
+      },
+      "PowerBudgetState": {
+        "properties": {
+          "applied_scale": {
+            "default": 1.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Applied Scale",
+            "type": "number"
+          },
+          "budget_watts": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Watts"
+          },
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "estimated_watts": {
+            "default": 0.0,
+            "minimum": 0.0,
+            "title": "Estimated Watts",
+            "type": "number"
+          },
+          "limiting_output_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limiting Output Id"
+          },
+          "outputs": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PowerOutputState"
+            },
+            "title": "Outputs",
+            "type": "array"
+          }
+        },
+        "title": "PowerBudgetState",
+        "type": "object"
+      },
+      "PowerOutputState": {
+        "properties": {
+          "applied_scale": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Applied Scale",
+            "type": "number"
+          },
+          "estimated_watts": {
+            "minimum": 0.0,
+            "title": "Estimated Watts",
+            "type": "number"
+          },
+          "limit_watts": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit Watts"
+          },
+          "output_id": {
+            "title": "Output Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "output_id",
+          "estimated_watts",
+          "applied_scale"
+        ],
+        "title": "PowerOutputState",
+        "type": "object"
+      },
+      "RuntimeKind": {
+        "enum": [
+          "simulation",
+          "hardware"
+        ],
+        "title": "RuntimeKind",
+        "type": "string"
+      },
+      "StartupPlaybackState": {
+        "properties": {
+          "animation": {
+            "default": "",
+            "title": "Animation",
+            "type": "string"
+          },
+          "blackout": {
+            "default": false,
+            "title": "Blackout",
+            "type": "boolean"
+          },
+          "brightness": {
+            "default": 1.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Brightness",
+            "type": "number"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/PlaybackMode",
+            "default": "static"
+          },
+          "solid_color": {
+            "default": "#7C3AED",
+            "pattern": "^#[0-9A-Fa-f]{6}$",
+            "title": "Solid Color",
+            "type": "string"
+          }
+        },
+        "title": "StartupPlaybackState",
+        "type": "object"
+      },
+      "StartupSettingsRequest": {
+        "properties": {
+          "restore_last_state": {
+            "title": "Restore Last State",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "restore_last_state"
+        ],
+        "title": "StartupSettingsRequest",
+        "type": "object"
+      },
+      "StartupSettingsResponse": {
+        "properties": {
+          "remembered": {
+            "$ref": "#/components/schemas/StartupPlaybackState"
+          },
+          "restore_last_state": {
+            "title": "Restore Last State",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "restore_last_state",
+          "remembered"
+        ],
+        "title": "StartupSettingsResponse",
+        "type": "object"
+      },
+      "StripeOutputConfig": {
+        "properties": {
+          "backend": {
+            "default": "spi",
+            "enum": [
+              "spi",
+              "gpio"
+            ],
+            "title": "Backend",
+            "type": "string"
+          },
+          "chip": {
+            "default": "/dev/gpiochip0",
+            "minLength": 1,
+            "title": "Chip",
+            "type": "string"
+          },
+          "clock_pin": {
+            "default": 11,
+            "minimum": 0.0,
+            "title": "Clock Pin",
+            "type": "integer"
+          },
+          "data_pin": {
+            "default": 10,
+            "minimum": 0.0,
+            "title": "Data Pin",
+            "type": "integer"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "full_white_current_a": {
+            "default": 0.06,
+            "exclusiveMinimum": 0.0,
+            "title": "Full White Current A",
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "last_output_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Output At"
+          },
+          "name": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "pixels": {
+            "maximum": 4096.0,
+            "minimum": 1.0,
+            "title": "Pixels",
+            "type": "integer"
+          },
+          "power_limit_watts": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Power Limit Watts"
+          },
+          "reversed": {
+            "default": false,
+            "title": "Reversed",
+            "type": "boolean"
+          },
+          "spi_device": {
+            "default": "/dev/spidev0.0",
+            "minLength": 1,
+            "title": "Spi Device",
+            "type": "string"
+          },
+          "spi_speed_hz": {
+            "default": 1000000,
+            "exclusiveMinimum": 0.0,
+            "maximum": 32000000.0,
+            "title": "Spi Speed Hz",
+            "type": "integer"
+          },
+          "voltage_v": {
+            "default": 5.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Voltage V",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "pixels"
+        ],
+        "title": "StripeOutputConfig",
+        "type": "object"
+      },
+      "StripePlaybackState": {
+        "properties": {
+          "animation": {
+            "default": "",
+            "title": "Animation",
+            "type": "string"
+          },
+          "blackout": {
+            "default": false,
+            "title": "Blackout",
+            "type": "boolean"
+          },
+          "brightness": {
+            "default": 1.0,
+            "title": "Brightness",
+            "type": "number"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/PlaybackMode",
+            "default": "static"
+          },
+          "music_active": {
+            "default": false,
+            "title": "Music Active",
+            "type": "boolean"
+          },
+          "music_recognition_enabled": {
+            "default": true,
+            "title": "Music Recognition Enabled",
+            "type": "boolean"
+          },
+          "solid_color": {
+            "default": "#7C3AED",
+            "title": "Solid Color",
+            "type": "string"
+          },
+          "stripe_id": {
+            "title": "Stripe Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stripe_id"
+        ],
+        "title": "StripePlaybackState",
+        "type": "object"
+      },
+      "StripeTestRequest": {
+        "properties": {
+          "pattern": {
+            "default": "identify",
+            "enum": [
+              "identify",
+              "red",
+              "green",
+              "blue",
+              "white"
+            ],
+            "title": "Pattern",
+            "type": "string"
+          },
+          "stripe_id": {
+            "title": "Stripe Id",
+            "type": "string"
+          },
+          "topology": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StripeTopologyRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "stripe_id"
+        ],
+        "title": "StripeTestRequest",
+        "type": "object"
+      },
+      "StripeTopology": {
+        "properties": {
+          "layout": {
+            "default": "mirrored",
+            "enum": [
+              "mirrored",
+              "continuous",
+              "independent"
+            ],
+            "title": "Layout",
+            "type": "string"
+          },
+          "outputs": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/StripeOutputConfig"
+            },
+            "maxItems": 2,
+            "title": "Outputs",
+            "type": "array"
+          },
+          "power_budget_enabled": {
+            "default": false,
+            "title": "Power Budget Enabled",
+            "type": "boolean"
+          },
+          "power_budget_watts": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Power Budget Watts"
+          }
+        },
+        "title": "StripeTopology",
+        "type": "object"
+      },
+      "StripeTopologyRequest": {
+        "properties": {
+          "layout": {
+            "enum": [
+              "mirrored",
+              "continuous",
+              "independent"
+            ],
+            "title": "Layout",
+            "type": "string"
+          },
+          "outputs": {
+            "items": {
+              "$ref": "#/components/schemas/StripeOutputConfig"
+            },
+            "maxItems": 2,
+            "title": "Outputs",
+            "type": "array"
+          },
+          "power_budget_enabled": {
+            "default": false,
+            "title": "Power Budget Enabled",
+            "type": "boolean"
+          },
+          "power_budget_watts": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Power Budget Watts"
+          }
+        },
+        "required": [
+          "layout",
+          "outputs"
+        ],
+        "title": "StripeTopologyRequest",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "LumiStripe",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/animation": {
+      "put": {
+        "operationId": "select_animation_api_animation_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnimationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Select Animation"
+      }
+    },
+    "/api/animations": {
+      "get": {
+        "operationId": "animations_api_animations_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnimationList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Animations"
+      }
+    },
+    "/api/audio/bluetooth": {
+      "get": {
+        "operationId": "bluetooth_status_api_audio_bluetooth_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BluetoothStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Bluetooth Status"
+      }
+    },
+    "/api/audio/bluetooth/alias": {
+      "put": {
+        "operationId": "bluetooth_alias_api_audio_bluetooth_alias_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BluetoothAliasRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BluetoothStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bluetooth Alias"
+      }
+    },
+    "/api/audio/bluetooth/connect": {
+      "post": {
+        "operationId": "bluetooth_connect_api_audio_bluetooth_connect_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BluetoothDeviceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BluetoothStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bluetooth Connect"
+      }
+    },
+    "/api/audio/bluetooth/disconnect": {
+      "post": {
+        "operationId": "bluetooth_disconnect_api_audio_bluetooth_disconnect_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BluetoothDeviceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BluetoothStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bluetooth Disconnect"
+      }
+    },
+    "/api/audio/bluetooth/forget": {
+      "post": {
+        "operationId": "bluetooth_forget_api_audio_bluetooth_forget_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BluetoothDeviceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BluetoothStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bluetooth Forget"
+      }
+    },
+    "/api/audio/bluetooth/pair": {
+      "post": {
+        "operationId": "bluetooth_pair_api_audio_bluetooth_pair_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BluetoothDeviceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BluetoothStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bluetooth Pair"
+      }
+    },
+    "/api/audio/bluetooth/power": {
+      "put": {
+        "operationId": "bluetooth_power_api_audio_bluetooth_power_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BluetoothPowerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BluetoothStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bluetooth Power"
+      }
+    },
+    "/api/audio/bluetooth/scan": {
+      "post": {
+        "operationId": "bluetooth_scan_api_audio_bluetooth_scan_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BluetoothStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Bluetooth Scan"
+      }
+    },
+    "/api/audio/calibration/session": {
+      "post": {
+        "operationId": "start_audio_calibration_api_audio_calibration_session_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudioCalibrationStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudioCalibrationSessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Audio Calibration"
+      }
+    },
+    "/api/audio/calibration/session/{session_id}": {
+      "get": {
+        "operationId": "audio_calibration_status_api_audio_calibration_session__session_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudioCalibrationSessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Audio Calibration Status"
+      }
+    },
+    "/api/audio/calibration/session/{session_id}/finish": {
+      "post": {
+        "operationId": "finish_audio_calibration_api_audio_calibration_session__session_id__finish_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudioCalibrationFinishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudioSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Finish Audio Calibration"
+      }
+    },
+    "/api/audio/device": {
+      "put": {
+        "operationId": "select_audio_device_api_audio_device_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudioDeviceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudioSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Select Audio Device"
+      }
+    },
+    "/api/audio/output": {
+      "put": {
+        "operationId": "select_audio_output_api_audio_output_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudioOutputSelectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BluetoothStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Select Audio Output"
+      }
+    },
+    "/api/audio/output/mute": {
+      "put": {
+        "operationId": "set_audio_output_mute_api_audio_output_mute_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudioOutputMuteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BluetoothStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Audio Output Mute"
+      }
+    },
+    "/api/audio/output/volume": {
+      "put": {
+        "operationId": "set_audio_output_volume_api_audio_output_volume_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudioOutputVolumeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BluetoothStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Audio Output Volume"
+      }
+    },
+    "/api/audio/settings": {
+      "get": {
+        "operationId": "audio_settings_api_audio_settings_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudioSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Audio Settings"
+      },
+      "put": {
+        "operationId": "update_audio_settings_api_audio_settings_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudioSettingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudioSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Audio Settings"
+      }
+    },
+    "/api/audio/settings/reset": {
+      "post": {
+        "operationId": "reset_audio_settings_api_audio_settings_reset_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudioResetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudioSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reset Audio Settings"
+      }
+    },
+    "/api/audio/source": {
+      "put": {
+        "operationId": "select_audio_source_api_audio_source_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudioSourceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudioSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Select Audio Source"
+      }
+    },
+    "/api/auth/logout": {
+      "post": {
+        "operationId": "logout_api_auth_logout_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Logout"
+      }
+    },
+    "/api/auth/pair": {
+      "post": {
+        "operationId": "pair_api_auth_pair_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pair"
+      }
+    },
+    "/api/auth/status": {
+      "get": {
+        "operationId": "access_status_api_auth_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Access Status"
+      }
+    },
+    "/api/blackout": {
+      "post": {
+        "operationId": "set_blackout_api_blackout_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlackoutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Blackout"
+      }
+    },
+    "/api/brightness": {
+      "put": {
+        "operationId": "set_brightness_api_brightness_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrightnessRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Brightness"
+      }
+    },
+    "/api/calibration/session": {
+      "post": {
+        "operationId": "start_calibration_api_calibration_session_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalibrationStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationSessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Calibration"
+      }
+    },
+    "/api/calibration/session/{session_id}": {
+      "put": {
+        "operationId": "update_calibration_api_calibration_session__session_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalibrationUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Calibration"
+      }
+    },
+    "/api/calibration/session/{session_id}/finish": {
+      "post": {
+        "operationId": "finish_calibration_api_calibration_session__session_id__finish_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalibrationFinishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Finish Calibration"
+      }
+    },
+    "/api/health": {
+      "get": {
+        "operationId": "health_api_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health"
+      }
+    },
+    "/api/mode": {
+      "put": {
+        "operationId": "set_mode_api_mode_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Mode"
+      }
+    },
+    "/api/startup": {
+      "get": {
+        "operationId": "startup_settings_api_startup_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartupSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Startup Settings"
+      },
+      "put": {
+        "operationId": "update_startup_settings_api_startup_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartupSettingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartupSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Startup Settings"
+      }
+    },
+    "/api/state": {
+      "get": {
+        "operationId": "state_api_state_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "State"
+      }
+    },
+    "/api/stripes": {
+      "get": {
+        "operationId": "stripe_topology_api_stripes_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StripeTopology"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Stripe Topology"
+      },
+      "put": {
+        "operationId": "update_stripe_topology_api_stripes_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StripeTopologyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Stripe Topology"
+      }
+    },
+    "/api/stripes/test": {
+      "post": {
+        "operationId": "test_stripe_api_stripes_test_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StripeTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Test Stripe"
+      }
+    }
+  }
+}

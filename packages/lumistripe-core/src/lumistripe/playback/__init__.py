@@ -1,3 +1,5 @@
+"""Playback configuration, activity gating, and rendering orchestration."""
+
 from __future__ import annotations
 
 import time
@@ -7,17 +9,17 @@ from enum import Enum
 from math import exp
 from random import Random
 
-from .animation.base import AnimationPlayer
-from .audio import AudioFrame, AudioSnapshot, MusicFeatures, features_from_frame
-from .color import Color, Rgb
-from .controller import BrightnessController, Controller
-from .effects.layers import (
+from ..animation.base import AnimationPlayer
+from ..audio import AudioFrame, AudioSnapshot, MusicFeatures, features_from_frame
+from ..color import Color, Rgb
+from ..controller import BrightnessController, Controller
+from ..effects.layers import (
     EffectScheduler,
     EffectSchedulerConfig,
     EffectSchedulerDiagnostics,
     LayeredRenderer,
 )
-from .selector import (
+from ..selector import (
     DynamicSelector,
     DynamicSelectorConfig,
     DynamicSelectorDiagnostics,

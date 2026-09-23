@@ -1,5 +1,6 @@
 from .animation import (
     Animation,
+    AnimationDefinition,
     AnimationMetadata,
     AnimationPlayer,
     AnimationRole,
@@ -160,6 +161,7 @@ __all__ = [
     "BUILTIN_MIC_PROFILES",
     "PCM2902_PROFILE",
     "Animation",
+    "AnimationDefinition",
     "AnimationMetadata",
     "AnimationPlayer",
     "AnimationRole",
