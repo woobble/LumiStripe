@@ -212,7 +212,6 @@ jobs:
         run: |
           set -eu
           test "$(uname -m)" = "aarch64"
-          python3 --version
           uname -a
           if test -f /etc/os-release; then
             cat /etc/os-release
@@ -232,12 +231,14 @@ jobs:
         run: |
           set -eu
           uv --version
-          uv run python -c 'import platform, sys; assert sys.version_info[:2] == (3, 12); print(platform.platform())'
 
       - name: Install Raspberry Pi native profile
         env:
           LUMISTRIPE_BUILD_EXTENSIONS: all
         run: uv sync --locked --all-extras --dev
+
+      - name: Verify Python environment
+        run: uv run python -c 'import platform, sys; print(sys.version); print(platform.platform()); assert sys.version_info[:2] == (3, 12)'
 
       - name: Test native core on arm64
         env:

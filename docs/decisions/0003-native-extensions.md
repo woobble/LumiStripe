@@ -25,7 +25,7 @@ explicit `workflow_dispatch` runs. Pull requests remain on hosted runners so
 code from forks cannot execute on the persistent home/device runner.
 
 The runner must be pre-provisioned with the GitHub Actions service, Linux
-ARM64/aarch64, Python 3.12, `uv`, Git submodule support, a C compiler, `make`,
-and the native development libraries required by the `all` profile. CI checks
-these prerequisites but does not upgrade the runner's operating-system
-packages on every run.
+ARM64/aarch64, Git submodule support, a C compiler, `make`, and the native
+development libraries required by the `all` profile. The workflow provisions
+Python 3.12 and `uv`; CI checks the remaining prerequisites but does not
+upgrade the runner's operating-system packages on every run.
