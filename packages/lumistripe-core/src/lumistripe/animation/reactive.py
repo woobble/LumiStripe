@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..audio import AudioFrame, AudioSnapshot
+from ..audio.types import AudioFrame, AudioSnapshot
 from ..color import Hsla
 
 

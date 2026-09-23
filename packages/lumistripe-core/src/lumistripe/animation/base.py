@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 
-from ..audio import AudioFrame
+from ..audio.types import AudioFrame
 from ..controller import BrightnessController, Controller
 
 
@@ -40,6 +40,7 @@ class _AnimationEntry:
     frame_ms: int
     frames_per_cycle: int
     automatic: bool
+    definition: Any = None
 
     def fresh_animation(self) -> Animation:
         animation_type: type[Animation] = type(self.animation)
@@ -81,116 +82,24 @@ class AnimationPlayer:
 
     @classmethod
     def party(cls) -> AnimationPlayer:
-        from ..effects import (
-            BassDrop,
-            BeatExplosion,
-            BeatRipple,
-            BeatTunnel,
-            BeatWave,
-            CenterBurst,
-            ClubFlash,
-            ColorBurst,
-            Confetti,
-            DropExplosion,
-            DropWave,
-            ElectricStorm,
-            FireworkBurst,
-            HardBeat,
-            LightningStrike,
-            MirrorFlash,
-            PixelExplosion,
-            Shockwave,
-            SpectrumFlash,
-        )
-        from .aurora import Aurora
-        from .bouncing_ball import BouncingBall
-        from .bpm import Bpm
-        from .color_wipe import ColorWipe
-        from .comet import Comet
-        from .comet_storm import CometStorm
-        from .dance_floor import DanceFloor
-        from .disco_comet import DiscoComet
-        from .disco_sparkle import DiscoSparkle
-        from .dual_comet import DualComet
-        from .dual_laser import DualLaser
-        from .fire import Fire
-        from .glow_rush import GlowRush
-        from .juggle import Juggle
-        from .laser_sweep import LaserSweep
-        from .neon_confetti import NeonConfetti
-        from .neon_storm import NeonStorm
-        from .peak_mirror import PeakMirror
-        from .plasma_rave import PlasmaRave
-        from .police import Police
-        from .pulse import Pulse
-        from .rainbow import Rainbow
-        from .rainbow_cycle import RainbowCycle
-        from .rainbow_strobe import RainbowStrobe
-        from .rave_pulse import RavePulse
-        from .rave_scanner import RaveScanner
-        from .red_rave import RedBlackoutStrobe, RedRaveChase, RedRaveSweep
-        from .sinelon import Sinelon
-        from .strobe import Strobe
-        from .strobe_chase import StrobeChase
-        from .theater_chase import TheaterChase
-        from .twinkle import Twinkle
-        from .wave import Wave
+        from .catalog import party_catalog
 
+        return cls.from_catalog(party_catalog())
+
+    @classmethod
+    def from_catalog(cls, definitions: tuple[Any, ...]) -> AnimationPlayer:
         player = cls()
-        player.add(RainbowCycle(), 15, 300)
-        player.add(Pulse(), 20, 180)
-        player.add(Confetti(), 15, 220)
-        player.add(Comet(), 16, 240)
-        player.add(Shockwave(), 16, 180)
-        player.add(TheaterChase(), 30, 220)
-        player.add(Aurora(), 18, 260)
-        player.add(ColorWipe(), 18, 220)
-        player.add(Fire(), 20, 300)
-        player.add(PeakMirror(), 18, 220)
-        player.add(Wave(), 18, 240)
-        player.add(Twinkle(), 15, 200)
-        player.add(BouncingBall(), 20, 200)
-        player.add(DualComet(), 16, 220)
-        player.add(Rainbow(), 20, 200)
-        player.add(Police(), 25, 160)
-        player.add(Juggle(), 18, 240)
-        player.add(Sinelon(), 18, 200)
-        player.add(Strobe(), 12, 160)
-        player.add(Bpm(), 20, 120)
-        player.add(BeatWave(), 20, 200)
-        player.add(DiscoSparkle(), 12, 160)
-        player.add(BeatExplosion(), 16, 140)
-        player.add(CometStorm(), 14, 180)
-        player.add(LaserSweep(), 12, 140)
-        player.add(PlasmaRave(), 18, 220)
-        player.add(FireworkBurst(), 15, 160)
-        player.add(LightningStrike(), 10, 100)
-        player.add(BeatTunnel(), 18, 200)
-        player.add(DropExplosion(), 20, 180)
-        player.add(BassDrop(), 20, 200)
-        player.add(RavePulse(), 14, 160)
-        player.add(NeonStorm(), 12, 140)
-        player.add(PixelExplosion(), 14, 140)
-        player.add(DualLaser(), 14, 160)
-        player.add(RainbowStrobe(), 10, 120)
-        player.add(BeatRipple(), 18, 160)
-        player.add(DanceFloor(), 18, 200)
-        player.add(ElectricStorm(), 12, 120)
-        player.add(GlowRush(), 16, 200)
-        player.add(HardBeat(), 12, 100)
-        player.add(ClubFlash(), 12, 120)
-        player.add(ColorBurst(), 16, 180)
-        player.add(DiscoComet(), 14, 180)
-        player.add(RaveScanner(), 12, 140)
-        player.add(RedRaveSweep(), 16, 180)
-        player.add(RedRaveChase(), 16, 160)
-        player.add(RedBlackoutStrobe(), 24, 120)
-        player.add(NeonConfetti(), 12, 150)
-        player.add(StrobeChase(), 12, 120)
-        player.add(CenterBurst(), 16, 160)
-        player.add(MirrorFlash(), 14, 140)
-        player.add(SpectrumFlash(), 16, 180)
-        player.add(DropWave(), 18, 180)
+        for definition in definitions:
+            animation = definition.create()
+            player.animations.append(
+                _AnimationEntry(
+                    animation,
+                    definition.frame_ms,
+                    definition.frames_per_cycle,
+                    definition.automatic,
+                    definition,
+                )
+            )
         return player
 
     def set_brightness(self, brightness: float) -> None:

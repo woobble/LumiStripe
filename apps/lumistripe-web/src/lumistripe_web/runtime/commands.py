@@ -10,7 +10,8 @@ from concurrent.futures import Future
 from dataclasses import dataclass, field
 from typing import Literal
 
-from lumistripe import ColorCorrection, PlaybackMode
+from lumistripe.controller import ColorCorrection
+from lumistripe.playback import PlaybackMode
 
 from ..settings import AudioTuningProfile, StripeTopologySettings
 

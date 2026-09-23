@@ -7,17 +7,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, TypedDict
 
-from lumistripe import (
-    AudioConfig,
-    AudioFrame,
-    AudioInput,
-    AudioSource,
-    ColorCorrection,
-    ColorCorrectionController,
-    Controller,
-    MusicFeatures,
-    PixelBuffer,
-)
+from lumistripe import ColorCorrectionController, Controller, PixelBuffer
+from lumistripe.audio.capture import AudioInput
+from lumistripe.audio.config import AudioConfig
+from lumistripe.audio.types import AudioFrame, MusicFeatures
+from lumistripe.controller import ColorCorrection
+from lumistripe.playback import AudioSource
 
 from ..models import RuntimeKind
 from ..settings import StripeTopologySettings, default_settings_path

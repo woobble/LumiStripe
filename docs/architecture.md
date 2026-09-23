@@ -61,10 +61,18 @@ The core package keeps compatibility exports in `lumistripe.__init__`, while
 new integrations should use narrower modules:
 
 - `lumistripe.audio.types`, `.config`, `.capture`, `.dsp`, `.devices`, and
-  `.calibration`
-- `lumistripe.playback.config`, `.activity`, and `.engine`
-- `lumistripe.animation.catalog`
+  `.calibration`; capture callbacks enqueue bounded sample batches and the DSP
+  worker owns native processing state
+- `lumistripe.playback.config`, `.activity`, `.state`, `.renderer`, and
+  `.engine`; `PlaybackDecision` and `RenderPlan` are pure policy outputs
+- `lumistripe.animation.catalog`; `AnimationDefinition` is the single
+  registration record used to build the party player
 - `lumistripe.effects.definitions`, `.scheduler`, and `.renderer`
 - `lumistripe.output`
+
+The core package is pure Python by default. Native audio, GPIO, and SPI
+extensions are selected explicitly with `LUMISTRIPE_BUILD_EXTENSIONS`, and
+optimized `-march=native` builds are reserved for device-local use. See
+`docs/decisions/0003-native-extensions.md` for the release and CI policy.
 
 These modules are the intended seams for future implementation moves.

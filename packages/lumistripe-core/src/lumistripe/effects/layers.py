@@ -3,15 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from random import Random
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-from ..animation.base import AnimationPlayer
-from ..audio import AudioFrame, AudioSnapshot
+from ..audio.types import AudioFrame, AudioSnapshot
 from ..color import Rgba
 from ..controller import BrightnessController, Controller
 from ..stripe import Stripe
 from .base import Effect
+
+if TYPE_CHECKING:
+    from ..animation.base import AnimationPlayer
 
 
 class EffectCategory(str, Enum):

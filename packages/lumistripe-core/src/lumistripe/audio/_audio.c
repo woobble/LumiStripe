@@ -697,74 +697,79 @@ static PyObject* _make_bands_tuple(const float *bands) {
     return t;
 }
 
+static int _dict_set_float(PyObject *dict, const char *name, double value) {
+    PyObject *object = PyFloat_FromDouble(value);
+    if (!object) return -1;
+    int result = PyDict_SetItemString(dict, name, object);
+    Py_DECREF(object);
+    return result;
+}
+
+static int _dict_set_int(PyObject *dict, const char *name, long long value) {
+    PyObject *object = PyLong_FromLongLong(value);
+    if (!object) return -1;
+    int result = PyDict_SetItemString(dict, name, object);
+    Py_DECREF(object);
+    return result;
+}
+
+static int _dict_set_bool(PyObject *dict, const char *name, int value) {
+    PyObject *object = PyBool_FromLong((long)value);
+    if (!object) return -1;
+    int result = PyDict_SetItemString(dict, name, object);
+    Py_DECREF(object);
+    return result;
+}
+
+static int _dict_set_bands(PyObject *dict, const char *name, const float *bands) {
+    PyObject *object = _make_bands_tuple(bands);
+    if (!object) return -1;
+    int result = PyDict_SetItemString(dict, name, object);
+    Py_DECREF(object);
+    return result;
+}
+
 static PyObject* AudioProcessor_frame(AudioProcessor *self, PyObject *Py_UNUSED(ignored)) {
-    PyObject *bands_tuple = _make_bands_tuple(self->s.frame_bands);
-    if (!bands_tuple) return NULL;
-
-    PyObject *r = PyFloat_FromDouble((double)self->s.frame_rms);
-    if (!r) { Py_DECREF(bands_tuple); return NULL; }
-    PyObject *b = PyBool_FromLong((long)self->s.frame_beat);
-    if (!b) { Py_DECREF(r); Py_DECREF(bands_tuple); return NULL; }
-    PyObject *s = PyFloat_FromDouble((double)self->s.frame_beat_strength);
-    if (!s) { Py_DECREF(r); Py_DECREF(bands_tuple); Py_DECREF(b); return NULL; }
-    PyObject *seq = PyLong_FromLong((long)self->s.fft_call_count);
-    if (!seq) { Py_DECREF(r); Py_DECREF(bands_tuple); Py_DECREF(b); Py_DECREF(s); return NULL; }
-
-    PyObject *result = PyTuple_New(5);
-    if (!result) {
-        Py_DECREF(r); Py_DECREF(bands_tuple); Py_DECREF(b); Py_DECREF(s); Py_DECREF(seq);
+    PyObject *result = PyDict_New();
+    if (!result) return NULL;
+    if (_dict_set_float(result, "rms", self->s.frame_rms) < 0 ||
+        _dict_set_bands(result, "bands", self->s.frame_bands) < 0 ||
+        _dict_set_bool(result, "beat", self->s.frame_beat) < 0 ||
+        _dict_set_float(result, "beat_strength", self->s.frame_beat_strength) < 0 ||
+        _dict_set_int(result, "sequence", self->s.fft_call_count) < 0) {
+        Py_DECREF(result);
         return NULL;
     }
-    PyTuple_SET_ITEM(result, 0, r);
-    PyTuple_SET_ITEM(result, 1, bands_tuple);
-    PyTuple_SET_ITEM(result, 2, b);
-    PyTuple_SET_ITEM(result, 3, s);
-    PyTuple_SET_ITEM(result, 4, seq);
     return result;
 }
 
 static PyObject* AudioProcessor_features(AudioProcessor *self, PyObject *Py_UNUSED(ignored)) {
-    PyObject *bands_tuple = _make_bands_tuple(self->s.features_bands);
-    if (!bands_tuple) return NULL;
-
-    PyObject *items[21];
-    items[0] = PyFloat_FromDouble((double)self->s.features_bpm);
-    items[1] = PyFloat_FromDouble((double)self->s.features_energy);
-    items[2] = PyFloat_FromDouble((double)self->s.features_bass);
-    items[3] = PyFloat_FromDouble((double)self->s.features_brightness);
-    items[4] = PyFloat_FromDouble((double)self->s.features_onset_strength);
-    items[5] = PyFloat_FromDouble((double)self->s.features_dynamic_range);
-    items[6] = PyBool_FromLong((long)self->s.features_beat);
-    items[7] = PyFloat_FromDouble((double)self->s.features_beat_strength);
-    items[8] = bands_tuple;  // already created, no INCREF needed
-    items[9] = PyFloat_FromDouble((double)self->s.features_bass_energy);
-    items[10] = PyFloat_FromDouble((double)self->s.features_mid_energy);
-    items[11] = PyFloat_FromDouble((double)self->s.features_treble_energy);
-    items[12] = PyFloat_FromDouble((double)self->s.features_spectral_centroid);
-    items[13] = PyFloat_FromDouble((double)self->s.features_spectral_flux);
-    items[14] = PyFloat_FromDouble((double)self->s.features_beat_confidence);
-    items[15] = PyFloat_FromDouble((double)self->s.features_rolling_loudness);
-    items[16] = PyBool_FromLong((long)self->s.features_silence);
-    items[17] = PyBool_FromLong((long)self->s.features_drop_detected);
-    items[18] = PyBool_FromLong((long)self->s.features_section_change);
-    items[19] = PyFloat_FromDouble((double)self->s.features_program_loudness);
-    items[20] = PyFloat_FromDouble((double)self->s.features_musical_impact);
-
-    for (int i = 0; i < 21; i++) {
-        if (!items[i]) {
-            for (int j = 0; j < 21; j++) {
-                if (items[j]) Py_DECREF(items[j]);
-            }
-            return NULL;
-        }
-    }
-
-    PyObject *result = PyTuple_New(21);
-    if (!result) {
-        for (int i = 0; i < 21; i++) Py_DECREF(items[i]);
+    PyObject *result = PyDict_New();
+    if (!result) return NULL;
+    if (_dict_set_float(result, "bpm", self->s.features_bpm) < 0 ||
+        _dict_set_float(result, "energy", self->s.features_energy) < 0 ||
+        _dict_set_float(result, "bass", self->s.features_bass) < 0 ||
+        _dict_set_float(result, "brightness", self->s.features_brightness) < 0 ||
+        _dict_set_float(result, "onset_strength", self->s.features_onset_strength) < 0 ||
+        _dict_set_float(result, "dynamic_range", self->s.features_dynamic_range) < 0 ||
+        _dict_set_bool(result, "beat", self->s.features_beat) < 0 ||
+        _dict_set_float(result, "beat_strength", self->s.features_beat_strength) < 0 ||
+        _dict_set_bands(result, "bands", self->s.features_bands) < 0 ||
+        _dict_set_float(result, "bass_energy", self->s.features_bass_energy) < 0 ||
+        _dict_set_float(result, "mid_energy", self->s.features_mid_energy) < 0 ||
+        _dict_set_float(result, "treble_energy", self->s.features_treble_energy) < 0 ||
+        _dict_set_float(result, "spectral_centroid", self->s.features_spectral_centroid) < 0 ||
+        _dict_set_float(result, "spectral_flux", self->s.features_spectral_flux) < 0 ||
+        _dict_set_float(result, "beat_confidence", self->s.features_beat_confidence) < 0 ||
+        _dict_set_float(result, "rolling_loudness", self->s.features_rolling_loudness) < 0 ||
+        _dict_set_bool(result, "silence", self->s.features_silence) < 0 ||
+        _dict_set_bool(result, "drop_detected", self->s.features_drop_detected) < 0 ||
+        _dict_set_bool(result, "section_change", self->s.features_section_change) < 0 ||
+        _dict_set_float(result, "program_loudness", self->s.features_program_loudness) < 0 ||
+        _dict_set_float(result, "musical_impact", self->s.features_musical_impact) < 0) {
+        Py_DECREF(result);
         return NULL;
     }
-    for (int i = 0; i < 21; i++) PyTuple_SET_ITEM(result, i, items[i]);
     return result;
 }
 
@@ -823,27 +828,30 @@ static PyObject* AudioProcessor_normalization_gain(AudioProcessor *self, PyObjec
 }
 
 static PyObject* AudioProcessor_stats(AudioProcessor *self, PyObject *Py_UNUSED(ignored)) {
-    return Py_BuildValue(
-        "(iLifdddd)",
-        self->s.feed_count,
-        self->s.samples_seen,
-        self->s.fft_call_count,
-        (double)self->s.sample_sum,
-        (double)self->s.normalization_gain,
-        (double)self->s.input_rms,
-        (double)self->s.level_estimate,
-        (double)self->s.musical_impact
-    );
+    PyObject *result = PyDict_New();
+    if (!result) return NULL;
+    if (_dict_set_int(result, "feed_count", self->s.feed_count) < 0 ||
+        _dict_set_int(result, "samples_seen", self->s.samples_seen) < 0 ||
+        _dict_set_int(result, "fft_count", self->s.fft_call_count) < 0 ||
+        _dict_set_float(result, "sample_abs_sum", self->s.sample_sum) < 0 ||
+        _dict_set_float(result, "normalization_gain", self->s.normalization_gain) < 0 ||
+        _dict_set_float(result, "input_rms", self->s.input_rms) < 0 ||
+        _dict_set_float(result, "program_loudness", self->s.level_estimate) < 0 ||
+        _dict_set_float(result, "musical_impact", self->s.musical_impact) < 0) {
+        Py_DECREF(result);
+        return NULL;
+    }
+    return result;
 }
 
 static PyMethodDef AudioProcessor_methods[] = {
     {"feed_samples", (PyCFunction)AudioProcessor_feed_samples, METH_VARARGS, "Feed audio samples"},
-    {"frame", (PyCFunction)AudioProcessor_frame, METH_NOARGS, "Get current AudioFrame as tuple"},
-    {"features", (PyCFunction)AudioProcessor_features, METH_NOARGS, "Get current MusicFeatures as tuple"},
+    {"frame", (PyCFunction)AudioProcessor_frame, METH_NOARGS, "Get current AudioFrame as named fields"},
+    {"features", (PyCFunction)AudioProcessor_features, METH_NOARGS, "Get current MusicFeatures as named fields"},
     {"state_copy", (PyCFunction)AudioProcessor_state_copy, METH_NOARGS, "Deep clone state"},
     {"reset", (PyCFunction)AudioProcessor_reset, METH_NOARGS, "Reset state to initial values"},
     {"normalization_gain", (PyCFunction)AudioProcessor_normalization_gain, METH_NOARGS, "Current AGC gain value"},
-    {"stats", (PyCFunction)AudioProcessor_stats, METH_NOARGS, "Get processor counters and gain"},
+    {"stats", (PyCFunction)AudioProcessor_stats, METH_NOARGS, "Get processor counters and gain as named fields"},
     {NULL, NULL, 0, NULL},
 };
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
-from lumistripe import ColorCorrection
+from lumistripe.controller import ColorCorrection
 
 from ...contracts.common import DashboardState
 from ...contracts.control import (

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from lumistripe import AudioConfig, AudioInput
+from lumistripe.audio.capture import AudioInput
+from lumistripe.audio.config import AudioConfig
 
 
 def default_audio_factory(device: str | None, config: AudioConfig) -> AudioInput:

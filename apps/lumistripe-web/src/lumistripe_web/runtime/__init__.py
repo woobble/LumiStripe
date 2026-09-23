@@ -16,40 +16,44 @@ from uuid import uuid4
 
 import numpy as np
 from lumistripe import (
-    AnimationPlayer,
-    AudioFrame,
-    AudioInput,
-    AudioInputHealth,
-    AudioSnapshot,
-    AudioSource,
     Color,
     ColorCorrection,
     ColorCorrectionController,
     CompositeController,
     Config,
     Controller,
-    GPIOStripe,
-    HardwareGainController,
     MultiController,
-    MusicActivityDetector,
-    MusicFeatures,
     NullController,
     OutputPowerEstimate,
-    PlaybackConfig,
-    PlaybackEngine,
-    PlaybackMode,
     ReversedController,
     Rgb,
     ScaledMultiController,
-    SPIConfig,
-    SPIStripe,
     Stripe,
     apply_power_budget,
-    demo_snapshot,
     estimate_frame_power,
-    list_input_device_details,
 )
-from lumistripe.audio import BandTuple, recommend_audio_calibration
+from lumistripe.animation import AnimationPlayer
+from lumistripe.audio.calibration import recommend_audio_calibration
+from lumistripe.audio.capture import AudioInput
+from lumistripe.audio.devices import list_input_device_details
+from lumistripe.audio.hardware_gain import HardwareGainController
+from lumistripe.audio.types import (
+    AudioFrame,
+    AudioInputHealth,
+    AudioSnapshot,
+    BandTuple,
+    MusicFeatures,
+)
+from lumistripe.gpio import GPIOStripe
+from lumistripe.gpio.spi import SPIConfig, SPIStripe
+from lumistripe.playback import (
+    AudioSource,
+    MusicActivityDetector,
+    PlaybackConfig,
+    PlaybackEngine,
+    PlaybackMode,
+    demo_snapshot,
+)
 
 from ..bluetooth import (
     BluetoothAudioBackend,

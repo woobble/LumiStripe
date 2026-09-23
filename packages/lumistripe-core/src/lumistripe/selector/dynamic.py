@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..animation.base import AnimationPlayer
-from ..audio import AudioFeatures
+from ..audio.types import AudioFeatures
 from .scoring import AnimationScoringEngine, DynamicSelectorConfig, SelectorDecision
 
 

@@ -5,15 +5,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Literal, cast
 
-from lumistripe import (
-    Config,
-    Controller,
-    GPIOStripe,
-    MultiController,
-    SPIConfig,
-    SPIStripe,
-    Stripe,
-)
+from lumistripe import Config, Controller, MultiController, Stripe
+from lumistripe.gpio import GPIOStripe
+from lumistripe.gpio.spi import SPIConfig, SPIStripe
 
 from ..settings import StripeOutputSettings, StripeTopologySettings
 from .state import RuntimeSettings

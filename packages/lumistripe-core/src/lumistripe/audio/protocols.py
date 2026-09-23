@@ -1,12 +1,14 @@
-"""Protocols used by audio consumers and test doubles."""
+"""Protocols at the audio capture and DSP boundaries."""
 
 from __future__ import annotations
 
 from typing import Protocol
 
+import numpy as np
 import numpy.typing as npt
 
-from . import AudioConfig, AudioFrame, AudioInputHealth, AudioSnapshot, MusicFeatures
+from .config import AudioConfig
+from .types import AudioFrame, AudioInputHealth, AudioSnapshot, MusicFeatures
 
 
 class AudioProcessor(Protocol):
@@ -21,6 +23,23 @@ class AudioProcessor(Protocol):
     def reconfigure(self, config: AudioConfig) -> None: ...
 
     def stats(self) -> object: ...
+
+
+class AudioBatchBuffer(Protocol):
+    """Non-blocking producer / blocking worker contract for sample batches."""
+
+    def push(self, samples: npt.NDArray[np.float32]) -> bool: ...
+
+    def pop(self, timeout: float | None = None) -> npt.NDArray[np.float32] | None: ...
+
+    def task_done(self) -> None: ...
+
+    def wait_until_idle(self, timeout: float | None = None) -> bool: ...
+
+    def close(self) -> None: ...
+
+    @property
+    def dropped_count(self) -> int: ...
 
 
 class AudioSource(Protocol):
@@ -45,4 +64,4 @@ def snapshot_from_source(source: AudioSource) -> AudioSnapshot:
     )
 
 
-__all__ = ["AudioProcessor", "AudioSource", "snapshot_from_source"]
+__all__ = ["AudioBatchBuffer", "AudioProcessor", "AudioSource", "snapshot_from_source"]

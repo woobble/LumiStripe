@@ -5,18 +5,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from lumistripe import (
+from lumistripe.audio.config import (
     AudioAnalysis,
     AudioConfig,
     AudioNormalization,
     AudioSmoothing,
+)
+from lumistripe.playback import (
     AudioSource,
     CycleOrder,
     CycleTiming,
     CyclingConfig,
-    DynamicSelectorConfig,
     MusicActivityConfig,
 )
+from lumistripe.selector import DynamicSelectorConfig
 
 
 class _CyclingOptions(Protocol):

@@ -6,32 +6,29 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from lumistripe import (
-    AnimationPlayer,
+from lumistripe import Stripe
+from lumistripe.animation import AnimationPlayer
+from lumistripe.audio.calibration import AudioCalibrationResult, calibrate_audio_input
+from lumistripe.audio.capture import AudioInput
+from lumistripe.audio.config import (
     AudioAnalysis,
-    AudioCalibrationResult,
     AudioConfig,
-    AudioFrame,
-    AudioInput,
     AudioNormalization,
     AudioSmoothing,
-    AudioSnapshot,
+)
+from lumistripe.audio.devices import list_input_device_details
+from lumistripe.audio.types import AudioFrame, AudioSnapshot, MusicFeatures
+from lumistripe.mic_profile import load_mic_profile
+from lumistripe.playback import (
     AudioSource,
-    CycleOrder,
-    CycleTiming,
-    CyclingConfig,
-    DynamicSelectorConfig,
     MusicActivityConfig,
-    MusicFeatures,
     PlaybackConfig,
     PlaybackEngine,
     PlaybackMode,
-    Stripe,
-    calibrate_audio_input,
     demo_snapshot,
-    list_input_device_details,
-    load_mic_profile,
 )
+from lumistripe.playback.config import CycleOrder, CycleTiming, CyclingConfig
+from lumistripe.selector import DynamicSelectorConfig
 from lumistripe_app_support import (
     ActivityPolicyOptions,
     build_activity_config,

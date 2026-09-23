@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal
 
-from lumistripe import PlaybackMode
+from lumistripe.playback import PlaybackMode
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 

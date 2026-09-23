@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from random import Random
 from typing import Any
 
-from ..audio import AudioFeatures
+from ..audio.types import AudioFeatures
 from .metadata import AnimationMetadata, animation_metadata
 
 

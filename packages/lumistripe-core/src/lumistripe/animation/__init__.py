@@ -1,154 +1,78 @@
-# Compatibility re-exports. New code should import overlay effects from
-# ``lumistripe.effects``; keeping these names avoids breaking existing users.
-from ..effects import (
-    ACCENT_EFFECTS,
-    RHYTHMIC_EFFECTS,
-    BassDrop,
-    BeatExplosion,
-    BeatRipple,
-    BeatTunnel,
-    BeatWave,
-    BlendMode,
-    CenterBurst,
-    ClubFlash,
-    ColorBurst,
-    Confetti,
-    DropExplosion,
-    DropWave,
-    Effect,
-    EffectCategory,
-    EffectDefinition,
-    EffectLayerStatus,
-    EffectScheduler,
-    EffectSchedulerConfig,
-    EffectSchedulerDiagnostics,
-    EffectTriggerResult,
-    EffectTriggerStatus,
-    ElectricStorm,
-    FireworkBurst,
-    HardBeat,
-    LayeredRenderer,
-    LightningStrike,
-    MirrorFlash,
-    PixelExplosion,
-    Shockwave,
-    SpectrumFlash,
-)
+"""Lazy animation package surface and canonical catalog entry points."""
+
+from __future__ import annotations
+
+from importlib import import_module
+from typing import Any
+
 from ..selector import AnimationMetadata, AnimationRole
-from .aurora import Aurora
 from .base import Animation, AnimationPlayer
-from .bouncing_ball import BouncingBall
-from .bpm import Bpm
-from .catalog import AnimationDefinition, animation_catalog, validate_animation_catalog
-from .color_wipe import ColorWipe
-from .comet import Comet
-from .comet_storm import CometStorm
-from .dance_floor import DanceFloor
-from .disco_comet import DiscoComet
-from .disco_sparkle import DiscoSparkle
-from .dual_comet import DualComet
-from .dual_laser import DualLaser
-from .fire import Fire
-from .glow_rush import GlowRush
-from .juggle import Juggle
-from .laser_sweep import LaserSweep
-from .neon_confetti import NeonConfetti
-from .neon_storm import NeonStorm
-from .peak_mirror import PeakMirror
-from .plasma_rave import PlasmaRave
-from .police import Police
-from .pulse import Pulse
-from .rainbow import Rainbow
-from .rainbow_cycle import RainbowCycle
-from .rainbow_strobe import RainbowStrobe
-from .rave_pulse import RavePulse
-from .rave_scanner import RaveScanner
-from .reactive import AudioReactive, Decay
-from .red_rave import RedBlackoutStrobe, RedRaveChase, RedRaveSweep
-from .rgbw_test import RgbwTest
-from .sinelon import Sinelon
-from .strobe import Strobe
-from .strobe_chase import StrobeChase
-from .theater_chase import TheaterChase
-from .twinkle import Twinkle
-from .wave import Wave
+from .catalog import (
+    AnimationDefinition,
+    animation_catalog,
+    party_catalog,
+    validate_animation_catalog,
+)
+
+_LAZY_ANIMATIONS: dict[str, tuple[str, str]] = {
+    "AudioReactive": ("lumistripe.animation.reactive", "AudioReactive"),
+    "Decay": ("lumistripe.animation.reactive", "Decay"),
+    "Aurora": ("lumistripe.animation.aurora", "Aurora"),
+    "BouncingBall": ("lumistripe.animation.bouncing_ball", "BouncingBall"),
+    "Bpm": ("lumistripe.animation.bpm", "Bpm"),
+    "ColorWipe": ("lumistripe.animation.color_wipe", "ColorWipe"),
+    "Comet": ("lumistripe.animation.comet", "Comet"),
+    "CometStorm": ("lumistripe.animation.comet_storm", "CometStorm"),
+    "DanceFloor": ("lumistripe.animation.dance_floor", "DanceFloor"),
+    "DiscoComet": ("lumistripe.animation.disco_comet", "DiscoComet"),
+    "DiscoSparkle": ("lumistripe.animation.disco_sparkle", "DiscoSparkle"),
+    "DualComet": ("lumistripe.animation.dual_comet", "DualComet"),
+    "DualLaser": ("lumistripe.animation.dual_laser", "DualLaser"),
+    "Fire": ("lumistripe.animation.fire", "Fire"),
+    "GlowRush": ("lumistripe.animation.glow_rush", "GlowRush"),
+    "Juggle": ("lumistripe.animation.juggle", "Juggle"),
+    "LaserSweep": ("lumistripe.animation.laser_sweep", "LaserSweep"),
+    "NeonConfetti": ("lumistripe.animation.neon_confetti", "NeonConfetti"),
+    "NeonStorm": ("lumistripe.animation.neon_storm", "NeonStorm"),
+    "PeakMirror": ("lumistripe.animation.peak_mirror", "PeakMirror"),
+    "PlasmaRave": ("lumistripe.animation.plasma_rave", "PlasmaRave"),
+    "Police": ("lumistripe.animation.police", "Police"),
+    "Pulse": ("lumistripe.animation.pulse", "Pulse"),
+    "Rainbow": ("lumistripe.animation.rainbow", "Rainbow"),
+    "RainbowCycle": ("lumistripe.animation.rainbow_cycle", "RainbowCycle"),
+    "RainbowStrobe": ("lumistripe.animation.rainbow_strobe", "RainbowStrobe"),
+    "RavePulse": ("lumistripe.animation.rave_pulse", "RavePulse"),
+    "RaveScanner": ("lumistripe.animation.rave_scanner", "RaveScanner"),
+    "RedBlackoutStrobe": ("lumistripe.animation.red_rave", "RedBlackoutStrobe"),
+    "RedRaveChase": ("lumistripe.animation.red_rave", "RedRaveChase"),
+    "RedRaveSweep": ("lumistripe.animation.red_rave", "RedRaveSweep"),
+    "RgbwTest": ("lumistripe.animation.rgbw_test", "RgbwTest"),
+    "Sinelon": ("lumistripe.animation.sinelon", "Sinelon"),
+    "Strobe": ("lumistripe.animation.strobe", "Strobe"),
+    "StrobeChase": ("lumistripe.animation.strobe_chase", "StrobeChase"),
+    "TheaterChase": ("lumistripe.animation.theater_chase", "TheaterChase"),
+    "Twinkle": ("lumistripe.animation.twinkle", "Twinkle"),
+    "Wave": ("lumistripe.animation.wave", "Wave"),
+}
+
+
+def __getattr__(name: str) -> Any:
+    target = _LAZY_ANIMATIONS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(target[0]), target[1])
+    globals()[name] = value
+    return value
+
 
 __all__ = [
-    "ACCENT_EFFECTS",
-    "RHYTHMIC_EFFECTS",
     "Animation",
     "AnimationDefinition",
     "AnimationMetadata",
     "AnimationPlayer",
     "AnimationRole",
-    "AudioReactive",
-    "Aurora",
-    "BassDrop",
-    "BeatExplosion",
-    "BeatRipple",
-    "BeatTunnel",
-    "BeatWave",
-    "BlendMode",
-    "BouncingBall",
-    "Bpm",
-    "CenterBurst",
-    "ClubFlash",
-    "ColorBurst",
-    "ColorWipe",
-    "Comet",
-    "CometStorm",
-    "Confetti",
-    "DanceFloor",
-    "Decay",
-    "DiscoComet",
-    "DiscoSparkle",
-    "DropExplosion",
-    "DropWave",
-    "DualComet",
-    "DualLaser",
-    "Effect",
-    "EffectCategory",
-    "EffectDefinition",
-    "EffectLayerStatus",
-    "EffectScheduler",
-    "EffectSchedulerConfig",
-    "EffectSchedulerDiagnostics",
-    "EffectTriggerResult",
-    "EffectTriggerStatus",
-    "ElectricStorm",
-    "Fire",
-    "FireworkBurst",
-    "GlowRush",
-    "HardBeat",
-    "Juggle",
-    "LaserSweep",
-    "LayeredRenderer",
-    "LightningStrike",
-    "MirrorFlash",
-    "NeonConfetti",
-    "NeonStorm",
-    "PeakMirror",
-    "PixelExplosion",
-    "PlasmaRave",
-    "Police",
-    "Pulse",
-    "Rainbow",
-    "RainbowCycle",
-    "RainbowStrobe",
-    "RavePulse",
-    "RaveScanner",
-    "RedBlackoutStrobe",
-    "RedRaveChase",
-    "RedRaveSweep",
-    "RgbwTest",
-    "Shockwave",
-    "Sinelon",
-    "SpectrumFlash",
-    "Strobe",
-    "StrobeChase",
-    "TheaterChase",
-    "Twinkle",
-    "Wave",
     "animation_catalog",
+    "party_catalog",
     "validate_animation_catalog",
 ]
+__all__.extend(_LAZY_ANIMATIONS)

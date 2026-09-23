@@ -8,11 +8,13 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from lumistripe import (
+from lumistripe.audio.config import (
     AudioConfig,
     AudioNormalization,
     AudioSmoothing,
-    ColorCorrection,
+)
+from lumistripe.controller import ColorCorrection
+from lumistripe.playback import (
     MusicActivityConfig,
     PlaybackMode,
 )
