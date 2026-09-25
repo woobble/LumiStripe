@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import lumistripe_web.spotify as spotify_module
 import pytest
 from lumistripe_web.spotify import (
     SpotifyClient,
@@ -90,3 +91,31 @@ def test_client_projects_soloist_events_into_a_stable_status() -> None:
     assert status.track.artists == ("Example artist",)
     assert status.track.album == "Example album"
     assert status.track.duration_ms == 180_000
+
+
+def test_client_interpolates_position_between_soloist_anchors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [100.0]
+    monkeypatch.setattr(spotify_module.time, "monotonic", lambda: now[0])
+    client = SpotifyClient(enabled=True)
+
+    client._apply_event(
+        {
+            "type": "playback_state",
+            "status": "playing",
+            "position": {
+                "position_ms": 4_200,
+                "timestamp_ms": 1_000,
+                "speed": 1.0,
+            },
+            "item": {"decorations": {"playback": {"duration_ms": 180_000}}},
+        }
+    )
+
+    now[0] += 2.5
+    assert client.status().position_ms == 6_700
+
+    client._apply_event({"type": "playback_changed", "status": "paused"})
+    now[0] += 10
+    assert client.status().position_ms == 6_700

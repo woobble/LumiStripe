@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import lumistripe_web.bluetooth as bluetooth_module
@@ -736,11 +737,14 @@ def test_spotify_source_routes_dedicated_monitor_and_accepts_controls(
         lambda: [AudioInputDevice(index=7, name="Monitor of LumiStripe Spotify")],
     )
     opened: list[str | None] = []
+    inputs: list[FakeAudioInput] = []
 
     def audio_factory(device, config):
         del config
         opened.append(device)
-        return FakeAudioInput("Monitor of LumiStripe Spotify")
+        audio_input = FakeAudioInput("Monitor of LumiStripe Spotify")
+        inputs.append(audio_input)
+        return audio_input
 
     runtime = LumiStripeRuntime(
         RuntimeSettings(
@@ -767,6 +771,24 @@ def test_spotify_source_routes_dedicated_monitor_and_accepts_controls(
         assert opened == ["Monitor of LumiStripe Spotify"]
         assert settings.active_device_name == "Monitor of LumiStripe Spotify"
         assert settings.spotify.connected is True
+
+        spotify.current = replace(spotify.current, is_active=False, device_name="iPhone")
+        runtime._next_audio_route_check_at = 0.0
+        deadline = time.monotonic() + 1.5
+        while not inputs[0].closed:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        assert runtime.audio_settings().monitoring is False
+        assert runtime.audio_settings().active_source == AudioSource.SPOTIFY.value
+
+        spotify.current = replace(spotify.current, is_active=True, device_name="LumiStripe")
+        runtime._next_audio_route_check_at = 0.0
+        deadline = time.monotonic() + 1.5
+        while len(inputs) < 2:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        assert inputs[1].closed is False
+        assert bluetooth.spotify_routes == 2
 
         runtime.set_mode(PlaybackMode.DYNAMIC).result(timeout=1)
         runtime.control_spotify("play").result(timeout=1)

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import queue
 import threading
+import time
 from concurrent.futures import Future
 from dataclasses import dataclass, replace
 from typing import Any, Literal, Protocol
@@ -89,6 +91,9 @@ class SpotifyClient:
         self._thread: threading.Thread | None = None
         self._socket: Any = None
         self._socket_lock = threading.Lock()
+        self._position_anchor_ms = 0
+        self._position_anchor_monotonic = time.monotonic()
+        self._position_speed = 0.0
 
     def start(self) -> None:
         if not self._enabled or (
@@ -126,7 +131,10 @@ class SpotifyClient:
 
     def status(self) -> SpotifyStatus:
         with self._state_lock:
-            return self._state
+            position_ms = self._current_position_locked()
+            if position_ms == self._state.position_ms:
+                return self._state
+            return replace(self._state, position_ms=position_ms)
 
     def control(self, action: str, value: object | None = None) -> SpotifyStatus:
         if not self._enabled:
@@ -199,18 +207,22 @@ class SpotifyClient:
     def _apply_event(self, event: dict[str, Any]) -> None:
         event_type = event.get("type")
         if event_type == "auth_state":
+            logged_in = bool(event.get("logged_in", False))
             self._set_state(
-                logged_in=bool(event.get("logged_in", False)),
+                logged_in=logged_in,
                 is_active=bool(event.get("is_active", False)),
                 device_name=_optional_string(event.get("device_name")),
             )
+            if logged_in:
+                self._queue_playback_state_request()
         elif event_type == "playback_state":
             self._apply_playback_state(event)
         elif event_type == "track_changed":
             track = _parse_track(event.get("item"))
             self._set_state(track=track, duration_ms=track.duration_ms if track else None)
+            self._set_position_anchor(0, 0.0)
         elif event_type == "playback_changed":
-            self._set_state(status=_playback_status(event.get("status")))
+            self._apply_playback_changed(event)
         elif event_type == "volume_changed":
             self._set_state(volume=_volume(event.get("volume")))
         elif event_type == "device_changed":
@@ -228,7 +240,10 @@ class SpotifyClient:
         elif event_type == "position_sync":
             position = event.get("position")
             if isinstance(position, dict):
-                self._set_state(position_ms=_nonnegative_int(position.get("position_ms")))
+                self._set_position_anchor(
+                    _nonnegative_int(position.get("position_ms")),
+                    _playback_speed(position.get("speed")),
+                )
         elif event_type == "error":
             self._set_state(error=_optional_string(event.get("message")) or "Spotify command failed")
 
@@ -236,15 +251,9 @@ class SpotifyClient:
         track = _parse_track(event.get("item"))
         position = event.get("position")
         options = event.get("options")
-        position_ms = (
-            _nonnegative_int(position.get("position_ms"))
-            if isinstance(position, dict)
-            else 0
-        )
         self._set_state(
             status=_playback_status(event.get("status")),
             track=track,
-            position_ms=position_ms,
             duration_ms=track.duration_ms if track else None,
             volume=_volume(event.get("volume")),
             is_active=bool(event.get("is_active", False)),
@@ -252,6 +261,53 @@ class SpotifyClient:
             repeat=_repeat(options.get("repeat", "off")) if isinstance(options, dict) else "off",
             error=None,
         )
+        if isinstance(position, dict):
+            self._set_position_anchor(
+                _nonnegative_int(position.get("position_ms")),
+                _playback_speed(position.get("speed")),
+            )
+        else:
+            self._set_position_anchor(0, 0.0)
+
+    def _apply_playback_changed(self, event: dict[str, Any]) -> None:
+        status = _playback_status(event.get("status"))
+        with self._state_lock:
+            position_ms = self._current_position_locked()
+            self._position_anchor_ms = position_ms
+            self._position_anchor_monotonic = time.monotonic()
+            self._position_speed = 1.0 if status == "playing" else 0.0
+            self._state = replace(
+                self._state,
+                status=status,
+                position_ms=position_ms,
+            )
+
+    def _queue_playback_state_request(self) -> None:
+        self._commands.put(
+            _PendingCommand(
+                {"type": "command", "command": "get_state"},
+                Future(),
+            )
+        )
+
+    def _set_position_anchor(self, position_ms: int, speed: float) -> None:
+        with self._state_lock:
+            self._position_anchor_ms = max(0, position_ms)
+            self._position_anchor_monotonic = time.monotonic()
+            self._position_speed = max(0.0, speed)
+            self._state = replace(self._state, position_ms=self._position_anchor_ms)
+
+    def _current_position_locked(self) -> int:
+        position_ms = self._position_anchor_ms
+        if self._state.status in {"playing", "buffering"} and self._position_speed > 0:
+            elapsed_ms = max(
+                0.0,
+                (time.monotonic() - self._position_anchor_monotonic) * 1000.0,
+            )
+            position_ms += int(elapsed_ms * self._position_speed)
+        if self._state.duration_ms is not None:
+            position_ms = min(position_ms, self._state.duration_ms)
+        return max(0, position_ms)
 
     def _set_state(self, **changes: Any) -> None:
         with self._state_lock:
@@ -369,6 +425,14 @@ def _nonnegative_int(value: object) -> int:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return max(0, int(value))
     return 0
+
+
+def _playback_speed(value: object) -> float:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        speed = float(value)
+        if math.isfinite(speed):
+            return max(0.0, speed)
+    return 1.0
 
 
 def _required_number(value: object | None, label: str) -> float:

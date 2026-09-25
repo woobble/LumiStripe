@@ -1537,11 +1537,23 @@ class RuntimeWorker:
             return
 
         if self._configured_audio_source is AudioSource.SPOTIFY:
+            spotify = self._spotify.status()
+            if spotify.connected and spotify.logged_in and not spotify.is_active:
+                if self._audio_input is not None:
+                    self._close_audio_input()
+                self._monitor_audio_source = AudioSource.SPOTIFY
+                self._active_audio_device_name = None
+                self._audio_monitor_error = None
+                self._audio_status = (
+                    "Spotify is playing on another device; select LumiStripe in Spotify "
+                    "to resume the local audio monitor."
+                )
+                return
             if (
                 self._audio_input is not None
                 and self._monitor_audio_source is AudioSource.SPOTIFY
-                and self._spotify.status().connected
-                and self._spotify.status().logged_in
+                and spotify.connected
+                and spotify.logged_in
             ):
                 return
             if self._audio_input is not None:
@@ -1666,6 +1678,10 @@ class RuntimeWorker:
             raise RuntimeError("Spotify Soloist is not connected")
         if not status.logged_in:
             raise RuntimeError("Spotify is not paired; select LumiStripe in Spotify first")
+        if not status.is_active:
+            raise RuntimeError(
+                "Spotify is active on another device; select LumiStripe in Spotify first"
+            )
         ensure_route = getattr(self._bluetooth, "ensure_spotify_route", None)
         if not callable(ensure_route):
             raise BluetoothCommandError("the PipeWire Spotify route is unavailable")
