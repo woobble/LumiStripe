@@ -245,7 +245,18 @@ jobs:
       - name: Install Raspberry Pi native profile
         env:
           LUMISTRIPE_BUILD_EXTENSIONS: all
-        run: uv sync --locked --all-extras --dev
+        # The ARM64 runner is persistent. The native profile is a build-time
+        # setting, so a normal sync can incorrectly reuse a prior pure-Python
+        # editable install of lumistripe-core.
+        run: uv sync --locked --all-extras --dev --reinstall-package lumistripe-core
+
+      - name: Verify Raspberry Pi native extensions
+        env:
+          LUMISTRIPE_BUILD_EXTENSIONS: all
+        run: >-
+          uv run python -c
+          'from lumistripe.audio import _audio; from lumistripe.gpio import _sm16716;
+          print(_audio.__file__); print(_sm16716.__file__)'
 
       - name: Verify Python environment
         run: uv run python -c 'import platform, sys; print(sys.version); print(platform.platform()); assert sys.version_info[:2] == (3, 12)'
