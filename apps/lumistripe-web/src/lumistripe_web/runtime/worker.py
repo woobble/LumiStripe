@@ -338,6 +338,7 @@ class RuntimeWorker:
         self._active_bluetooth_address: str | None = None
         self._bluetooth_previous_default_source: str | None = None
         self._next_audio_route_check_at = 0.0
+        self._spotify_last_active: bool | None = None
         self._audio_frame = AudioFrame()
         self._music_features = MusicFeatures()
         self._demo_tick = 0
@@ -1538,7 +1539,25 @@ class RuntimeWorker:
 
         if self._configured_audio_source is AudioSource.SPOTIFY:
             spotify = self._spotify.status()
-            if spotify.connected and spotify.logged_in and not spotify.is_active:
+            if not spotify.connected or not spotify.logged_in:
+                self._spotify_last_active = None
+                if self._audio_input is not None:
+                    self._close_audio_input()
+                try:
+                    self._open_spotify_monitor()
+                except (BluetoothCommandError, RuntimeError) as exc:
+                    self._monitor_audio_source = AudioSource.SPOTIFY
+                    self._active_audio_device_name = None
+                    self._audio_monitor_error = str(exc)
+                    self._audio_status = f"Spotify audio unavailable: {exc}"
+                return
+
+            active_changed = (
+                self._spotify_last_active is not None
+                and self._spotify_last_active != spotify.is_active
+            )
+            self._spotify_last_active = spotify.is_active
+            if active_changed and not spotify.is_active:
                 if self._audio_input is not None:
                     self._close_audio_input()
                 self._monitor_audio_source = AudioSource.SPOTIFY
@@ -1549,11 +1568,11 @@ class RuntimeWorker:
                     "to resume the local audio monitor."
                 )
                 return
+            if active_changed and spotify.is_active and self._audio_input is not None:
+                self._close_audio_input()
             if (
                 self._audio_input is not None
                 and self._monitor_audio_source is AudioSource.SPOTIFY
-                and spotify.connected
-                and spotify.logged_in
             ):
                 return
             if self._audio_input is not None:
@@ -1678,10 +1697,6 @@ class RuntimeWorker:
             raise RuntimeError("Spotify Soloist is not connected")
         if not status.logged_in:
             raise RuntimeError("Spotify is not paired; select LumiStripe in Spotify first")
-        if not status.is_active:
-            raise RuntimeError(
-                "Spotify is active on another device; select LumiStripe in Spotify first"
-            )
         ensure_route = getattr(self._bluetooth, "ensure_spotify_route", None)
         if not callable(ensure_route):
             raise BluetoothCommandError("the PipeWire Spotify route is unavailable")
@@ -1888,6 +1903,7 @@ class RuntimeWorker:
         if self.playback.mode is PlaybackMode.DYNAMIC and source == "off":
             raise RuntimeCommandError("dynamic mode requires demo or microphone audio")
         self._audio_source_setting = source
+        self._spotify_last_active = None
         if source == "auto":
             self._configured_audio_source = (
                 AudioSource.BLUETOOTH if self.settings.hardware else AudioSource.DEMO

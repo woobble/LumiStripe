@@ -795,3 +795,59 @@ def test_spotify_source_routes_dedicated_monitor_and_accepts_controls(
         assert spotify.actions == [("play", None)]
     finally:
         runtime.stop()
+
+
+def test_spotify_monitor_opens_before_soloist_reports_active(
+    monkeypatch, tmp_path: Path
+) -> None:
+    bluetooth = FakeBluetoothManager()
+    spotify = FakeSpotifyManager()
+    spotify.current = replace(spotify.current, is_active=False, device_name="iPhone")
+    monkeypatch.setattr(
+        runtime_module,
+        "list_input_device_details",
+        lambda: [AudioInputDevice(index=7, name="Monitor of LumiStripe Spotify")],
+    )
+    inputs: list[FakeAudioInput] = []
+
+    def audio_factory(device, config):
+        del config
+        audio_input = FakeAudioInput("Monitor of LumiStripe Spotify")
+        inputs.append(audio_input)
+        return audio_input
+
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(
+            hardware=True,
+            pixels=4,
+            audio_source="spotify",
+            settings_file=tmp_path / "settings.json",
+        ),
+        controller_factory=lambda settings: Stripe(settings.pixels),
+        audio_factory=audio_factory,
+        bluetooth_manager=bluetooth,
+        spotify_manager=spotify,
+    )
+    runtime.start()
+    try:
+        deadline = time.monotonic() + 1.0
+        while not inputs:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+
+        assert runtime.audio_settings().active_source == AudioSource.SPOTIFY.value
+        assert inputs[0].closed is False
+        assert bluetooth.spotify_routes == 1
+
+        spotify.current = replace(spotify.current, is_active=True, device_name="LumiStripe")
+        runtime._next_audio_route_check_at = 0.0
+        deadline = time.monotonic() + 1.5
+        while len(inputs) < 2:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+
+        assert inputs[0].closed is True
+        assert inputs[1].closed is False
+        assert bluetooth.spotify_routes == 2
+    finally:
+        runtime.stop()
