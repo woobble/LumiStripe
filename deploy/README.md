@@ -74,9 +74,15 @@ sudo env LUMI_PAIRING_CODE=0427 \
   ./deploy/docker-install.sh
 ```
 
-The installer installs Docker and Compose when they are missing, installs the
-host Bluetooth/PipeWire prerequisites, enables SPI, creates the host audio
-configuration, builds the ARM64-capable image, and starts the Compose stack.
+The installer configures Docker's official Debian apt repository, removes
+conflicting distro Docker packages when present, and installs
+`docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, and
+`docker-compose-plugin`. Docker's repository publishes arm64 packages for the
+64-bit Raspberry Pi OS target. It also installs the host Bluetooth/PipeWire
+prerequisites, enables SPI, creates the host audio configuration, builds the
+ARM64-capable image, and starts the Compose stack. Set
+`LUMI_DOCKER_DEBIAN_SUITE` if a Debian derivative does not expose
+`VERSION_CODENAME` correctly.
 The Spotify key is stored in a mode-600 local secret file readable only by the
 service account and root; it is not copied into the image. If the key is
 omitted from the environment, an interactive terminal prompts for it.

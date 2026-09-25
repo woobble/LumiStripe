@@ -28,6 +28,7 @@ Configuration is supplied through environment variables, including:
   LUMI_SPOTIFY_API_KEY=YOUR_SOLOIST_API_KEY
   LUMI_SPI_DEVICE=/dev/spidev0.0
   LUMI_SPI_DEVICE_2=/dev/spidev1.0
+  LUMI_DOCKER_DEBIAN_SUITE=trixie
   LUMI_SERVICE_USER=pi
   LUMI_PROJECT_DIR=/home/pi/lumistripe
 EOF
@@ -124,45 +125,79 @@ install_host_packages() {
 }
 
 install_docker() {
-  if ! command -v docker >/dev/null 2>&1; then
-    apt-get install --yes --no-install-recommends docker.io
-  fi
+  local architecture
+  local suite
+  local keyring=/etc/apt/keyrings/docker.asc
+  local source_file=/etc/apt/sources.list.d/docker.sources
+  local key_temporary_file
+  local source_temporary_file
+  local package
+  local package_status
+  local -a conflicting_packages=()
 
-  if ! docker compose version >/dev/null 2>&1; then
-    local compose_package=
-    local candidate
-    for candidate in docker-compose-v2 docker-compose-plugin; do
-      if apt-cache show "$candidate" >/dev/null 2>&1; then
-        compose_package="$candidate"
-        break
-      fi
-    done
-    if [[ -n "$compose_package" ]]; then
-      apt-get install --yes --no-install-recommends "$compose_package"
+  architecture="$(dpkg --print-architecture)"
+  case "$architecture" in
+    amd64|arm64|armhf|ppc64el) ;;
+    *) die "Docker's official Debian repository does not support $architecture" ;;
+  esac
+
+  if [[ -n "${LUMI_DOCKER_DEBIAN_SUITE:-}" ]]; then
+    suite="$LUMI_DOCKER_DEBIAN_SUITE"
+  else
+    [[ -r /etc/os-release ]] || die "/etc/os-release is unavailable"
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    suite="${VERSION_CODENAME:-}"
+  fi
+  [[ "$suite" =~ ^[a-z0-9]+$ ]] || \
+    die "could not determine a valid Debian suite; set LUMI_DOCKER_DEBIAN_SUITE"
+  case "$suite" in
+    bookworm|trixie) ;;
+    *) die "unsupported Debian suite '$suite'; use bookworm or trixie, or set LUMI_DOCKER_DEBIAN_SUITE" ;;
+  esac
+
+  echo "Configuring Docker's official Debian repository for $suite/$architecture..."
+  apt-get install --yes --no-install-recommends ca-certificates curl
+  install -d -o root -g root -m 0755 /etc/apt/keyrings
+
+  key_temporary_file="$(mktemp /tmp/lumistripe-docker-key.XXXXXX)"
+  curl --fail --silent --show-error --location --retry 3 --retry-delay 2 \
+    https://download.docker.com/linux/debian/gpg \
+    --output "$key_temporary_file"
+  install -o root -g root -m 0644 "$key_temporary_file" "$keyring"
+  rm -f -- "$key_temporary_file"
+
+  source_temporary_file="$(mktemp /tmp/lumistripe-docker.sources.XXXXXX)"
+  {
+    printf 'Types: deb\n'
+    printf 'URIs: https://download.docker.com/linux/debian\n'
+    printf 'Suites: %s\n' "$suite"
+    printf 'Components: stable\n'
+    printf 'Architectures: %s\n' "$architecture"
+    printf 'Signed-By: %s\n' "$keyring"
+  } > "$source_temporary_file"
+  install -o root -g root -m 0644 "$source_temporary_file" "$source_file"
+  rm -f -- "$source_temporary_file"
+
+  for package in \
+    docker.io docker-compose docker-compose-v2 docker-doc docker-buildx \
+    podman-docker containerd runc; do
+    package_status="$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)"
+    if [[ "$package_status" == "install ok installed" ]]; then
+      conflicting_packages+=("$package")
     fi
+  done
+  if ((${#conflicting_packages[@]} > 0)); then
+    echo "Removing conflicting distro Docker packages: ${conflicting_packages[*]}"
+    apt-get remove --yes "${conflicting_packages[@]}"
   fi
 
-  if ! docker compose version >/dev/null 2>&1; then
-    local version="${LUMI_DOCKER_COMPOSE_VERSION:-v2.39.4}"
-    local architecture
-    local asset_arch
-    local plugin_dir=/usr/local/lib/docker/cli-plugins
-    architecture="$(dpkg --print-architecture)"
-    case "$architecture" in
-      arm64) asset_arch=aarch64 ;;
-      amd64) asset_arch=x86_64 ;;
-      armhf|armel) asset_arch=armv7 ;;
-      *) die "Docker Compose has no configured release for $architecture" ;;
-    esac
-    install -d -o root -g root -m 755 "$plugin_dir"
-    echo "Installing Docker Compose $version..."
-    curl --fail --silent --show-error --location --retry 3 --retry-delay 2 \
-      "https://github.com/docker/compose/releases/download/$version/docker-compose-linux-$asset_arch" \
-      --output "$plugin_dir/docker-compose"
-    chmod 755 "$plugin_dir/docker-compose"
-  fi
+  apt-get update
+  apt-get install --yes --no-install-recommends \
+    docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
   systemctl enable --now docker.service
+  command -v docker >/dev/null 2>&1 || die "Docker Engine was not installed"
   docker compose version >/dev/null 2>&1 || \
     die "Docker Compose v2 is unavailable after installation"
 }
