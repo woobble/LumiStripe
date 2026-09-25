@@ -1,4 +1,4 @@
 services:
   lumistripe-web:
     devices:
-      - "${LUMI_SPI_DEVICE_2}:/dev/spidev0.1"
+      - "${LUMI_SPI_DEVICE_2}:${LUMI_SPI_DEVICE_2}"

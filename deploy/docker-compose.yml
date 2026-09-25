@@ -25,8 +25,8 @@ services:
       - "${LUMI_RUNTIME_DIR}:${LUMI_RUNTIME_DIR}"
       - "${LUMI_DBUS_SOCKET:-/run/dbus/system_bus_socket}:/run/dbus/system_bus_socket"
     devices:
-      - "${LUMI_SPI_DEVICE:-/dev/spidev0.0}:/dev/spidev0.0"
-      - "${LUMI_GPIO_CHIP:-/dev/gpiochip0}:/dev/gpiochip0"
+      - "${LUMI_SPI_DEVICE:-/dev/spidev0.0}:${LUMI_SPI_DEVICE:-/dev/spidev0.0}"
+      - "${LUMI_GPIO_CHIP:-/dev/gpiochip0}:${LUMI_GPIO_CHIP:-/dev/gpiochip0}"
     command: ["/usr/local/bin/lumistripe-web-entrypoint"]
     healthcheck:
       test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:8000/api/health >/dev/null || exit 1"]

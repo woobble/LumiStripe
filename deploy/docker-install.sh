@@ -26,6 +26,8 @@ explicit --takeover-systemd option is supplied.
 Configuration is supplied through environment variables, including:
   LUMI_PAIRING_CODE=0427
   LUMI_SPOTIFY_API_KEY=YOUR_SOLOIST_API_KEY
+  LUMI_SPI_DEVICE=/dev/spidev0.0
+  LUMI_SPI_DEVICE_2=/dev/spidev1.0
   LUMI_SERVICE_USER=pi
   LUMI_PROJECT_DIR=/home/pi/lumistripe
 EOF

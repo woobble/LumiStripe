@@ -57,6 +57,11 @@ sudo env LUMI_PAIRING_CODE=0427 \
   ./deploy/docker-install.sh
 ```
 
+For two hardware SPI outputs, enable SPI1 on the Pi and set
+`LUMI_SPI_DEVICE_2=/dev/spidev1.0` during installation. See
+[`deploy/README.md`](deploy/README.md) for the SPI1 overlay, wiring, and
+dashboard configuration.
+
 Update it with `sudo ./deploy/docker-update.sh` and remove it with
 `sudo ./deploy/docker-uninstall.sh`. Do not run the Docker and systemd
 installations at the same time; the Docker installer stops with instructions

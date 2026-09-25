@@ -105,9 +105,30 @@ a later reinstall.
 
 The default Compose mapping expects the LED output at
 `/dev/spidev0.0` and the GPIO chip at `/dev/gpiochip0`. Set
-`LUMI_SPI_DEVICE` and `LUMI_GPIO_CHIP` when the host paths differ. Optional
-second-SPI and `/dev/gpiomem` mappings can be enabled with
-`LUMI_SPI_DEVICE_2` and `LUMI_GPIOMEM_DEVICE`.
+`LUMI_SPI_DEVICE` and `LUMI_GPIO_CHIP` when the host paths differ. The
+configured device paths are preserved inside the containers. To use a second
+SPI controller for a second strip, enable SPI1 on the host and install with:
+
+```bash
+sudo env LUMI_PAIRING_CODE=0427 \
+  LUMI_SPOTIFY_API_KEY=YOUR_SOLOIST_API_KEY \
+  LUMI_SPI_DEVICE=/dev/spidev0.0 \
+  LUMI_SPI_DEVICE_2=/dev/spidev1.0 \
+  ./deploy/docker-install.sh
+```
+
+On Raspberry Pi OS, add `dtoverlay=spi1-1cs` to
+`/boot/firmware/config.txt`, reboot, and verify that both
+`/dev/spidev0.0` and `/dev/spidev1.0` exist. SPI0 uses GPIO10/data and
+GPIO11/clock; SPI1 uses GPIO20/data and GPIO21/clock. Then add the second
+output on **Setup → Stripes**, select **SPI**, set its device to
+`/dev/spidev1.0`, and choose **Save & apply**. An existing installation can
+be changed by adding `LUMI_SPI_DEVICE_2=/dev/spidev1.0` to
+`/etc/lumistripe/lumistripe-docker.env` and running
+`sudo ./deploy/docker-update.sh`.
+
+Optional `/dev/gpiomem` mapping can be enabled with
+`LUMI_GPIOMEM_DEVICE`.
 
 The containers use host networking because Soloist's local WebSocket API and
 the existing runtime both use `127.0.0.1:9090`. Only one LumiStripe web
