@@ -94,10 +94,13 @@ as_user() {
 
 compose_files() {
   COMPOSE_FILES=("-f" "$DOCKER_COMPOSE_FILE")
-  [[ -n "${LUMI_SPI_DEVICE_2:-}" ]] && \
+  if [[ -n "${LUMI_SPI_DEVICE_2:-}" ]]; then
     COMPOSE_FILES+=("-f" "$DOCKER_COMPOSE_SPI2_FILE")
-  [[ -n "${LUMI_GPIOMEM_DEVICE:-}" ]] && \
+  fi
+  if [[ -n "${LUMI_GPIOMEM_DEVICE:-}" ]]; then
     COMPOSE_FILES+=("-f" "$DOCKER_COMPOSE_GPIOMEM_FILE")
+  fi
+  return 0
 }
 
 compose() {
@@ -114,6 +117,37 @@ validate_compose() {
   echo "Docker Compose validation failed:" >&2
   printf '%s\n' "$output" >&2
   return 1
+}
+
+build_compose_image() {
+  local status
+  local progress="${LUMI_BUILDKIT_PROGRESS:-plain}"
+
+  echo "Building the LumiStripe image (BuildKit progress: $progress)..."
+  if BUILDKIT_PROGRESS="$progress" compose build --pull; then
+    echo "LumiStripe image build completed."
+    return 0
+  else
+    status=$?
+  fi
+  echo "Docker Compose image build failed (exit status $status)." >&2
+  return "$status"
+}
+
+start_compose() {
+  local status
+
+  echo "Starting LumiStripe containers..."
+  if compose up --detach --remove-orphans; then
+    echo "LumiStripe containers started."
+    return 0
+  else
+    status=$?
+  fi
+  echo "Docker Compose failed to start LumiStripe (exit status $status)." >&2
+  echo "Current container status:" >&2
+  compose ps >&2 || true
+  return "$status"
 }
 
 read_env_value() {

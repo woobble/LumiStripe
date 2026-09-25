@@ -361,10 +361,9 @@ create_compose_environment() {
 build_and_start() {
   echo "Validating Docker Compose configuration..."
   validate_compose
-  echo "Building the LumiStripe ARM64-capable image..."
-  compose build --pull
-  echo "Starting LumiStripe containers..."
-  compose up --detach --remove-orphans
+  echo "Docker Compose configuration is valid."
+  build_compose_image
+  start_compose
 
   for _ in {1..60}; do
     if curl --fail --silent http://127.0.0.1:8000/api/health >/dev/null; then

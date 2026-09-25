@@ -36,9 +36,10 @@ restart_host_audio
 
 echo "Validating Docker Compose configuration..."
 validate_compose
+echo "Docker Compose configuration is valid."
 echo "Rebuilding LumiStripe containers..."
-compose build --pull
-compose up --detach --remove-orphans
+build_compose_image
+start_compose
 
 for _ in {1..60}; do
   if curl --fail --silent http://127.0.0.1:8000/api/health >/dev/null; then
