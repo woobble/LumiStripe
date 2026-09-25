@@ -106,6 +106,16 @@ compose() {
     --env-file "$DOCKER_ENV_FILE" "${COMPOSE_FILES[@]}" "$@"
 }
 
+validate_compose() {
+  local output
+  if output="$(compose config 2>&1)"; then
+    return 0
+  fi
+  echo "Docker Compose validation failed:" >&2
+  printf '%s\n' "$output" >&2
+  return 1
+}
+
 read_env_value() {
   local name="$1"
   [[ -f "$DOCKER_ENV_FILE" ]] || return 1

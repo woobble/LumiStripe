@@ -35,7 +35,7 @@ refresh_host_audio_config
 restart_host_audio
 
 echo "Validating Docker Compose configuration..."
-compose config --quiet
+validate_compose
 echo "Rebuilding LumiStripe containers..."
 compose build --pull
 compose up --detach --remove-orphans

@@ -360,7 +360,7 @@ create_compose_environment() {
 
 build_and_start() {
   echo "Validating Docker Compose configuration..."
-  compose config --quiet
+  validate_compose
   echo "Building the LumiStripe ARM64-capable image..."
   compose build --pull
   echo "Starting LumiStripe containers..."
