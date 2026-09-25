@@ -39,7 +39,8 @@ class PlaybackPolicy:
         if configured_audio_source is AudioSource.OFF:
             raise PlaybackPolicyError("dynamic mode requires demo or microphone audio")
         if (
-            configured_audio_source in {AudioSource.MIC, AudioSource.BLUETOOTH}
+            configured_audio_source
+            in {AudioSource.MIC, AudioSource.BLUETOOTH, AudioSource.SPOTIFY}
             and not audio_input_available
         ):
             raise PlaybackPolicyError(

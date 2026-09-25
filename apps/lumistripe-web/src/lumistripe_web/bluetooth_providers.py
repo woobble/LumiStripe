@@ -86,6 +86,9 @@ class PipeWireProvider:
     def sink_inputs(self) -> str:
         return self._runner(("pactl", "list", "short", "sink-inputs"), 2.0)
 
+    def modules(self) -> str:
+        return self._runner(("pactl", "list", "short", "modules"), 2.0)
+
     def info(self) -> str:
         return self._runner(("pactl", "info"), 2.0)
 
@@ -97,6 +100,12 @@ class PipeWireProvider:
 
     def move_sink_input(self, input_id: str, sink: str) -> None:
         self._runner(("pactl", "move-sink-input", input_id, sink), 2.0)
+
+    def load_module(self, module: str, arguments: str) -> str:
+        return self._runner(("pactl", "load-module", module, arguments), 2.0)
+
+    def unload_module(self, module_id: str) -> None:
+        self._runner(("pactl", "unload-module", module_id), 2.0)
 
     def set_volume(self, sink: str, volume: float) -> None:
         self._runner(("pactl", "set-sink-volume", sink, f"{round(volume * 100)}%"), 2.0)

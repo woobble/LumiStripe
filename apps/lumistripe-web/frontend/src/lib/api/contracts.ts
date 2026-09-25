@@ -13,6 +13,8 @@ export type AudioCalibrationSessionResponse = RestSchema<"AudioCalibrationSessio
 export type AudioDeviceOption = RestSchema<"AudioDeviceOption">
 export type AudioOutputDeviceInfo = RestSchema<"AudioOutputDeviceInfo">
 export type AudioSettingsResponse = RestSchema<"AudioSettingsResponse">
+export type SpotifyStatusResponse = RestSchema<"SpotifyStatusResponse">
+export type SpotifyTrackInfo = RestSchema<"SpotifyTrackInfo">
 // WebSocket payloads are not represented by OpenAPI components.
 export interface AudioTelemetry {
   sequence: number
@@ -64,4 +66,5 @@ export type StripeBackend = RestSchema<"StripeOutputConfig">["backend"]
 export type BluetoothDeviceRole = RestSchema<"BluetoothDeviceRequest">["role"]
 export type BluetoothOperation = RestSchema<"BluetoothCapabilities">["operations"][number]
 export type AudioSource = RestSchema<"AudioSourceRequest">["source"]
+export type SpotifyControlAction = RestSchema<"SpotifyControlRequest">["action"]
 export type RuntimeKind = RestSchema<"RuntimeKind">

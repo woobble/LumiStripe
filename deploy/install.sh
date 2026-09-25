@@ -14,6 +14,11 @@ PYTHON_VERSION="${LUMI_PYTHON_VERSION:-3.12}"
 ENV_DIR=/etc/lumistripe
 ENV_FILE="$ENV_DIR/lumistripe-web.env"
 SERVICE_FILE=/etc/systemd/system/lumistripe-web.service
+SPOTIFY_ENV_FILE="$ENV_DIR/lumistripe-spotify.env"
+SPOTIFY_SERVICE_FILE=/etc/systemd/system/lumistripe-spotify.service
+SOLOIST_BIN=/usr/local/bin/soloist
+STATE_DIR=/var/lib/lumistripe
+STATE_FILE="$STATE_DIR/install-state"
 WIREPLUMBER_DIR=
 WIREPLUMBER_FILE=
 NGINX_AVAILABLE=/etc/nginx/sites-available/led-controller
@@ -24,6 +29,7 @@ TLS_CERT="$TLS_DIR/led.controller.pem"
 TLS_KEY="$TLS_DIR/led.controller-key.pem"
 CERT_TMP_DIR=
 MKCERT_CA_ROOT=
+NGINX_DEFAULT_REMOVED=0
 
 if [[ $EUID -ne 0 ]]; then
   echo "Run this installer as root (for example: sudo $0)." >&2
@@ -67,12 +73,17 @@ UV_BIN="$SERVICE_HOME/.local/bin/uv"
 BUN_BIN="$SERVICE_HOME/.bun/bin/bun"
 WIREPLUMBER_DIR="$SERVICE_HOME/.config/wireplumber/wireplumber.conf.d"
 WIREPLUMBER_FILE="$WIREPLUMBER_DIR/90-lumistripe-bluetooth.conf"
+PIPEWIRE_DIR="$SERVICE_HOME/.config/pipewire/pipewire.conf.d"
+SPOTIFY_PIPEWIRE_FILE="$PIPEWIRE_DIR/90-lumistripe-spotify.conf"
 USER_RUNTIME_DIR="/run/user/$SERVICE_UID"
 
 for required_file in \
   "$PROJECT_DIR/deploy/lumistripe-web.service" \
+  "$PROJECT_DIR/deploy/lumistripe-spotify.service" \
   "$PROJECT_DIR/deploy/90-lumistripe-bluetooth.conf" \
+  "$PROJECT_DIR/deploy/90-lumistripe-spotify.conf" \
   "$PROJECT_DIR/deploy/lumistripe-web.env.example" \
+  "$PROJECT_DIR/deploy/lumistripe-spotify.env.example" \
   "$PROJECT_DIR/deploy/nginx/led-controller.conf"; do
   [[ -f "$required_file" ]] || {
     echo "Required deployment file is missing: $required_file" >&2
@@ -264,6 +275,40 @@ install_toolchains() {
   }
 }
 
+install_spotify_soloist() {
+  local architecture
+  local archive_arch
+  local archive_url
+  local archive_file
+  local extract_dir
+  architecture="$(uname -m)"
+  case "$architecture" in
+    aarch64) archive_arch=arm64 ;;
+    armv7l) archive_arch=arm32 ;;
+    x86_64) archive_arch=x86_64 ;;
+    *)
+      echo "Spotify Soloist has no configured build for $architecture." >&2
+      exit 1
+      ;;
+  esac
+  archive_url="https://soloist-builds.spotifycdn.com/soloist_release_${archive_arch}.tar.gz"
+  archive_file="$(mktemp /tmp/lumistripe-soloist.XXXXXX.tar.gz)"
+  extract_dir="$(mktemp -d /tmp/lumistripe-soloist.XXXXXX)"
+  echo "Downloading Spotify Soloist for $architecture..."
+  curl --fail --silent --show-error --location --retry 3 --retry-delay 2 \
+    "$archive_url" -o "$archive_file"
+  tar -xzf "$archive_file" -C "$extract_dir"
+  [[ -x "$extract_dir/soloist" ]] || {
+    echo "Spotify Soloist archive did not contain an executable soloist file." >&2
+    rm -f -- "$archive_file"
+    rm -rf -- "$extract_dir"
+    exit 1
+  }
+  install -o root -g root -m 755 "$extract_dir/soloist" "$SOLOIST_BIN"
+  rm -f -- "$archive_file"
+  rm -rf -- "$extract_dir"
+}
+
 install_project_dependencies() {
   echo "Installing Python dependencies with uv (Python $PYTHON_VERSION)..."
   pushd "$PROJECT_DIR" >/dev/null
@@ -304,6 +349,45 @@ create_environment_file() {
   pairing_code="$(awk -F= '$1 == "LUMI_PAIRING_CODE" { print $2; exit }' "$ENV_FILE")"
   [[ "$pairing_code" =~ ^[0-9]{4}$ ]] || {
     echo "LUMI_PAIRING_CODE must be exactly four digits in $ENV_FILE." >&2
+    exit 1
+  }
+}
+
+create_spotify_environment_file() {
+  install -d -m 755 "$ENV_DIR"
+  if [[ ! -e "$SPOTIFY_ENV_FILE" ]]; then
+    local api_key="${LUMI_SPOTIFY_API_KEY:-}"
+    [[ -n "$api_key" && "$api_key" != REPLACE_WITH_* ]] || {
+      echo "LUMI_SPOTIFY_API_KEY is required to install Spotify Soloist." >&2
+      echo "Generate a key in the Spotify for Developers dashboard and rerun:" >&2
+      echo "  sudo env LUMI_SPOTIFY_API_KEY=... $0" >&2
+      exit 1
+    }
+    [[ "$api_key" != *$'\n'* && "$api_key" != *$'\r'* ]] || {
+      echo "LUMI_SPOTIFY_API_KEY must be a single-line value." >&2
+      exit 1
+    }
+    local api_key_replacement
+    local data_dir_replacement
+    local cache_dir_replacement
+    api_key_replacement="$(printf '%s' "$api_key" | sed 's/[&|\\]/\\&/g')"
+    data_dir_replacement="$(printf '%s' "$SERVICE_HOME/.local/share/soloist" | sed 's/[&|\\]/\\&/g')"
+    cache_dir_replacement="$(printf '%s' "$SERVICE_HOME/.cache/soloist" | sed 's/[&|\\]/\\&/g')"
+    install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 600 \
+      "$PROJECT_DIR/deploy/lumistripe-spotify.env.example" "$SPOTIFY_ENV_FILE"
+    sed -i \
+      -e "s|^LUMI_SPOTIFY_API_KEY=.*|LUMI_SPOTIFY_API_KEY=$api_key_replacement|" \
+      -e "s|^LUMI_SPOTIFY_DATA_DIR=.*|LUMI_SPOTIFY_DATA_DIR=$data_dir_replacement|" \
+      -e "s|^LUMI_SPOTIFY_CACHE_DIR=.*|LUMI_SPOTIFY_CACHE_DIR=$cache_dir_replacement|" \
+      "$SPOTIFY_ENV_FILE"
+  fi
+
+  chown "$SERVICE_USER:$SERVICE_GROUP" "$SPOTIFY_ENV_FILE"
+  chmod 600 "$SPOTIFY_ENV_FILE"
+  local api_key_from_file
+  api_key_from_file="$(awk -F= '$1 == "LUMI_SPOTIFY_API_KEY" { print substr($0, index($0, "=") + 1); exit }' "$SPOTIFY_ENV_FILE")"
+  [[ -n "$api_key_from_file" && "$api_key_from_file" != REPLACE_WITH_* ]] || {
+    echo "LUMI_SPOTIFY_API_KEY must be configured in $SPOTIFY_ENV_FILE." >&2
     exit 1
   }
 }
@@ -370,10 +454,43 @@ render_service_unit() {
   rm -f -- "$rendered_file"
 }
 
+render_spotify_service_unit() {
+  local rendered_file
+  local project_replacement
+  local home_replacement
+  local user_replacement
+  local group_replacement
+  local uid_replacement
+  rendered_file="$(mktemp /tmp/lumistripe-spotify-service.XXXXXX)"
+  project_replacement="$(printf '%s' "$PROJECT_DIR" | sed 's/[&|\\]/\\&/g')"
+  home_replacement="$(printf '%s' "$SERVICE_HOME" | sed 's/[&|\\]/\\&/g')"
+  user_replacement="$(printf '%s' "$SERVICE_USER" | sed 's/[&|\\]/\\&/g')"
+  group_replacement="$(printf '%s' "$SERVICE_GROUP" | sed 's/[&|\\]/\\&/g')"
+  uid_replacement="$(printf '%s' "$SERVICE_UID" | sed 's/[&|\\]/\\&/g')"
+
+  sed \
+    -e "s|@LUMI_SERVICE_USER@|$user_replacement|g" \
+    -e "s|@LUMI_SERVICE_GROUP@|$group_replacement|g" \
+    -e "s|@LUMI_PROJECT_DIR@|$project_replacement|g" \
+    -e "s|@LUMI_HOME@|$home_replacement|g" \
+    -e "s|@LUMI_SERVICE_UID@|$uid_replacement|g" \
+    "$PROJECT_DIR/deploy/lumistripe-spotify.service" > "$rendered_file"
+  if grep -q '@LUMI_[A-Z_]*@' "$rendered_file"; then
+    rm -f -- "$rendered_file"
+    echo "The Spotify systemd service template contains unresolved placeholders." >&2
+    exit 1
+  fi
+  install -o root -g root -m 644 "$rendered_file" "$SPOTIFY_SERVICE_FILE"
+  rm -f -- "$rendered_file"
+}
+
 install_wireplumber_config() {
   install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 755 "$WIREPLUMBER_DIR"
   install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 644 \
     "$PROJECT_DIR/deploy/90-lumistripe-bluetooth.conf" "$WIREPLUMBER_FILE"
+  install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 755 "$PIPEWIRE_DIR"
+  install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 644 \
+    "$PROJECT_DIR/deploy/90-lumistripe-spotify.conf" "$SPOTIFY_PIPEWIRE_FILE"
 }
 
 start_bluetooth() {
@@ -408,7 +525,7 @@ start_user_audio() {
   as_user_with_env \
     XDG_RUNTIME_DIR="$USER_RUNTIME_DIR" \
     DBUS_SESSION_BUS_ADDRESS="unix:path=$USER_RUNTIME_DIR/bus" \
-    systemctl --user restart wireplumber
+    systemctl --user restart pipewire pipewire-pulse wireplumber
 }
 
 install_nginx() {
@@ -421,10 +538,29 @@ install_nginx() {
   # Remove only Debian's stock symlink; never remove a user-created site.
   if [[ -L "$NGINX_DEFAULT" && "$(readlink -f "$NGINX_DEFAULT")" == "/etc/nginx/sites-available/default" ]]; then
     rm -f -- "$NGINX_DEFAULT"
+    NGINX_DEFAULT_REMOVED=1
   fi
 
   nginx -t
   systemctl enable --now nginx.service
+}
+
+write_install_state() {
+  local state_file
+  local previous_default_removed=0
+  if [[ -f "$STATE_FILE" ]]; then
+    previous_default_removed="$(awk -F= '$1 == "nginx_default_removed" { print $2; exit }' "$STATE_FILE")"
+    [[ "$previous_default_removed" == 1 ]] && NGINX_DEFAULT_REMOVED=1
+  fi
+
+  install -d -o root -g root -m 755 "$STATE_DIR"
+  state_file="$(mktemp /tmp/lumistripe-install-state.XXXXXX)"
+  {
+    printf 'service_user=%s\n' "$SERVICE_USER"
+    printf 'nginx_default_removed=%s\n' "$NGINX_DEFAULT_REMOVED"
+  } > "$state_file"
+  install -o root -g root -m 600 "$state_file" "$STATE_FILE"
+  rm -f -- "$state_file"
 }
 
 install_system_packages
@@ -436,16 +572,21 @@ enable_spi
 # frontend. This also makes deploy/update.sh work after a root-owned checkout.
 chown -R "$SERVICE_USER:$SERVICE_GROUP" "$PROJECT_DIR"
 install_toolchains
+install_spotify_soloist
 install_project_dependencies
 create_environment_file
+create_spotify_environment_file
 create_tls_certificate
 render_service_unit
+render_spotify_service_unit
 install_wireplumber_config
 start_bluetooth
 start_user_audio
 install_nginx
+write_install_state
 
 systemctl daemon-reload
+systemctl enable --now lumistripe-spotify.service
 systemctl enable --now lumistripe-web.service
 systemctl --no-pager --full status lumistripe-web.service
 

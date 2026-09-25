@@ -8,6 +8,7 @@ import type {
   CalibrationPattern,
   DashboardState,
   PlaybackMode,
+  SpotifyControlAction,
   StripeTopology,
 } from "@/lib/api/contracts"
 
@@ -44,6 +45,9 @@ export type {
   StripeOutputConfig,
   StripePlaybackState,
   StripeTopology,
+  SpotifyControlAction,
+  SpotifyStatusResponse,
+  SpotifyTrackInfo,
 } from "@/lib/api/contracts"
 
 export const ACCESS_REVOKED_EVENT = "lumistripe:access-revoked"
@@ -257,6 +261,44 @@ const audioDeviceSchema = z.object({
   name: z.string(),
   settings: audioTuningSchema,
 }).strict()
+const spotifyTrackSchema = z.object({
+  uri: z.string(),
+  name: z.string(),
+  artists: z.array(z.string()),
+  album: z.string().nullable().optional(),
+  cover_url: z.string().nullable().optional(),
+  duration_ms: z.number().int().nullable().optional(),
+}).strict()
+const spotifyStatusSchema = z.object({
+  configured: z.boolean(),
+  connected: z.boolean(),
+  logged_in: z.boolean(),
+  is_active: z.boolean(),
+  device_name: z.string().nullable().optional(),
+  status: z.enum(["idle", "playing", "paused", "buffering"]),
+  track: spotifyTrackSchema.nullable().optional(),
+  position_ms: z.number().int(),
+  duration_ms: z.number().int().nullable().optional(),
+  volume: z.number().int().min(0).max(100),
+  shuffle: z.boolean(),
+  repeat: z.enum(["off", "context", "track"]),
+  error: z.string().nullable().optional(),
+}).strict()
+const defaultSpotifyStatus = {
+  configured: false,
+  connected: false,
+  logged_in: false,
+  is_active: false,
+  device_name: null,
+  status: "idle" as const,
+  track: null,
+  position_ms: 0,
+  duration_ms: null,
+  volume: 0,
+  shuffle: false,
+  repeat: "off" as const,
+  error: null,
+}
 const audioSettingsSchema = z.object({
   source: z.string(),
   active_source: z.string(),
@@ -274,6 +316,9 @@ const audioSettingsSchema = z.object({
   hardware_gain_value: z.number().nullable().optional(),
   hardware_gain_error: z.string().nullable().optional(),
   bluetooth: bluetoothStatusSchema.optional(),
+  // Older dashboard snapshots predate Spotify; keep the compatibility
+  // default explicit while new responses always include the field.
+  spotify: spotifyStatusSchema.optional().default(defaultSpotifyStatus),
   error: z.string().nullable().optional(),
 }).strict()
 const audioCalibrationResultSchema = z.object({
@@ -451,11 +496,17 @@ export const dashboardApi = {
       body: JSON.stringify({ save }),
     }, dashboardStateSchema),
   getAudioSettings: () => request("/api/audio/settings", undefined, audioSettingsSchema),
-  setAudioSource: (source: "auto" | "off" | "demo" | "mic" | "bluetooth") =>
+  setAudioSource: (source: "auto" | "off" | "demo" | "mic" | "bluetooth" | "spotify") =>
     request("/api/audio/source", {
       method: "PUT",
       body: JSON.stringify({ source }),
     }, audioSettingsSchema),
+  getSpotifyStatus: () => request("/api/audio/spotify", undefined, spotifyStatusSchema),
+  controlSpotify: (action: SpotifyControlAction, value?: number | boolean | string) =>
+    request("/api/audio/spotify/control", {
+      method: "POST",
+      body: JSON.stringify({ action, ...(value === undefined ? {} : { value }) }),
+    }, spotifyStatusSchema),
   getBluetoothStatus: () => request("/api/audio/bluetooth", undefined, parseBluetoothStatus),
   setBluetoothPower: (powered: boolean) => request("/api/audio/bluetooth/power", { method: "PUT", body: JSON.stringify({ powered }) }, parseBluetoothStatus),
   setBluetoothAlias: (alias: string) => request("/api/audio/bluetooth/alias", { method: "PUT", body: JSON.stringify({ alias }) }, parseBluetoothStatus),

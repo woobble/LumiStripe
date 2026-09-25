@@ -52,3 +52,8 @@ def test_parse_audio_source_rejects_bluetooth_for_local_apps() -> None:
     assert parse_audio_source("demo") is AudioSource.DEMO
     with pytest.raises(ValueError, match="Bluetooth"):
         parse_audio_source("bluetooth")
+
+
+def test_parse_audio_source_rejects_spotify_for_local_apps() -> None:
+    with pytest.raises(ValueError, match="Spotify"):
+        parse_audio_source("spotify")

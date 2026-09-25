@@ -90,6 +90,12 @@ class _AudioSourceCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class _SpotifyCommand:
+    action: str
+    value: object | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class _AudioCalibrationStartCommand:
     device: str
     duration_seconds: float
@@ -119,6 +125,7 @@ __all__ = [
     "_CalibrationUpdateCommand",
     "_Command",
     "_ModeCommand",
+    "_SpotifyCommand",
     "_StartupSettingsCommand",
     "_StripeTestCommand",
     "_StripeTopologyCommand",

@@ -242,11 +242,27 @@ def test_audio_source_and_bluetooth_api(
         assert initial.status_code == 200
         assert initial.json()["source"] == "off"
         assert initial.json()["active_source"] == "off"
+        spotify = client.get("/api/audio/spotify")
+        assert spotify.status_code == 200
+        assert spotify.json()["configured"] is False
+        assert spotify.json()["status"] == "idle"
 
         demo = client.put("/api/audio/source", json={"source": "demo"})
         assert demo.status_code == 200
         assert demo.json()["source"] == "demo"
         assert demo.json()["active_source"] == "demo"
+
+        spotify_source = client.put("/api/audio/source", json={"source": "spotify"})
+        assert spotify_source.status_code == 200
+        assert spotify_source.json()["source"] == "spotify"
+        assert spotify_source.json()["active_source"] == "spotify"
+        assert (
+            client.post(
+                "/api/audio/spotify/control",
+                json={"action": "play"},
+            ).status_code
+            == 409
+        )
 
         dynamic = client.put("/api/mode", json={"mode": "dynamic"})
         assert dynamic.status_code == 200

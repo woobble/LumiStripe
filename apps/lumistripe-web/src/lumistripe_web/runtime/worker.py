@@ -60,6 +60,7 @@ from ..bluetooth import (
     BluetoothManager,
     BluetoothStatus,
     capture_device_selector,
+    spotify_capture_device_selector,
 )
 from ..models import (
     AnimationOption,
@@ -80,6 +81,8 @@ from ..models import (
     DiagnosticIssue,
     PowerBudgetState,
     PowerOutputState,
+    SpotifyStatusResponse,
+    SpotifyTrackInfo,
     StartupPlaybackState,
     StartupSettingsResponse,
     StripeOutputConfig,
@@ -92,6 +95,11 @@ from ..settings import (
     CalibrationSettingsStore,
     StartupPlaybackSettings,
     StripeTopologySettings,
+)
+from ..spotify import (
+    SpotifyBackend,
+    SpotifyClient,
+    SpotifyCommandError,
 )
 from .audio import default_audio_factory
 from .audio_service import complete_audio_calibration
@@ -107,6 +115,7 @@ from .commands import (
     _CalibrationUpdateCommand,
     _Command,
     _ModeCommand,
+    _SpotifyCommand,
     _StartupSettingsCommand,
     _StripeTestCommand,
     _StripeTopologyCommand,
@@ -162,6 +171,7 @@ FRAME_TIMING_WINDOW_SECONDS = 10.0
 FRAME_TIMING_MIN_MISSES = 5
 FRAME_TIMING_MISS_RATE_THRESHOLD = 0.10
 BLUETOOTH_PROFILE_KEY = "Bluetooth music"
+SPOTIFY_PROFILE_KEY = "Spotify music"
 
 try:
     APPLICATION_VERSION = metadata.version("lumistripe-web")
@@ -239,6 +249,7 @@ class RuntimeWorker:
         controller_factory: _ControllerFactory = _default_controller_factory,
         audio_factory: _AudioFactory = _default_audio_factory,
         bluetooth_manager: BluetoothAudioBackend | None = None,
+        spotify_manager: SpotifyBackend | None = None,
         fatal_exit: Callable[[int], None] | None = None,
     ) -> None:
         self.settings = settings or RuntimeSettings()
@@ -248,6 +259,7 @@ class RuntimeWorker:
         )
         self._audio_factory = audio_factory
         self._bluetooth = bluetooth_manager or BluetoothManager(enabled=self.settings.hardware)
+        self._spotify = spotify_manager or SpotifyClient(enabled=self.settings.hardware)
         self._settings_store = CalibrationSettingsStore(self.settings.settings_file)
         loaded_settings, self._settings_warning = self._settings_store.load_all()
         self._saved_corrections = loaded_settings.color_corrections
@@ -459,6 +471,17 @@ class RuntimeWorker:
                         ),
                     )
                 )
+                options_list.append(
+                    AudioDeviceOption(
+                        selector="spotify",
+                        name=SPOTIFY_PROFILE_KEY,
+                        settings=_profile_values(
+                            self._audio_profiles.get(
+                                SPOTIFY_PROFILE_KEY, AudioTuningProfile()
+                            )
+                        ),
+                    )
+                )
             options = tuple(options_list)
             enumeration_error = None
         except RuntimeError as exc:
@@ -470,12 +493,16 @@ class RuntimeWorker:
         selected_name = (
             BLUETOOTH_PROFILE_KEY
             if self._monitor_audio_source is AudioSource.BLUETOOTH
+            else SPOTIFY_PROFILE_KEY
+            if self._monitor_audio_source is AudioSource.SPOTIFY
             else (active_name or self._selected_audio_device)
         )
         active_selector = next(
             (option.selector for option in options if option.name == selected_name),
             "bluetooth"
             if self._monitor_audio_source is AudioSource.BLUETOOTH
+            else "spotify"
+            if self._monitor_audio_source is AudioSource.SPOTIFY
             else selected_name,
         )
         fallback_selector = next(
@@ -498,6 +525,8 @@ class RuntimeWorker:
                 self._audio_profiles.get(
                     BLUETOOTH_PROFILE_KEY
                     if self._monitor_audio_source is AudioSource.BLUETOOTH
+                    else SPOTIFY_PROFILE_KEY
+                    if self._monitor_audio_source is AudioSource.SPOTIFY
                     else (active_name or self._selected_audio_device or ""),
                     self._audio_profile,
                 )
@@ -505,11 +534,42 @@ class RuntimeWorker:
             configured_noise_floor=self._audio_profile.audio_config().smoothing.noise_floor,
             **_hardware_gain_values(self._hardware_gain),
             bluetooth=self._bluetooth_status_response(),
+            spotify=self._spotify_status_response(),
             error=self._audio_monitor_error or enumeration_error,
         )
 
     def bluetooth_status(self) -> BluetoothStatusResponse:
         return self._bluetooth_status_response()
+
+    def _spotify_status_response(self) -> SpotifyStatusResponse:
+        current = self._spotify.status()
+        track = current.track
+        return SpotifyStatusResponse(
+            configured=current.configured,
+            connected=current.connected,
+            logged_in=current.logged_in,
+            is_active=current.is_active,
+            device_name=current.device_name,
+            status=current.status,
+            track=(
+                SpotifyTrackInfo(
+                    uri=track.uri,
+                    name=track.name,
+                    artists=track.artists,
+                    album=track.album,
+                    cover_url=track.cover_url,
+                    duration_ms=track.duration_ms,
+                )
+                if track is not None
+                else None
+            ),
+            position_ms=current.position_ms,
+            duration_ms=current.duration_ms,
+            volume=current.volume,
+            shuffle=current.shuffle,
+            repeat=current.repeat,
+            error=current.error,
+        )
 
     def _bluetooth_status_response(
         self, status: BluetoothStatus | None = None
@@ -661,6 +721,17 @@ class RuntimeWorker:
         return cast(
             Future[AudioSettingsResponse],
             self._submit("audio_source", _AudioSourceCommand(source)),
+        )
+
+    def spotify_status(self) -> SpotifyStatusResponse:
+        return self._spotify_status_response()
+
+    def control_spotify(
+        self, action: str, value: object | None = None
+    ) -> Future[SpotifyStatusResponse]:
+        return cast(
+            Future[SpotifyStatusResponse],
+            self._submit("spotify", _SpotifyCommand(action, value)),
         )
 
     def set_startup_restore(
@@ -864,6 +935,7 @@ class RuntimeWorker:
             self._started_at_s = time.monotonic()
             self._fps_window_started_s = self._started_at_s
             self._bluetooth.start()
+            self._spotify.start()
             self._initialize_audio_monitor()
             self._apply_remembered_startup()
             self._publish(running=True)
@@ -1170,6 +1242,14 @@ class RuntimeWorker:
                 self._set_audio_source(audio_source.source)
                 self._publish(running=True)
                 result = self.audio_settings()
+            elif command.name == "spotify":
+                spotify = _expect(command.value, _SpotifyCommand)
+                try:
+                    self._spotify.control(spotify.action, spotify.value)
+                except SpotifyCommandError as exc:
+                    raise RuntimeCommandError(str(exc)) from exc
+                self._publish(running=True)
+                result = self._spotify_status_response()
             elif command.name == "audio_calibration_start":
                 calibration = _expect(command.value, _AudioCalibrationStartCommand)
                 result = self._start_audio_calibration(calibration.device, calibration.duration_seconds)
@@ -1256,6 +1336,8 @@ class RuntimeWorker:
                     (
                         f"Bluetooth: {self._active_audio_device_name}"
                         if self._monitor_audio_source is AudioSource.BLUETOOTH
+                        else "Spotify: waiting for playback"
+                        if self._monitor_audio_source is AudioSource.SPOTIFY
                         else f"Input: {self._audio_input.device_name()}"
                     )
                     if self._audio_input is not None
@@ -1454,6 +1536,25 @@ class RuntimeWorker:
             self._audio_monitor_error = None
             return
 
+        if self._configured_audio_source is AudioSource.SPOTIFY:
+            if (
+                self._audio_input is not None
+                and self._monitor_audio_source is AudioSource.SPOTIFY
+                and self._spotify.status().connected
+                and self._spotify.status().logged_in
+            ):
+                return
+            if self._audio_input is not None:
+                self._close_audio_input()
+            try:
+                self._open_spotify_monitor()
+            except (BluetoothCommandError, RuntimeError) as exc:
+                self._monitor_audio_source = AudioSource.SPOTIFY
+                self._active_audio_device_name = None
+                self._audio_monitor_error = str(exc)
+                self._audio_status = f"Spotify audio unavailable: {exc}"
+            return
+
         bluetooth = self._bluetooth.status()
         bluetooth_ready = bluetooth.streaming and bluetooth.input_source is not None
         wants_bluetooth = self._configured_audio_source is AudioSource.BLUETOOTH
@@ -1559,6 +1660,30 @@ class RuntimeWorker:
         self._audio_status = f"Bluetooth: {device.name}"
         self._audio_monitor_error = None
 
+    def _open_spotify_monitor(self) -> None:
+        status = self._spotify.status()
+        if not status.connected:
+            raise RuntimeError("Spotify Soloist is not connected")
+        if not status.logged_in:
+            raise RuntimeError("Spotify is not paired; select LumiStripe in Spotify first")
+        ensure_route = getattr(self._bluetooth, "ensure_spotify_route", None)
+        if not callable(ensure_route):
+            raise BluetoothCommandError("the PipeWire Spotify route is unavailable")
+        ensure_route()
+        devices = list_input_device_details()
+        selector = spotify_capture_device_selector(devices)
+        profile = self._audio_profiles.get(SPOTIFY_PROFILE_KEY, AudioTuningProfile())
+        audio_input = self._audio_factory(selector, profile.audio_config())
+        self._audio_input = audio_input
+        self._audio_profile = profile
+        self._monitor_audio_source = AudioSource.SPOTIFY
+        self._active_audio_device_name = audio_input.device_name()
+        self._active_bluetooth_address = None
+        self._hardware_gain = None
+        self._apply_audio_profile(profile)
+        self._audio_status = "Spotify: waiting for playback"
+        self._audio_monitor_error = None
+
     def _apply_audio_profile(self, profile: AudioTuningProfile) -> None:
         self.playback.set_activity_config(profile.activity_config())
         self.playback.set_dynamic_response(profile.dynamic_response)
@@ -1572,9 +1697,11 @@ class RuntimeWorker:
         candidate: AudioInput | None = None
         current = self._audio_input
         target_is_bluetooth = device_name == BLUETOOTH_PROFILE_KEY
+        target_is_spotify = device_name == SPOTIFY_PROFILE_KEY
         current_name = current.device_name() if current is not None else None
         target_is_active_mic = (
             not target_is_bluetooth
+            and not target_is_spotify
             and self._monitor_audio_source is AudioSource.MIC
             and current_name == device_name
         )
@@ -1583,8 +1710,14 @@ class RuntimeWorker:
             and self._monitor_audio_source is AudioSource.BLUETOOTH
             and current is not None
         )
+        active_spotify = (
+            target_is_spotify
+            and self._monitor_audio_source is AudioSource.SPOTIFY
+            and current is not None
+        )
         should_open_mic = (
             not target_is_bluetooth
+            and not target_is_spotify
             and not target_is_active_mic
             and (
                 self._configured_audio_source is AudioSource.MIC
@@ -1604,7 +1737,7 @@ class RuntimeWorker:
             next_profiles[device_name] = profile
             selected_device = (
                 device_name
-                if not target_is_bluetooth
+                if not target_is_bluetooth and not target_is_spotify
                 else self._selected_audio_device or ""
             )
             with self._settings_io_lock:
@@ -1612,21 +1745,24 @@ class RuntimeWorker:
 
             if candidate is not None:
                 self._audio_input = candidate
-            elif active_bluetooth or target_is_active_mic:
+            elif active_bluetooth or active_spotify or target_is_active_mic:
                 assert current is not None
                 current.reconfigure(profile.audio_config())
 
             self._audio_profiles = next_profiles
-            if not target_is_bluetooth:
+            if not target_is_bluetooth and not target_is_spotify:
                 self._selected_audio_device = device_name
             applies_to_active_input = (
-                candidate is not None or active_bluetooth or target_is_active_mic
+                candidate is not None
+                or active_bluetooth
+                or active_spotify
+                or target_is_active_mic
             )
             if applies_to_active_input or (target_is_bluetooth and current is None):
                 self._audio_profile = profile
                 self._hardware_gain = (
                     None
-                    if target_is_bluetooth
+                    if target_is_bluetooth or target_is_spotify
                     else HardwareGainController(device_name)
                 )
                 if (
@@ -1642,12 +1778,14 @@ class RuntimeWorker:
                     (
                         f"Bluetooth: {self._active_audio_device_name}"
                         if self._monitor_audio_source is AudioSource.BLUETOOTH
+                        else "Spotify: waiting for playback"
+                        if self._monitor_audio_source is AudioSource.SPOTIFY
                         else f"Input: {device_name}"
                     )
                     if self._audio_input is not None
                     else (
                         self._audio_status
-                        if target_is_bluetooth
+                        if target_is_bluetooth or target_is_spotify
                         else "Microphone monitoring is disabled by the audio source."
                     )
                 )
@@ -1677,6 +1815,11 @@ class RuntimeWorker:
             if self._monitor_audio_source is not AudioSource.BLUETOOTH:
                 raise RuntimeCommandError(
                     "connect and select the active Bluetooth stream before calibrating"
+                )
+        elif device_name == SPOTIFY_PROFILE_KEY:
+            if self._monitor_audio_source is not AudioSource.SPOTIFY:
+                raise RuntimeCommandError(
+                    "pair Spotify and select the active Spotify stream before calibrating"
                 )
         elif self._audio_input.device_name() != device_name:
             raise RuntimeCommandError("select the active microphone before calibrating")
@@ -1716,12 +1859,15 @@ class RuntimeWorker:
         if device == "bluetooth":
             self._set_audio_source("bluetooth")
             return
+        if device == "spotify":
+            self._set_audio_source("spotify")
+            return
         device_name = self._device_name_for_selector(device)
         profile = self._audio_profiles.get(device_name, AudioTuningProfile())
         self._apply_audio_settings(device, profile)
 
     def _set_audio_source(self, source: str) -> None:
-        if source not in {"auto", "off", "demo", "mic", "bluetooth"}:
+        if source not in {"auto", "off", "demo", "mic", "bluetooth", "spotify"}:
             raise RuntimeCommandError(f"invalid audio source: {source}")
         if self.playback.mode is PlaybackMode.DYNAMIC and source == "off":
             raise RuntimeCommandError("dynamic mode requires demo or microphone audio")
@@ -1851,6 +1997,8 @@ class RuntimeWorker:
     def _device_name_for_selector(self, selector: str) -> str:
         if selector == "bluetooth":
             return BLUETOOTH_PROFILE_KEY
+        if selector == "spotify":
+            return SPOTIFY_PROFILE_KEY
         try:
             devices = list_input_device_details()
         except RuntimeError as exc:
@@ -1886,6 +2034,8 @@ class RuntimeWorker:
             self._audio_status = (
                 f"Bluetooth: {self._active_audio_device_name}"
                 if self._monitor_audio_source is AudioSource.BLUETOOTH
+                else "Spotify: waiting for playback"
+                if self._monitor_audio_source is AudioSource.SPOTIFY
                 else f"Input: {self._audio_input.device_name()}"
             )
         elif next_source is AudioSource.DEMO:
@@ -2769,6 +2919,7 @@ class RuntimeWorker:
         except Exception as exc:  # noqa: BLE001 - cleanup continues after individual failures
             self._fatal_error = self._fatal_error or str(exc)
         self._bluetooth.stop()
+        self._spotify.stop()
         controller = self._raw_controller
         if controller is None:
             return

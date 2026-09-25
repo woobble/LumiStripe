@@ -50,7 +50,14 @@ class RuntimeSettings:
             raise ValueError("secondary SPI speed must be greater than zero")
         if self.spi_speed_hz_2 is not None and self.spi_device_2 is None:
             raise ValueError("secondary SPI speed requires a secondary SPI device")
-        if self.audio_source not in {"auto", "off", "demo", "mic", "bluetooth"}:
+        if self.audio_source not in {
+            "auto",
+            "off",
+            "demo",
+            "mic",
+            "bluetooth",
+            "spotify",
+        }:
             raise ValueError(f"invalid audio source: {self.audio_source}")
 
     @property

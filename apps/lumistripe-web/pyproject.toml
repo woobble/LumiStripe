@@ -12,6 +12,7 @@ dependencies = [
     "lumistripe-core[audio,gpio,spi]",
     "lumistripe-app-support",
     "uvicorn[standard]>=0.52.4",
+    "websockets>=15.0",
 ]
 
 [project.scripts]

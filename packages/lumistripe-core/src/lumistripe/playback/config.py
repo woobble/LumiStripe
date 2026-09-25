@@ -23,6 +23,7 @@ class AudioSource(str, Enum):
     MIC = "mic"
     DEMO = "demo"
     BLUETOOTH = "bluetooth"
+    SPOTIFY = "spotify"
 
 
 class CycleOrder(str, Enum):

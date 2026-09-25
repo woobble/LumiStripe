@@ -32,6 +32,7 @@ def test_package_exports_are_importable() -> None:
     assert PlaybackMode.STATIC.value == "static"
     assert AudioSource.DEMO.value == "demo"
     assert AudioSource.BLUETOOTH.value == "bluetooth"
+    assert AudioSource.SPOTIFY.value == "spotify"
     assert CyclingConfig().interval_s == 30.0
     assert DynamicSelector is not None
 

@@ -13,6 +13,8 @@ from ...contracts.audio import (
     AudioSettingsRequest,
     AudioSettingsResponse,
     AudioSourceRequest,
+    SpotifyControlRequest,
+    SpotifyStatusResponse,
 )
 from ...runtime import RuntimeCommandError
 from ...settings import AudioTuningProfile
@@ -31,6 +33,20 @@ async def select_audio_source(
     request: Request, body: AudioSourceRequest
 ) -> AudioSettingsResponse:
     return await await_command(runtime_from_request(request).set_audio_source(body.source))
+
+
+@router.get("/api/audio/spotify", response_model=SpotifyStatusResponse)
+async def spotify_status(request: Request) -> SpotifyStatusResponse:
+    return runtime_from_request(request).spotify_status()
+
+
+@router.post("/api/audio/spotify/control", response_model=SpotifyStatusResponse)
+async def control_spotify(
+    request: Request, body: SpotifyControlRequest
+) -> SpotifyStatusResponse:
+    return await await_command(
+        runtime_from_request(request).control_spotify(body.action, body.value)
+    )
 
 
 @router.put("/api/audio/device", response_model=AudioSettingsResponse)

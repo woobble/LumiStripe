@@ -8,6 +8,9 @@ PYTHON_VERSION="${LUMI_PYTHON_VERSION:-3.12}"
 TARGET_REF="${1:-origin/main}"
 LOCK_FILE=/run/lock/lumistripe-update.lock
 SERVICE_FILE=/etc/systemd/system/lumistripe-web.service
+SPOTIFY_SERVICE_FILE=/etc/systemd/system/lumistripe-spotify.service
+SPOTIFY_ENV_FILE=/etc/lumistripe/lumistripe-spotify.env
+SOLOIST_BIN=/usr/local/bin/soloist
 PREVIOUS_REF=
 ROLLING_BACK=0
 
@@ -37,6 +40,8 @@ UV_BIN="$PROJECT_HOME/.local/bin/uv"
 BUN_BIN="$PROJECT_HOME/.bun/bin/bun"
 WIREPLUMBER_DIR="$PROJECT_HOME/.config/wireplumber/wireplumber.conf.d"
 WIREPLUMBER_FILE="$WIREPLUMBER_DIR/90-lumistripe-bluetooth.conf"
+PIPEWIRE_DIR="$PROJECT_HOME/.config/pipewire/pipewire.conf.d"
+SPOTIFY_PIPEWIRE_FILE="$PIPEWIRE_DIR/90-lumistripe-spotify.conf"
 SERVICE_RUNTIME_DIR="/run/user/$(id -u "$PROJECT_USER")"
 NGINX_AVAILABLE=/etc/nginx/sites-available/led-controller
 [[ -d "$PROJECT_DIR/.git" ]] || { echo "Not a Git checkout: $PROJECT_DIR" >&2; exit 1; }
@@ -79,6 +84,76 @@ install_audio_bridge_packages() {
   apt-get install --yes --no-install-recommends "${missing[@]}"
 }
 
+install_spotify_soloist() {
+  local architecture
+  local archive_arch
+  local archive_url
+  local archive_file
+  local extract_dir
+  architecture="$(uname -m)"
+  case "$architecture" in
+    aarch64) archive_arch=arm64 ;;
+    armv7l) archive_arch=arm32 ;;
+    x86_64) archive_arch=x86_64 ;;
+    *)
+      echo "Spotify Soloist has no configured build for $architecture." >&2
+      return 1
+      ;;
+  esac
+  archive_url="https://soloist-builds.spotifycdn.com/soloist_release_${archive_arch}.tar.gz"
+  archive_file="$(mktemp /tmp/lumistripe-soloist-update.XXXXXX.tar.gz)"
+  extract_dir="$(mktemp -d /tmp/lumistripe-soloist-update.XXXXXX)"
+  curl --fail --silent --show-error --location --retry 3 --retry-delay 2 \
+    "$archive_url" -o "$archive_file"
+  tar -xzf "$archive_file" -C "$extract_dir"
+  [[ -x "$extract_dir/soloist" ]] || {
+    echo "Spotify Soloist archive did not contain an executable soloist file." >&2
+    rm -f -- "$archive_file"
+    rm -rf -- "$extract_dir"
+    return 1
+  }
+  install -o root -g root -m 755 "$extract_dir/soloist" "$SOLOIST_BIN"
+  rm -f -- "$archive_file"
+  rm -rf -- "$extract_dir"
+}
+
+create_spotify_environment_file() {
+  install -d -m 755 /etc/lumistripe
+  if [[ ! -e "$SPOTIFY_ENV_FILE" ]]; then
+    local api_key="${LUMI_SPOTIFY_API_KEY:-}"
+    if [[ -z "$api_key" ]]; then
+      echo "Spotify secret is not configured; leaving Spotify service disabled." >&2
+      return 0
+    fi
+    [[ "$api_key" != *$'\n'* && "$api_key" != *$'\r'* ]] || {
+      echo "LUMI_SPOTIFY_API_KEY must be a single-line value." >&2
+      return 1
+    }
+    local api_key_replacement
+    local data_dir_replacement
+    local cache_dir_replacement
+    api_key_replacement="$(printf '%s' "$api_key" | sed 's/[&|\\]/\\&/g')"
+    data_dir_replacement="$(printf '%s' "$PROJECT_HOME/.local/share/soloist" | sed 's/[&|\\]/\\&/g')"
+    cache_dir_replacement="$(printf '%s' "$PROJECT_HOME/.cache/soloist" | sed 's/[&|\\]/\\&/g')"
+    install -o "$PROJECT_USER" -g "$PROJECT_GROUP" -m 600 \
+      "$PROJECT_DIR/deploy/lumistripe-spotify.env.example" "$SPOTIFY_ENV_FILE"
+    sed -i \
+      -e "s|^LUMI_SPOTIFY_API_KEY=.*|LUMI_SPOTIFY_API_KEY=$api_key_replacement|" \
+      -e "s|^LUMI_SPOTIFY_DATA_DIR=.*|LUMI_SPOTIFY_DATA_DIR=$data_dir_replacement|" \
+      -e "s|^LUMI_SPOTIFY_CACHE_DIR=.*|LUMI_SPOTIFY_CACHE_DIR=$cache_dir_replacement|" \
+      "$SPOTIFY_ENV_FILE"
+  fi
+  chown "$PROJECT_USER:$PROJECT_GROUP" "$SPOTIFY_ENV_FILE"
+  chmod 600 "$SPOTIFY_ENV_FILE"
+}
+
+spotify_environment_ready() {
+  [[ -f "$SPOTIFY_ENV_FILE" ]] || return 1
+  local api_key
+  api_key="$(awk -F= '$1 == "LUMI_SPOTIFY_API_KEY" { print substr($0, index($0, "=") + 1); exit }' "$SPOTIFY_ENV_FILE")"
+  [[ -n "$api_key" && "$api_key" != REPLACE_WITH_* ]]
+}
+
 git_user() { as_user git -C "$PROJECT_DIR" "$@"; }
 
 sync_dependencies() {
@@ -101,6 +176,9 @@ install_wireplumber_config() {
   install -d -o "$PROJECT_USER" -g "$PROJECT_GROUP" -m 755 "$WIREPLUMBER_DIR"
   install -o "$PROJECT_USER" -g "$PROJECT_GROUP" -m 644 \
     "$PROJECT_DIR/deploy/90-lumistripe-bluetooth.conf" "$WIREPLUMBER_FILE"
+  install -d -o "$PROJECT_USER" -g "$PROJECT_GROUP" -m 755 "$PIPEWIRE_DIR"
+  install -o "$PROJECT_USER" -g "$PROJECT_GROUP" -m 644 \
+    "$PROJECT_DIR/deploy/90-lumistripe-spotify.conf" "$SPOTIFY_PIPEWIRE_FILE"
 }
 
 render_service_unit() {
@@ -133,9 +211,40 @@ render_service_unit() {
   rm -f -- "$rendered_file"
 }
 
+render_spotify_service_unit() {
+  local rendered_file
+  local project_replacement
+  local home_replacement
+  local user_replacement
+  local group_replacement
+  local uid_replacement
+  rendered_file="$(mktemp /tmp/lumistripe-spotify-service-update.XXXXXX)"
+  project_replacement="$(printf '%s' "$PROJECT_DIR" | sed 's/[&|\\]/\\&/g')"
+  home_replacement="$(printf '%s' "$PROJECT_HOME" | sed 's/[&|\\]/\\&/g')"
+  user_replacement="$(printf '%s' "$PROJECT_USER" | sed 's/[&|\\]/\\&/g')"
+  group_replacement="$(printf '%s' "$PROJECT_GROUP" | sed 's/[&|\\]/\\&/g')"
+  uid_replacement="$(printf '%s' "$(id -u "$PROJECT_USER")" | sed 's/[&|\\]/\\&/g')"
+
+  sed \
+    -e "s|@LUMI_SERVICE_USER@|$user_replacement|g" \
+    -e "s|@LUMI_SERVICE_GROUP@|$group_replacement|g" \
+    -e "s|@LUMI_PROJECT_DIR@|$project_replacement|g" \
+    -e "s|@LUMI_HOME@|$home_replacement|g" \
+    -e "s|@LUMI_SERVICE_UID@|$uid_replacement|g" \
+    "$PROJECT_DIR/deploy/lumistripe-spotify.service" > "$rendered_file"
+  if grep -q '@LUMI_[A-Z_]*@' "$rendered_file"; then
+    rm -f -- "$rendered_file"
+    echo "The Spotify systemd service template contains unresolved placeholders." >&2
+    return 1
+  fi
+  install -o root -g root -m 644 "$rendered_file" "$SPOTIFY_SERVICE_FILE"
+  rm -f -- "$rendered_file"
+}
+
 refresh_deployment_files() {
   install_wireplumber_config
   render_service_unit
+  render_spotify_service_unit
   systemctl daemon-reload
 
   install -d -m 755 /etc/nginx/sites-available /etc/nginx/sites-enabled
@@ -149,7 +258,7 @@ refresh_deployment_files() {
     as_user_with_env \
       XDG_RUNTIME_DIR="$SERVICE_RUNTIME_DIR" \
       DBUS_SESSION_BUS_ADDRESS="unix:path=$SERVICE_RUNTIME_DIR/bus" \
-      systemctl --user restart wireplumber
+      systemctl --user restart pipewire pipewire-pulse wireplumber
   fi
 }
 
@@ -162,6 +271,7 @@ rollback() {
   build_frontend || true
   refresh_deployment_files || true
   systemctl restart lumistripe-web.service || true
+  systemctl restart lumistripe-spotify.service || true
 }
 trap rollback ERR
 
@@ -173,9 +283,14 @@ TARGET_COMMIT=$(git_user rev-parse --verify "${TARGET_REF}^{commit}")
 git_user switch --detach "$TARGET_COMMIT"
 
 install_audio_bridge_packages
+install_spotify_soloist
+create_spotify_environment_file
 sync_dependencies
 build_frontend
 refresh_deployment_files
+if spotify_environment_ready; then
+  systemctl enable --now lumistripe-spotify.service
+fi
 systemctl restart lumistripe-web.service
 systemctl is-active --quiet lumistripe-web.service
 

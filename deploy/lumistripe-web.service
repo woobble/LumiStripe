@@ -2,8 +2,8 @@
 # with the selected non-root service account and checkout paths.
 [Unit]
 Description=LumiStripe web dashboard and LED controller
-Wants=network-online.target bluetooth.service
-After=network-online.target bluetooth.service
+Wants=network-online.target bluetooth.service lumistripe-spotify.service
+After=network-online.target bluetooth.service lumistripe-spotify.service
 StartLimitIntervalSec=60
 StartLimitBurst=5
 

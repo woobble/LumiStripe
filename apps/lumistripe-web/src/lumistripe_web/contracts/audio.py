@@ -13,6 +13,9 @@ from ..models import (
     AudioSourceRequest,
     AudioTelemetry,
     AudioTuningValues,
+    SpotifyControlRequest,
+    SpotifyStatusResponse,
+    SpotifyTrackInfo,
 )
 
 __all__ = [
@@ -28,4 +31,7 @@ __all__ = [
     "AudioSourceRequest",
     "AudioTelemetry",
     "AudioTuningValues",
+    "SpotifyControlRequest",
+    "SpotifyStatusResponse",
+    "SpotifyTrackInfo",
 ]

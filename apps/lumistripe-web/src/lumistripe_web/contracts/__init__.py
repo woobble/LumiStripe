@@ -17,6 +17,9 @@ from .audio import (
     AudioSourceRequest,
     AudioTelemetry,
     AudioTuningValues,
+    SpotifyControlRequest,
+    SpotifyStatusResponse,
+    SpotifyTrackInfo,
 )
 from .bluetooth import (
     AudioOutputDeviceInfo,
@@ -99,6 +102,9 @@ __all__ = [
     "ModeRequest",
     "PairingRequest",
     "RuntimeKind",
+    "SpotifyControlRequest",
+    "SpotifyStatusResponse",
+    "SpotifyTrackInfo",
     "StartupPlaybackState",
     "StartupSettingsRequest",
     "StartupSettingsResponse",

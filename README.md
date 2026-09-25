@@ -47,8 +47,16 @@ After installing a new revision, update the checkout and run:
 sudo ./deploy/update.sh origin/main
 ```
 
+To remove the installed LumiStripe appliance while preserving shared system
+packages, the project checkout, and the service account, run:
+
+```bash
+sudo ./deploy/uninstall.sh
+```
+
 See [`deploy/README.md`](deploy/README.md) for hardware wiring, output-sink
-selection, certificate trust, troubleshooting, and manual recovery commands.
+selection, installation, uninstallation, certificate trust, troubleshooting,
+and manual recovery commands.
 
 ## Quick Start
 

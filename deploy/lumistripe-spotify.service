@@ -1,0 +1,27 @@
+# This unit is a template. deploy/install.sh replaces the @LUMI_*@ values
+# with the selected non-root service account and paths.
+[Unit]
+Description=Spotify Soloist for LumiStripe
+ConditionPathExists=/etc/lumistripe/lumistripe-spotify.env
+Wants=network-online.target user@@LUMI_SERVICE_UID@.service
+After=network-online.target user@@LUMI_SERVICE_UID@.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=@LUMI_SERVICE_USER@
+Group=@LUMI_SERVICE_GROUP@
+SupplementaryGroups=audio
+WorkingDirectory=@LUMI_HOME@
+Environment=PATH=@LUMI_HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=XDG_RUNTIME_DIR=/run/user/@LUMI_SERVICE_UID@
+EnvironmentFile=/etc/lumistripe/lumistripe-spotify.env
+ExecStart=/bin/bash -c 'exec /usr/local/bin/soloist --device-name "$LUMI_SPOTIFY_DEVICE_NAME" --api-key "$LUMI_SPOTIFY_API_KEY" --ws "$LUMI_SPOTIFY_WS" --pipewire-device "$LUMI_SPOTIFY_PIPEWIRE_DEVICE" --data-dir "$LUMI_SPOTIFY_DATA_DIR" --cache-dir "$LUMI_SPOTIFY_CACHE_DIR"'
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target

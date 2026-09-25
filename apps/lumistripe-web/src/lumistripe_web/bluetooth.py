@@ -31,6 +31,8 @@ from .bluetooth_providers import BlueZProvider, PipeWireProvider
 logger = logging.getLogger(__name__)
 
 BLUETOOTH_ADDRESS = re.compile(r"^[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}$")
+SPOTIFY_SINK = "lumistripe_spotify"
+SPOTIFY_MONITOR = f"{SPOTIFY_SINK}.monitor"
 _DEVICE_LINE = re.compile(r"^Device\s+([0-9A-Fa-f:]{17})\s*(.*)$")
 _AGENT_REGISTERED = re.compile(r"\bagent registered\b", re.IGNORECASE)
 _AGENT_FAILURE = re.compile(
@@ -171,7 +173,64 @@ class BluetoothManager:
         normalized = _validate_selector(sink)
         self._pipewire.set_default_sink(normalized)
         self._move_sink_inputs(normalized)
+        self._ensure_spotify_route(normalized, create=False)
         return self.refresh()
+
+    def ensure_spotify_route(self) -> None:
+        """Create the Spotify monitor-to-default-sink loopback when needed."""
+        if not self.enabled:
+            raise BluetoothCommandError("Spotify audio routing requires the hardware PipeWire session")
+        status = self.refresh()
+        default_sink = status.default_sink
+        if not default_sink:
+            raise BluetoothCommandError("no default PipeWire output is available for Spotify")
+        self._ensure_spotify_route(default_sink, create=True)
+
+    def _ensure_spotify_route(self, sink: str, *, create: bool) -> None:
+        modules = self._pipewire.modules()
+        existing_id: str | None = None
+        existing_sink: str | None = None
+        for line in modules.splitlines():
+            fields = line.split()
+            if (
+                len(fields) >= 2
+                and fields[0].isdigit()
+                and fields[1] == "module-loopback"
+                and f"source={SPOTIFY_MONITOR}" in fields
+            ):
+                existing_id = fields[0]
+                existing_sink = next(
+                    (
+                        field.removeprefix("sink=")
+                        for field in fields
+                        if field.startswith("sink=")
+                    ),
+                    None,
+                )
+                break
+        if existing_id is None:
+            if not create:
+                return
+        elif existing_sink == sink:
+            return
+        else:
+            self._pipewire.unload_module(existing_id)
+
+        result = self._pipewire.load_module(
+            "module-loopback",
+            " ".join(
+                (
+                    f"source={SPOTIFY_MONITOR}",
+                    f"sink={sink}",
+                    "latency_msec=20",
+                    "sink_input_properties=application.name=LumiStripe-Spotify",
+                )
+            ),
+        )
+        if not result.strip().isdigit():
+            raise BluetoothCommandError(
+                "PipeWire could not create the Spotify output route"
+            )
 
     def set_output_volume(self, sink: str, volume: float) -> BluetoothStatus:
         if not self.enabled:
@@ -567,6 +626,19 @@ def capture_device_selector(devices: Sequence[object]) -> str:
     )
 
 
+def spotify_capture_device_selector(devices: Sequence[object]) -> str:
+    """Return the PortAudio device that exposes the dedicated Spotify monitor."""
+    for device in devices:
+        name = str(getattr(device, "name", device))
+        lowered = name.casefold()
+        if "lumistripe spotify" in lowered or "lumistripe_spotify" in lowered:
+            return name
+    raise BluetoothCommandError(
+        "The dedicated LumiStripe Spotify PipeWire monitor is not visible to sounddevice. "
+        "Restart PipeWire/WirePlumber and LumiStripe."
+    )
+
+
 def _validate_address(address: str) -> str:
     normalized = address.strip().upper()
     if not BLUETOOTH_ADDRESS.fullmatch(normalized):
@@ -674,6 +746,8 @@ def _parse_output_devices(
         if len(fields) < 2:
             continue
         selector = fields[1]
+        if selector == SPOTIFY_SINK:
+            continue
         description, volume, muted = details.get(selector.casefold(), (None, None, False))
         address = _bluetooth_address_from_node(selector)
         is_bluetooth = address is not None
@@ -982,4 +1056,5 @@ __all__ = [
     "BluetoothManager",
     "BluetoothStatus",
     "capture_device_selector",
+    "spotify_capture_device_selector",
 ]

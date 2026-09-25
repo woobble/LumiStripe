@@ -1,8 +1,8 @@
 # Raspberry Pi audio setup
 
-The LumiStripe web runtime can receive music from a phone or other source over Bluetooth
-while the Pi sends the same stream to the wagon sound system and analyzes it
-for reactive animations.
+The LumiStripe web runtime can receive music from a phone or other source over Bluetooth,
+or use Spotify Connect through Spotify's Soloist player. The Pi sends the selected
+stream to the sound system and analyzes it for reactive animations.
 
 The supported target is Raspberry Pi OS Trixie using PipeWire/WirePlumber.
 The Pi can send audio to USB, HDMI, wired, or Bluetooth speaker outputs. It
@@ -17,14 +17,26 @@ From the LumiStripe checkout on the Pi, run:
 sudo env LUMI_PAIRING_CODE=0427 ./deploy/install.sh
 ```
 
+To enable Spotify Connect during installation, provide the Soloist API key from
+the Spotify for Developers dashboard:
+
+```bash
+sudo env LUMI_PAIRING_CODE=0427 \
+  LUMI_SPOTIFY_API_KEY=YOUR_SOLOIST_API_KEY ./deploy/install.sh
+```
+
 The installer provisions the complete appliance: Debian/Raspberry Pi OS
 packages and native
 build tools, the service user and GPIO/SPI/audio permissions, Raspberry Pi SPI,
 uv with managed Python 3.12, Bun, locked Python and frontend dependencies, the
-frontend production build, the Bluetooth/WirePlumber configuration, a local
-mkcert CA and HTTPS certificate, Nginx, and all required systemd services. If
+frontend production build, the Bluetooth/WirePlumber configuration, the
+official Spotify Soloist binary, a local mkcert CA and HTTPS certificate, Nginx,
+and all required systemd services. If
 `LUMI_PAIRING_CODE` is omitted, a secure four-digit code is generated and
-printed. An existing `/etc/lumistripe/lumistripe-web.env` is preserved.
+printed. Existing `/etc/lumistripe/lumistripe-web.env` and
+`/etc/lumistripe/lumistripe-spotify.env` files are preserved. Spotify's
+official builds are downloaded on the Pi and are not bundled or redistributed
+by LumiStripe.
 
 The installer uses the non-root account that invoked `sudo` (or the checkout
 owner when run from a root shell). For another account or checkout, set
@@ -43,6 +55,29 @@ downloads. It can be run again safely after updating the checkout; existing
 pairing and TLS files are kept. The generated CA is stored at the service
 user's mkcert CA path and must be installed/trusted on each phone or PC that
 opens the HTTPS dashboard.
+
+## Uninstallation
+
+To remove the LumiStripe appliance files and services while preserving the
+checkout, shared Debian packages, PipeWire/Bluetooth/Nginx services, the
+service account, uv, Bun, mkcert, and the mkcert CA, run:
+
+```bash
+sudo ./deploy/uninstall.sh
+```
+
+The script asks for confirmation. Use `--yes` for an unattended removal:
+
+```bash
+sudo ./deploy/uninstall.sh --yes
+```
+
+The uninstaller removes both LumiStripe systemd units, environment files,
+Soloist, LumiStripe's PipeWire/WirePlumber fragments, Nginx site and TLS
+files, generated Python/frontend dependencies, and Soloist's default data and
+cache directories. It does not remove the project checkout, shared operating
+system packages, the service user, or custom Soloist data/cache paths. Existing
+non-empty backup directories are retained.
 
 ## Manual audio-stack recovery
 
@@ -75,6 +110,16 @@ mkdir -p ~/.config/wireplumber/wireplumber.conf.d
 cp deploy/90-lumistripe-bluetooth.conf \
   ~/.config/wireplumber/wireplumber.conf.d/90-lumistripe-bluetooth.conf
 systemctl --user restart wireplumber pipewire pipewire-pulse
+```
+
+Install the Spotify virtual sink in PipeWire's configuration directory as
+well:
+
+```bash
+mkdir -p ~/.config/pipewire/pipewire.conf.d
+cp deploy/90-lumistripe-spotify.conf \
+  ~/.config/pipewire/pipewire.conf.d/90-lumistripe-spotify.conf
+systemctl --user restart pipewire pipewire-pulse wireplumber
 ```
 
 The rule disables graphical-session seat ownership for this dedicated headless
@@ -141,6 +186,33 @@ selected microphone, and returns to Bluetooth when the phone reconnects. Use
 `--audio-source bluetooth` to require Bluetooth, or choose the source from the
 dashboard.
 
+## Spotify Connect
+
+The installer runs Spotify Soloist as the separate
+`lumistripe-spotify.service`. Soloist writes to the dedicated
+`lumistripe_spotify` PipeWire sink. When Spotify is selected as the LumiStripe
+audio source, the runtime captures that sink's monitor for analysis and creates
+a loopback to the current default output. Changing the output in Setup → Audio
+therefore also moves Spotify to a wired, HDMI, USB, or Bluetooth speaker.
+
+After installation, open Setup → Audio, choose **Spotify Connect**, and use the
+playback controls. Pair the device by opening Spotify on a phone or computer
+and choosing the configured device name (default: `LumiStripe`). The dashboard
+shows the connection state, current track, position, volume, shuffle, and
+repeat controls.
+
+Useful service checks:
+
+```bash
+sudo systemctl status lumistripe-spotify.service
+sudo journalctl -u lumistripe-spotify.service -f
+pactl list short sinks | grep lumistripe_spotify
+```
+
+Soloist's local WebSocket control endpoint is bound to `127.0.0.1:9090` by
+default and is used only by the local LumiStripe web service. Do not expose
+that port outside the Pi.
+
 ## Troubleshooting
 
 - No phone appears: open the phone's Bluetooth settings and run Scan again.
@@ -156,3 +228,10 @@ dashboard.
 - The Audio page says no PipeWire/Pulse capture device is visible: install
   `pipewire-alsa` and `libasound2-plugins`, restart LumiStripe, select
   `Automatic` or `Bluetooth`, and press **Save audio source**.
+- Spotify is unavailable: check that `/etc/lumistripe/lumistripe-spotify.env`
+  contains a valid `LUMI_SPOTIFY_API_KEY`, then restart
+  `lumistripe-spotify.service`. If the Soloist build has expired, rerun
+  `deploy/update.sh` to download the current official build.
+- Spotify plays but the Stripe is quiet: confirm that the dedicated sink and
+  monitor are present with `pactl list short sinks` and
+  `pactl list short sources`, then reselect Spotify in Setup → Audio.

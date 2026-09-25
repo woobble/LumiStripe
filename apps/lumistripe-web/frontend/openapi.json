@@ -565,11 +565,15 @@
           "source": {
             "title": "Source",
             "type": "string"
+          },
+          "spotify": {
+            "$ref": "#/components/schemas/SpotifyStatusResponse"
           }
         },
         "required": [
           "source",
-          "monitoring"
+          "monitoring",
+          "spotify"
         ],
         "title": "AudioSettingsResponse",
         "type": "object"
@@ -582,7 +586,8 @@
               "off",
               "demo",
               "mic",
-              "bluetooth"
+              "bluetooth",
+              "spotify"
             ],
             "title": "Source",
             "type": "string"
@@ -1712,6 +1717,216 @@
         "title": "RuntimeKind",
         "type": "string"
       },
+      "SpotifyControlRequest": {
+        "properties": {
+          "action": {
+            "enum": [
+              "play",
+              "pause",
+              "skip_next",
+              "skip_prev",
+              "seek",
+              "set_volume",
+              "set_shuffle",
+              "set_repeat"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "SpotifyControlRequest",
+        "type": "object"
+      },
+      "SpotifyStatusResponse": {
+        "properties": {
+          "configured": {
+            "default": false,
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "connected": {
+            "default": false,
+            "title": "Connected",
+            "type": "boolean"
+          },
+          "device_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Name"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "is_active": {
+            "default": false,
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "logged_in": {
+            "default": false,
+            "title": "Logged In",
+            "type": "boolean"
+          },
+          "position_ms": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Position Ms",
+            "type": "integer"
+          },
+          "repeat": {
+            "default": "off",
+            "enum": [
+              "off",
+              "context",
+              "track"
+            ],
+            "title": "Repeat",
+            "type": "string"
+          },
+          "shuffle": {
+            "default": false,
+            "title": "Shuffle",
+            "type": "boolean"
+          },
+          "status": {
+            "default": "idle",
+            "enum": [
+              "idle",
+              "playing",
+              "paused",
+              "buffering"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "track": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SpotifyTrackInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "volume": {
+            "default": 0,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Volume",
+            "type": "integer"
+          }
+        },
+        "title": "SpotifyStatusResponse",
+        "type": "object"
+      },
+      "SpotifyTrackInfo": {
+        "properties": {
+          "album": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Album"
+          },
+          "artists": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Artists",
+            "type": "array"
+          },
+          "cover_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Url"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "name": {
+            "default": "",
+            "title": "Name",
+            "type": "string"
+          },
+          "uri": {
+            "default": "",
+            "title": "Uri",
+            "type": "string"
+          }
+        },
+        "title": "SpotifyTrackInfo",
+        "type": "object"
+      },
       "StartupPlaybackState": {
         "properties": {
           "animation": {
@@ -2838,6 +3053,62 @@
           }
         },
         "summary": "Select Audio Source"
+      }
+    },
+    "/api/audio/spotify": {
+      "get": {
+        "operationId": "spotify_status_api_audio_spotify_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpotifyStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Spotify Status"
+      }
+    },
+    "/api/audio/spotify/control": {
+      "post": {
+        "operationId": "control_spotify_api_audio_spotify_control_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpotifyControlRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpotifyStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Control Spotify"
       }
     },
     "/api/auth/logout": {

@@ -272,6 +272,35 @@ class AudioOutputDeviceInfo(BaseModel):
     connected: bool = True
 
 
+class SpotifyTrackInfo(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    uri: str = ""
+    name: str = ""
+    artists: tuple[str, ...] = ()
+    album: str | None = None
+    cover_url: str | None = None
+    duration_ms: int | None = Field(default=None, ge=0)
+
+
+class SpotifyStatusResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    configured: bool = False
+    connected: bool = False
+    logged_in: bool = False
+    is_active: bool = False
+    device_name: str | None = None
+    status: Literal["idle", "playing", "paused", "buffering"] = "idle"
+    track: SpotifyTrackInfo | None = None
+    position_ms: int = Field(default=0, ge=0)
+    duration_ms: int | None = Field(default=None, ge=0)
+    volume: int = Field(default=0, ge=0, le=100)
+    shuffle: bool = False
+    repeat: Literal["off", "context", "track"] = "off"
+    error: str | None = None
+
+
 BluetoothOperation = Literal[
     "power",
     "rename",
@@ -379,6 +408,7 @@ class AudioSettingsResponse(BaseModel):
     hardware_gain_value: float | None = None
     hardware_gain_error: str | None = None
     bluetooth: BluetoothStatusResponse = Field(default_factory=BluetoothStatusResponse)
+    spotify: SpotifyStatusResponse
     error: str | None = None
 
 
@@ -396,7 +426,21 @@ class AudioDeviceRequest(BaseModel):
 
 
 class AudioSourceRequest(BaseModel):
-    source: Literal["auto", "off", "demo", "mic", "bluetooth"]
+    source: Literal["auto", "off", "demo", "mic", "bluetooth", "spotify"]
+
+
+class SpotifyControlRequest(BaseModel):
+    action: Literal[
+        "play",
+        "pause",
+        "skip_next",
+        "skip_prev",
+        "seek",
+        "set_volume",
+        "set_shuffle",
+        "set_repeat",
+    ]
+    value: int | float | bool | str | None = None
 
 
 class BluetoothDeviceRequest(BaseModel):

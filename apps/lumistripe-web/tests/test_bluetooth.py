@@ -27,6 +27,7 @@ from lumistripe_web.bluetooth import (
 )
 from lumistripe_web.runtime import LumiStripeRuntime, RuntimeSettings
 from lumistripe_web.settings import AudioTuningProfile
+from lumistripe_web.spotify import SpotifyStatus
 
 PHONE_ADDRESS = "AA:BB:CC:DD:EE:FF"
 PHONE_SOURCE = "bluez_output.AA_BB_CC_DD_EE_FF.1.monitor"
@@ -119,6 +120,52 @@ def test_bluetooth_status_finds_phone_monitor_and_output() -> None:
     assert status.capabilities.max_outputs == 1
 
 
+def test_spotify_route_loops_dedicated_monitor_to_default_sink() -> None:
+    module_output = ""
+    loaded: list[tuple[str, ...]] = []
+    unloaded: list[tuple[str, ...]] = []
+
+    def runner(command: tuple[str, ...], timeout: float) -> str:
+        nonlocal module_output
+        if command == ("pactl", "list", "short", "modules"):
+            return module_output
+        if command[:3] == ("pactl", "load-module", "module-loopback"):
+            loaded.append(command)
+            module_output = (
+                "77 module-loopback "
+                "source=lumistripe_spotify.monitor sink=alsa_output.usb-speakers"
+            )
+            return "77"
+        if command[:2] == ("pactl", "unload-module"):
+            unloaded.append(command)
+            module_output = ""
+            return ""
+        return _pipewire_runner(command, timeout)
+
+    manager = BluetoothManager(
+        runner=runner,
+        command_exists=lambda command: command in {"bluetoothctl", "pactl"},
+    )
+
+    manager.ensure_spotify_route()
+    manager.ensure_spotify_route()
+
+    assert len(loaded) == 1
+    assert "source=lumistripe_spotify.monitor" in loaded[0][-1]
+    assert "sink=alsa_output.usb-speakers" in loaded[0][-1]
+    assert unloaded == []
+
+    module_output = (
+        "77 module-loopback "
+        "source=lumistripe_spotify.monitor sink=bluez_output.speaker.1"
+    )
+    manager.set_default_sink("alsa_output.usb-speakers")
+
+    assert unloaded == [("pactl", "unload-module", "77")]
+    assert len(loaded) == 2
+    assert "sink=alsa_output.usb-speakers" in loaded[-1][-1]
+
+
 def test_bluetooth_status_falls_back_to_sink_monitor_for_active_wpctl_stream() -> None:
     def runner(command: tuple[str, ...], timeout: float) -> str:
         if command == ("pactl", "list", "short", "sources"):
@@ -178,6 +225,8 @@ def test_bluetooth_status_separates_phone_input_and_speaker_output() -> None:
         if command == ("pactl", "list", "short", "sinks"):
             return f"80 {SPEAKER_SINK} PipeWire s16le 2ch 48000Hz RUNNING\n43 alsa_output.usb-speakers PipeWire s16le 2ch 48000Hz IDLE"
         if command == ("pactl", "list", "short", "sink-inputs"):
+            return ""
+        if command == ("pactl", "list", "short", "modules"):
             return ""
         if command == ("pactl", "list", "sinks"):
             return (
@@ -568,6 +617,7 @@ class FakeBluetoothManager:
         )
         self.defaults: list[str] = []
         self.restored: list[str] = []
+        self.spotify_routes = 0
 
     def start(self) -> None:
         return
@@ -587,6 +637,35 @@ class FakeBluetoothManager:
     def restore_default_source(self, source: str | None) -> None:
         if source is not None:
             self.restored.append(source)
+
+    def ensure_spotify_route(self) -> None:
+        self.spotify_routes += 1
+
+
+class FakeSpotifyManager:
+    def __init__(self) -> None:
+        self.current = SpotifyStatus(
+            configured=True,
+            connected=True,
+            logged_in=True,
+            is_active=True,
+            device_name="LumiStripe",
+        )
+        self.started = False
+        self.actions: list[tuple[str, object | None]] = []
+
+    def start(self) -> None:
+        self.started = True
+
+    def stop(self) -> None:
+        self.started = False
+
+    def status(self) -> SpotifyStatus:
+        return self.current
+
+    def control(self, action: str, value: object | None = None) -> SpotifyStatus:
+        self.actions.append((action, value))
+        return self.current
 
 
 def test_auto_source_switches_between_bluetooth_and_microphone(
@@ -642,5 +721,55 @@ def test_auto_source_switches_between_bluetooth_and_microphone(
 
         assert opened[-1] == "USB Mic"
         assert bluetooth.restored == ["alsa_input.usb-mic"]
+    finally:
+        runtime.stop()
+
+
+def test_spotify_source_routes_dedicated_monitor_and_accepts_controls(
+    monkeypatch, tmp_path: Path
+) -> None:
+    bluetooth = FakeBluetoothManager()
+    spotify = FakeSpotifyManager()
+    monkeypatch.setattr(
+        runtime_module,
+        "list_input_device_details",
+        lambda: [AudioInputDevice(index=7, name="Monitor of LumiStripe Spotify")],
+    )
+    opened: list[str | None] = []
+
+    def audio_factory(device, config):
+        del config
+        opened.append(device)
+        return FakeAudioInput("Monitor of LumiStripe Spotify")
+
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(
+            hardware=True,
+            pixels=4,
+            audio_source="spotify",
+            settings_file=tmp_path / "settings.json",
+        ),
+        controller_factory=lambda settings: Stripe(settings.pixels),
+        audio_factory=audio_factory,
+        bluetooth_manager=bluetooth,
+        spotify_manager=spotify,
+    )
+    runtime.start()
+    try:
+        deadline = time.monotonic() + 1.0
+        while runtime.audio_settings().active_source != AudioSource.SPOTIFY.value:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+
+        settings = runtime.audio_settings()
+        assert spotify.started is True
+        assert bluetooth.spotify_routes == 1
+        assert opened == ["Monitor of LumiStripe Spotify"]
+        assert settings.active_device_name == "Monitor of LumiStripe Spotify"
+        assert settings.spotify.connected is True
+
+        runtime.set_mode(PlaybackMode.DYNAMIC).result(timeout=1)
+        runtime.control_spotify("play").result(timeout=1)
+        assert spotify.actions == [("play", None)]
     finally:
         runtime.stop()

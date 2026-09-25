@@ -345,6 +345,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/audio/spotify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Spotify Status */
+        get: operations["spotify_status_api_audio_spotify_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/audio/spotify/control": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Control Spotify */
+        post: operations["control_spotify_api_audio_spotify_control_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/logout": {
         parameters: {
             query?: never;
@@ -808,6 +842,7 @@ export interface components {
             settings: components["schemas"]["AudioTuningValues"];
             /** Source */
             source: string;
+            spotify: components["schemas"]["SpotifyStatusResponse"];
         };
         /** AudioSourceRequest */
         AudioSourceRequest: {
@@ -815,7 +850,7 @@ export interface components {
              * Source
              * @enum {string}
              */
-            source: "auto" | "off" | "demo" | "mic" | "bluetooth";
+            source: "auto" | "off" | "demo" | "mic" | "bluetooth" | "spotify";
         };
         /** AudioTuningValues */
         AudioTuningValues: {
@@ -1339,6 +1374,97 @@ export interface components {
          * @enum {string}
          */
         RuntimeKind: "simulation" | "hardware";
+        /** SpotifyControlRequest */
+        SpotifyControlRequest: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "play" | "pause" | "skip_next" | "skip_prev" | "seek" | "set_volume" | "set_shuffle" | "set_repeat";
+            /** Value */
+            value?: number | boolean | string | null;
+        };
+        /** SpotifyStatusResponse */
+        SpotifyStatusResponse: {
+            /**
+             * Configured
+             * @default false
+             */
+            configured: boolean;
+            /**
+             * Connected
+             * @default false
+             */
+            connected: boolean;
+            /** Device Name */
+            device_name?: string | null;
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /** Error */
+            error?: string | null;
+            /**
+             * Is Active
+             * @default false
+             */
+            is_active: boolean;
+            /**
+             * Logged In
+             * @default false
+             */
+            logged_in: boolean;
+            /**
+             * Position Ms
+             * @default 0
+             */
+            position_ms: number;
+            /**
+             * Repeat
+             * @default off
+             * @enum {string}
+             */
+            repeat: "off" | "context" | "track";
+            /**
+             * Shuffle
+             * @default false
+             */
+            shuffle: boolean;
+            /**
+             * Status
+             * @default idle
+             * @enum {string}
+             */
+            status: "idle" | "playing" | "paused" | "buffering";
+            track?: components["schemas"]["SpotifyTrackInfo"] | null;
+            /**
+             * Volume
+             * @default 0
+             */
+            volume: number;
+        };
+        /** SpotifyTrackInfo */
+        SpotifyTrackInfo: {
+            /** Album */
+            album?: string | null;
+            /**
+             * Artists
+             * @default []
+             */
+            artists: string[];
+            /** Cover Url */
+            cover_url?: string | null;
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /**
+             * Name
+             * @default
+             */
+            name: string;
+            /**
+             * Uri
+             * @default
+             */
+            uri: string;
+        };
         /** StartupPlaybackState */
         StartupPlaybackState: {
             /**
@@ -2173,6 +2299,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AudioSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    spotify_status_api_audio_spotify_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpotifyStatusResponse"];
+                };
+            };
+        };
+    };
+    control_spotify_api_audio_spotify_control_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpotifyControlRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpotifyStatusResponse"];
                 };
             };
             /** @description Validation Error */

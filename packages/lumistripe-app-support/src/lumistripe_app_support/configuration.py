@@ -107,6 +107,8 @@ def parse_audio_source(value: str, *, allow_bluetooth: bool = False) -> AudioSou
         raise ValueError(f"invalid audio source: {value}") from exc
     if source is AudioSource.BLUETOOTH and not allow_bluetooth:
         raise ValueError("Bluetooth audio is only available through lumistripe-web")
+    if source is AudioSource.SPOTIFY:
+        raise ValueError("Spotify audio is only available through lumistripe-web")
     return source
 
 

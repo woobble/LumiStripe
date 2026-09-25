@@ -648,6 +648,7 @@ dependencies = [
     { name = "lumistripe-app-support" },
     { name = "lumistripe-core", extra = ["audio", "gpio", "spi"] },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "websockets" },
 ]
 
 [package.metadata]
@@ -656,6 +657,7 @@ requires-dist = [
     { name = "lumistripe-app-support", editable = "packages/lumistripe-app-support" },
     { name = "lumistripe-core", extras = ["audio", "gpio", "spi"], editable = "packages/lumistripe-core" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.52.4" },
+    { name = "websockets", specifier = ">=15.0" },
 ]
 
 [[package]]

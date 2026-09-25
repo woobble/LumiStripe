@@ -25,9 +25,9 @@ FastAPI, browser code, or application-specific configuration.
 policies shared by the CLI, simulator, and web runtime. It may depend on core,
 but not on any application.
 
-The web backend owns HTTP contracts, authentication, Bluetooth providers,
-runtime lifecycle, and state projection. The frontend consumes the backend
-contract and never reaches into Python implementation details.
+The web backend owns HTTP contracts, authentication, Bluetooth and Spotify
+providers, runtime lifecycle, and state projection. The frontend consumes the
+backend contract and never reaches into Python implementation details.
 
 ## Runtime ownership
 
