@@ -46,6 +46,29 @@ const bluetoothStatus = {
   error: null,
 }
 
+const spotifyStatus = {
+  configured: true,
+  connected: true,
+  logged_in: true,
+  is_active: true,
+  device_name: "LumiStripe",
+  status: "playing" as const,
+  track: {
+    uri: "spotify:track:test-track",
+    name: "Test track",
+    artists: ["Test artist"],
+    album: "Test album",
+    cover_url: null,
+    duration_ms: 120_000,
+  },
+  position_ms: 10_000,
+  duration_ms: 120_000,
+  volume: 40,
+  shuffle: false,
+  repeat: "off" as const,
+  error: null,
+}
+
 const audioSettings = {
   source: "mic",
   active_source: "mic",
@@ -67,6 +90,7 @@ const audioSettings = {
   hardware_gain_error: null,
   error: null,
   bluetooth: bluetoothStatus,
+  spotify: spotifyStatus,
 }
 
 function Router({ children }: { children: ReactNode }) {
@@ -96,6 +120,7 @@ class MockWebSocket {
 
 describe("App", () => {
   let pendingBrightnessResponse: Promise<Response> | null = null
+  let pendingSpotifyControlResponse: Promise<Response> | null = null
   const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
     const path = String(input)
     if (path === "/api/auth/status") {
@@ -107,6 +132,11 @@ describe("App", () => {
     }
     if (path === "/api/audio/bluetooth" || path === "/api/audio/bluetooth/connect") {
       return jsonResponse(bluetoothStatus)
+    }
+    if (path === "/api/audio/spotify") return jsonResponse(spotifyStatus)
+    if (path === "/api/audio/spotify/control") {
+      if (pendingSpotifyControlResponse) return pendingSpotifyControlResponse
+      return jsonResponse(spotifyStatus)
     }
     if (path === "/api/audio/device") {
       const body = JSON.parse(String(init?.body)) as { device: string }
@@ -171,6 +201,7 @@ describe("App", () => {
   beforeEach(() => {
     MockWebSocket.instances = []
     pendingBrightnessResponse = null
+    pendingSpotifyControlResponse = null
     fetchMock.mockClear()
     vi.stubGlobal("fetch", fetchMock)
     vi.stubGlobal("WebSocket", MockWebSocket)
@@ -324,6 +355,43 @@ describe("App", () => {
       "/api/audio/device",
       expect.objectContaining({ method: "PUT", body: JSON.stringify({ device: "3" }) }),
     ))
+  })
+
+  it("keeps Spotify sliders interactive while a control request is pending", async () => {
+    const user = userEvent.setup()
+    pendingSpotifyControlResponse = new Promise(() => undefined)
+    render(<App />, { wrapper: Router })
+    await screen.findByText(/aurora wave/i)
+
+    await user.click(screen.getByRole("link", { name: "Setup" }))
+    const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
+    await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
+    await screen.findByText("Spotify Connect")
+    const [position, volume] = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="range"]'))
+    expect(position).toBeDefined()
+    expect(volume).toBeDefined()
+    expect(volume).not.toBeDisabled()
+    fireEvent.change(position, { target: { value: "20000" } })
+    fireEvent.change(volume, { target: { value: "41" } })
+    expect(screen.getByText("0:20")).toBeInTheDocument()
+    expect(screen.getByText("41%")).toBeInTheDocument()
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/audio/spotify/control",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ action: "seek", value: 20_000 }),
+      }),
+    ))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/audio/spotify/control",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ action: "set_volume", value: 41 }),
+      }),
+    ))
+    expect(volume).not.toBeDisabled()
+    expect(screen.getByText("41%")).toBeInTheDocument()
   })
 
   it("offers separate connection actions for dual-role Bluetooth devices", async () => {

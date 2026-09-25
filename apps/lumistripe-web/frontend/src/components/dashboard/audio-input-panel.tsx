@@ -50,6 +50,17 @@ function formatMilliseconds(value: number | null | undefined) {
   return `${minutes}:${seconds}`
 }
 
+type SpotifySliderKey = "position" | "volume"
+type SpotifySliderCommand = {
+  queuedValue: number | null
+  sequence: number
+  running: boolean
+}
+type SpotifySliderOptimisticValue = {
+  value: number
+  expiresAt: number
+}
+
 function AudioInputPanelView() {
   const [response, setResponse] = useState<AudioSettingsResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -57,11 +68,17 @@ function AudioInputPanelView() {
   const [source, setSource] = useState<AudioSourceValue>("auto")
   const [sourceSaving, setSourceSaving] = useState(false)
   const [spotify, setSpotify] = useState<SpotifyStatusResponse | null>(null)
-  const [spotifyBusy, setSpotifyBusy] = useState(false)
+  const [spotifyCommandBusy, setSpotifyCommandBusy] = useState(false)
   const [spotifyPositionDraft, setSpotifyPositionDraft] = useState<number | null>(null)
   const [spotifyVolumeDraft, setSpotifyVolumeDraft] = useState<number | null>(null)
   const spotifyPositionDragging = useRef(false)
   const spotifyVolumeDragging = useRef(false)
+  const spotifySliderCommands = useRef<Record<SpotifySliderKey, SpotifySliderCommand>>({
+    position: { queuedValue: null, sequence: 0, running: false },
+    volume: { queuedValue: null, sequence: 0, running: false },
+  })
+  const spotifySliderPending = useRef<Record<SpotifySliderKey, number | null>>({ position: null, volume: null })
+  const spotifySliderOptimistic = useRef<Record<SpotifySliderKey, SpotifySliderOptimisticValue | null>>({ position: null, volume: null })
   const [bluetoothAlias, setBluetoothAlias] = useState("")
   const [outputVolumeDraft, setOutputVolumeDraft] = useState<number | null>(null)
   const form = useForm<InputFormValues>({ resolver: zodResolver(inputSelectionSchema), defaultValues: { selected: "" } })
@@ -73,8 +90,28 @@ function AudioInputPanelView() {
 
   const updateSpotifyStatus = useCallback((next: SpotifyStatusResponse) => {
     setSpotify(next)
-    if (!spotifyPositionDragging.current) setSpotifyPositionDraft(next.position_ms)
-    if (!spotifyVolumeDragging.current) setSpotifyVolumeDraft(next.volume)
+    const now = Date.now()
+    const positionOptimistic = spotifySliderOptimistic.current.position
+    if (positionOptimistic && positionOptimistic.expiresAt <= now) {
+      spotifySliderOptimistic.current.position = null
+    }
+    const volumeOptimistic = spotifySliderOptimistic.current.volume
+    if (volumeOptimistic && volumeOptimistic.expiresAt <= now) {
+      spotifySliderOptimistic.current.volume = null
+    }
+
+    if (
+      !spotifyPositionDragging.current
+      && spotifySliderPending.current.position === null
+    ) {
+      setSpotifyPositionDraft(spotifySliderOptimistic.current.position?.value ?? next.position_ms)
+    }
+    if (
+      !spotifyVolumeDragging.current
+      && spotifySliderPending.current.volume === null
+    ) {
+      setSpotifyVolumeDraft(spotifySliderOptimistic.current.volume?.value ?? next.volume)
+    }
   }, [])
 
   const load = useCallback(async () => {
@@ -136,23 +173,68 @@ function AudioInputPanelView() {
   }
 
   const runSpotifyControl = async (action: SpotifyControlAction, value?: number | boolean | string) => {
-    if (spotifyBusy) return
-    setSpotifyBusy(true)
+    if (spotifyCommandBusy) return
+    setSpotifyCommandBusy(true)
     try {
       const next = await dashboardApi.controlSpotify(action, value)
       updateSpotifyStatus(next)
-      if (action === "seek" && typeof value === "number") setSpotifyPositionDraft(Math.round(value))
-      if (action === "set_volume" && typeof value === "number") setSpotifyVolumeDraft(Math.round(value))
     } catch (error) {
-      if (action === "seek") setSpotifyPositionDraft(null)
-      if (action === "set_volume") setSpotifyVolumeDraft(null)
       toast.error(error instanceof Error ? error.message : "Spotify control failed.")
     } finally {
-      if (action === "seek") spotifyPositionDragging.current = false
-      if (action === "set_volume") spotifyVolumeDragging.current = false
-      setSpotifyBusy(false)
+      setSpotifyCommandBusy(false)
     }
   }
+
+  const sendSpotifySliderCommand = useCallback(
+    (key: SpotifySliderKey, action: "seek" | "set_volume", value: number) => {
+      const command = spotifySliderCommands.current[key]
+      command.queuedValue = value
+      command.sequence += 1
+      spotifySliderPending.current[key] = value
+
+      if (command.running) return
+      command.running = true
+
+      void (async () => {
+        try {
+          while (command.queuedValue !== null) {
+            const commandValue = command.queuedValue
+            command.queuedValue = null
+            const sequence = command.sequence
+
+            try {
+              const next = await dashboardApi.controlSpotify(action, commandValue)
+              updateSpotifyStatus(next)
+
+              // Soloist may acknowledge a command before its next status
+              // event contains the new value. Keep the local value stable for
+              // a short grace period so polling cannot snap the thumb back.
+              if (command.sequence === sequence) {
+                spotifySliderPending.current[key] = null
+                spotifySliderOptimistic.current[key] = {
+                  value: commandValue,
+                  expiresAt: Date.now() + 2000,
+                }
+                if (key === "position") setSpotifyPositionDraft(commandValue)
+                else setSpotifyVolumeDraft(commandValue)
+              }
+            } catch (error) {
+              if (command.sequence === sequence) {
+                spotifySliderPending.current[key] = null
+                spotifySliderOptimistic.current[key] = null
+                if (key === "position") setSpotifyPositionDraft(null)
+                else setSpotifyVolumeDraft(null)
+                toast.error(error instanceof Error ? error.message : "Spotify control failed.")
+              }
+            }
+          }
+        } finally {
+          command.running = false
+        }
+      })()
+    },
+    [updateSpotifyStatus],
+  )
 
   const runBluetoothAction = async (
     action: BluetoothAction,
@@ -275,22 +357,22 @@ function AudioInputPanelView() {
                 </div>
               ) : null}
               <div className="flex items-center justify-center gap-2">
-                <Button variant="outline" size="icon" className="size-10 rounded-full" disabled={!spotifyReady || spotifyBusy} onClick={() => void runSpotifyControl("skip_prev")} aria-label="Previous Spotify track"><SkipBackIcon /></Button>
-                <Button size="icon-lg" className="rounded-full" disabled={!spotifyReady || spotifyBusy} onClick={() => void runSpotifyControl(spotify?.status === "playing" || spotify?.status === "buffering" ? "pause" : "play")} aria-label={spotify?.status === "playing" || spotify?.status === "buffering" ? "Pause Spotify" : "Play Spotify"}>{spotify?.status === "playing" || spotify?.status === "buffering" ? <PauseIcon /> : <PlayIcon />}</Button>
-                <Button variant="outline" size="icon" className="size-10 rounded-full" disabled={!spotifyReady || spotifyBusy} onClick={() => void runSpotifyControl("skip_next")} aria-label="Next Spotify track"><SkipForwardIcon /></Button>
+                <Button variant="outline" size="icon" className="size-10 rounded-full" disabled={!spotifyReady || spotifyCommandBusy} onClick={() => void runSpotifyControl("skip_prev")} aria-label="Previous Spotify track"><SkipBackIcon /></Button>
+                <Button size="icon-lg" className="rounded-full" disabled={!spotifyReady || spotifyCommandBusy} onClick={() => void runSpotifyControl(spotify?.status === "playing" || spotify?.status === "buffering" ? "pause" : "play")} aria-label={spotify?.status === "playing" || spotify?.status === "buffering" ? "Pause Spotify" : "Play Spotify"}>{spotify?.status === "playing" || spotify?.status === "buffering" ? <PauseIcon /> : <PlayIcon />}</Button>
+                <Button variant="outline" size="icon" className="size-10 rounded-full" disabled={!spotifyReady || spotifyCommandBusy} onClick={() => void runSpotifyControl("skip_next")} aria-label="Next Spotify track"><SkipForwardIcon /></Button>
               </div>
               <div className="space-y-1">
-                <Slider aria-label="Spotify track position" min={0} max={spotifyDuration} step={1000} value={[spotifyPosition]} disabled={!spotifyReady || !spotify?.track || spotifyBusy} onValueChange={(value) => { spotifyPositionDragging.current = true; setSpotifyPositionDraft(firstSliderValue(value)) }} onValueCommitted={(value) => { const next = firstSliderValue(value); spotifyPositionDragging.current = true; setSpotifyPositionDraft(next); void runSpotifyControl("seek", next) }} />
+                <Slider aria-label="Spotify track position" min={0} max={spotifyDuration} step={1000} value={[spotifyPosition]} disabled={!spotifyReady || !spotify?.track} onValueChange={(value) => { spotifyPositionDragging.current = true; spotifySliderOptimistic.current.position = null; setSpotifyPositionDraft(firstSliderValue(value)) }} onValueCommitted={(value) => { const next = firstSliderValue(value); spotifyPositionDragging.current = false; setSpotifyPositionDraft(next); sendSpotifySliderCommand("position", "seek", next) }} />
                 <div className="flex justify-between text-xs text-muted-foreground"><span>{formatMilliseconds(spotifyPosition)}</span><span>{formatMilliseconds(spotifyDuration)}</span></div>
               </div>
               <div className="grid gap-4 rounded-xl border border-white/5 bg-white/[0.03] p-3 sm:grid-cols-2">
                 <div className="space-y-2">
                   <div className="flex items-center justify-between gap-3 text-sm"><span className="flex items-center gap-2"><Volume2Icon className="size-4" />Volume</span><span className="font-mono text-muted-foreground">{spotifyVolume}%</span></div>
-                  <Slider aria-label="Spotify volume" min={0} max={100} step={1} value={[spotifyVolume]} disabled={!spotifyReady || spotifyBusy} onValueChange={(value) => { spotifyVolumeDragging.current = true; setSpotifyVolumeDraft(firstSliderValue(value)) }} onValueCommitted={(value) => { const next = firstSliderValue(value); spotifyVolumeDragging.current = true; setSpotifyVolumeDraft(next); void runSpotifyControl("set_volume", next) }} />
+                  <Slider aria-label="Spotify volume" min={0} max={100} step={1} value={[spotifyVolume]} disabled={!spotifyReady} onValueChange={(value) => { spotifyVolumeDragging.current = true; spotifySliderOptimistic.current.volume = null; setSpotifyVolumeDraft(firstSliderValue(value)) }} onValueCommitted={(value) => { const next = firstSliderValue(value); spotifyVolumeDragging.current = false; setSpotifyVolumeDraft(next); sendSpotifySliderCommand("volume", "set_volume", next) }} />
                 </div>
                 <div className="flex items-center justify-between gap-3">
-                  <Button variant={spotify?.shuffle ? "default" : "outline"} size="sm" disabled={!spotifyReady || spotifyBusy} onClick={() => void runSpotifyControl("set_shuffle", !spotify?.shuffle)}><ShuffleIcon />Shuffle</Button>
-                  <Button variant="outline" size="sm" disabled={!spotifyReady || spotifyBusy} onClick={() => void runSpotifyControl("set_repeat", spotify?.repeat === "off" ? "context" : spotify?.repeat === "context" ? "track" : "off")}><Repeat2Icon />{spotify?.repeat === "track" ? "Track" : spotify?.repeat === "context" ? "Context" : "Repeat"}</Button>
+                  <Button variant={spotify?.shuffle ? "default" : "outline"} size="sm" disabled={!spotifyReady || spotifyCommandBusy} onClick={() => void runSpotifyControl("set_shuffle", !spotify?.shuffle)}><ShuffleIcon />Shuffle</Button>
+                  <Button variant="outline" size="sm" disabled={!spotifyReady || spotifyCommandBusy} onClick={() => void runSpotifyControl("set_repeat", spotify?.repeat === "off" ? "context" : spotify?.repeat === "context" ? "track" : "off")}><Repeat2Icon />{spotify?.repeat === "track" ? "Track" : spotify?.repeat === "context" ? "Context" : "Repeat"}</Button>
                 </div>
               </div>
             </CardContent>
