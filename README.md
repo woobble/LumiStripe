@@ -47,6 +47,21 @@ After installing a new revision, update the checkout and run:
 sudo ./deploy/update.sh origin/main
 ```
 
+The same appliance can also be shipped with Docker Compose. This alternative
+builds locally on the Pi and keeps BlueZ and PipeWire/WirePlumber on the host
+while running LumiStripe, Soloist, and the HTTPS proxy in containers:
+
+```bash
+sudo env LUMI_PAIRING_CODE=0427 \
+  LUMI_SPOTIFY_API_KEY=YOUR_SOLOIST_API_KEY \
+  ./deploy/docker-install.sh
+```
+
+Update it with `sudo ./deploy/docker-update.sh` and remove it with
+`sudo ./deploy/docker-uninstall.sh`. Do not run the Docker and systemd
+installations at the same time; the Docker installer stops with instructions
+when an existing LumiStripe systemd deployment is detected.
+
 To remove the installed LumiStripe appliance while preserving shared system
 packages, the project checkout, and the service account, run:
 

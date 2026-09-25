@@ -1,0 +1,86 @@
+services:
+  lumistripe-web:
+    image: "${LUMI_IMAGE:-lumistripe:local}"
+    build:
+      context: ..
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        UV_VERSION: "${LUMI_UV_VERSION:-0.12.19}"
+    network_mode: host
+    restart: unless-stopped
+    user: "${LUMI_UID}:${LUMI_GID}"
+    group_add:
+      - "${LUMI_GPIO_GID}"
+      - "${LUMI_SPI_GID}"
+      - "${LUMI_AUDIO_GID}"
+    env_file:
+      - "${LUMI_CONTAINER_ENV_FILE:-/etc/lumistripe/lumistripe-docker.env}"
+    environment:
+      HOME: /var/lib/lumistripe/home
+      XDG_RUNTIME_DIR: "${LUMI_RUNTIME_DIR}"
+      DBUS_SESSION_BUS_ADDRESS: "unix:path=${LUMI_RUNTIME_DIR}/bus"
+      PULSE_SERVER: "unix:${LUMI_RUNTIME_DIR}/pulse/native"
+    volumes:
+      - "${LUMI_HOST_DATA_DIR}:/var/lib/lumistripe"
+      - "${LUMI_RUNTIME_DIR}:${LUMI_RUNTIME_DIR}"
+      - "${LUMI_DBUS_SOCKET:-/run/dbus/system_bus_socket}:/run/dbus/system_bus_socket"
+    devices:
+      - "${LUMI_SPI_DEVICE:-/dev/spidev0.0}:/dev/spidev0.0"
+      - "${LUMI_GPIO_CHIP:-/dev/gpiochip0}:/dev/gpiochip0"
+    command: ["/usr/local/bin/lumistripe-web-entrypoint"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:8000/api/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  lumistripe-spotify:
+    image: "${LUMI_IMAGE:-lumistripe:local}"
+    network_mode: host
+    restart: unless-stopped
+    user: "${LUMI_UID}:${LUMI_GID}"
+    group_add:
+      - "${LUMI_AUDIO_GID}"
+    env_file:
+      - "${LUMI_CONTAINER_ENV_FILE:-/etc/lumistripe/lumistripe-docker.env}"
+    environment:
+      HOME: /var/lib/lumistripe/home
+      XDG_RUNTIME_DIR: "${LUMI_RUNTIME_DIR}"
+      DBUS_SESSION_BUS_ADDRESS: "unix:path=${LUMI_RUNTIME_DIR}/bus"
+      PULSE_SERVER: "unix:${LUMI_RUNTIME_DIR}/pulse/native"
+    volumes:
+      - "${LUMI_HOST_DATA_DIR}:/var/lib/lumistripe"
+      - "${LUMI_RUNTIME_DIR}:${LUMI_RUNTIME_DIR}"
+      - "${LUMI_DBUS_SOCKET:-/run/dbus/system_bus_socket}:/run/dbus/system_bus_socket"
+    secrets:
+      - spotify_api_key
+    command: ["/usr/local/bin/lumistripe-spotify-entrypoint"]
+    healthcheck:
+      test:
+        ["CMD-SHELL", "python -c 'import socket; s=socket.create_connection((\"127.0.0.1\", 9090), 1); s.close()'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  lumistripe-nginx:
+    image: "${LUMI_NGINX_IMAGE:-nginx:1.29-alpine}"
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      lumistripe-web:
+        condition: service_healthy
+    volumes:
+      - "./docker/nginx.conf:/etc/nginx/conf.d/default.conf:ro"
+      - "${LUMI_HOST_TLS_DIR}:/etc/nginx/certs:ro"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-check-certificate --quiet --spider https://127.0.0.1/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+secrets:
+  spotify_api_key:
+    file: "${LUMI_HOST_API_KEY_FILE}"

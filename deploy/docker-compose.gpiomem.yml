@@ -1,0 +1,4 @@
+services:
+  lumistripe-web:
+    devices:
+      - "${LUMI_GPIOMEM_DEVICE}:/dev/gpiomem"
