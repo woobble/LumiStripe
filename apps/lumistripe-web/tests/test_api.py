@@ -264,6 +264,11 @@ def test_audio_source_and_bluetooth_api(
             == 409
         )
 
+        unavailable_dynamic = client.put("/api/mode", json={"mode": "dynamic"})
+        assert unavailable_dynamic.status_code == 409
+
+        demo_again = client.put("/api/audio/source", json={"source": "demo"})
+        assert demo_again.status_code == 200
         dynamic = client.put("/api/mode", json={"mode": "dynamic"})
         assert dynamic.status_code == 200
         blocked_off = client.put("/api/audio/source", json={"source": "off"})
