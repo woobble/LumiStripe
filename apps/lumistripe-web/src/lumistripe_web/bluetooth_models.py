@@ -111,6 +111,8 @@ class AudioRoutingBackend(Protocol):
 
     def ensure_spotify_route(self) -> None: ...
 
+    def refresh_spotify_route(self) -> None: ...
+
 
 class BluetoothAudioBackend(BluetoothDeviceBackend, AudioRoutingBackend, Protocol):
     """Combined backend consumed by the runtime and HTTP layer."""

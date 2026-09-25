@@ -55,6 +55,7 @@ from lumistripe.playback import (
 )
 
 from ..bluetooth import (
+    SPOTIFY_MONITOR,
     BluetoothAudioBackend,
     BluetoothCommandError,
     BluetoothManager,
@@ -1568,7 +1569,8 @@ class RuntimeWorker:
                     "to resume the local audio monitor."
                 )
                 return
-            if active_changed and spotify.is_active and self._audio_input is not None:
+            refresh_spotify_route = active_changed and spotify.is_active
+            if refresh_spotify_route and self._audio_input is not None:
                 self._close_audio_input()
             if (
                 self._audio_input is not None
@@ -1578,7 +1580,7 @@ class RuntimeWorker:
             if self._audio_input is not None:
                 self._close_audio_input()
             try:
-                self._open_spotify_monitor()
+                self._open_spotify_monitor(refresh_route=refresh_spotify_route)
             except (BluetoothCommandError, RuntimeError) as exc:
                 self._monitor_audio_source = AudioSource.SPOTIFY
                 self._active_audio_device_name = None
@@ -1691,25 +1693,49 @@ class RuntimeWorker:
         self._audio_status = f"Bluetooth: {device.name}"
         self._audio_monitor_error = None
 
-    def _open_spotify_monitor(self) -> None:
+    def _open_spotify_monitor(self, *, refresh_route: bool = False) -> None:
         status = self._spotify.status()
         if not status.connected:
             raise RuntimeError("Spotify Soloist is not connected")
         if not status.logged_in:
             raise RuntimeError("Spotify is not paired; select LumiStripe in Spotify first")
-        ensure_route = getattr(self._bluetooth, "ensure_spotify_route", None)
+        route_method_name = (
+            "refresh_spotify_route" if refresh_route else "ensure_spotify_route"
+        )
+        ensure_route = getattr(self._bluetooth, route_method_name, None)
+        if not callable(ensure_route):
+            # Keep injected development backends compatible with the optional
+            # route-refresh operation.
+            ensure_route = getattr(self._bluetooth, "ensure_spotify_route", None)
         if not callable(ensure_route):
             raise BluetoothCommandError("the PipeWire Spotify route is unavailable")
         ensure_route()
         devices = list_input_device_details()
-        selector = spotify_capture_device_selector(devices)
+        restore_source: str | None = None
+        try:
+            selector = spotify_capture_device_selector(devices)
+        except BluetoothCommandError:
+            # pipewire-alsa commonly exposes only its shared ``pulse`` or
+            # ``pipewire`` capture device to PortAudio. Route that device's
+            # default source to the dedicated Spotify monitor, just as the
+            # Bluetooth monitor does, instead of requiring a separate device
+            # entry for every PipeWire node.
+            selector = capture_device_selector(devices)
+            restore_source = self._bluetooth.default_source()
+            self._bluetooth.set_default_source(SPOTIFY_MONITOR)
         profile = self._audio_profiles.get(SPOTIFY_PROFILE_KEY, AudioTuningProfile())
-        audio_input = self._audio_factory(selector, profile.audio_config())
+        try:
+            audio_input = self._audio_factory(selector, profile.audio_config())
+        except Exception:
+            if restore_source is not None:
+                self._bluetooth.restore_default_source(restore_source)
+            raise
         self._audio_input = audio_input
         self._audio_profile = profile
         self._monitor_audio_source = AudioSource.SPOTIFY
         self._active_audio_device_name = audio_input.device_name()
         self._active_bluetooth_address = None
+        self._bluetooth_previous_default_source = restore_source
         self._hardware_gain = None
         self._apply_audio_profile(profile)
         self._audio_status = "Spotify: waiting for playback"

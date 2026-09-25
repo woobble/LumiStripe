@@ -194,6 +194,10 @@ The installer runs Spotify Soloist as the separate
 audio source, the runtime captures that sink's monitor for analysis and creates
 a loopback to the current default output. Changing the output in Setup → Audio
 therefore also moves Spotify to a wired, HDMI, USB, or Bluetooth speaker.
+On systems where PortAudio exposes only the shared `pulse` or `pipewire`
+capture device, LumiStripe temporarily selects the Spotify monitor as that
+device's default source and restores the previous source when Spotify is
+deselected.
 
 After installation, open Setup → Audio, choose **Spotify Connect**, and use the
 playback controls. Pair the device by opening Spotify on a phone or computer

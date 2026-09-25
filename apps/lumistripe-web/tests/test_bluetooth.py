@@ -167,6 +167,44 @@ def test_spotify_route_loops_dedicated_monitor_to_default_sink() -> None:
     assert "sink=alsa_output.usb-speakers" in loaded[-1][-1]
 
 
+def test_spotify_route_refresh_recreates_existing_route() -> None:
+    module_output = (
+        "77 module-loopback "
+        "source=lumistripe_spotify.monitor sink=alsa_output.usb-speakers"
+    )
+    loaded: list[tuple[str, ...]] = []
+    unloaded: list[tuple[str, ...]] = []
+
+    def runner(command: tuple[str, ...], timeout: float) -> str:
+        nonlocal module_output
+        if command == ("pactl", "list", "short", "modules"):
+            return module_output
+        if command[:3] == ("pactl", "load-module", "module-loopback"):
+            loaded.append(command)
+            module_output = (
+                "78 module-loopback "
+                "source=lumistripe_spotify.monitor sink=alsa_output.usb-speakers"
+            )
+            return "78"
+        if command[:2] == ("pactl", "unload-module"):
+            unloaded.append(command)
+            module_output = ""
+            return ""
+        return _pipewire_runner(command, timeout)
+
+    manager = BluetoothManager(
+        runner=runner,
+        command_exists=lambda command: command in {"bluetoothctl", "pactl"},
+    )
+
+    manager.refresh_spotify_route()
+
+    assert unloaded == [("pactl", "unload-module", "77")]
+    assert len(loaded) == 1
+    assert "source=lumistripe_spotify.monitor" in loaded[0][-1]
+    assert "sink=alsa_output.usb-speakers" in loaded[0][-1]
+
+
 def test_bluetooth_status_falls_back_to_sink_monitor_for_active_wpctl_stream() -> None:
     def runner(command: tuple[str, ...], timeout: float) -> str:
         if command == ("pactl", "list", "short", "sources"):
@@ -642,6 +680,9 @@ class FakeBluetoothManager:
     def ensure_spotify_route(self) -> None:
         self.spotify_routes += 1
 
+    def refresh_spotify_route(self) -> None:
+        self.spotify_routes += 1
+
 
 class FakeSpotifyManager:
     def __init__(self) -> None:
@@ -851,3 +892,48 @@ def test_spotify_monitor_opens_before_soloist_reports_active(
         assert bluetooth.spotify_routes == 2
     finally:
         runtime.stop()
+
+
+def test_spotify_monitor_falls_back_to_shared_pipewire_capture_device(
+    monkeypatch, tmp_path: Path
+) -> None:
+    bluetooth = FakeBluetoothManager()
+    spotify = FakeSpotifyManager()
+    monkeypatch.setattr(
+        runtime_module,
+        "list_input_device_details",
+        lambda: [AudioInputDevice(index=2, name="pulse")],
+    )
+    opened: list[str | None] = []
+
+    def audio_factory(device, config):
+        del config
+        opened.append(device)
+        return FakeAudioInput("pulse")
+
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(
+            hardware=True,
+            pixels=4,
+            audio_source="spotify",
+            settings_file=tmp_path / "settings.json",
+        ),
+        controller_factory=lambda settings: Stripe(settings.pixels),
+        audio_factory=audio_factory,
+        bluetooth_manager=bluetooth,
+        spotify_manager=spotify,
+    )
+    runtime.start()
+    try:
+        deadline = time.monotonic() + 1.0
+        while runtime.audio_settings().active_source != AudioSource.SPOTIFY.value:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+
+        assert opened == ["pulse"]
+        assert bluetooth.defaults == ["lumistripe_spotify.monitor"]
+        assert runtime.audio_settings().monitoring is True
+    finally:
+        runtime.stop()
+
+    assert bluetooth.restored == ["alsa_input.usb-mic"]
