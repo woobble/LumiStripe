@@ -171,11 +171,22 @@ class BluetoothManager:
     def set_default_sink(self, sink: str) -> BluetoothStatus:
         if not self.enabled:
             raise BluetoothCommandError("Audio outputs are only available in hardware mode.")
-        normalized = _validate_selector(sink)
+        normalized = self._resolve_output_selector(sink)
         self._pipewire.set_default_sink(normalized)
         self._move_sink_inputs(normalized)
         self._ensure_spotify_route(normalized, create=False)
         return self.refresh()
+
+    def _resolve_output_selector(self, selector: str) -> str:
+        """Return an available output's canonical selector, never the request value."""
+        requested = _validate_selector(selector)
+        status = self.status()
+        if not status.output_devices:
+            status = self.refresh()
+        for device in status.output_devices:
+            if device.selector == requested:
+                return _validate_selector(device.selector)
+        raise BluetoothCommandError("Selected PipeWire output is unavailable")
 
     def ensure_spotify_route(self) -> None:
         """Create the Spotify monitor-to-default-sink loopback when needed."""
@@ -248,7 +259,7 @@ class BluetoothManager:
     def set_output_volume(self, sink: str, volume: float) -> BluetoothStatus:
         if not self.enabled:
             raise BluetoothCommandError("Audio outputs are only available in hardware mode.")
-        normalized = _validate_selector(sink)
+        normalized = self._resolve_output_selector(sink)
         if not 0.0 <= volume <= 1.0:
             raise BluetoothCommandError("Output volume must be between 0 and 1")
         self._pipewire.set_volume(normalized, volume)
@@ -257,7 +268,7 @@ class BluetoothManager:
     def set_output_mute(self, sink: str, muted: bool) -> BluetoothStatus:
         if not self.enabled:
             raise BluetoothCommandError("Audio outputs are only available in hardware mode.")
-        normalized = _validate_selector(sink)
+        normalized = self._resolve_output_selector(sink)
         self._pipewire.set_mute(normalized, muted)
         return self.refresh()
 
@@ -925,9 +936,6 @@ def _with_operation(
 def _run_command(command: tuple[str, ...], timeout: float) -> str:
     safe_command = _validate_command(command)
     try:
-        # The command allowlist pins executables and operations to literals,
-        # validates variable operands, and shell=False keeps them as data.
-        # codeql[py/command-line-injection]
         result = subprocess.run(
             safe_command,
             shell=False,
