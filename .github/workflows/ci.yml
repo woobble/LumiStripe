@@ -35,7 +35,7 @@ jobs:
           submodules: recursive
 
       - name: Install uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
           python-version: ${{ matrix.python-version }}
@@ -63,7 +63,7 @@ jobs:
 
       - name: Upload coverage to Codecov
         if: matrix.python-version == '3.12' && env.CODECOV_TOKEN != ''
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7
         with:
           files: ./coverage.xml
           token: ${{ env.CODECOV_TOKEN }}
@@ -73,7 +73,7 @@ jobs:
 
       - name: Upload test results to Codecov
         if: matrix.python-version == '3.12' && !cancelled() && env.CODECOV_TOKEN != ''
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7
         with:
           files: ./junit.xml
           token: ${{ env.CODECOV_TOKEN }}
@@ -114,7 +114,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Install uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
           python-version: "3.12"
@@ -159,7 +159,7 @@ jobs:
           submodules: recursive
 
       - name: Install uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
           python-version: "3.12"
@@ -222,7 +222,7 @@ jobs:
           git submodule status --recursive
 
       - name: Install uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
           python-version: "3.12"
