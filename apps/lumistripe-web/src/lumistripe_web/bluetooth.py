@@ -31,6 +31,7 @@ from .bluetooth_providers import BlueZProvider, PipeWireProvider
 logger = logging.getLogger(__name__)
 
 BLUETOOTH_ADDRESS = re.compile(r"^[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}$")
+PIPEWIRE_SELECTOR = re.compile(r"^[A-Za-z0-9_:.@+-]{1,256}$")
 SPOTIFY_SINK = "lumistripe_spotify"
 SPOTIFY_MONITOR = f"{SPOTIFY_SINK}.monitor"
 _DEVICE_LINE = re.compile(r"^Device\s+([0-9A-Fa-f:]{17})\s*(.*)$")
@@ -664,13 +665,18 @@ def _validate_alias(alias: str) -> str:
         raise BluetoothCommandError("Bluetooth name cannot be empty")
     if len(normalized) > 64:
         raise BluetoothCommandError("Bluetooth name must be 64 characters or fewer")
+    if any(ord(char) < 0x20 or 0x7F <= ord(char) <= 0x9F for char in normalized):
+        raise BluetoothCommandError("Bluetooth name cannot contain control characters")
     return normalized
 
 
 def _validate_selector(selector: str) -> str:
     normalized = selector.strip()
-    if not normalized or len(normalized) > 256 or any(char.isspace() for char in normalized):
-        raise BluetoothCommandError("Audio output selector is invalid")
+    if (
+        not PIPEWIRE_SELECTOR.fullmatch(normalized)
+        or normalized.startswith("-")
+    ):
+        raise BluetoothCommandError("PipeWire selector is invalid")
     return normalized
 
 
@@ -917,9 +923,14 @@ def _with_operation(
 
 
 def _run_command(command: tuple[str, ...], timeout: float) -> str:
+    safe_command = _validate_command(command)
     try:
+        # The command allowlist pins executables and operations to literals,
+        # validates variable operands, and shell=False keeps them as data.
+        # codeql[py/command-line-injection]
         result = subprocess.run(
-            command,
+            safe_command,
+            shell=False,
             check=False,
             capture_output=True,
             text=True,
@@ -937,6 +948,111 @@ def _run_command(command: tuple[str, ...], timeout: float) -> str:
             output or f"{' '.join(command)} failed with exit code {result.returncode}"
         )
     return output
+
+
+def _validate_command(command: tuple[str, ...]) -> tuple[str, ...]:
+    """Allow only the Bluetooth and PipeWire commands issued by our providers."""
+    if command in {
+        ("bluetoothctl", "show"),
+        ("bluetoothctl", "devices"),
+        ("bluetoothctl", "devices", "Connected"),
+        ("bluetoothctl", "devices", "Paired"),
+        ("bluetoothctl", "--timeout", "8", "scan", "on"),
+        ("pactl", "list", "short", "sources"),
+        ("pactl", "list", "short", "sinks"),
+        ("pactl", "list", "sinks"),
+        ("pactl", "list", "short", "sink-inputs"),
+        ("pactl", "list", "short", "modules"),
+        ("pactl", "info"),
+        ("wpctl", "status"),
+    }:
+        return command
+
+    if len(command) == 3 and command[:2] == ("bluetoothctl", "info"):
+        return ("bluetoothctl", "info", _validate_address(command[2]))
+    if len(command) == 3 and command[:2] == ("bluetoothctl", "power"):
+        if command[2] == "on":
+            return ("bluetoothctl", "power", "on")
+        if command[2] == "off":
+            return ("bluetoothctl", "power", "off")
+        raise BluetoothCommandError("unsupported Bluetooth power command")
+    if len(command) == 3 and command[:2] == ("bluetoothctl", "system-alias"):
+        return ("bluetoothctl", "system-alias", _validate_alias(command[2]))
+    if len(command) == 3 and command[:2] == ("bluetoothctl", "trust"):
+        return ("bluetoothctl", "trust", _validate_address(command[2]))
+    if len(command) == 3 and command[:2] == ("bluetoothctl", "remove"):
+        return ("bluetoothctl", "remove", _validate_address(command[2]))
+    if len(command) == 3 and command[:2] == ("bluetoothctl", "disconnect"):
+        return ("bluetoothctl", "disconnect", _validate_address(command[2]))
+    if len(command) == 4 and command[:2] == ("bluetoothctl", "connect"):
+        address = _validate_address(command[2])
+        if command[3] not in {"a2dp-sink", "a2dp-source"}:
+            raise BluetoothCommandError("unsupported Bluetooth audio profile")
+        return ("bluetoothctl", "connect", address, command[3])
+
+    if len(command) == 3 and command[:2] == ("pactl", "set-default-sink"):
+        return ("pactl", "set-default-sink", _validate_selector(command[2]))
+    if len(command) == 3 and command[:2] == ("pactl", "set-default-source"):
+        return ("pactl", "set-default-source", _validate_selector(command[2]))
+    if len(command) == 4 and command[:2] == ("pactl", "move-sink-input"):
+        if not command[2].isdigit():
+            raise BluetoothCommandError("PipeWire sink input id is invalid")
+        return (
+            "pactl",
+            "move-sink-input",
+            command[2],
+            _validate_selector(command[3]),
+        )
+    if len(command) == 4 and command[:2] == ("pactl", "set-sink-volume"):
+        if not re.fullmatch(r"(?:100|[1-9][0-9]?|0)%", command[3]):
+            raise BluetoothCommandError("PipeWire sink volume is invalid")
+        return (
+            "pactl",
+            "set-sink-volume",
+            _validate_selector(command[2]),
+            command[3],
+        )
+    if len(command) == 4 and command[:2] == ("pactl", "set-sink-mute"):
+        if command[3] not in {"0", "1"}:
+            raise BluetoothCommandError("PipeWire sink mute value is invalid")
+        return (
+            "pactl",
+            "set-sink-mute",
+            _validate_selector(command[2]),
+            command[3],
+        )
+    if len(command) == 3 and command[:2] == ("pactl", "unload-module"):
+        if not command[2].isdigit():
+            raise BluetoothCommandError("PipeWire module id is invalid")
+        return ("pactl", "unload-module", command[2])
+    if len(command) == 4 and command[:3] == (
+        "pactl",
+        "load-module",
+        "module-loopback",
+    ):
+        match = re.fullmatch(
+            r"source=lumistripe_spotify\.monitor sink=([A-Za-z0-9_:.@+-]{1,256}) "
+            r"latency_msec=20 sink_input_properties=application\.name=LumiStripe-Spotify",
+            command[3],
+        )
+        if match is None:
+            raise BluetoothCommandError("unsupported PipeWire module arguments")
+        sink = _validate_selector(match[1])
+        return (
+            "pactl",
+            "load-module",
+            "module-loopback",
+            " ".join(
+                (
+                    f"source={SPOTIFY_MONITOR}",
+                    f"sink={sink}",
+                    "latency_msec=20",
+                    "sink_input_properties=application.name=LumiStripe-Spotify",
+                )
+            ),
+        )
+
+    raise BluetoothCommandError("unsupported Bluetooth or PipeWire command")
 
 
 def _run_bluetoothctl_script(
