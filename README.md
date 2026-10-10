@@ -27,8 +27,9 @@ sudo ./deploy/install.sh
 ```
 
 The installer installs the system packages and native build tools, uv 0.13.0,
-managed Python 3.12, Bun, all locked Python/frontend dependencies, the
-Bluetooth/WirePlumber setup, Raspberry Pi SPI, Nginx, and the systemd service.
+managed Python 3.12, the native audio, GPIO, and SPI extensions, Bun, and all
+locked Python/frontend dependencies. It also builds the frontend and configures
+Bluetooth/WirePlumber, Raspberry Pi SPI, Nginx, and the systemd service.
 It uses the non-root account invoking `sudo`; set `LUMI_SERVICE_USER` and
 `LUMI_PROJECT_DIR` when the checkout or service account differs. In an
 interactive terminal, the installer prompts for a four-digit pairing code and

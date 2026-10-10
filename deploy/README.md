@@ -31,11 +31,12 @@ sudo env LUMI_PAIRING_CODE=0427 \
 The installer provisions the complete appliance: Debian/Raspberry Pi OS
 packages and native
 build tools, the service user and GPIO/SPI/audio permissions, Raspberry Pi SPI,
-uv 0.13.0 with managed Python 3.12, Bun, locked Python and frontend
-dependencies, the frontend production build, the Bluetooth/WirePlumber
-configuration, the official Spotify Soloist binary when Spotify is configured,
-and a local mkcert CA and HTTPS certificate, Nginx, and the required systemd
-services. Without a Spotify key the Spotify service remains disabled. Existing
+uv 0.13.0 with managed Python 3.12, the native audio, GPIO, and SPI extensions,
+Bun, locked Python and frontend dependencies, the frontend production build,
+and the Bluetooth/WirePlumber configuration. It installs the official Spotify
+Soloist binary when configured, plus a local mkcert CA and HTTPS certificate,
+Nginx, and the required systemd services. Without a Spotify key the Spotify
+service remains disabled. Existing
 `/etc/lumistripe/lumistripe-web.env` and
 `/etc/lumistripe/lumistripe-spotify.env` files are preserved. Spotify's
 official builds are downloaded on the Pi and are not bundled or redistributed

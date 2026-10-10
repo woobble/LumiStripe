@@ -180,8 +180,12 @@ sync_dependencies() {
   pushd "$PROJECT_DIR" >/dev/null
   as_user "$UV_BIN" python install "$PYTHON_VERSION"
   as_user_with_env \
+    LUMISTRIPE_BUILD_EXTENSIONS=all \
     UV_PYTHON_PREFERENCE=only-managed \
-    "$UV_BIN" sync --locked --python "$PYTHON_VERSION" --no-dev --extra hardware-gain
+    "$UV_BIN" sync --locked --python "$PYTHON_VERSION" --no-dev \
+    --extra hardware-gain --reinstall-package lumistripe-core
+  as_user "$PROJECT_DIR/.venv/bin/python" -c \
+    'import lumistripe.audio._audio, lumistripe.gpio._gpiomem, lumistripe.gpio._sm16716'
   popd >/dev/null
 }
 
