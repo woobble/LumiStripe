@@ -424,12 +424,9 @@ spotify_environment_ready() {
 
 start_deployment_services() {
   local unit
-  local load_state
   for unit in lumistripe-web.service lumistripe-spotify.service; do
-    load_state="$(systemctl show --property=LoadState --value "$unit" 2>/dev/null || true)"
-    if [[ "$load_state" == loaded ]]; then
-      systemctl reset-failed "$unit"
-    fi
+    # Freshly installed unit files may not be loaded by systemd yet.
+    systemctl reset-failed "$unit" >/dev/null 2>&1 || true
   done
 
   if spotify_environment_ready; then
