@@ -113,6 +113,7 @@ generated project dependencies/build output, Nginx site, and TLS certificate.
 
 It will preserve the project checkout, shared OS packages/services, the
 $SERVICE_USER account, uv, Bun, mkcert and its CA, and existing backups.
+Reinstalling will ask for a pairing code and an optional Spotify API key.
 
 EOF
   read -r -p "Continue with LumiStripe uninstall? [y/N] " confirmation
@@ -231,3 +232,4 @@ remove_empty_directory /var/backups/lumistripe
 echo
 echo "LumiStripe uninstall completed."
 echo "Shared packages, services, toolchains, user account, mkcert CA, and checkout were preserved."
+echo "Run deploy/install.sh to reinstall; it will request a pairing code and optional Spotify API key."

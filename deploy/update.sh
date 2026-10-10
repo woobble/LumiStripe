@@ -2,15 +2,21 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=deploy/tls.sh
+source "$SCRIPT_DIR/tls.sh"
 PROJECT_DIR="${LUMI_PROJECT_DIR:-$(cd -- "$SCRIPT_DIR/.." && pwd -P)}"
 PROJECT_USER="${LUMI_SERVICE_USER:-${SUDO_USER:-}}"
 PYTHON_VERSION="${LUMI_PYTHON_VERSION:-3.12}"
+UV_VERSION="${LUMI_UV_VERSION:-0.13.0}"
 TARGET_REF="${1:-origin/main}"
 LOCK_FILE=/run/lock/lumistripe-update.lock
 SERVICE_FILE=/etc/systemd/system/lumistripe-web.service
 SPOTIFY_SERVICE_FILE=/etc/systemd/system/lumistripe-spotify.service
 SPOTIFY_ENV_FILE=/etc/lumistripe/lumistripe-spotify.env
 SOLOIST_BIN=/usr/local/bin/soloist
+TLS_DIR=/etc/nginx/certs
+TLS_CERT="$TLS_DIR/led.controller.pem"
+TLS_KEY="$TLS_DIR/led.controller-key.pem"
 PREVIOUS_REF=
 ROLLING_BACK=0
 
@@ -65,6 +71,20 @@ as_user_with_env() {
     HOME="$PROJECT_HOME" \
     PATH="$PROJECT_HOME/.bun/bin:$PROJECT_HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" \
     "$@"
+}
+
+ensure_uv_version() {
+  local installed_uv_version
+  installed_uv_version="$(as_user "$UV_BIN" --version 2>/dev/null | awk '{ print $2 }' || true)"
+  if [[ "$installed_uv_version" != "$UV_VERSION" ]]; then
+    echo "Updating uv to $UV_VERSION for $PROJECT_USER..."
+    as_user "$UV_BIN" self update "$UV_VERSION"
+    installed_uv_version="$(as_user "$UV_BIN" --version 2>/dev/null | awk '{ print $2 }' || true)"
+  fi
+  [[ "$installed_uv_version" == "$UV_VERSION" ]] || {
+    echo "Expected uv $UV_VERSION at $UV_BIN; found ${installed_uv_version:-no usable uv binary}." >&2
+    return 1
+  }
 }
 
 install_audio_bridge_packages() {
@@ -242,6 +262,9 @@ render_spotify_service_unit() {
 }
 
 refresh_deployment_files() {
+  ensure_lumistripe_tls_certificate \
+    "$TLS_DIR" "$TLS_CERT" "$TLS_KEY" "$PROJECT_USER" "$PROJECT_GROUP" "$PROJECT_HOME"
+
   install_wireplumber_config
   render_service_unit
   render_spotify_service_unit
@@ -277,14 +300,19 @@ trap rollback ERR
 
 STATUS=$(git_user status --porcelain)
 [[ -z "$STATUS" ]] || { echo "Working tree is dirty; commit or stash changes before updating." >&2; exit 1; }
+ensure_uv_version
 PREVIOUS_REF=$(git_user rev-parse HEAD)
 git_user fetch --prune --tags origin
 TARGET_COMMIT=$(git_user rev-parse --verify "${TARGET_REF}^{commit}")
 git_user switch --detach "$TARGET_COMMIT"
 
 install_audio_bridge_packages
-install_spotify_soloist
 create_spotify_environment_file
+if spotify_environment_ready; then
+  install_spotify_soloist
+else
+  systemctl disable --now lumistripe-spotify.service >/dev/null 2>&1 || true
+fi
 sync_dependencies
 build_frontend
 refresh_deployment_files

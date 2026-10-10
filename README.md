@@ -23,15 +23,19 @@ dashboard, Bluetooth music input, PipeWire audio routing, and Nginx HTTPS
 access, run the self-contained installer from the checkout on the Pi:
 
 ```bash
-sudo env LUMI_PAIRING_CODE=0427 ./deploy/install.sh
+sudo ./deploy/install.sh
 ```
 
-The installer installs the system packages and native build tools, managed
-Python 3.12 through uv, Bun, all locked Python/frontend dependencies, the
+The installer installs the system packages and native build tools, uv 0.13.0,
+managed Python 3.12, Bun, all locked Python/frontend dependencies, the
 Bluetooth/WirePlumber setup, Raspberry Pi SPI, Nginx, and the systemd service.
 It uses the non-root account invoking `sudo`; set `LUMI_SERVICE_USER` and
-`LUMI_PROJECT_DIR` when the checkout or service account differs. If no pairing
-code is supplied, the installer generates one and prints it.
+`LUMI_PROJECT_DIR` when the checkout or service account differs. In an
+interactive terminal, the installer prompts for a four-digit pairing code and
+an optional Spotify API key when they are not supplied. Leave the pairing code
+blank to generate one; leave the Spotify key blank to skip Spotify. For
+unattended installation, set `LUMI_PAIRING_CODE` and optionally
+`LUMI_SPOTIFY_API_KEY` in the environment.
 
 The HTTPS certificate is generated with mkcert. Trust the generated
 `rootCA.pem` (the installer prints its path) on each phone or PC that opens

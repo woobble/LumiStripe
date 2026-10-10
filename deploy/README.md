@@ -14,11 +14,14 @@ same routed stream drives the music-reactive animation.
 From the LumiStripe checkout on the Pi, run:
 
 ```bash
-sudo env LUMI_PAIRING_CODE=0427 ./deploy/install.sh
+sudo ./deploy/install.sh
 ```
 
-To enable Spotify Connect during installation, provide the Soloist API key from
-the Spotify for Developers dashboard:
+In a terminal, the installer asks for a four-digit pairing code and the
+Spotify Soloist API key. Leave the pairing-code prompt blank to generate a
+secure code. Leave the Spotify-key prompt blank to install without Spotify.
+For unattended installation, provide the pairing code and optional API key in
+the environment:
 
 ```bash
 sudo env LUMI_PAIRING_CODE=0427 \
@@ -28,12 +31,12 @@ sudo env LUMI_PAIRING_CODE=0427 \
 The installer provisions the complete appliance: Debian/Raspberry Pi OS
 packages and native
 build tools, the service user and GPIO/SPI/audio permissions, Raspberry Pi SPI,
-uv with managed Python 3.12, Bun, locked Python and frontend dependencies, the
-frontend production build, the Bluetooth/WirePlumber configuration, the
-official Spotify Soloist binary, a local mkcert CA and HTTPS certificate, Nginx,
-and all required systemd services. If
-`LUMI_PAIRING_CODE` is omitted, a secure four-digit code is generated and
-printed. Existing `/etc/lumistripe/lumistripe-web.env` and
+uv 0.13.0 with managed Python 3.12, Bun, locked Python and frontend
+dependencies, the frontend production build, the Bluetooth/WirePlumber
+configuration, the official Spotify Soloist binary when Spotify is configured,
+and a local mkcert CA and HTTPS certificate, Nginx, and the required systemd
+services. Without a Spotify key the Spotify service remains disabled. Existing
+`/etc/lumistripe/lumistripe-web.env` and
 `/etc/lumistripe/lumistripe-spotify.env` files are preserved. Spotify's
 official builds are downloaded on the Pi and are not bundled or redistributed
 by LumiStripe.
@@ -52,7 +55,9 @@ images are handled with `libgpiod2` when that is the available runtime package.
 
 The installer needs internet access for apt, uv, Bun, mkcert, and package
 downloads. It can be run again safely after updating the checkout; existing
-pairing and TLS files are kept. The generated CA is stored at the service
+pairing and complete TLS files are kept. If either TLS file is missing or
+empty, the installer recreates the certificate and key using the existing CA.
+The generated CA is stored at the service
 user's mkcert CA path and must be installed/trusted on each phone or PC that
 opens the HTTPS dashboard.
 

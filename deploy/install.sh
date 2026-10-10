@@ -10,6 +10,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_DIR="${LUMI_PROJECT_DIR:-$(cd -- "$SCRIPT_DIR/.." && pwd -P)}"
 SERVICE_USER="${LUMI_SERVICE_USER:-${SUDO_USER:-}}"
 PYTHON_VERSION="${LUMI_PYTHON_VERSION:-3.12}"
+UV_VERSION="${LUMI_UV_VERSION:-0.13.0}"
 
 ENV_DIR=/etc/lumistripe
 ENV_FILE="$ENV_DIR/lumistripe-web.env"
@@ -27,7 +28,6 @@ NGINX_DEFAULT=/etc/nginx/sites-enabled/default
 TLS_DIR=/etc/nginx/certs
 TLS_CERT="$TLS_DIR/led.controller.pem"
 TLS_KEY="$TLS_DIR/led.controller-key.pem"
-CERT_TMP_DIR=
 MKCERT_CA_ROOT=
 NGINX_DEFAULT_REMOVED=0
 
@@ -84,12 +84,16 @@ for required_file in \
   "$PROJECT_DIR/deploy/90-lumistripe-spotify.conf" \
   "$PROJECT_DIR/deploy/lumistripe-web.env.example" \
   "$PROJECT_DIR/deploy/lumistripe-spotify.env.example" \
-  "$PROJECT_DIR/deploy/nginx/led-controller.conf"; do
+  "$PROJECT_DIR/deploy/nginx/led-controller.conf" \
+  "$PROJECT_DIR/deploy/tls.sh"; do
   [[ -f "$required_file" ]] || {
     echo "Required deployment file is missing: $required_file" >&2
     exit 1
   }
 done
+
+# shellcheck source=deploy/tls.sh
+source "$SCRIPT_DIR/tls.sh"
 
 command -v apt-get >/dev/null 2>&1 || {
   echo "This installer requires apt-get (Raspberry Pi OS/Debian)." >&2
@@ -99,13 +103,6 @@ command -v systemctl >/dev/null 2>&1 || {
   echo "systemd is required on the target Pi." >&2
   exit 1
 }
-
-cleanup() {
-  if [[ -n "$CERT_TMP_DIR" && -d "$CERT_TMP_DIR" ]]; then
-    rm -rf -- "$CERT_TMP_DIR"
-  fi
-}
-trap cleanup EXIT
 
 as_user() {
   runuser -u "$SERVICE_USER" -- env \
@@ -236,6 +233,7 @@ enable_spi() {
 download_and_run_as_user() {
   local url="$1"
   local shell_name="$2"
+  shift 2
   local installer_file
   installer_file="$(mktemp /tmp/lumistripe-tool-installer.XXXXXX)"
 
@@ -244,7 +242,7 @@ download_and_run_as_user() {
   chown "$SERVICE_USER:$SERVICE_GROUP" "$installer_file"
   chmod 700 "$installer_file"
 
-  if ! as_user_with_env "$shell_name" "$installer_file"; then
+  if ! as_user_with_env "$@" "$shell_name" "$installer_file"; then
     rm -f -- "$installer_file"
     return 1
   fi
@@ -252,15 +250,21 @@ download_and_run_as_user() {
 }
 
 install_toolchains() {
+  local installed_uv_version=
   install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 755 \
     "$SERVICE_HOME/.local/bin" "$SERVICE_HOME/.bun"
 
-  if [[ ! -x "$UV_BIN" ]]; then
-    echo "Installing uv for $SERVICE_USER..."
-    download_and_run_as_user "https://astral.sh/uv/install.sh" /bin/sh
+  if [[ -x "$UV_BIN" ]]; then
+    installed_uv_version="$(as_user "$UV_BIN" --version 2>/dev/null | awk '{ print $2 }' || true)"
   fi
-  [[ -x "$UV_BIN" ]] || {
-    echo "uv installation did not produce $UV_BIN." >&2
+  if [[ "$installed_uv_version" != "$UV_VERSION" ]]; then
+    echo "Installing uv $UV_VERSION for $SERVICE_USER..."
+    download_and_run_as_user \
+      "https://astral.sh/uv/install.sh" /bin/sh "UV_VERSION=$UV_VERSION"
+  fi
+  installed_uv_version="$(as_user "$UV_BIN" --version 2>/dev/null | awk '{ print $2 }' || true)"
+  [[ "$installed_uv_version" == "$UV_VERSION" ]] || {
+    echo "Expected uv $UV_VERSION at $UV_BIN; found ${installed_uv_version:-no usable uv binary}." >&2
     exit 1
   }
 
@@ -330,6 +334,11 @@ create_environment_file() {
 
   if [[ ! -e "$ENV_FILE" ]]; then
     local pairing_code="${LUMI_PAIRING_CODE:-}"
+    if [[ -z "$pairing_code" && -t 0 ]]; then
+      IFS= read -r -s -p \
+        "LumiStripe pairing code (4 digits, leave blank to generate): " pairing_code || pairing_code=
+      printf '\n' >&2
+    fi
     if [[ -z "$pairing_code" ]]; then
       pairing_code="$(od -An -N2 -tu2 /dev/urandom | awk '{ printf "%04d", 1000 + ($1 % 9000) }')"
       echo "Generated a LumiStripe pairing code: $pairing_code"
@@ -357,29 +366,43 @@ create_spotify_environment_file() {
   install -d -m 755 "$ENV_DIR"
   if [[ ! -e "$SPOTIFY_ENV_FILE" ]]; then
     local api_key="${LUMI_SPOTIFY_API_KEY:-}"
-    [[ -n "$api_key" && "$api_key" != REPLACE_WITH_* ]] || {
-      echo "LUMI_SPOTIFY_API_KEY is required to install Spotify Soloist." >&2
-      echo "Generate a key in the Spotify for Developers dashboard and rerun:" >&2
-      echo "  sudo env LUMI_SPOTIFY_API_KEY=... $0" >&2
+    local line
+    local spotify_env_tmp
+    if [[ -z "$api_key" && -t 0 ]]; then
+      IFS= read -r -s -p \
+        "Spotify Soloist API key (leave blank to skip Spotify): " api_key || api_key=
+      printf '\n' >&2
+    fi
+    if [[ -z "$api_key" ]]; then
+      echo "Spotify key not supplied; Spotify will remain disabled."
+      return 0
+    fi
+    [[ "$api_key" != REPLACE_WITH_* ]] || {
+      echo "LUMI_SPOTIFY_API_KEY must be a real Spotify Soloist API key." >&2
       exit 1
     }
     [[ "$api_key" != *$'\n'* && "$api_key" != *$'\r'* ]] || {
       echo "LUMI_SPOTIFY_API_KEY must be a single-line value." >&2
       exit 1
     }
-    local api_key_replacement
-    local data_dir_replacement
-    local cache_dir_replacement
-    api_key_replacement="$(printf '%s' "$api_key" | sed 's/[&|\\]/\\&/g')"
-    data_dir_replacement="$(printf '%s' "$SERVICE_HOME/.local/share/soloist" | sed 's/[&|\\]/\\&/g')"
-    cache_dir_replacement="$(printf '%s' "$SERVICE_HOME/.cache/soloist" | sed 's/[&|\\]/\\&/g')"
-    install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 600 \
-      "$PROJECT_DIR/deploy/lumistripe-spotify.env.example" "$SPOTIFY_ENV_FILE"
-    sed -i \
-      -e "s|^LUMI_SPOTIFY_API_KEY=.*|LUMI_SPOTIFY_API_KEY=$api_key_replacement|" \
-      -e "s|^LUMI_SPOTIFY_DATA_DIR=.*|LUMI_SPOTIFY_DATA_DIR=$data_dir_replacement|" \
-      -e "s|^LUMI_SPOTIFY_CACHE_DIR=.*|LUMI_SPOTIFY_CACHE_DIR=$cache_dir_replacement|" \
-      "$SPOTIFY_ENV_FILE"
+    spotify_env_tmp="$(mktemp /tmp/lumistripe-spotify-env.XXXXXX)"
+    if ! while IFS= read -r line || [[ -n "$line" ]]; do
+      case "$line" in
+        LUMI_SPOTIFY_API_KEY=*) printf 'LUMI_SPOTIFY_API_KEY=%s\n' "$api_key" ;;
+        LUMI_SPOTIFY_DATA_DIR=*) printf 'LUMI_SPOTIFY_DATA_DIR=%s\n' "$SERVICE_HOME/.local/share/soloist" ;;
+        LUMI_SPOTIFY_CACHE_DIR=*) printf 'LUMI_SPOTIFY_CACHE_DIR=%s\n' "$SERVICE_HOME/.cache/soloist" ;;
+        *) printf '%s\n' "$line" ;;
+      esac
+    done < "$PROJECT_DIR/deploy/lumistripe-spotify.env.example" > "$spotify_env_tmp"; then
+      rm -f -- "$spotify_env_tmp"
+      return 1
+    fi
+    if ! install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 600 \
+      "$spotify_env_tmp" "$SPOTIFY_ENV_FILE"; then
+      rm -f -- "$spotify_env_tmp"
+      return 1
+    fi
+    rm -f -- "$spotify_env_tmp"
   fi
 
   chown "$SERVICE_USER:$SERVICE_GROUP" "$SPOTIFY_ENV_FILE"
@@ -392,35 +415,58 @@ create_spotify_environment_file() {
   }
 }
 
-create_tls_certificate() {
-  install -d -o root -g root -m 700 "$TLS_DIR"
+spotify_environment_ready() {
+  [[ -f "$SPOTIFY_ENV_FILE" ]] || return 1
+  local api_key
+  api_key="$(awk -F= '$1 == "LUMI_SPOTIFY_API_KEY" { print substr($0, index($0, "=") + 1); exit }' "$SPOTIFY_ENV_FILE")"
+  [[ -n "$api_key" && "$api_key" != REPLACE_WITH_* ]]
+}
 
-  if [[ ! -e "$TLS_CERT" && ! -e "$TLS_KEY" ]]; then
-    echo "Generating the local mkcert HTTPS certificate for led.controller..."
-    CERT_TMP_DIR="$(mktemp -d /tmp/lumistripe-certificate.XXXXXX)"
-    chown "$SERVICE_USER:$SERVICE_GROUP" "$CERT_TMP_DIR"
-    local certificate_names=(led.controller localhost 127.0.0.1)
-    local host_address
-    local -a host_addresses=()
-    read -r -a host_addresses <<< "$(hostname -I 2>/dev/null || true)"
-    for host_address in "${host_addresses[@]:-}"; do
-      [[ -n "$host_address" ]] && certificate_names+=("$host_address")
-    done
-    as_user mkcert -install
-    as_user mkcert \
-      -cert-file "$CERT_TMP_DIR/cert.pem" \
-      -key-file "$CERT_TMP_DIR/key.pem" \
-      "${certificate_names[@]}"
-    install -o root -g root -m 644 "$CERT_TMP_DIR/cert.pem" "$TLS_CERT"
-    install -o root -g root -m 600 "$CERT_TMP_DIR/key.pem" "$TLS_KEY"
-  elif [[ ! -s "$TLS_CERT" || ! -s "$TLS_KEY" ]]; then
-    echo "Both $TLS_CERT and $TLS_KEY must exist, or neither may exist." >&2
-    exit 1
+start_deployment_services() {
+  systemctl reset-failed lumistripe-web.service lumistripe-spotify.service
+
+  if spotify_environment_ready; then
+    systemctl enable lumistripe-spotify.service
+    if ! systemctl restart lumistripe-spotify.service; then
+      echo "Spotify Soloist did not start. Inspect it with: systemctl status lumistripe-spotify.service" >&2
+      return 1
+    fi
+    if ! systemctl is-active --quiet lumistripe-spotify.service; then
+      echo "Spotify Soloist is not active. Inspect it with: systemctl status lumistripe-spotify.service" >&2
+      return 1
+    fi
+  else
+    systemctl disable --now lumistripe-spotify.service >/dev/null 2>&1 || true
   fi
 
-  chown root:root "$TLS_CERT" "$TLS_KEY"
-  chmod 644 "$TLS_CERT"
-  chmod 600 "$TLS_KEY"
+  systemctl enable lumistripe-web.service
+  if ! systemctl restart lumistripe-web.service; then
+    echo "LumiStripe web did not start. Inspect it with: systemctl status lumistripe-web.service" >&2
+    return 1
+  fi
+  if ! systemctl is-active --quiet lumistripe-web.service; then
+    echo "LumiStripe web is not active. Inspect it with: systemctl status lumistripe-web.service" >&2
+    return 1
+  fi
+
+  for _ in {1..30}; do
+    if curl --fail --silent http://127.0.0.1:8000/api/health >/dev/null; then
+      systemctl --no-pager --full status lumistripe-web.service
+      return 0
+    fi
+    if ! systemctl is-active --quiet lumistripe-web.service; then
+      break
+    fi
+    sleep 1
+  done
+
+  echo "LumiStripe web did not become healthy. Inspect it with: systemctl status lumistripe-web.service" >&2
+  return 1
+}
+
+create_tls_certificate() {
+  ensure_lumistripe_tls_certificate \
+    "$TLS_DIR" "$TLS_CERT" "$TLS_KEY" "$SERVICE_USER" "$SERVICE_GROUP" "$SERVICE_HOME"
   MKCERT_CA_ROOT="$(as_user mkcert -CAROOT)"
 }
 
@@ -572,10 +618,12 @@ enable_spi
 # frontend. This also makes deploy/update.sh work after a root-owned checkout.
 chown -R "$SERVICE_USER:$SERVICE_GROUP" "$PROJECT_DIR"
 install_toolchains
-install_spotify_soloist
-install_project_dependencies
 create_environment_file
 create_spotify_environment_file
+if spotify_environment_ready; then
+  install_spotify_soloist
+fi
+install_project_dependencies
 create_tls_certificate
 render_service_unit
 render_spotify_service_unit
@@ -586,9 +634,7 @@ install_nginx
 write_install_state
 
 systemctl daemon-reload
-systemctl enable --now lumistripe-spotify.service
-systemctl enable --now lumistripe-web.service
-systemctl --no-pager --full status lumistripe-web.service
+start_deployment_services
 
 echo
 echo "LumiStripe deployment installed successfully."
