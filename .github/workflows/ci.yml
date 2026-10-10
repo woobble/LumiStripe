@@ -39,6 +39,7 @@ jobs:
         with:
           enable-cache: true
           python-version: ${{ matrix.python-version }}
+          version: "0.13.0"
 
       - name: Install native audio dependencies
         run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libasound2-dev
@@ -118,6 +119,7 @@ jobs:
         with:
           enable-cache: true
           python-version: "3.12"
+          version: "0.13.0"
 
       - name: Verify generated REST contract
         run: bun run generate:api && git diff --exit-code -- openapi.json src/generated/api.ts
@@ -163,6 +165,7 @@ jobs:
         with:
           enable-cache: true
           python-version: "3.12"
+          version: "0.13.0"
 
       - name: Install native audio dependencies
         if: matrix.profile == 'audio' || matrix.profile == 'all'
@@ -226,6 +229,7 @@ jobs:
         with:
           enable-cache: true
           python-version: "3.12"
+          version: "0.13.0"
 
       - name: Verify build environment
         run: |
