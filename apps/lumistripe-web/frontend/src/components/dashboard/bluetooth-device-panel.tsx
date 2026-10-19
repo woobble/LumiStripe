@@ -92,9 +92,11 @@ export function BluetoothDevicePanel({
           <p className="text-xs text-muted-foreground">This is the name phones, speakers, and other Bluetooth devices see when connecting to the Pi.</p>
         </div>
         <div className="flex gap-2">
-          <Button className="h-11 flex-1 rounded-xl" disabled={busy || !status?.available || !status?.powered || !supports(status, "scan")} onClick={() => onAction("scan", dashboardApi.scanBluetooth, "Bluetooth scan started.")}><SearchIcon />{status?.scanning ? "Scanning…" : "Scan for devices"}</Button>
+          <Button className="h-11 flex-1 rounded-xl" disabled={busy || !status?.available || !status?.powered || !supports(status, "scan")} onClick={() => onAction("scan", dashboardApi.scanBluetooth, "Scan started. Open Settings → Bluetooth, then return here.")}><SearchIcon />{status?.scanning ? "Scanning…" : "Start 60-second scan"}</Button>
           <Button variant="outline" size="icon" className="size-11 rounded-xl" disabled={busy} onClick={onRefresh} aria-label="Refresh Bluetooth status"><RefreshCwIcon /></Button>
         </div>
+        <p className="text-xs text-muted-foreground">For iPhone, start a scan, open Settings → Bluetooth, then return here. The Pi keeps scanning while you switch apps; Safari may pause page updates until you return.</p>
+        {(status?.operation === "scanning" || status?.scanning) && <p role="status" className="rounded-xl border border-violet-300/15 bg-violet-300/5 p-3 text-sm text-violet-100">Discovery stays active for up to 60 seconds. Keep Bluetooth Settings open, then return to this page to see the devices found.</p>}
         {(status?.connected_inputs.length || status?.connected_outputs.length) ? <div className="grid gap-2 sm:grid-cols-2">
           {status.connected_inputs.map((device) => <div key={`input-${device.address}`} className="rounded-xl border border-cyan-300/15 bg-cyan-300/5 p-3"><div className="flex items-center justify-between gap-2"><span className="truncate text-sm font-medium">{device.name}</span><Badge variant="outline">Input</Badge></div><p className="mt-1 text-xs text-muted-foreground">{status.streaming ? "Music stream detected" : "Connected; waiting for audio"}</p></div>)}
           {status.connected_outputs.map((device) => <div key={`output-${device.address}`} className="rounded-xl border border-emerald-300/15 bg-emerald-300/5 p-3"><div className="flex items-center justify-between gap-2"><span className="truncate text-sm font-medium">{device.name}</span><Badge variant="outline">Output</Badge></div><p className="mt-1 text-xs text-muted-foreground">Connected speaker output</p></div>)}
@@ -130,7 +132,7 @@ export function BluetoothDevicePanel({
         {!status?.available && <div className="flex gap-2 rounded-xl bg-amber-500/10 p-3 text-sm text-amber-100"><CircleAlertIcon className="mt-0.5 size-4 shrink-0" /><span>Bluetooth tools are unavailable. Install the Pi Bluetooth/PipeWire setup from the deployment guide.</span></div>}
         {status?.error && <div className="flex gap-2 rounded-xl bg-red-500/10 p-3 text-sm text-red-200"><CircleAlertIcon className="mt-0.5 size-4 shrink-0" /><span>{status.error}</span></div>}
         {status?.available && !status.powered && !status.operation && <p className="text-sm text-muted-foreground">Bluetooth is off. Turn it on to scan, pair, or connect a device.</p>}
-        {status?.available && status.powered && !status.devices.length && !status.operation && <p className="text-sm text-muted-foreground">No devices found yet. Put a phone, speaker, or other Bluetooth audio device in pairing mode, then scan.</p>}
+        {status?.available && status.powered && !status.devices.length && !status.operation && <p className="text-sm text-muted-foreground">No devices found yet. Put the device in pairing mode or open iPhone Settings → Bluetooth, then start a scan.</p>}
         <p className="text-xs text-muted-foreground">Input devices send music to the Pi for animation analysis. Output devices receive the Pi’s audio stream.</p>
       </CardContent>
     </Card>

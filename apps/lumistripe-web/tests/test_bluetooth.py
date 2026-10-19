@@ -26,6 +26,7 @@ from lumistripe_web.bluetooth import (
     _raise_for_bluetooth_failure,
     capture_device_selector,
 )
+from lumistripe_web.bluetooth_providers import BlueZProvider
 from lumistripe_web.runtime import LumiStripeRuntime, RuntimeSettings
 from lumistripe_web.settings import AudioTuningProfile
 from lumistripe_web.spotify import SpotifyStatus
@@ -34,6 +35,23 @@ PHONE_ADDRESS = "AA:BB:CC:DD:EE:FF"
 PHONE_SOURCE = "bluez_output.AA_BB_CC_DD_EE_FF.1.monitor"
 SPEAKER_ADDRESS = "11:22:33:44:55:66"
 SPEAKER_SINK = "bluez_output.11_22_33_44_55_66.1"
+
+
+def test_bluetooth_scan_uses_sixty_second_discovery_window() -> None:
+    calls: list[tuple[tuple[str, ...], float]] = []
+
+    def runner(command: tuple[str, ...], timeout: float) -> str:
+        calls.append((command, timeout))
+        return ""
+
+    provider = BlueZProvider(runner, lambda command, script, timeout: "")
+
+    provider.scan()
+
+    assert calls == [
+        (("bluetoothctl", "power", "on"), 5.0),
+        (("bluetoothctl", "--timeout", "60", "scan", "on"), 64.0),
+    ]
 
 
 def _pipewire_runner(command: tuple[str, ...], timeout: float) -> str:

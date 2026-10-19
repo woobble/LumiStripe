@@ -12,6 +12,8 @@ from collections.abc import Callable
 
 from .bluetooth_models import Runner, ScriptRunner
 
+_SCAN_DURATION_SECONDS = 60
+
 
 class BlueZProvider:
     """Command boundary for ``bluetoothctl``."""
@@ -37,7 +39,16 @@ class BlueZProvider:
 
     def scan(self) -> str:
         self._runner(("bluetoothctl", "power", "on"), 5.0)
-        return self._runner(("bluetoothctl", "--timeout", "8", "scan", "on"), 12.0)
+        return self._runner(
+            (
+                "bluetoothctl",
+                "--timeout",
+                str(_SCAN_DURATION_SECONDS),
+                "scan",
+                "on",
+            ),
+            float(_SCAN_DURATION_SECONDS + 4),
+        )
 
     def power(self, powered: bool) -> str:
         return self._runner(("bluetoothctl", "power", "on" if powered else "off"), 8.0)
