@@ -193,6 +193,9 @@ def _clamp01(value: float) -> float:
 
 def _config_to_dict(config: AudioConfig) -> dict[str, float | int]:
     return {
+        "microphone_enabled": config.microphone.enabled,
+        "input_noise_floor": config.microphone.input_noise_floor,
+        "high_pass_hz": config.microphone.high_pass_hz,
         "noise_floor": config.smoothing.noise_floor,
         "rms_attack": config.smoothing.rms_attack,
         "rms_release": config.smoothing.rms_release,
@@ -253,7 +256,8 @@ class AudioState:
         return float(self._processor.normalization_gain())
 
     def stats(self) -> AudioProcessorStats:
-        result = NativeStatsResult.from_native(self._processor.stats())
+        native = self._processor.stats()
+        result = NativeStatsResult.from_native(native)
         return AudioProcessorStats(
             feed_count=result.feed_count,
             samples_seen=result.samples_seen,
@@ -263,6 +267,9 @@ class AudioState:
             input_rms=result.input_rms,
             program_loudness=result.program_loudness,
             musical_impact=result.musical_impact,
+            input_peak=float(native.get("input_peak", 0.0)) if isinstance(native, Mapping) else 0.0,
+            clipping_fraction=float(native.get("clipping_fraction", 0.0)) if isinstance(native, Mapping) else 0.0,
+            microphone_gate_open=bool(native.get("microphone_gate_open", False)) if isinstance(native, Mapping) else False,
         )
 
     def reconfigure(self, config: AudioConfig) -> None:

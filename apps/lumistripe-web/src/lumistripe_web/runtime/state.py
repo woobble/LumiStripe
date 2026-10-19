@@ -10,7 +10,7 @@ from typing import Literal, TypedDict
 from lumistripe import ColorCorrectionController, Controller, PixelBuffer
 from lumistripe.audio.capture import AudioInput
 from lumistripe.audio.config import AudioConfig
-from lumistripe.audio.types import AudioFrame, MusicFeatures
+from lumistripe.audio.types import AudioFrame, AudioProcessorStats, MusicFeatures
 from lumistripe.controller import ColorCorrection
 from lumistripe.playback import AudioSource
 
@@ -106,6 +106,9 @@ class _AudioCalibrationResult(TypedDict):
     recommended_target_level: float
     recommended_hardware_gain: float | None
     recommended_idle_threshold_scale: float
+    recommended_input_noise_floor: float
+    measured_music_level: float
+    clipping_fraction: float
 
 
 @dataclass(slots=True)
@@ -118,6 +121,11 @@ class _AudioCalibrationSession:
     features: list[MusicFeatures] = field(default_factory=list)
     result: _AudioCalibrationResult | None = None
     error: str | None = None
+    two_step: bool = False
+    phase: str = "quiet"
+    last_sequence: int = 0
+    quiet_samples: list[AudioProcessorStats] = field(default_factory=list)
+    music_samples: list[AudioProcessorStats] = field(default_factory=list)
 
 
 _ControllerFactory = Callable[[RuntimeSettings], Controller]

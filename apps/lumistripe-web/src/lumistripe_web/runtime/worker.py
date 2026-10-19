@@ -103,10 +103,11 @@ from ..spotify import (
     SpotifyCommandError,
 )
 from .audio import default_audio_factory
-from .audio_service import complete_audio_calibration
+from .audio_service import complete_audio_calibration, complete_microphone_calibration
 from .calibration_service import calibration_color
 from .commands import (
     _AudioCalibrationFinishCommand,
+    _AudioCalibrationMusicCommand,
     _AudioCalibrationStartCommand,
     _AudioDeviceCommand,
     _AudioSettingsCommand,
@@ -328,6 +329,7 @@ class RuntimeWorker:
         self._correction_controllers: tuple[ColorCorrectionController, ...] = ()
         self._calibration: _CalibrationSession | None = None
         self._audio_calibration: _AudioCalibrationSession | None = None
+        self._audio_calibration_snapshot: AudioCalibrationSessionResponse | None = None
         self._stripe_test: _StripeTestSession | None = None
         self._audio_input: AudioInput | None = None
         self._hardware_gain: HardwareGainController | None = None
@@ -755,26 +757,40 @@ class RuntimeWorker:
     def reset_audio_settings(self, device: str) -> Future[AudioSettingsResponse]:
         return self.apply_audio_settings(device, AudioTuningProfile())
 
-    def start_audio_calibration(self, device: str, duration_seconds: float) -> Future[AudioCalibrationSessionResponse]:
-        return cast(Future[AudioCalibrationSessionResponse], self._submit("audio_calibration_start", _AudioCalibrationStartCommand(device, duration_seconds)))
+    def start_audio_calibration(self, device: str, duration_seconds: float, two_step: bool = False) -> Future[AudioCalibrationSessionResponse]:
+        return cast(Future[AudioCalibrationSessionResponse], self._submit("audio_calibration_start", _AudioCalibrationStartCommand(device, duration_seconds, two_step)))
+
+    def begin_audio_calibration_music(self, session_id: str) -> Future[AudioCalibrationSessionResponse]:
+        return cast(Future[AudioCalibrationSessionResponse], self._submit("audio_calibration_music", _AudioCalibrationMusicCommand(session_id)))
 
     def audio_calibration_status(self, session_id: str) -> AudioCalibrationSessionResponse:
+        with self._snapshot_lock:
+            snapshot = self._audio_calibration_snapshot
+        if snapshot is None or snapshot.session_id != session_id:
+            raise RuntimeCommandError("audio calibration session not found")
+        return snapshot.model_copy(deep=True)
+
+    def _publish_audio_calibration(self, session_id: str) -> AudioCalibrationSessionResponse:
         session = self._audio_calibration
         if session is None or session.session_id != session_id:
             raise RuntimeCommandError("audio calibration session not found")
         elapsed = min(session.duration_seconds, max(0.0, time.monotonic() - session.started_at))
-        status = "complete" if session.result is not None else "capturing"
+        status = "failed" if session.error else "complete" if session.result is not None else "waiting" if session.phase == "waiting_music" else "capturing"
         result = None
         if session.result is not None:
             result = AudioCalibrationResultModel(**session.result)
-        return AudioCalibrationSessionResponse(
+        response = AudioCalibrationSessionResponse(
             session_id=session.session_id,
+            phase=session.phase,
             status=status,
             elapsed_seconds=elapsed,
             remaining_seconds=max(0.0, session.duration_seconds - elapsed),
             result=result,
             error=session.error,
         )
+        with self._snapshot_lock:
+            self._audio_calibration_snapshot = response
+        return response.model_copy(deep=True)
 
     def finish_audio_calibration(self, session_id: str, *, apply: bool, target_level: float | None = None, noise_floor: float | None = None) -> Future[AudioSettingsResponse | AudioCalibrationSessionResponse]:
         return cast(Future[AudioSettingsResponse | AudioCalibrationSessionResponse], self._submit("audio_calibration_finish", _AudioCalibrationFinishCommand(session_id, apply, target_level, noise_floor)))
@@ -1254,7 +1270,10 @@ class RuntimeWorker:
                 result = self._spotify_status_response()
             elif command.name == "audio_calibration_start":
                 calibration = _expect(command.value, _AudioCalibrationStartCommand)
-                result = self._start_audio_calibration(calibration.device, calibration.duration_seconds)
+                result = self._start_audio_calibration(calibration.device, calibration.duration_seconds, calibration.two_step)
+            elif command.name == "audio_calibration_music":
+                music = _expect(command.value, _AudioCalibrationMusicCommand)
+                result = self._begin_audio_calibration_music(music.session_id)
             elif command.name == "audio_calibration_finish":
                 calibration_finish = _expect(
                     command.value, _AudioCalibrationFinishCommand
@@ -1648,12 +1667,12 @@ class RuntimeWorker:
         )
         audio_input = self._audio_factory(
             self._selected_audio_device,
-            profile.audio_config(),
+profile.audio_config(microphone=True),
         )
         device_name = audio_input.device_name()
         saved_profile = self._audio_profiles.get(device_name)
         if saved_profile is not None and saved_profile != profile:
-            audio_input.reconfigure(saved_profile.audio_config())
+            audio_input.reconfigure(saved_profile.audio_config(microphone=True))
             profile = saved_profile
         self._selected_audio_device = device_name
         self._audio_profile = profile
@@ -1751,6 +1770,8 @@ class RuntimeWorker:
 
     def _apply_audio_settings(self, device: str, profile: AudioTuningProfile) -> None:
         device_name = self._device_name_for_selector(device)
+        if self._audio_calibration is not None:
+            raise RuntimeCommandError("discard microphone calibration before changing audio settings")
         candidate: AudioInput | None = None
         current = self._audio_input
         target_is_bluetooth = device_name == BLUETOOTH_PROFILE_KEY
@@ -1786,7 +1807,7 @@ class RuntimeWorker:
         )
         try:
             if should_open_mic:
-                candidate = self._audio_factory(device, profile.audio_config())
+                candidate = self._audio_factory(device, profile.audio_config(microphone=True))
                 device_name = candidate.device_name()
                 target_is_active_mic = True
 
@@ -1804,7 +1825,7 @@ class RuntimeWorker:
                 self._audio_input = candidate
             elif active_bluetooth or active_spotify or target_is_active_mic:
                 assert current is not None
-                current.reconfigure(profile.audio_config())
+                current.reconfigure(profile.audio_config(microphone=target_is_active_mic))
 
             self._audio_profiles = next_profiles
             if not target_is_bluetooth and not target_is_spotify:
@@ -1862,7 +1883,7 @@ class RuntimeWorker:
                 raise
             raise RuntimeCommandError(str(exc)) from exc
 
-    def _start_audio_calibration(self, device: str, duration_seconds: float) -> AudioCalibrationSessionResponse:
+    def _start_audio_calibration(self, device: str, duration_seconds: float, two_step: bool = False) -> AudioCalibrationSessionResponse:
         if self._audio_calibration is not None:
             raise RuntimeCommandError("an audio calibration session is already active")
         if self._audio_input is None:
@@ -1880,36 +1901,105 @@ class RuntimeWorker:
                 )
         elif self._audio_input.device_name() != device_name:
             raise RuntimeCommandError("select the active microphone before calibrating")
-        session = _AudioCalibrationSession(uuid4().hex, device_name, time.monotonic(), duration_seconds)
+        if two_step and self._monitor_audio_source is not AudioSource.MIC:
+            raise RuntimeCommandError("two-step calibration requires microphone input")
+        session = _AudioCalibrationSession(uuid4().hex, device_name, time.monotonic(), duration_seconds, two_step=two_step)
+        session.last_sequence = self._audio_frame.sequence
         self._audio_calibration = session
-        return self.audio_calibration_status(session.session_id)
+        return self._publish_audio_calibration(session.session_id)
+
+    def _tick_audio_calibration(self) -> None:
+        session = self._audio_calibration
+        if session is None or session.error:
+            return
+        active_device = (
+            BLUETOOTH_PROFILE_KEY if self._monitor_audio_source is AudioSource.BLUETOOTH
+            else SPOTIFY_PROFILE_KEY if self._monitor_audio_source is AudioSource.SPOTIFY
+            else self._audio_input.device_name() if self._audio_input is not None else None
+        )
+        if self._audio_input is None or active_device != session.device:
+            session.error = "Audio device changed or disconnected. Discard and measure again."
+            session.result = None
+            return
+        if session.result is not None or session.phase == "waiting_music":
+            if session.two_step and not self._audio_frame.fresh:
+                session.error = "Microphone input stopped. Discard and measure again."
+                session.result = None
+            return
+        elapsed = time.monotonic() - session.started_at
+        frame = self._audio_frame
+        if frame.fresh and frame.sequence > session.last_sequence:
+            session.last_sequence = frame.sequence
+            if session.two_step:
+                samples = session.quiet_samples if session.phase == "quiet" else session.music_samples
+                samples.append(self._audio_health.processor)
+            else:
+                session.frames.append(frame)
+                session.features.append(self._music_features)
+        if elapsed < session.duration_seconds:
+            return
+        try:
+            if session.two_step:
+                samples = session.quiet_samples if session.phase == "quiet" else session.music_samples
+                if len(samples) < 10 or not frame.fresh:
+                    raise ValueError("Not enough fresh input; check the microphone and retry.")
+                if session.phase == "quiet":
+                    session.phase = "waiting_music"
+                else:
+                    session.result = complete_microphone_calibration(
+                        session.quiet_samples, session.music_samples, duration=session.duration_seconds,
+                    )
+                    # Preserve the independent, manually tuned output floor.
+                    session.result["recommended_noise_floor"] = self._audio_profile.noise_floor
+            else:
+                session.result = complete_audio_calibration(
+                    session.frames, session.features, duration=session.duration_seconds,
+                )
+        except ValueError as exc:
+            session.error = str(exc)
+
+    def _begin_audio_calibration_music(self, session_id: str) -> AudioCalibrationSessionResponse:
+        session = self._audio_calibration
+        if session is None or session.session_id != session_id or session.phase != "waiting_music" or session.error:
+            raise RuntimeCommandError("calibration is not waiting for music")
+        if self._audio_input is None or self._audio_input.device_name() != session.device or not self._audio_frame.fresh:
+            raise RuntimeCommandError("microphone input is unavailable; discard and measure again")
+        session.phase = "music"
+        session.started_at = time.monotonic()
+        session.last_sequence = self._audio_frame.sequence
+        return self._publish_audio_calibration(session_id)
 
     def _finish_audio_calibration(self, command: _AudioCalibrationFinishCommand) -> AudioSettingsResponse | AudioCalibrationSessionResponse:
         session = self._audio_calibration
         if session is None or session.session_id != command.session_id:
             raise RuntimeCommandError("audio calibration session not found")
-        if session.result is None:
-            raise RuntimeCommandError("audio calibration is still capturing")
         if not command.apply:
             self._audio_calibration = None
+            with self._snapshot_lock:
+                self._audio_calibration_snapshot = None
             return self.audio_settings()
+        if session.result is None or session.error:
+            raise RuntimeCommandError("audio calibration has no valid recommendation")
+        if session.two_step and (self._audio_input is None or self._audio_input.device_name() != session.device or not self._audio_frame.fresh):
+            raise RuntimeCommandError("microphone input changed; discard and measure again")
         result = session.result
         profile = self._audio_profiles.get(session.device, AudioTuningProfile())
         hardware_target = profile.hardware_gain_target
-        if self._hardware_gain is not None and self._hardware_gain.status.writable:
-            raw_level = max(self._audio_health.processor.input_rms, 1e-4)
-            desired_raw = min(0.3, max(0.05, (command.target_level if command.target_level is not None else float(result["recommended_target_level"])) * 0.5))
-            current_hardware = self._hardware_gain.status.value if self._hardware_gain.status.value is not None else 0.5
-            hardware_target = min(1.0, max(0.0, current_hardware * desired_raw / raw_level))
+        # Hardware gain stays fixed: recommendations use measurements at this gain.
         result["recommended_hardware_gain"] = hardware_target
         next_profile = replace(
             profile,
             target_level=command.target_level if command.target_level is not None else float(result["recommended_target_level"]),
             noise_floor=command.noise_floor if command.noise_floor is not None else float(result["recommended_noise_floor"]),
             hardware_gain_target=hardware_target,
+            input_noise_floor=float(result["recommended_input_noise_floor"]) if session.two_step else profile.input_noise_floor,
         )
-        self._apply_audio_settings(session.device, next_profile)
         self._audio_calibration = None
+        try:
+            self._apply_audio_settings(session.device, next_profile)
+        except Exception:
+            self._audio_calibration = session
+            raise
         return self.audio_settings()
 
     def _select_audio_device(self, device: str) -> None:
@@ -1924,6 +2014,8 @@ class RuntimeWorker:
         self._apply_audio_settings(device, profile)
 
     def _set_audio_source(self, source: str) -> None:
+        if self._audio_calibration is not None:
+            raise RuntimeCommandError("discard microphone calibration before changing audio source")
         if source not in {"auto", "off", "demo", "mic", "bluetooth", "spotify"}:
             raise RuntimeCommandError(f"invalid audio source: {source}")
         if self.playback.mode is PlaybackMode.DYNAMIC and source == "off":
@@ -2259,16 +2351,7 @@ class RuntimeWorker:
                 self._noise_samples.append(
                     min(1.0, max(0.0, self._audio_health.processor.input_rms))
                 )
-                audio_session = self._audio_calibration
-                if audio_session is not None and audio_session.result is None:
-                    audio_session.frames.append(self._audio_frame)
-                    audio_session.features.append(self._music_features)
-                    if time.monotonic() - audio_session.started_at >= audio_session.duration_seconds:
-                        audio_session.result = complete_audio_calibration(
-                            audio_session.frames,
-                            audio_session.features,
-                            duration=audio_session.duration_seconds,
-                        )
+
         elif self._active_audio_source is AudioSource.DEMO:
             snapshot = demo_snapshot(self._demo_tick)
             self._demo_tick += 1
@@ -2279,6 +2362,7 @@ class RuntimeWorker:
             self._music_features = MusicFeatures()
             self._audio_health = AudioInputHealth()
 
+        self._tick_audio_calibration()
         if self._topology.layout == "independent" and self._output_gates:
             delays = [
                 self._playbacks[output.id][1].step(
@@ -2440,6 +2524,10 @@ class RuntimeWorker:
             sequence=self._audio_frame.sequence,
             fresh=self._audio_frame.fresh,
             input_level=min(1.0, max(0.0, processor.input_rms)),
+            input_peak=processor.input_peak,
+            clipping_fraction=processor.clipping_fraction,
+            microphone_gate_open=processor.microphone_gate_open,
+            configured_input_noise_floor=self._audio_profile.input_noise_floor if self._monitor_audio_source is AudioSource.MIC else None,
             processed_level=min(1.0, max(0.0, self._audio_frame.rms)),
             bands=cast(
                 BandTuple,
@@ -2503,6 +2591,11 @@ class RuntimeWorker:
         error: str | None = None,
     ) -> DashboardState:
         self._capture_preview_frame()
+        if self._audio_calibration is not None:
+            self._publish_audio_calibration(self._audio_calibration.session_id)
+        else:
+            with self._snapshot_lock:
+                self._audio_calibration_snapshot = None
         self._revision += 1
         controller = self._controller
         uptime_seconds = self._uptime_seconds()

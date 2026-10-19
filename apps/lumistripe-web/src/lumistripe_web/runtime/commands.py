@@ -99,6 +99,12 @@ class _SpotifyCommand:
 class _AudioCalibrationStartCommand:
     device: str
     duration_seconds: float
+    two_step: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _AudioCalibrationMusicCommand:
+    session_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +122,7 @@ class _StartupSettingsCommand:
 
 __all__ = [
     "_AudioCalibrationFinishCommand",
+    "_AudioCalibrationMusicCommand",
     "_AudioCalibrationStartCommand",
     "_AudioDeviceCommand",
     "_AudioSettingsCommand",

@@ -3,10 +3,55 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
+from math import isfinite
 
 from .config import AudioSmoothing
 from .dsp import features_from_frame
-from .types import AudioCalibrationResult, AudioFrame, MusicFeatures
+from .types import (
+    AudioCalibrationResult,
+    AudioFrame,
+    AudioProcessorStats,
+    MusicFeatures,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class MicrophoneCalibrationRecommendation:
+    measured_floor: float
+    measured_music_level: float
+    measured_peak: float
+    input_noise_floor: float
+    target_level: float
+    clipping_fraction: float
+
+
+def recommend_microphone_calibration(
+    quiet: list[AudioProcessorStats], music: list[AudioProcessorStats],
+) -> MicrophoneCalibrationRecommendation:
+    """Compare pre-gain, high-pass-filtered levels at a fixed hardware gain."""
+    if min(len(quiet), len(music)) < 10:
+        raise ValueError("Not enough fresh input; check the microphone and retry.")
+    values = [sample.input_rms for sample in quiet + music]
+    if not all(isfinite(value) and 0 <= value <= 1 for value in values):
+        raise ValueError("Invalid microphone levels; retry calibration.")
+    floor = _percentile_value([sample.input_rms for sample in quiet], 95)
+    level = _percentile_value([sample.input_rms for sample in music], 70)
+    clipping = max(sample.clipping_fraction for sample in quiet + music)
+    if clipping > 0:
+        raise ValueError("Input is clipping. Lower microphone capture gain and measure again.")
+    if level < 0.003:
+        raise ValueError("Music input is too weak. Increase microphone capture gain or move the mic closer, then repeat both measurements.")
+    if level < floor * 3:
+        raise ValueError("Music is too close to room noise. Move the mic closer or increase music volume and retry.")
+    return MicrophoneCalibrationRecommendation(
+        measured_floor=floor,
+        measured_music_level=level,
+        measured_peak=max(sample.input_peak for sample in music),
+        input_noise_floor=_clamp(floor * 1.1, 0.00005, 0.5),
+        target_level=_clamp(level * 4.0, 0.24, 0.62),
+        clipping_fraction=clipping,
+    )
 
 
 def recommend_audio_calibration(
@@ -91,6 +136,8 @@ def _percentile_value(values: list[float], percentile: float) -> float:
 
 __all__ = [
     "AudioCalibrationResult",
+    "MicrophoneCalibrationRecommendation",
     "calibrate_audio_input",
     "recommend_audio_calibration",
+    "recommend_microphone_calibration",
 ]

@@ -28,6 +28,8 @@ import { useUnsavedChangesGuard } from "@/hooks/use-unsaved-changes"
 type SliderKey = Exclude<keyof AudioTuningValues, "noise_floor">
 
 const audioTuningSchema = z.object({
+  noise_floor: z.number().min(0).max(1),
+  input_noise_floor: z.number().min(0).max(0.5),
   target_level: z.number().min(0.1).max(0.8),
   hardware_gain_target: z.number().min(0).max(1).nullable().optional(),
   dynamic_response: z.number().min(0).max(1),
@@ -89,6 +91,7 @@ function AudioTuningPanelView() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const form = useForm<AudioTuningFormValues>({ resolver: zodResolver(audioTuningSchema), defaultValues: {
+    noise_floor: 0.015, input_noise_floor: 0.003,
     target_level: 0.36, dynamic_response: 0.65, rms_attack: 0.45, rms_release: 0.12, band_attack: 0.4, band_release: 0.1, beat_release: 0.18,
     hardware_gain_target: null,
     energy_threshold: 0.03, onset_threshold: 0.025, beat_density_threshold: 0.05, brightness_threshold: 0.08, spectral_balance_ratio: 0.35,
@@ -181,7 +184,7 @@ function AudioTuningPanelView() {
 
       <AudioTelemetryCards telemetry={telemetry} thresholds={thresholds} />
       <AudioHistoryChart history={history} />
-      <AudioCalibrationWizard device={selectedDevice} onApplied={() => void load()} />
+      <AudioCalibrationWizard device={selectedDevice} microphone={response.active_source === "mic"} onApplied={() => void load()} />
 
       <Card className="border-white/5 bg-card/80"><CardHeader><CardTitle className="flex items-center gap-2"><SlidersHorizontalIcon className="size-4 text-violet-300" />Normalization</CardTitle><CardDescription>The target used by automatic software gain.</CardDescription></CardHeader><CardContent><TuningSlider label="Target level" description="Higher values make quiet microphones more prominent." value={draft.target_level} min={0.1} max={0.8} step={0.005} onChange={(value) => change("target_level", value)} />{errors.target_level && <p role="alert" className="mt-2 text-xs text-red-300">{errors.target_level.message}</p>}</CardContent></Card>
 

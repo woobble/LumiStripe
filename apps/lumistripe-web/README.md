@@ -116,3 +116,48 @@ LAN (the certificate must be trusted by each client device):
 uv run lumistripe-web --ssl-certfile /path/to/cert.pem \
   --ssl-keyfile /path/to/key.pem --pairing-code 0427
 ```
+
+## USB microphone setup
+
+Select **MIC** and your capture device in **Setup → Audio**, then open Audio
+tuning. PCM2902 devices use the same measurement workflow as other USB inputs;
+saved tuning stays associated with the device name.
+
+1. Start microphone calibration and keep the room quiet for eight seconds.
+2. Play music at your usual listening volume, then select **Measure music**.
+3. Review the measured room and music levels, then select **Apply**. Discard or
+   cancel leaves the saved profile unchanged. The capture duration is selectable.
+
+MIC processing applies a continuous 30 Hz high-pass filter, a soft input gate
+with hysteresis and a 120 ms hold, and bounded software normalization (up to
+24× for weak inputs, with fast peak headroom protection). The gate opens at twice the calibrated input noise floor
+and closes below 70% of that opening level. Gain returns toward unity when the
+gate closes. Bass beat detection includes 40–180 Hz to pick up kick drums beyond
+the lowest spectrum band. Voices and sudden room sounds can still trigger it.
+
+The input noise threshold measures RMS **before software gain and gating**, after
+high-pass filtering. It is separate from the existing processed-signal cutoff.
+Calibration measures distinct, fresh frames; it rejects clipping, insufficient
+input, music RMS below `0.003`, and music levels less than three times the room noise. Peaks and clipping
+are measured on the original capture samples, before filtering or gain.
+
+Hardware trim stays fixed throughout calibration and is not automatically changed
+when applying a recommendation. If clipping appears, discard calibration, lower
+hardware trim, save, and repeat both steps. If music is too close to room noise,
+move the microphone closer to the speakers or raise playback volume. Unsupported
+hardware trim does not prevent software conditioning or calibration.
+
+Existing profiles load with an input noise floor of `0.003`; their other tuning
+values are retained. Bluetooth and Spotify retain their existing processing and
+single-stage calibration. Raw core processing leaves microphone conditioning off.
+The CLI and simulator share the microphone processing defaults; the two-step
+wizard is available in the web dashboard.
+
+The calibration API retains its single-stage default. Clients can opt into the
+microphone workflow with `two_step: true` on
+`POST /api/audio/calibration/session`. After quiet capture the response has
+`status: "waiting"` and `phase: "waiting_music"`. Start music capture with
+`POST /api/audio/calibration/session/{session_id}/music`, then poll the existing
+status endpoint until complete or failed. Finish with `apply: true` only after
+review; `apply: false` cancels at any phase. Audio source and tuning changes are
+blocked until the session is discarded or applied.

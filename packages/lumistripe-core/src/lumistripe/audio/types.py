@@ -95,6 +95,9 @@ class AudioProcessorStats:
     input_rms: float = 0.0
     program_loudness: float = 0.0
     musical_impact: float = 0.0
+    input_peak: float = 0.0
+    clipping_fraction: float = 0.0
+    microphone_gate_open: bool = False
 
 
 @dataclass(frozen=True, slots=True)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 FFT_SIZE = 2048
@@ -55,10 +56,24 @@ class AudioAnalysis:
 
 
 @dataclass(frozen=True, slots=True)
+class MicrophoneConditioning:
+    enabled: bool = False
+    input_noise_floor: float = 0.003
+    high_pass_hz: float = 30.0
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.input_noise_floor) or not 0.0 <= self.input_noise_floor <= 0.5:
+            raise ValueError("input_noise_floor must be between 0 and 0.5")
+        if not math.isfinite(self.high_pass_hz) or not 0.0 <= self.high_pass_hz <= 100.0:
+            raise ValueError("high_pass_hz must be between 0 and 100")
+
+
+@dataclass(frozen=True, slots=True)
 class AudioConfig:
     smoothing: AudioSmoothing = field(default_factory=AudioSmoothing)
     normalization: AudioNormalization = field(default_factory=AudioNormalization)
     analysis: AudioAnalysis = field(default_factory=AudioAnalysis)
+    microphone: MicrophoneConditioning = field(default_factory=MicrophoneConditioning)
 
     @classmethod
     def raw(cls) -> AudioConfig:
@@ -79,4 +94,5 @@ __all__ = [
     "AudioConfig",
     "AudioNormalization",
     "AudioSmoothing",
+    "MicrophoneConditioning",
 ]

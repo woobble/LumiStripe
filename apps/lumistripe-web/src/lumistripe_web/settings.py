@@ -12,6 +12,7 @@ from lumistripe.audio.config import (
     AudioConfig,
     AudioNormalization,
     AudioSmoothing,
+    MicrophoneConditioning,
 )
 from lumistripe.controller import ColorCorrection
 from lumistripe.playback import (
@@ -138,6 +139,7 @@ class AudioTuningProfile:
     target_level: float = AudioNormalization().target_level
     hardware_gain_target: float | None = None
     noise_floor: float = AudioSmoothing().noise_floor
+    input_noise_floor: float = 0.003
     dynamic_response: float = 0.65
     rms_attack: float = AudioSmoothing().rms_attack
     rms_release: float = AudioSmoothing().rms_release
@@ -151,6 +153,7 @@ class AudioTuningProfile:
     spectral_balance_ratio: float = MusicActivityConfig().spectral_balance_ratio
 
     def __post_init__(self) -> None:
+        MicrophoneConditioning(input_noise_floor=self.input_noise_floor)
         if not 0.1 <= self.target_level <= 0.8:
             raise ValueError("target_level must be between 0.1 and 0.8")
         if self.hardware_gain_target is not None and not 0.0 <= self.hardware_gain_target <= 1.0:
@@ -178,13 +181,15 @@ class AudioTuningProfile:
             if not 0.0 <= getattr(self, name) <= 1.0:
                 raise ValueError(f"{name} must be between 0 and 1")
 
-    def audio_config(self) -> AudioConfig:
+    def audio_config(self, *, microphone: bool = False) -> AudioConfig:
         defaults = build_audio_config(
             target_level=self.target_level,
             noise_floor=self.noise_floor,
+            microphone=microphone,
         )
         return replace(
             defaults,
+            microphone=MicrophoneConditioning(enabled=microphone, input_noise_floor=self.input_noise_floor),
             smoothing=replace(
                 defaults.smoothing,
                 rms_attack=self.rms_attack,
@@ -196,6 +201,7 @@ class AudioTuningProfile:
             normalization=replace(
                 defaults.normalization,
                 target_level=self.target_level,
+                music_threshold=self.input_noise_floor * 2.0 if microphone else defaults.normalization.music_threshold,
             ),
         )
 

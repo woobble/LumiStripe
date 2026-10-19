@@ -33,6 +33,11 @@ typedef struct {
     float drop_bass_threshold, drop_bass_delta_threshold, drop_onset_threshold;
     float section_change_threshold, section_onset_threshold;
     float sample_rate;
+    int microphone_enabled, microphone_gate_open;
+    float input_noise_floor, high_pass_hz;
+    float high_pass_input, high_pass_output, gate_envelope, gate_hold;
+    float input_peak, clipping_fraction;
+    float raw_buffer[FFT_SIZE];
 
     float prev_bass_energy;
     float smoothed_rms;
@@ -379,6 +384,15 @@ static void _process_fft(AudioProcessor *self) {
     int half = FFT_SIZE / 2;
 
     float normalized[FFT_SIZE];
+    s->input_peak = 0.0f;
+    int clipped = 0;
+    for (int i = 0; i < FFT_SIZE; i++) {
+        float magnitude = fabsf(s->raw_buffer[i]);
+        s->input_peak = fmaxf(s->input_peak, magnitude);
+        if (magnitude >= 0.995f) clipped++;
+    }
+    s->input_peak = fminf(1.0f, s->input_peak);
+    s->clipping_fraction = (float)clipped / FFT_SIZE;
     if (s->dc_block_enabled) {
         float sum = 0.0f;
         for (int i = 0; i < FFT_SIZE; i++) sum += s->buffer[i];
@@ -393,6 +407,24 @@ static void _process_fft(AudioProcessor *self) {
     float input_level = sqrtf(input_sq_sum / (float)FFT_SIZE);
     if (input_level > 1.0f) input_level = 1.0f;
     s->input_rms = input_level;
+    float gate = 1.0f;
+    if (s->microphone_enabled) {
+        float hop = (float)FFT_HOP_SIZE / s->sample_rate;
+        float open_level = fmaxf(0.0001f, s->input_noise_floor * 2.0f);
+        float close_level = open_level * 0.7f;
+        if (input_level >= open_level) {
+            s->microphone_gate_open = 1;
+            s->gate_hold = 0.12f;
+        } else if (input_level < close_level) {
+            s->gate_hold = fmaxf(0.0f, s->gate_hold - hop);
+            if (s->gate_hold <= 0.0f) s->microphone_gate_open = 0;
+        }
+        float target = s->microphone_gate_open ? 1.0f : 0.0f;
+        float seconds = s->microphone_gate_open ? 0.01f : 0.08f;
+        s->gate_envelope += (target - s->gate_envelope) * (1.0f - expf(-hop / seconds));
+        gate = s->gate_envelope;
+        if (!s->microphone_gate_open && gate < 0.0001f) gate = 0.0f;
+    }
 
     float reference_floor = fmaxf(
         s->music_threshold,
@@ -410,7 +442,8 @@ static void _process_fft(AudioProcessor *self) {
     );
 
     float impact_target = 0.0f;
-    if (input_level >= s->music_threshold) {
+    if (input_level >= (s->microphone_enabled ? s->input_noise_floor * 2.0f : s->music_threshold)
+        && (!s->microphone_enabled || s->microphone_gate_open)) {
         impact_target = _clamp01f(
             input_level / fmaxf(s->level_estimate, reference_floor)
         );
@@ -425,7 +458,8 @@ static void _process_fft(AudioProcessor *self) {
     if (s->normalization_enabled) {
         float effective_level = fmaxf(s->level_estimate, reference_floor);
         float target_gain;
-        if (input_level < s->music_threshold) {
+        if (input_level < (s->microphone_enabled ? s->input_noise_floor * 2.0f : s->music_threshold)
+            || (s->microphone_enabled && !s->microphone_gate_open)) {
             /* Do not amplify the noise band between the silence and music floors. */
             target_gain = 1.0f;
         } else {
@@ -437,12 +471,21 @@ static void _process_fft(AudioProcessor *self) {
         float gain_factor = (target_gain > s->normalization_gain) ? s->adapt_attack : s->adapt_release;
         s->normalization_gain = _smooth(s->normalization_gain, target_gain, gain_factor, gain_factor);
 
+        if (s->microphone_enabled) {
+            float peak = 0.0f;
+            for (int i = 0; i < FFT_SIZE; i++) peak = fmaxf(peak, fabsf(normalized[i]));
+            /* Fast headroom protection preserves sudden transients after quiet music. */
+            if (peak > 0.0f) s->normalization_gain = fminf(s->normalization_gain, 0.95f / peak);
+        }
+
         for (int i = 0; i < FFT_SIZE; i++) {
             normalized[i] = normalized[i] * s->normalization_gain;
             if (normalized[i] > 1.0f) normalized[i] = 1.0f;
             else if (normalized[i] < -1.0f) normalized[i] = -1.0f;
         }
     }
+
+    for (int i = 0; i < FFT_SIZE; i++) normalized[i] *= gate;
 
     float sq_sum = 0.0f;
     for (int i = 0; i < FFT_SIZE; i++) sq_sum += normalized[i] * normalized[i];
@@ -482,6 +525,19 @@ static void _process_fft(AudioProcessor *self) {
     }
 
     float bass = gated_bands[0];
+    if (s->microphone_enabled) {
+        /* Integrate kick fundamentals beyond the sub-bass band. */
+        float sum = 0.0f;
+        int count = 0;
+        for (int i = 1; i < half; i++) {
+            if (s->frequencies[i] >= 40.0f && s->frequencies[i] <= 180.0f) {
+                sum += mags[i] * mags[i];
+                count++;
+            }
+        }
+        float value = count ? sqrtf(sum / count) : 0.0f;
+        bass = _apply_noise_floor(fminf(1.0f, 1.2f * value / (value + 0.12f)), s->noise_floor);
+    }
     float bass_rise = bass - s->prev_bass_energy;
     float threshold = fmaxf(s->prev_bass_energy * 1.12f, s->noise_floor + 0.01f);
     int beat = (bass > threshold && bass_rise > 0.015f) ? 1 : 0;
@@ -590,6 +646,9 @@ static int AudioProcessor_init(AudioProcessor *self, PyObject *args, PyObject *k
         SET_FLOAT(silence_floor);
         SET_INT(normalization_enabled);
         SET_INT(dc_block_enabled);
+        SET_INT(microphone_enabled);
+        SET_FLOAT(input_noise_floor);
+        SET_FLOAT(high_pass_hz);
         SET_FLOAT(drop_bass_threshold);
         SET_FLOAT(drop_bass_delta_threshold);
         SET_FLOAT(drop_onset_threshold);
@@ -663,11 +722,23 @@ static PyObject* AudioProcessor_feed_samples(AudioProcessor *self, PyObject *arg
     self->s.sample_sum += abs_sum;
 
     Py_ssize_t offset = 0;
+    float high_pass_coefficient = expf(-2.0f * (float)M_PI * self->s.high_pass_hz / self->s.sample_rate);
     while (offset < size) {
         int remaining = FFT_SIZE - self->s.buffer_pos;
         int chunk = (int)(size - offset);
         if (chunk > remaining) chunk = remaining;
-        memcpy(self->s.buffer + self->s.buffer_pos, samples + offset, chunk * sizeof(float));
+        for (int i = 0; i < chunk; i++) {
+            float sample = samples[offset + i];
+            if (!isfinite(sample)) sample = 0.0f;
+            self->s.raw_buffer[self->s.buffer_pos + i] = sample;
+            if (self->s.microphone_enabled && self->s.high_pass_hz > 0.0f) {
+                float filtered = high_pass_coefficient * (self->s.high_pass_output + sample - self->s.high_pass_input);
+                self->s.high_pass_input = sample;
+                self->s.high_pass_output = filtered;
+                sample = filtered;
+            }
+            self->s.buffer[self->s.buffer_pos + i] = sample;
+        }
         self->s.buffer_pos += chunk;
         offset += chunk;
         if (self->s.buffer_pos >= FFT_SIZE) {
@@ -678,6 +749,7 @@ static PyObject* AudioProcessor_feed_samples(AudioProcessor *self, PyObject *arg
                 self->s.buffer + FFT_HOP_SIZE,
                 sizeof(float) * retained
             );
+            memmove(self->s.raw_buffer, self->s.raw_buffer + FFT_HOP_SIZE, sizeof(float) * retained);
             self->s.buffer_pos = retained;
         }
     }
@@ -812,6 +884,9 @@ static PyObject* AudioProcessor_reset(AudioProcessor *self, PyObject *Py_UNUSED(
     self->s.silence_floor = saved.silence_floor;
     self->s.normalization_enabled = saved.normalization_enabled;
     self->s.dc_block_enabled = saved.dc_block_enabled;
+    self->s.microphone_enabled = saved.microphone_enabled;
+    self->s.input_noise_floor = saved.input_noise_floor;
+    self->s.high_pass_hz = saved.high_pass_hz;
     self->s.drop_bass_threshold = saved.drop_bass_threshold;
     self->s.drop_bass_delta_threshold = saved.drop_bass_delta_threshold;
     self->s.drop_onset_threshold = saved.drop_onset_threshold;
@@ -836,6 +911,9 @@ static PyObject* AudioProcessor_stats(AudioProcessor *self, PyObject *Py_UNUSED(
         _dict_set_float(result, "sample_abs_sum", self->s.sample_sum) < 0 ||
         _dict_set_float(result, "normalization_gain", self->s.normalization_gain) < 0 ||
         _dict_set_float(result, "input_rms", self->s.input_rms) < 0 ||
+        _dict_set_float(result, "input_peak", self->s.input_peak) < 0 ||
+        _dict_set_float(result, "clipping_fraction", self->s.clipping_fraction) < 0 ||
+        _dict_set_int(result, "microphone_gate_open", self->s.microphone_gate_open) < 0 ||
         _dict_set_float(result, "program_loudness", self->s.level_estimate) < 0 ||
         _dict_set_float(result, "musical_impact", self->s.musical_impact) < 0) {
         Py_DECREF(result);

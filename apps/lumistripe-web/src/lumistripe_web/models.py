@@ -240,6 +240,7 @@ class AudioTuningValues(BaseModel):
     target_level: float = Field(default=0.36, ge=0.1, le=0.8)
     hardware_gain_target: float | None = Field(default=None, ge=0.0, le=1.0)
     noise_floor: float = Field(default=0.015, ge=0.0, le=1.0)
+    input_noise_floor: float = Field(default=0.003, ge=0.0, le=0.5)
     dynamic_response: float = Field(default=0.65, ge=0.0, le=1.0)
     rms_attack: float = Field(default=0.45, ge=0.01, le=1.0)
     rms_release: float = Field(default=0.12, ge=0.01, le=1.0)
@@ -361,6 +362,7 @@ class BluetoothStatusResponse(BaseModel):
 class AudioCalibrationStartRequest(BaseModel):
     device: str = Field(min_length=1)
     duration_seconds: float = Field(default=8.0, ge=3.0, le=30.0)
+    two_step: bool = False
 
 
 class AudioCalibrationFinishRequest(BaseModel):
@@ -378,6 +380,9 @@ class AudioCalibrationResult(BaseModel):
     recommended_target_level: float
     recommended_hardware_gain: float | None = Field(default=None, ge=0.0, le=1.0)
     recommended_idle_threshold_scale: float
+    recommended_input_noise_floor: float = 0.003
+    measured_music_level: float = 0.0
+    clipping_fraction: float = 0.0
 
 
 class AudioCalibrationSessionResponse(BaseModel):
@@ -387,6 +392,7 @@ class AudioCalibrationSessionResponse(BaseModel):
     remaining_seconds: float = 0.0
     result: AudioCalibrationResult | None = None
     error: str | None = None
+    phase: str = "quiet"
 
 
 class AudioSettingsResponse(BaseModel):
@@ -497,6 +503,10 @@ class AudioTelemetry(BaseModel):
     sequence: int = 0
     fresh: bool = False
     input_level: float = Field(default=0.0, ge=0.0, le=1.0)
+    input_peak: float = Field(default=0.0, ge=0.0, le=1.0)
+    clipping_fraction: float = Field(default=0.0, ge=0.0, le=1.0)
+    microphone_gate_open: bool = False
+    configured_input_noise_floor: float | None = Field(default=None, ge=0.0, le=0.5)
     processed_level: float = Field(default=0.0, ge=0.0, le=1.0)
     bands: tuple[float, float, float, float, float, float, float, float] = (
         0.0,

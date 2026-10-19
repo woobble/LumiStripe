@@ -225,6 +225,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/audio/calibration/session/{session_id}/music": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Begin Audio Calibration Music */
+        post: operations["begin_audio_calibration_music_api_audio_calibration_session__session_id__music_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/audio/device": {
         parameters: {
             query?: never;
@@ -662,16 +679,31 @@ export interface components {
         };
         /** AudioCalibrationResult */
         AudioCalibrationResult: {
+            /**
+             * Clipping Fraction
+             * @default 0
+             */
+            clipping_fraction: number;
             /** Duration Seconds */
             duration_seconds: number;
             /** Measured Floor */
             measured_floor: number;
+            /**
+             * Measured Music Level
+             * @default 0
+             */
+            measured_music_level: number;
             /** Measured Peak */
             measured_peak: number;
             /** Recommended Hardware Gain */
             recommended_hardware_gain?: number | null;
             /** Recommended Idle Threshold Scale */
             recommended_idle_threshold_scale: number;
+            /**
+             * Recommended Input Noise Floor
+             * @default 0.003
+             */
+            recommended_input_noise_floor: number;
             /** Recommended Noise Floor */
             recommended_noise_floor: number;
             /** Recommended Target Level */
@@ -688,6 +720,11 @@ export interface components {
             elapsed_seconds: number;
             /** Error */
             error?: string | null;
+            /**
+             * Phase
+             * @default quiet
+             */
+            phase: string;
             /**
              * Remaining Seconds
              * @default 0
@@ -708,6 +745,11 @@ export interface components {
              * @default 8
              */
             duration_seconds: number;
+            /**
+             * Two Step
+             * @default false
+             */
+            two_step: boolean;
         };
         /** AudioDeviceOption */
         AudioDeviceOption: {
@@ -831,6 +873,7 @@ export interface components {
              *       "brightness_threshold": 0.08,
              *       "dynamic_response": 0.65,
              *       "energy_threshold": 0.03,
+             *       "input_noise_floor": 0.003,
              *       "noise_floor": 0.015,
              *       "onset_threshold": 0.025,
              *       "rms_attack": 0.45,
@@ -891,6 +934,11 @@ export interface components {
             energy_threshold: number;
             /** Hardware Gain Target */
             hardware_gain_target?: number | null;
+            /**
+             * Input Noise Floor
+             * @default 0.003
+             */
+            input_noise_floor: number;
             /**
              * Noise Floor
              * @default 0.015
@@ -2048,6 +2096,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AudioSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    begin_audio_calibration_music_api_audio_calibration_session__session_id__music_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudioCalibrationSessionResponse"];
                 };
             };
             /** @description Validation Error */

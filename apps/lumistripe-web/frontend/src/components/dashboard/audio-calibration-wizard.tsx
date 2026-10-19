@@ -7,23 +7,36 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Progress } from "@/components/ui/progress"
 import { dashboardApi, type AudioCalibrationSessionResponse } from "@/lib/api"
 
-export function AudioCalibrationWizard({ device, onApplied }: { device: string | null; onApplied: () => void }) {
+export function AudioCalibrationWizard({ device, onApplied, microphone = true }: { device: string | null; onApplied: () => void; microphone?: boolean }) {
   const [session, setSession] = useState<AudioCalibrationSessionResponse | null>(null)
   const [busy, setBusy] = useState(false)
   const [duration, setDuration] = useState(8)
 
   useEffect(() => {
     if (!session || session.status !== "capturing") return
+    let active = true
+    let pending = false
     const timer = window.setInterval(async () => {
-      try { setSession(await dashboardApi.getAudioCalibration(session.session_id)) } catch (error) { toast.error(error instanceof Error ? error.message : "Calibration status unavailable."); setSession(null) }
+      if (pending) return
+      pending = true
+      try {
+        const next = await dashboardApi.getAudioCalibration(session.session_id)
+        if (active) setSession(next)
+      } catch (error) {
+        if (active) {
+          const message = error instanceof Error ? error.message : "Calibration status unavailable."
+          toast.error(message)
+          setSession((current) => current ? { ...current, status: "failed", error: message } : null)
+        }
+      } finally { pending = false }
     }, 250)
-    return () => window.clearInterval(timer)
+    return () => { active = false; window.clearInterval(timer) }
   }, [session])
 
   const start = async () => {
     if (!device || busy) return
     setBusy(true)
-    try { setSession(await dashboardApi.startAudioCalibration(device, duration)) } catch (error) { toast.error(error instanceof Error ? error.message : "Could not start calibration.") } finally { setBusy(false) }
+    try { setSession(await dashboardApi.startAudioCalibration(device, duration, microphone)) } catch (error) { toast.error(error instanceof Error ? error.message : "Could not start calibration.") } finally { setBusy(false) }
   }
 
   const finish = async (apply: boolean) => {
@@ -39,19 +52,29 @@ export function AudioCalibrationWizard({ device, onApplied }: { device: string |
   const result = session?.result
   return (
     <Card className="border-white/5 bg-card/80">
-      <CardHeader><CardTitle className="flex items-center gap-2"><Mic2Icon className="size-4 text-emerald-300" />Microphone calibration</CardTitle><CardDescription>Measure the room floor and recommend a calmer software gain for quiet passages.</CardDescription></CardHeader>
+      <CardHeader><CardTitle className="flex items-center gap-2"><Mic2Icon className="size-4 text-emerald-300" />Microphone calibration</CardTitle><CardDescription>{microphone ? "Measure room noise, then music, to tune this microphone." : "Measure the quiet input and review software tuning."}</CardDescription></CardHeader>
       <CardContent className="space-y-4">
         {!session && <>
-          <p className="text-sm text-muted-foreground">Stay quiet while the microphone listens. You can review the recommendation before anything is changed.</p>
+          <p className="text-sm text-muted-foreground">{microphone ? "First keep the room quiet. Then play music at your normal listening volume. Keep microphone capture gain unchanged throughout both steps." : "Keep the input quiet during measurement."}</p>
           <div className="flex items-center gap-2"><label htmlFor="calibration-duration" className="text-sm">Capture time</label><select id="calibration-duration" value={duration} onChange={(event) => setDuration(Number(event.target.value))} className="h-10 rounded-lg border border-input bg-background px-3 text-sm"><option value={5}>5 seconds</option><option value={8}>8 seconds</option><option value={12}>12 seconds</option></select></div>
           <Button className="h-11 w-full rounded-xl" disabled={!device || busy} onClick={() => void start()}><SlidersHorizontalIcon />Start measurement</Button>
         </>}
-        {session?.status === "capturing" && <div className="space-y-3"><div className="flex justify-between text-sm"><span>Listening…</span><span>{Math.ceil(session.remaining_seconds)}s remaining</span></div><Progress value={(session.elapsed_seconds / (session.elapsed_seconds + session.remaining_seconds || 1)) * 100} /><p className="text-xs text-muted-foreground">Keep the room quiet so the noise floor is representative.</p></div>}
+        {session?.status === "capturing" && <div className="space-y-3"><div className="flex justify-between text-sm"><span>{session.phase === "music" ? "Measuring music…" : "Measuring room noise…"}</span><span>{Math.ceil(session.remaining_seconds)}s remaining</span></div><Progress value={(session.elapsed_seconds / (session.elapsed_seconds + session.remaining_seconds || 1)) * 100} /><p className="text-xs text-muted-foreground">{session.phase === "music" ? "Keep music playing at your normal volume." : "Keep the room quiet so the noise floor is representative."}</p></div>}
+        {session?.status === "waiting" && <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">Now play music at your normal listening volume. When it is playing, begin the second measurement.</p>
+          <Button disabled={busy} onClick={async () => {
+            setBusy(true)
+            try { setSession(await dashboardApi.beginAudioCalibrationMusic(session.session_id)) }
+            catch (error) { toast.error(error instanceof Error ? error.message : "Could not measure music.") }
+            finally { setBusy(false) }
+          }}>Measure music</Button>
+        </div>}
         {session?.status === "complete" && result && <>
-          <div className="grid grid-cols-2 gap-2"><Metric label="Measured floor" value={result.measured_floor.toFixed(3)} /><Metric label="Measured peak" value={result.measured_peak.toFixed(3)} /><Metric label="Recommended floor" value={result.recommended_noise_floor.toFixed(3)} /><Metric label="Recommended target" value={result.recommended_target_level.toFixed(3)} /></div>
+          <div className="grid grid-cols-2 gap-2"><Metric label="Measured floor" value={result.measured_floor.toFixed(3)} /><Metric label="Measured peak" value={result.measured_peak.toFixed(3)} />{microphone && <><Metric label="Input noise threshold" value={result.recommended_input_noise_floor.toFixed(4)} /><Metric label="Music level" value={result.measured_music_level.toFixed(3)} /></>}<Metric label="Recommended target" value={result.recommended_target_level.toFixed(3)} /></div>
           <p className="rounded-xl bg-emerald-400/10 p-3 text-sm text-emerald-100">Review complete. Applying will update this microphone profile only.</p>
           <div className="grid grid-cols-2 gap-2"><Button variant="outline" disabled={busy} onClick={() => void finish(false)}><RotateCcwIcon />Discard</Button><Button disabled={busy} onClick={() => void finish(true)}><CheckCircle2Icon />Apply</Button></div>
         </>}
+        {session && session.status !== "complete" && <Button variant="outline" disabled={busy} onClick={() => void finish(false)}>{session.error ? "Discard and retry" : "Cancel calibration"}</Button>}
         {session?.error && <p className="flex gap-2 rounded-xl bg-red-500/10 p-3 text-sm text-red-200"><CircleAlertIcon className="size-4" />{session.error}</p>}
       </CardContent>
     </Card>

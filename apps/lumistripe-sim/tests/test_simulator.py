@@ -16,6 +16,7 @@ from lumistripe import (
     PlaybackMode,
     demo_snapshot,
 )
+from lumistripe.audio.config import MicrophoneConditioning
 from lumistripe_sim.simulator import (
     MIN_FRAME_SECONDS,
     SimulatorApp,
@@ -323,7 +324,8 @@ def test_dynamic_mode_selects_animation(monkeypatch) -> None:
     assert app.audio_status == "Input: Fake Mic"
     assert FakeAudioInput.last_config == AudioConfig(
         smoothing=AudioSmoothing(noise_floor=0.01),
-        normalization=AudioNormalization(target_level=0.5),
+        normalization=AudioNormalization(target_level=0.5, max_gain=24, music_max_gain=24, music_threshold=0.006),
+        microphone=MicrophoneConditioning(enabled=True),
     )
     assert app.playback.last_decision is not None
     assert app.playback.activity_detector.config.idle_enter_frames == 42
@@ -441,7 +443,8 @@ def test_startup_auto_calibration_applies_before_mic_mode(monkeypatch: pytest.Mo
     assert app.audio_status == "Input: USB Mic"
     assert FakeAudioInput.seen == AudioConfig(
         smoothing=AudioSmoothing(noise_floor=0.03),
-        normalization=AudioNormalization(target_level=0.4),
+        normalization=AudioNormalization(target_level=0.4, max_gain=24, music_max_gain=24, music_threshold=0.006),
+        microphone=MicrophoneConditioning(enabled=True),
     )
 
 
@@ -578,7 +581,8 @@ def test_mic_mode_uses_device_specific_audio_config(monkeypatch) -> None:
         "2",
         AudioConfig(
             smoothing=AudioSmoothing(noise_floor=AudioSmoothing().noise_floor),
-            normalization=AudioNormalization(target_level=AudioNormalization().target_level),
+            normalization=AudioNormalization(target_level=AudioNormalization().target_level, max_gain=24, music_max_gain=24, music_threshold=0.006),
+            microphone=MicrophoneConditioning(enabled=True),
         ),
     )
 

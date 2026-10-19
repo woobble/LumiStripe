@@ -20,6 +20,10 @@ export const emptyTelemetry: AudioTelemetry = {
   sequence: 0,
   fresh: false,
   input_level: 0,
+  input_peak: 0,
+  clipping_fraction: 0,
+  microphone_gate_open: false,
+  configured_input_noise_floor: null,
   processed_level: 0,
   bands: [0, 0, 0, 0, 0, 0, 0, 0],
   beat: false,
@@ -206,10 +210,13 @@ export function AudioTelemetryCards({
             <div className="relative h-4 overflow-hidden rounded-full bg-white/5">
               <div className="h-full rounded-full bg-gradient-to-r from-violet-500 via-cyan-400 to-emerald-300 transition-[width] duration-75" style={{ width: `${percent(telemetry.input_level)}%` }} />
               <span className="absolute inset-y-0 w-0.5 bg-amber-300" title="Estimated floor" style={{ left: `${percent(telemetry.estimated_noise_floor)}%` }} />
-              <span className="absolute inset-y-0 w-0.5 bg-white" title="Configured cutoff" style={{ left: `${percent(telemetry.configured_noise_floor)}%` }} />
+              {telemetry.configured_input_noise_floor !== null && <span className="absolute inset-y-0 w-0.5 bg-white" title="Microphone opening threshold" style={{ left: `${percent(telemetry.configured_input_noise_floor * 2)}%` }} />}
             </div>
-            <div className="mt-2 flex justify-between text-[11px] text-muted-foreground"><span>Noise floor {telemetry.estimated_noise_floor.toFixed(3)}</span><span>Cutoff {telemetry.configured_noise_floor.toFixed(3)}</span></div>
+            <div className="mt-2 flex justify-between text-[11px] text-muted-foreground"><span>Noise floor {telemetry.estimated_noise_floor.toFixed(3)}</span><span>Processed cutoff {telemetry.configured_noise_floor.toFixed(3)}</span></div>
           </div>
+          {telemetry.configured_input_noise_floor !== null && <p className="text-xs text-muted-foreground">Peak {percent(telemetry.input_peak)}% · Microphone input gate {telemetry.microphone_gate_open ? "open" : "closed"} · Opens at {(telemetry.configured_input_noise_floor * 2).toFixed(4)}</p>}
+          {telemetry.fresh && telemetry.clipping_fraction > 0 && <p role="alert" className="text-sm text-amber-300">Input is clipping. Lower microphone capture gain, then repeat calibration.</p>}
+          {telemetry.fresh && telemetry.input_peak < 0.001 && <p className="text-sm text-muted-foreground">Very little input. Check the selected microphone and its capture gain.</p>}
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
             <div className={`rounded-xl p-3 text-center transition-colors ${telemetry.beat ? "bg-fuchsia-400/20 text-fuchsia-100" : "bg-white/[0.035]"}`}><AudioLinesIcon className="mx-auto mb-1 size-4" /><p className="font-semibold">{telemetry.beat ? "Beat" : "Waiting"}</p><p className="text-[11px] text-muted-foreground">{percent(telemetry.beat_strength)}% strength</p></div>
             <div className="rounded-xl bg-white/[0.035] p-3 text-center"><WavesIcon className="mx-auto mb-1 size-4" /><p className="font-semibold">{telemetry.bpm > 0 ? telemetry.bpm.toFixed(0) : "—"} BPM</p><p className="text-[11px] text-muted-foreground">Detected tempo</p></div>

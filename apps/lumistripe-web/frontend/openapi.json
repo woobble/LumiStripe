@@ -124,12 +124,22 @@
       },
       "AudioCalibrationResult": {
         "properties": {
+          "clipping_fraction": {
+            "default": 0.0,
+            "title": "Clipping Fraction",
+            "type": "number"
+          },
           "duration_seconds": {
             "title": "Duration Seconds",
             "type": "number"
           },
           "measured_floor": {
             "title": "Measured Floor",
+            "type": "number"
+          },
+          "measured_music_level": {
+            "default": 0.0,
+            "title": "Measured Music Level",
             "type": "number"
           },
           "measured_peak": {
@@ -151,6 +161,11 @@
           },
           "recommended_idle_threshold_scale": {
             "title": "Recommended Idle Threshold Scale",
+            "type": "number"
+          },
+          "recommended_input_noise_floor": {
+            "default": 0.003,
+            "title": "Recommended Input Noise Floor",
             "type": "number"
           },
           "recommended_noise_floor": {
@@ -196,6 +211,11 @@
             ],
             "title": "Error"
           },
+          "phase": {
+            "default": "quiet",
+            "title": "Phase",
+            "type": "string"
+          },
           "remaining_seconds": {
             "default": 0.0,
             "title": "Remaining Seconds",
@@ -240,6 +260,11 @@
             "minimum": 3.0,
             "title": "Duration Seconds",
             "type": "number"
+          },
+          "two_step": {
+            "default": false,
+            "title": "Two Step",
+            "type": "boolean"
           }
         },
         "required": [
@@ -554,6 +579,7 @@
               "brightness_threshold": 0.08,
               "dynamic_response": 0.65,
               "energy_threshold": 0.03,
+              "input_noise_floor": 0.003,
               "noise_floor": 0.015,
               "onset_threshold": 0.025,
               "rms_attack": 0.45,
@@ -662,6 +688,13 @@
               }
             ],
             "title": "Hardware Gain Target"
+          },
+          "input_noise_floor": {
+            "default": 0.003,
+            "maximum": 0.5,
+            "minimum": 0.0,
+            "title": "Input Noise Floor",
+            "type": "number"
           },
           "noise_floor": {
             "default": 0.015,
@@ -2771,6 +2804,45 @@
           }
         },
         "summary": "Finish Audio Calibration"
+      }
+    },
+    "/api/audio/calibration/session/{session_id}/music": {
+      "post": {
+        "operationId": "begin_audio_calibration_music_api_audio_calibration_session__session_id__music_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudioCalibrationSessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Begin Audio Calibration Music"
       }
     },
     "/api/audio/device": {

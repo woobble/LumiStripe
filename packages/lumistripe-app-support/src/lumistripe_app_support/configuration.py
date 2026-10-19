@@ -10,6 +10,7 @@ from lumistripe.audio.config import (
     AudioConfig,
     AudioNormalization,
     AudioSmoothing,
+    MicrophoneConditioning,
 )
 from lumistripe.playback import (
     AudioSource,
@@ -52,12 +53,19 @@ def build_audio_config(
     target_level: float,
     noise_floor: float,
     analysis: AudioAnalysis | None = None,
+    microphone: bool = True,
 ) -> AudioConfig:
     """Build the common normalized audio configuration used by applications."""
 
     return AudioConfig(
+        microphone=MicrophoneConditioning(enabled=microphone),
         smoothing=AudioSmoothing(noise_floor=noise_floor),
-        normalization=AudioNormalization(target_level=target_level),
+        normalization=AudioNormalization(
+            target_level=target_level,
+            max_gain=24.0 if microphone else 5.0,
+            music_max_gain=24.0 if microphone else 4.5,
+            music_threshold=0.006 if microphone else 0.015,
+        ),
         analysis=analysis if analysis is not None else AudioAnalysis(),
     )
 

@@ -17,6 +17,10 @@ export type SpotifyStatusResponse = RestSchema<"SpotifyStatusResponse">
 export type SpotifyTrackInfo = RestSchema<"SpotifyTrackInfo">
 // WebSocket payloads are not represented by OpenAPI components.
 export interface AudioTelemetry {
+  input_peak: number
+  clipping_fraction: number
+  microphone_gate_open: boolean
+  configured_input_noise_floor: number | null
   sequence: number
   fresh: boolean
   input_level: number

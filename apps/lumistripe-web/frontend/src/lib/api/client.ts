@@ -244,6 +244,7 @@ const audioTuningSchema = z.object({
   target_level: z.number(),
   hardware_gain_target: z.number().nullable().optional(),
   noise_floor: z.number(),
+  input_noise_floor: z.number().min(0).max(0.5).default(0.003),
   dynamic_response: z.number(),
   rms_attack: z.number(),
   rms_release: z.number(),
@@ -330,9 +331,13 @@ const audioCalibrationResultSchema = z.object({
   recommended_target_level: z.number(),
   recommended_hardware_gain: z.number().nullable().optional(),
   recommended_idle_threshold_scale: z.number(),
+  recommended_input_noise_floor: z.number().min(0).max(0.5).default(0.003),
+  measured_music_level: z.number().min(0).max(1).default(0),
+  clipping_fraction: z.number().min(0).max(1).default(0),
 }).strict()
 const audioCalibrationSchema = z.object({
   session_id: z.string(),
+  phase: z.enum(["quiet", "waiting_music", "music"]).default("quiet"),
   status: z.string(),
   elapsed_seconds: z.number(),
   remaining_seconds: z.number(),
@@ -359,6 +364,10 @@ const audioTelemetrySchema = z.object({
   sequence: z.number().int(),
   fresh: z.boolean(),
   input_level: z.number(),
+  input_peak: z.number().min(0).max(1).default(0),
+  clipping_fraction: z.number().min(0).max(1).default(0),
+  microphone_gate_open: z.boolean().default(false),
+  configured_input_noise_floor: z.number().min(0).max(0.5).nullable().default(null),
   processed_level: z.number(),
   bands: z.tuple([
     z.number(), z.number(), z.number(), z.number(),
@@ -536,11 +545,12 @@ export const dashboardApi = {
       method: "POST",
       body: JSON.stringify({ device }),
     }, audioSettingsSchema),
-  startAudioCalibration: (device: string, durationSeconds = 8) =>
+  startAudioCalibration: (device: string, durationSeconds = 8, twoStep = false) =>
     request("/api/audio/calibration/session", {
       method: "POST",
-      body: JSON.stringify({ device, duration_seconds: durationSeconds }),
+      body: JSON.stringify({ device, duration_seconds: durationSeconds, two_step: twoStep }),
     }, audioCalibrationSchema),
+  beginAudioCalibrationMusic: (sessionId: string) => request(`/api/audio/calibration/session/${sessionId}/music`, { method: "POST" }, audioCalibrationSchema),
   getAudioCalibration: (sessionId: string) => request(`/api/audio/calibration/session/${sessionId}`, undefined, audioCalibrationSchema),
   finishAudioCalibration: (sessionId: string, apply: boolean, values?: { target_level?: number; noise_floor?: number }) =>
     request(`/api/audio/calibration/session/${sessionId}/finish`, {

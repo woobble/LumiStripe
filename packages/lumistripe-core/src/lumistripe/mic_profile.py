@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .audio import AudioAnalysis, AudioConfig, AudioNormalization, AudioSmoothing
+from .audio.config import MicrophoneConditioning
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,12 +25,16 @@ class MicProfile:
         noise_floor: float | None = None,
     ) -> AudioConfig:
         return AudioConfig(
+            microphone=MicrophoneConditioning(enabled=True),
             smoothing=AudioSmoothing(
                 noise_floor=noise_floor
                 if noise_floor is not None
                 else (self.mic_noise_floor if self.mic_noise_floor is not None else AudioSmoothing().noise_floor)
             ),
             normalization=AudioNormalization(
+                max_gain=24.0,
+                music_max_gain=24.0,
+                music_threshold=0.006,
                 target_level=target_level
                 if target_level is not None
                 else (self.mic_target_level if self.mic_target_level is not None else AudioNormalization().target_level)

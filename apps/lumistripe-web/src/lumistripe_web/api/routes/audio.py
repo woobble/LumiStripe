@@ -82,7 +82,7 @@ async def start_audio_calibration(
 ) -> AudioCalibrationSessionResponse:
     return await await_command(
         runtime_from_request(request).start_audio_calibration(
-            body.device, body.duration_seconds
+            body.device, body.duration_seconds, body.two_step
         )
     )
 
@@ -98,6 +98,14 @@ async def audio_calibration_status(
         return runtime_from_request(request).audio_calibration_status(session_id)
     except RuntimeCommandError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/api/audio/calibration/session/{session_id}/music",
+    response_model=AudioCalibrationSessionResponse,
+)
+async def begin_audio_calibration_music(request: Request, session_id: str) -> AudioCalibrationSessionResponse:
+    return await await_command(runtime_from_request(request).begin_audio_calibration_music(session_id))
 
 
 @router.post(

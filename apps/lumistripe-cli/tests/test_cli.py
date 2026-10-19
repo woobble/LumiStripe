@@ -22,6 +22,7 @@ from lumistripe import (
     Stripe,
     demo_snapshot,
 )
+from lumistripe.audio.config import MicrophoneConditioning
 from lumistripe_cli.app import (
     MIN_FRAME_SECONDS,
     AudioDebugRecorder,
@@ -1053,7 +1054,8 @@ def test_headless_app_dynamic_mode_uses_shared_playback(monkeypatch: pytest.Monk
     assert app.audio_status == "Input: Fake Mic"
     assert FakeAudioInput.last_config == AudioConfig(
         smoothing=AudioSmoothing(noise_floor=0.01),
-        normalization=AudioNormalization(target_level=0.5),
+        normalization=AudioNormalization(target_level=0.5, max_gain=24, music_max_gain=24, music_threshold=0.006),
+        microphone=MicrophoneConditioning(enabled=True),
     )
     assert app.playback.activity_detector.config.idle_enter_frames == 42
     assert app.playback.activity_detector.config.energy_threshold == pytest.approx(MusicActivityConfig().energy_threshold * 1.5)
@@ -1185,7 +1187,8 @@ def test_headless_app_mic_mode_uses_device_specific_audio_config(monkeypatch: py
         "2",
         AudioConfig(
             smoothing=AudioSmoothing(noise_floor=AudioSmoothing().noise_floor),
-            normalization=AudioNormalization(target_level=AudioNormalization().target_level),
+            normalization=AudioNormalization(target_level=AudioNormalization().target_level, max_gain=24, music_max_gain=24, music_threshold=0.006),
+            microphone=MicrophoneConditioning(enabled=True),
         ),
     )
 
