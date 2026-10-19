@@ -66,11 +66,20 @@ class StripeOutputSettings:
     power_limit_watts: float | None = None
 
     def __post_init__(self) -> None:
+        for name in ("id", "name", "spi_device", "chip"):
+            if not isinstance(getattr(self, name), str):
+                raise TypeError(f"stripe {name} must be a string")
+        for name in ("pixels", "spi_speed_hz", "data_pin", "clock_pin"):
+            value = getattr(self, name)
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise TypeError(f"stripe {name} must be an integer")
+        if not isinstance(self.reversed, bool):
+            raise TypeError("stripe reversed must be a boolean")
         if not self.id.strip() or not self.name.strip():
             raise ValueError("stripe id and name must not be empty")
         if not 1 <= self.pixels <= 4096:
             raise ValueError("stripe pixels must be between 1 and 4096")
-        if self.backend not in {"spi", "gpio"}:
+        if not isinstance(self.backend, str) or self.backend not in {"spi", "gpio"}:
             raise ValueError("stripe backend must be spi or gpio")
         if self.spi_speed_hz <= 0:
             raise ValueError("SPI speed must be greater than zero")
@@ -231,7 +240,7 @@ class CalibrationSettingsStore:
             raw = self.path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return settings, None
-        except OSError as exc:
+        except (OSError, UnicodeError) as exc:
             return settings, f"Could not read dashboard settings: {exc}"
 
         warnings: list[str] = []

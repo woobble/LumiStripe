@@ -11,6 +11,9 @@ SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
 FAILED_ATTEMPT_WINDOW_SECONDS = 5 * 60
 FAILED_ATTEMPT_LIMIT = 5
 LOCKOUT_SECONDS = 60
+CLEANUP_INTERVAL_SECONDS = 60
+MAX_SESSIONS = 1024
+MAX_CLIENTS = 4096
 
 
 class InvalidPairingCodeError(ValueError):
@@ -38,6 +41,25 @@ class PairingAuth:
         self._failed_attempts: dict[str, deque[float]] = defaultdict(deque)
         self._blocked_until: dict[str, float] = {}
         self._lock = threading.Lock()
+        self._next_cleanup_s = 0.0
+
+    def _cleanup(self, now: float) -> None:
+        """Prune abandoned records periodically while holding the auth lock."""
+        if now < self._next_cleanup_s:
+            return
+        self._next_cleanup_s = now + CLEANUP_INTERVAL_SECONDS
+        self._sessions = {
+            token: expiry for token, expiry in self._sessions.items() if expiry > now
+        }
+        self._blocked_until = {
+            client: expiry for client, expiry in self._blocked_until.items()
+            if expiry > now
+        }
+        for client, attempts in list(self._failed_attempts.items()):
+            while attempts and now - attempts[0] > FAILED_ATTEMPT_WINDOW_SECONDS:
+                attempts.popleft()
+            if not attempts and client not in self._blocked_until:
+                del self._failed_attempts[client]
 
     @property
     def required(self) -> bool:
@@ -50,6 +72,7 @@ class PairingAuth:
             return False
         now = time.monotonic() if now_s is None else now_s
         with self._lock:
+            self._cleanup(now)
             expires_at = self._sessions.get(session)
             if expires_at is None:
                 return False
@@ -66,13 +89,16 @@ class PairingAuth:
         now_s: float | None = None,
     ) -> str:
         if not self.required:
-            return self._new_session()
+            return secrets.token_urlsafe(32)
         now = time.monotonic() if now_s is None else now_s
         with self._lock:
+            self._cleanup(now)
             blocked_until = self._blocked_until.get(client_id, 0.0)
             if blocked_until > now:
                 raise PairingRateLimitedError(math.ceil(blocked_until - now))
 
+            if client_id not in self._failed_attempts and len(self._failed_attempts) >= MAX_CLIENTS:
+                raise PairingRateLimitedError(CLEANUP_INTERVAL_SECONDS)
             attempts = self._failed_attempts[client_id]
             while attempts and now - attempts[0] > FAILED_ATTEMPT_WINDOW_SECONDS:
                 attempts.popleft()
@@ -80,8 +106,11 @@ class PairingAuth:
             assert self._pairing_code is not None
             if secrets.compare_digest(code, self._pairing_code):
                 attempts.clear()
+                self._failed_attempts.pop(client_id, None)
                 self._blocked_until.pop(client_id, None)
                 token = secrets.token_urlsafe(32)
+                if len(self._sessions) >= MAX_SESSIONS:
+                    del self._sessions[next(iter(self._sessions))]
                 self._sessions[token] = now + SESSION_MAX_AGE_SECONDS
                 return token
 
@@ -98,8 +127,3 @@ class PairingAuth:
         with self._lock:
             self._sessions.pop(session, None)
 
-    def _new_session(self) -> str:
-        token = secrets.token_urlsafe(32)
-        with self._lock:
-            self._sessions[token] = time.monotonic() + SESSION_MAX_AGE_SECONDS
-        return token

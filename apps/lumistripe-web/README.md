@@ -97,6 +97,17 @@ HttpOnly session cookie. Five failed attempts from one client trigger a
 temporary one-minute lockout. Without this flag, the dashboard remains
 unprotected and must only be exposed on a trusted local network.
 
+Sessions expire after 30 days. Live streams close with code `4401` after logout
+or expiry, within their next polling interval (at most 250 ms). Authentication
+prunes expired sessions and inactive client records during requests, at most
+once per minute. Storage is capped at 1,024 sessions and 4,096 client records;
+new sessions revoke the oldest session at capacity, while new clients receive
+HTTP 429 when the client record limit is reached. Pairing-disabled operation
+does not retain sessions.
+
+Malformed saved stripe settings are ignored with a warning while other valid
+settings are retained. Settings files with invalid UTF-8 fall back to defaults.
+
 To serve the production dashboard over HTTPS directly from Uvicorn, provide a
 certificate and private key. This enables WebGPU for supported browsers on the
 LAN (the certificate must be trusted by each client device):

@@ -509,6 +509,28 @@ def test_pairing_code_protects_api_and_websocket() -> None:
         assert client.get("/api/stripes").status_code == 401
 
 
+@pytest.mark.parametrize("stream", ["state", "audio", "preview"])
+@pytest.mark.parametrize("invalidate", ["logout", "expiry"])
+def test_open_websocket_closes_when_session_invalidated(stream: str, invalidate: str) -> None:
+    app = create_app(RuntimeSettings(pixels=8), pairing_code="1234")
+    with TestClient(app) as client:
+        client.post("/api/auth/pair", json={"code": "1234"})
+        with client.websocket_connect(f"/ws/{stream}") as websocket:
+            assert websocket.receive()["type"] == "websocket.send"
+            if invalidate == "logout":
+                client.post("/api/auth/logout")
+            else:
+                access = app.state.access
+                with access._lock:
+                    for token in access._sessions:
+                        access._sessions[token] = 0.0
+            while True:
+                message = websocket.receive()
+                if message["type"] == "websocket.close":
+                    assert message["code"] == 4401
+                    break
+
+
 def test_pairing_endpoint_rate_limits_fifth_failure() -> None:
     app = create_app(RuntimeSettings(pixels=8), pairing_code="1234")
     with TestClient(app) as client:

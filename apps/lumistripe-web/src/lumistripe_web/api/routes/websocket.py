@@ -33,6 +33,9 @@ async def websocket_state(websocket: WebSocket) -> None:
     last_revision = -1
     try:
         while True:
+            if not _session_active(websocket):
+                await websocket.close(code=4401, reason="pairing required")
+                return
             snapshot = runtime.snapshot()
             if snapshot.revision != last_revision:
                 await websocket.send_json(snapshot.model_dump(mode="json"))
@@ -52,6 +55,9 @@ async def websocket_audio(websocket: WebSocket) -> None:
     runtime: LumiStripeRuntime = websocket.app.state.runtime
     try:
         while True:
+            if not _session_active(websocket):
+                await websocket.close(code=4401, reason="pairing required")
+                return
             telemetry: AudioTelemetry = runtime.audio_telemetry()
             await websocket.send_json(telemetry.model_dump(mode="json"))
             await asyncio.sleep(AUDIO_WEBSOCKET_INTERVAL_SECONDS)
@@ -67,6 +73,9 @@ async def websocket_preview(websocket: WebSocket) -> None:
     last_sequence = -1
     try:
         while True:
+            if not _session_active(websocket):
+                await websocket.close(code=4401, reason="pairing required")
+                return
             frame = runtime.preview_frame()
             if frame.sequence != last_sequence:
                 await websocket.send_bytes(encode_preview_frame(frame))
@@ -77,6 +86,11 @@ async def websocket_preview(websocket: WebSocket) -> None:
             await asyncio.sleep(PREVIEW_WEBSOCKET_INTERVAL_SECONDS)
     except (WebSocketDisconnect, RuntimeError):
         return
+
+
+def _session_active(websocket: WebSocket) -> bool:
+    access: PairingAuth = websocket.app.state.access
+    return access.authenticated(websocket.cookies.get(SESSION_COOKIE))
 
 
 __all__ = ["router"]

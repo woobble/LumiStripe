@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from lumistripe import ColorCorrection, PlaybackMode
 from lumistripe_web.settings import (
     AudioTuningProfile,
@@ -11,6 +12,24 @@ from lumistripe_web.settings import (
     StripeOutputSettings,
     StripeTopologySettings,
 )
+
+
+@pytest.mark.parametrize("field,value", [("id", None), ("name", 3), ("backend", []), ("pixels", True)])
+def test_malformed_stripe_settings_preserve_other_settings(tmp_path: Path, field: str, value: object) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"version": 5, "selected_audio_device": "USB Mic", "stripes": {"outputs": [{field: value}]}}))
+    settings, warning = CalibrationSettingsStore(path).load_all()
+    assert settings.stripe_topology is None
+    assert settings.selected_audio_device == "USB Mic"
+    assert warning is not None
+
+
+def test_invalid_utf8_settings_use_defaults(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_bytes(b"\xff")
+    settings, warning = CalibrationSettingsStore(path).load_all()
+    assert settings.stripe_topology is None
+    assert warning is not None
 
 
 def test_missing_settings_use_neutral_profiles(tmp_path: Path) -> None:
