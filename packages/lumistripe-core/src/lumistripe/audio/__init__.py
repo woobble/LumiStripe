@@ -35,6 +35,11 @@ from .protocols import (
     snapshot_from_source,
 )
 from .structure import MusicStructurePhase, MusicStructureState, MusicStructureTracker
+from .timeline import (
+    MusicalTimelineConfig,
+    MusicalTimelineState,
+    MusicalTimelineTracker,
+)
 from .types import (
     NUM_BANDS,
     AudioCalibrationResult,
@@ -85,6 +90,9 @@ __all__ = [
     "MusicStructurePhase",
     "MusicStructureState",
     "MusicStructureTracker",
+    "MusicalTimelineConfig",
+    "MusicalTimelineState",
+    "MusicalTimelineTracker",
     "NativeFeaturesResult",
     "NativeFrameResult",
     "NativeStatsResult",

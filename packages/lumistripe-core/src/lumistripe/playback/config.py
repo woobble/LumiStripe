@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
+from ..audio.timeline import MusicalTimelineConfig
 from ..color import Color, Rgb
 from ..effects.layers import EffectSchedulerConfig
 from ..selector import DynamicSelectorConfig
@@ -54,6 +55,9 @@ class PlaybackConfig:
     solid_color: Color = field(default_factory=lambda: Rgb(124, 58, 237))
     cycling: CyclingConfig = field(default_factory=CyclingConfig)
     dynamic: DynamicSelectorConfig = field(default_factory=DynamicSelectorConfig)
+    musical_timeline: MusicalTimelineConfig = field(
+        default_factory=MusicalTimelineConfig
+    )
     activity: MusicActivityConfig = field(default_factory=MusicActivityConfig)
     idle_color: Color = field(default_factory=lambda: Rgb(32, 96, 255))
     idle_brightness: float = 0.08

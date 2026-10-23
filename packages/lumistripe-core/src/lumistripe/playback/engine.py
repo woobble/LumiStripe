@@ -11,6 +11,7 @@ from ..animation.base import AnimationPlayer
 from ..audio.beat import BeatClockTracker
 from ..audio.dsp import features_from_frame
 from ..audio.structure import MusicStructureState, MusicStructureTracker
+from ..audio.timeline import MusicalTimelineState, MusicalTimelineTracker
 from ..audio.types import AudioSnapshot, BeatClockState, MusicFeatures
 from ..color import Color
 from ..controller import Controller
@@ -67,6 +68,10 @@ class PlaybackEngine:
         init=False, default_factory=MusicStructureState
     )
     _confirmed_drop_count: int = field(init=False, default=0)
+    musical_timeline_tracker: MusicalTimelineTracker = field(init=False)
+    _musical_timeline_state: MusicalTimelineState = field(
+        init=False, default_factory=MusicalTimelineState
+    )
     sync_offset_s: float = field(init=False, default=0.0)
 
     def __post_init__(self) -> None:
@@ -84,6 +89,12 @@ class PlaybackEngine:
         self.render_adapter = PlaybackRenderer()
         self.beat_clock_tracker = BeatClockTracker()
         self._beat_clock_state = self.beat_clock_tracker.state(0.0)
+        self.musical_timeline_tracker = MusicalTimelineTracker(
+            self.config.musical_timeline
+        )
+        self._musical_timeline_state = self.musical_timeline_tracker.update(
+            self._beat_clock_state
+        )
         self._structure_tracker = MusicStructureTracker()
         self.player.transition_ms = int(self.config.transition_duration_s * 1000.0)
         self._rng = Random(self.config.cycling.seed)
@@ -106,6 +117,10 @@ class PlaybackEngine:
     @property
     def beat_clock_state(self) -> BeatClockState:
         return self._beat_clock_state
+
+    @property
+    def musical_timeline_state(self) -> MusicalTimelineState:
+        return self._musical_timeline_state
 
     @property
     def music_structure_state(self) -> MusicStructureState:
@@ -205,6 +220,9 @@ class PlaybackEngine:
             snapshot = replace(snapshot, beat_clock=self._beat_clock_state)
         else:
             self._beat_clock_state = self.beat_clock_tracker.state(now)
+        self._musical_timeline_state = self.musical_timeline_tracker.update(
+            self._beat_clock_state
+        )
         if self._cycle_started_at_s is None:
             self._cycle_started_at_s = now
 

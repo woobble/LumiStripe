@@ -20,7 +20,7 @@ from lumistripe import (
     Stripe,
 )
 from lumistripe.animation import AnimationPlayer
-from lumistripe.audio import MusicStructurePhase
+from lumistripe.audio import BeatEvent, MusicalTimelineConfig, MusicStructurePhase
 
 
 class CountingStripe(Stripe):
@@ -329,6 +329,37 @@ def test_dynamic_playback_tracks_music_structure_and_resets_on_mode_change() -> 
 
     assert engine.music_structure_state.phase is MusicStructurePhase.IDLE
     assert engine.music_structure_state.confidence == 0.0
+
+
+def test_playback_exposes_timeline_from_its_advancing_beat_clock() -> None:
+    player = AnimationPlayer.party()
+    original_animation = player.current_index()
+    engine = PlaybackEngine(
+        player,
+        PlaybackConfig(
+            mode=PlaybackMode.STATIC,
+            musical_timeline=MusicalTimelineConfig(bars_per_phrase=2),
+        ),
+    )
+    stripe = Stripe(8)
+    first_snapshot = AudioSnapshot.from_parts(
+        AudioFrame(fresh=True),
+        MusicFeatures(bpm=120.0),
+        beat_events=(BeatEvent(sequence=1, timestamp=10.0, strength=0.9),),
+    )
+
+    engine.step(stripe, snapshot=first_snapshot, now_s=10.0)
+    first_beat = engine.musical_timeline_state
+    engine.step(stripe, now_s=10.5)
+    second_beat = engine.musical_timeline_state
+
+    assert first_beat.aligned is True
+    assert first_beat.beat_index == 1
+    assert first_beat.bars_per_phrase == 2
+    assert first_beat.next_phrase_at == 14.0
+    assert second_beat.beat_index == 2
+    assert second_beat.beat_in_bar == 2
+    assert player.current_index() == original_animation
 
 
 def test_speech_like_low_energy_input_does_not_activate_music() -> None:

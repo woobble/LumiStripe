@@ -76,9 +76,10 @@ The core package keeps compatibility exports in `lumistripe.__init__`, while
 new integrations should use narrower modules:
 
 - `lumistripe.audio.types`, `.config`, `.capture`, `.dsp`, `.devices`,
-  `.calibration`, and `.structure`; capture callbacks enqueue bounded sample
-  batches, the DSP worker owns native processing state, and the structure
-  tracker classifies timestamped features for Dynamic playback
+  `.calibration`, `.structure`, and `.timeline`; capture callbacks enqueue
+  bounded sample batches, the DSP worker owns native processing state, the
+  structure tracker classifies timestamped features for Dynamic playback, and
+  the timeline maps the beat clock onto an estimated 4/4 bar and phrase grid
 - `lumistripe.playback.config`, `.activity`, `.state`, `.renderer`, and
   `.engine`; Dynamic playback passes the current structure state to the effect
   scheduler, while `PlaybackDecision` and `RenderPlan` remain pure policy outputs
