@@ -20,6 +20,7 @@ from lumistripe import (
     Stripe,
 )
 from lumistripe.animation import AnimationPlayer
+from lumistripe.audio import MusicStructurePhase
 
 
 class CountingStripe(Stripe):
@@ -223,6 +224,64 @@ def test_dynamic_schedules_layered_effects_after_activation_crossfade() -> None:
     assert engine.music_active is True
     assert engine.active_effect_names
     assert len(engine.active_effect_names) <= 2
+
+
+def test_dynamic_playback_tracks_music_structure_and_resets_on_mode_change() -> None:
+    engine = PlaybackEngine(
+        AnimationPlayer.party(),
+        PlaybackConfig(
+            mode=PlaybackMode.DYNAMIC,
+            activity=MusicActivityConfig(
+                activation_delay_s=0.0,
+                idle_enter_frames=1,
+            ),
+        ),
+    )
+    stripe = Stripe(8)
+
+    for index in range(45):
+        energy = 0.18 + 0.008 * index
+        features = MusicFeatures(
+            energy=energy,
+            volume=energy,
+            energy_level=energy,
+            bass_energy=energy * 0.7,
+            mid_energy=0.4,
+            treble_energy=0.3,
+            onset_strength=0.2,
+            beat=True,
+            beat_strength=0.8,
+            silence=False,
+        )
+        frame = AudioFrame(
+            rms=energy,
+            beat=True,
+            beat_strength=0.8,
+            timestamp=index * 0.1,
+            fresh=True,
+        )
+        engine.step(
+            stripe,
+            snapshot=AudioSnapshot.from_parts(frame, features),
+            now_s=index * 0.1,
+        )
+
+    assert engine.music_structure_state.phase is MusicStructurePhase.BUILDUP
+    assert engine.music_structure_state.buildup_progress > 0.0
+
+    engine.step(
+        stripe,
+        snapshot=AudioSnapshot.from_parts(AudioFrame(), MusicFeatures(silence=True)),
+        now_s=4.5,
+    )
+
+    assert engine.music_structure_state.phase is MusicStructurePhase.IDLE
+    assert engine.music_structure_state.confidence == 0.0
+
+    engine.set_mode(PlaybackMode.STATIC, now_s=5.0)
+
+    assert engine.music_structure_state.phase is MusicStructurePhase.IDLE
+    assert engine.music_structure_state.confidence == 0.0
 
 
 def test_speech_like_low_energy_input_does_not_activate_music() -> None:

@@ -10,6 +10,7 @@ from random import Random
 from ..animation.base import AnimationPlayer
 from ..audio.beat import BeatClockTracker
 from ..audio.dsp import features_from_frame
+from ..audio.structure import MusicStructureState, MusicStructureTracker
 from ..audio.types import AudioSnapshot, BeatClockState, MusicFeatures
 from ..color import Color
 from ..controller import Controller
@@ -61,6 +62,10 @@ class PlaybackEngine:
     solid_color: Color = field(init=False)
     beat_clock_tracker: BeatClockTracker = field(init=False)
     _beat_clock_state: BeatClockState = field(init=False)
+    _structure_tracker: MusicStructureTracker = field(init=False)
+    _music_structure_state: MusicStructureState = field(
+        init=False, default_factory=MusicStructureState
+    )
     sync_offset_s: float = field(init=False, default=0.0)
 
     def __post_init__(self) -> None:
@@ -78,6 +83,7 @@ class PlaybackEngine:
         self.render_adapter = PlaybackRenderer()
         self.beat_clock_tracker = BeatClockTracker()
         self._beat_clock_state = self.beat_clock_tracker.state(0.0)
+        self._structure_tracker = MusicStructureTracker()
         self.player.transition_ms = int(self.config.transition_duration_s * 1000.0)
         self._rng = Random(self.config.cycling.seed)
 
@@ -100,6 +106,10 @@ class PlaybackEngine:
     def beat_clock_state(self) -> BeatClockState:
         return self._beat_clock_state
 
+    @property
+    def music_structure_state(self) -> MusicStructureState:
+        return self._music_structure_state
+
     def set_sync_offset(self, offset_s: float) -> None:
         if not -0.5 <= offset_s <= 0.5:
             raise ValueError("audio sync offset must be between -0.5 and 0.5 seconds")
@@ -117,6 +127,8 @@ class PlaybackEngine:
         self._music_active = False
         self._idle_rendered = False
         self.activity_detector.reset()
+        self._structure_tracker.reset()
+        self._music_structure_state = MusicStructureState()
         self.layered_renderer.reset()
         self.reactive_smoother.reset()
         self.player.cancel_transition()
@@ -130,6 +142,8 @@ class PlaybackEngine:
         self.activity_detector.config = config
         self.activity_detector.reset()
         self._music_active = False
+        self._structure_tracker.reset()
+        self._music_structure_state = MusicStructureState()
 
     def set_dynamic_response(self, response: float) -> None:
         if not 0.0 <= response <= 1.0:
@@ -142,6 +156,8 @@ class PlaybackEngine:
         if not enabled:
             self.activity_detector.reset()
             self._music_active = False
+            self._structure_tracker.reset()
+            self._music_structure_state = MusicStructureState()
 
     def select_animation(self, name: str) -> None:
         index = self.player.index_of(name)
@@ -206,6 +222,8 @@ class PlaybackEngine:
             was_active = self._music_active
             self._music_active = self.activity_detector.update(features, now_s=now)
             if not self._music_active:
+                self._structure_tracker.reset()
+                self._music_structure_state = MusicStructureState()
                 if was_active:
                     self.layered_renderer.reset()
                     self.reactive_smoother.reset()
@@ -233,6 +251,12 @@ class PlaybackEngine:
                     self._idle_rendered = True
                 return 0.05
 
+            if not was_active:
+                self._structure_tracker.reset()
+            self._music_structure_state = self._structure_tracker.update(
+                features,
+                now,
+            )
             self._idle_rendered = False
             self.last_decision = self.dynamic_selector.update(
                 self.player,
@@ -285,6 +309,7 @@ class PlaybackEngine:
                 now_s=now,
                 flush=plan.flush,
                 sync_offset_s=self.sync_offset_s,
+                structure_state=self._music_structure_state,
             )
 
         audio_frame = None

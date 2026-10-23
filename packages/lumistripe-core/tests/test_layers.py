@@ -23,6 +23,7 @@ from lumistripe import (
     Stripe,
     animation_metadata,
 )
+from lumistripe.audio import MusicStructurePhase, MusicStructureState
 from lumistripe.audio.types import BeatClockState, BeatEvent
 from lumistripe.controller import Controller
 from lumistripe.effects import BeatWave
@@ -379,6 +380,226 @@ def test_scheduler_response_controls_quiet_floor_and_impact_threshold() -> None:
 
     with pytest.raises(ValueError, match="response must be between zero and one"):
         scheduler.set_response(1.01)
+
+
+def _structure_drop_snapshot(*, clock_confidence: float = 0.9) -> AudioSnapshot:
+    base = _event_snapshot()
+    return replace(
+        base,
+        frame=AudioFrame(fresh=True),
+        features=replace(
+            base.features,
+            beat=False,
+            beat_strength=0.0,
+            beat_confidence=0.0,
+            onset_strength=0.0,
+            drop_detected=False,
+            musical_impact=0.7,
+        ),
+        beat_events=(),
+        beat_event_stream=True,
+        beat_clock=BeatClockState(
+            bpm=120.0,
+            confidence=clock_confidence,
+            next_beat_at=2.0,
+        ),
+    )
+
+
+def test_structure_drop_accent_uses_next_beat_and_negative_sync_offset() -> None:
+    scheduler = EffectScheduler(EffectSchedulerConfig(seed=4))
+    player = AnimationPlayer.party()
+    base_snapshot = _structure_drop_snapshot()
+    snapshot = replace(
+        base_snapshot,
+        features=replace(
+            base_snapshot.features,
+            onset_strength=0.8,
+            drop_detected=True,
+        ),
+    )
+    drop = MusicStructureState(
+        phase=MusicStructurePhase.DROP,
+        confidence=0.95,
+        buildup_progress=1.0,
+        drop_event=True,
+    )
+
+    scheduler.update(
+        player,
+        snapshot,
+        now_s=1.0,
+        sync_offset_s=-0.085,
+        structure_state=drop,
+    )
+    assert scheduler._pending_drop_accent_at_s == pytest.approx(1.915)
+    assert scheduler.active_names == ()
+
+    scheduler.update(
+        player,
+        snapshot,
+        now_s=1.916,
+        sync_offset_s=-0.085,
+        structure_state=replace(drop, drop_event=False),
+    )
+
+    assert scheduler.active_names == ("drop_explosion",)
+    assert scheduler.active[0].intensity == 1.0
+    assert scheduler.diagnostics().accent.result is EffectTriggerResult.ACTIVATED
+
+    scheduler.update(
+        player,
+        snapshot,
+        now_s=1.92,
+        sync_offset_s=-0.085,
+        structure_state=replace(drop, drop_event=False),
+    )
+    assert scheduler.active_names == ("drop_explosion",)
+
+
+def test_pending_structure_drop_tracks_sync_offset_changes() -> None:
+    scheduler = EffectScheduler(EffectSchedulerConfig(seed=4))
+    player = AnimationPlayer.party()
+    snapshot = _structure_drop_snapshot()
+    drop = MusicStructureState(
+        phase=MusicStructurePhase.DROP,
+        confidence=0.95,
+        buildup_progress=1.0,
+        drop_event=True,
+    )
+
+    scheduler.update(player, snapshot, now_s=1.0, structure_state=drop)
+    assert scheduler._pending_drop_accent_at_s == pytest.approx(2.0)
+
+    scheduler.update(
+        player,
+        snapshot,
+        now_s=1.5,
+        sync_offset_s=-0.085,
+        structure_state=replace(drop, drop_event=False),
+    )
+
+    assert scheduler._pending_drop_accent_at_s == pytest.approx(1.915)
+
+
+def test_structure_drop_accent_is_skipped_when_late_or_clock_is_uncertain() -> None:
+    drop = MusicStructureState(
+        phase=MusicStructurePhase.DROP,
+        confidence=0.95,
+        buildup_progress=1.0,
+        drop_event=True,
+    )
+
+    late_scheduler = EffectScheduler(EffectSchedulerConfig(seed=4))
+    player = AnimationPlayer.party()
+    late_snapshot = _structure_drop_snapshot()
+    late_scheduler.update(
+        player,
+        late_snapshot,
+        now_s=1.0,
+        sync_offset_s=-0.085,
+        structure_state=drop,
+    )
+    late_scheduler.update(
+        player,
+        late_snapshot,
+        now_s=2.1,
+        sync_offset_s=-0.085,
+        structure_state=replace(drop, drop_event=False),
+    )
+    assert late_scheduler.active_names == ()
+    assert late_scheduler.diagnostics().late_ticks_dropped == 1
+
+    uncertain_scheduler = EffectScheduler(EffectSchedulerConfig(seed=4))
+    uncertain_scheduler.update(
+        player,
+        _structure_drop_snapshot(clock_confidence=0.5),
+        now_s=1.0,
+        structure_state=drop,
+    )
+    assert uncertain_scheduler._pending_drop_accent_at_s is None
+    assert uncertain_scheduler.active_names == ()
+
+
+@pytest.mark.parametrize(
+    ("state", "expected_result"),
+    (
+        (None, EffectTriggerResult.BELOW_THRESHOLD),
+        (
+            MusicStructureState(
+                phase=MusicStructurePhase.BREAKDOWN,
+                confidence=0.9,
+            ),
+            EffectTriggerResult.BELOW_THRESHOLD,
+        ),
+        (
+            MusicStructureState(
+                phase=MusicStructurePhase.BUILDUP,
+                confidence=0.9,
+                buildup_progress=1.0,
+            ),
+            EffectTriggerResult.ACTIVATED,
+        ),
+    ),
+)
+def test_structure_phase_adjusts_effect_trigger_activity(
+    state: MusicStructureState | None,
+    expected_result: EffectTriggerResult,
+) -> None:
+    scheduler = EffectScheduler(EffectSchedulerConfig(seed=4))
+    player = AnimationPlayer.party()
+    base = _event_snapshot()
+    snapshot = replace(
+        base,
+        frame=AudioFrame(fresh=True),
+        features=replace(
+            base.features,
+            beat=False,
+            beat_strength=0.0,
+            beat_confidence=0.0,
+            onset_strength=0.6,
+            drop_detected=False,
+            musical_impact=0.75,
+        ),
+        beat_events=(),
+        beat_event_stream=True,
+        beat_clock=None,
+    )
+
+    scheduler.update(player, snapshot, now_s=1.0, structure_state=state)
+
+    assert scheduler.diagnostics().accent.result is expected_result
+
+
+def test_structure_modulation_keeps_base_output_within_player_brightness() -> None:
+    def render_with_state(state: MusicStructureState | None) -> int:
+        player = AnimationPlayer()
+        player.add(Red(), 50, 10)
+        player.set_brightness(0.4)
+        renderer = LayeredRenderer(EffectScheduler(EffectSchedulerConfig(seed=2)))
+        snapshot = AudioSnapshot.from_parts(
+            AudioFrame(fresh=True), MusicFeatures(musical_impact=1.0)
+        )
+        stripe = Stripe(4)
+        renderer.render(player, stripe, snapshot, now_s=1.0, structure_state=state)
+        return int(stripe.pixels()[0, 0])
+
+    groove = render_with_state(
+        MusicStructureState(phase=MusicStructurePhase.GROOVE, confidence=0.9)
+    )
+    breakdown = render_with_state(
+        MusicStructureState(phase=MusicStructurePhase.BREAKDOWN, confidence=0.9)
+    )
+    buildup = render_with_state(
+        MusicStructureState(
+            phase=MusicStructurePhase.BUILDUP,
+            confidence=0.9,
+            buildup_progress=0.5,
+        )
+    )
+
+    assert breakdown < buildup < groove
+    assert groove <= 102
 
 
 def test_scheduler_diagnostics_describe_layers_budget_and_triggers() -> None:

@@ -78,9 +78,10 @@ new integrations should use narrower modules:
 - `lumistripe.audio.types`, `.config`, `.capture`, `.dsp`, `.devices`,
   `.calibration`, and `.structure`; capture callbacks enqueue bounded sample
   batches, the DSP worker owns native processing state, and the structure
-  tracker classifies timestamped features independently of playback/rendering
+  tracker classifies timestamped features for Dynamic playback
 - `lumistripe.playback.config`, `.activity`, `.state`, `.renderer`, and
-  `.engine`; `PlaybackDecision` and `RenderPlan` are pure policy outputs
+  `.engine`; Dynamic playback passes the current structure state to the effect
+  scheduler, while `PlaybackDecision` and `RenderPlan` remain pure policy outputs
 - `lumistripe.animation.catalog`; `AnimationDefinition` is the single
   registration record used to build the party player
 - `lumistripe.effects.definitions`, `.scheduler`, and `.renderer`

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from ..audio.structure import MusicStructurePhase, MusicStructureState
 from ..audio.types import AudioFrame, AudioSnapshot, BeatClockState, BeatEvent
 from ..color import Rgba
 from ..controller import BrightnessController, Controller
@@ -165,6 +166,31 @@ class _ScheduledBeat:
     grid_index: int | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _StructureModifiers:
+    output_scale: float = 1.0
+    effect_scale: float = 1.0
+    threshold_scale: float = 1.0
+
+
+def _structure_modifiers(
+    state: MusicStructureState | None,
+) -> _StructureModifiers:
+    if (
+        state is None
+        or state.confidence < 0.6
+        or state.phase in (MusicStructurePhase.IDLE, MusicStructurePhase.DROP)
+    ):
+        return _StructureModifiers()
+    if state.phase is MusicStructurePhase.BREAKDOWN:
+        return _StructureModifiers(0.65, 0.65, 1.25)
+    if state.phase is MusicStructurePhase.BUILDUP:
+        progress = min(1.0, max(0.0, state.buildup_progress))
+        scale = 0.65 + 0.35 * progress
+        return _StructureModifiers(scale, scale, 1.0 - 0.2 * progress)
+    return _StructureModifiers()
+
+
 @dataclass(slots=True)
 class EffectScheduler:
     config: EffectSchedulerConfig = field(default_factory=EffectSchedulerConfig)
@@ -181,6 +207,7 @@ class EffectScheduler:
     _pending_beats: deque[_ScheduledBeat] = field(
         default_factory=deque, init=False
     )
+    _pending_drop_accent_at_s: float | None = field(default=None, init=False)
     _last_clock_subdivision_scheduled: int | None = field(default=None, init=False)
     _recent_grid_indices: deque[int] = field(default_factory=deque, init=False)
     _recent_grid_index_set: set[int] = field(default_factory=set, init=False)
@@ -221,6 +248,7 @@ class EffectScheduler:
         self._last_update_at_s = 0.0
         self._last_beat_event_sequence = 0
         self._pending_beats.clear()
+        self._pending_drop_accent_at_s = None
         self._last_clock_subdivision_scheduled = None
         self._recent_grid_indices.clear()
         self._recent_grid_index_set.clear()
@@ -283,6 +311,7 @@ class EffectScheduler:
         now_s: float,
         allow_triggers: bool = True,
         sync_offset_s: float = 0.0,
+        structure_state: MusicStructureState | None = None,
     ) -> None:
         self._last_update_at_s = now_s
         if sync_offset_s != self._sync_offset_s:
@@ -291,6 +320,8 @@ class EffectScheduler:
                 replace(beat, due_at_s=beat.due_at_s + offset_delta)
                 for beat in self._pending_beats
             )
+            if self._pending_drop_accent_at_s is not None:
+                self._pending_drop_accent_at_s += offset_delta
             self._sync_offset_s = sync_offset_s
         self.active = [
             effect
@@ -298,6 +329,9 @@ class EffectScheduler:
             if now_s - effect.started_at_s < effect.definition.duration_s
         ]
         features = snapshot.features
+        modifiers = _structure_modifiers(structure_state)
+        impact_threshold = self.impact_threshold * modifiers.threshold_scale
+        onset_threshold = self.config.onset_threshold * modifiers.threshold_scale
         beat_strength = max(
             snapshot.frame.beat_strength,
             features.beat_strength,
@@ -376,6 +410,14 @@ class EffectScheduler:
             )
 
         lateness_limit_s = self._maximum_beat_lateness_s(clock)
+        if structure_state is not None and structure_state.drop_event:
+            self._schedule_drop_accent(
+                structure_state,
+                clock,
+                now_s=now_s,
+                sync_offset_s=sync_offset_s,
+            )
+        drop_accent_due = self._drop_accent_due(now_s, lateness_limit_s)
         due_beats: list[_ScheduledBeat] = []
         while self._pending_beats and self._pending_beats[0].due_at_s <= now_s:
             due_beats.append(self._pending_beats.popleft())
@@ -424,7 +466,7 @@ class EffectScheduler:
                 beat
                 and beat_strength >= self.config.beat_confidence_threshold
                 and (
-                    impact >= self.impact_threshold
+                    impact >= impact_threshold
                     or (
                         predicted_beat
                         and clock is not None
@@ -455,40 +497,131 @@ class EffectScheduler:
             rhythmic_result,
         )
 
-        accent_trigger = (
-            impact >= self.impact_threshold
-            and (
-                features.drop_detected
-                or features.onset_strength >= self.config.onset_threshold
+        if drop_accent_due:
+            accent_result = self._trigger_result(
+                category=EffectCategory.ACCENT,
+                triggered=True,
+                now_s=now_s,
+                last_trigger_at_s=self._last_accent_at_s,
+                cooldown_s=self.config.accent_cooldown_s,
+                allow_triggers=allow_triggers,
             )
+            if accent_result is EffectTriggerResult.ACTIVATED:
+                activated = self._activate_drop_accent(player, snapshot, now_s)
+                accent_result = (
+                    EffectTriggerResult.ACTIVATED
+                    if activated
+                    else EffectTriggerResult.NO_CANDIDATE
+                )
+                self._last_accent_at_s = now_s
+            self._accent_status = EffectTriggerStatus(
+                EffectCategory.ACCENT,
+                "drop",
+                1.0,
+                1.0,
+                accent_result,
+            )
+        else:
+            drop_in_progress = structure_state is not None and (
+                structure_state.phase is MusicStructurePhase.DROP
+                or self._pending_drop_accent_at_s is not None
+            )
+            accent_trigger = (
+                not drop_in_progress
+                and impact >= impact_threshold
+                and features.onset_strength >= onset_threshold
+                and (structure_state is None or not features.drop_detected)
+            )
+            accent_result = self._trigger_result(
+                category=EffectCategory.ACCENT,
+                triggered=accent_trigger,
+                now_s=now_s,
+                last_trigger_at_s=self._last_accent_at_s,
+                cooldown_s=self.config.accent_cooldown_s,
+                allow_triggers=allow_triggers,
+            )
+            if accent_result is EffectTriggerResult.ACTIVATED:
+                candidates = tuple(
+                    definition
+                    for definition in ACCENT_EFFECTS
+                    if not definition.drop_only
+                )
+                activated = self._activate(player, candidates, snapshot, now_s)
+                accent_result = (
+                    EffectTriggerResult.ACTIVATED
+                    if activated
+                    else EffectTriggerResult.NO_CANDIDATE
+                )
+                self._last_accent_at_s = now_s
+            self._accent_status = EffectTriggerStatus(
+                EffectCategory.ACCENT,
+                "onset",
+                features.onset_strength,
+                onset_threshold,
+                accent_result,
+            )
+
+    def _schedule_drop_accent(
+        self,
+        state: MusicStructureState,
+        clock: BeatClockState | None,
+        *,
+        now_s: float,
+        sync_offset_s: float,
+    ) -> None:
+        if self._pending_drop_accent_at_s is not None:
+            return
+        if (
+            state.confidence < 0.6
+            or clock is None
+            or clock.confidence < self.config.clock_confidence_threshold
+            or clock.bpm <= 0.0
+            or clock.next_beat_at is None
+        ):
+            return
+        period = 60.0 / clock.bpm
+        due_at = clock.next_beat_at + sync_offset_s
+        while due_at <= now_s:
+            due_at += period
+        self._pending_drop_accent_at_s = due_at
+
+    def _drop_accent_due(self, now_s: float, lateness_limit_s: float) -> bool:
+        due_at = self._pending_drop_accent_at_s
+        if due_at is None or due_at > now_s:
+            return False
+        self._pending_drop_accent_at_s = None
+        if now_s - due_at > lateness_limit_s + 1e-9:
+            self._late_ticks_dropped += 1
+            return False
+        return True
+
+    def _activate_drop_accent(
+        self,
+        player: AnimationPlayer,
+        snapshot: AudioSnapshot,
+        now_s: float,
+    ) -> bool:
+        available = [
+            definition
+            for definition in ACCENT_EFFECTS
+            if definition.drop_only and player.index_of(definition.name) is not None
+        ]
+        if not available:
+            return False
+        strongest = max(available, key=lambda item: item.strength)
+        features = replace(snapshot.features, drop_detected=True)
+        frame = replace(
+            snapshot.frame,
+            beat=True,
+            beat_strength=max(snapshot.frame.beat_strength, 0.9),
         )
-        accent_result = self._trigger_result(
-            category=EffectCategory.ACCENT,
-            triggered=accent_trigger,
-            now_s=now_s,
-            last_trigger_at_s=self._last_accent_at_s,
-            cooldown_s=self.config.accent_cooldown_s,
-            allow_triggers=allow_triggers,
-        )
-        if accent_result is EffectTriggerResult.ACTIVATED:
-            candidates = tuple(
-                definition
-                for definition in ACCENT_EFFECTS
-                if features.drop_detected or not definition.drop_only
-            )
-            activated = self._activate(player, candidates, snapshot, now_s)
-            accent_result = (
-                EffectTriggerResult.ACTIVATED
-                if activated
-                else EffectTriggerResult.NO_CANDIDATE
-            )
-            self._last_accent_at_s = now_s
-        self._accent_status = EffectTriggerStatus(
-            EffectCategory.ACCENT,
-            "drop" if features.drop_detected else "onset",
-            1.0 if features.drop_detected else features.onset_strength,
-            1.0 if features.drop_detected else self.config.onset_threshold,
-            accent_result,
+        drop_snapshot = replace(snapshot, features=features, frame=frame)
+        return self._activate(
+            player,
+            (strongest,),
+            drop_snapshot,
+            now_s,
+            intensity_override=1.0,
         )
 
     def _maximum_beat_lateness_s(self, clock: BeatClockState | None) -> float:
@@ -595,6 +728,8 @@ class EffectScheduler:
         definitions: tuple[EffectDefinition, ...],
         snapshot: AudioSnapshot,
         now_s: float,
+        *,
+        intensity_override: float | None = None,
     ) -> bool:
         available = [
             item for item in definitions if player.index_of(item.name) is not None
@@ -612,7 +747,11 @@ class EffectScheduler:
         )
         if snapshot.features.drop_detected:
             trigger_strength = max(trigger_strength, 0.9)
-        intensity = min(1.0, snapshot.musical_impact * trigger_strength)
+        intensity = (
+            min(1.0, snapshot.musical_impact * trigger_strength)
+            if intensity_override is None
+            else min(1.0, max(0.0, intensity_override))
+        )
         trigger = replace(
             snapshot.frame, beat=True, beat_strength=min(trigger_strength, 1.0)
         )
@@ -680,6 +819,7 @@ class LayeredRenderer:
         now_s: float,
         flush: bool = True,
         sync_offset_s: float = 0.0,
+        structure_state: MusicStructureState | None = None,
     ) -> float:
         if self._base_buffer is None or self._base_buffer.length != controller.length:
             self._base_buffer = Stripe(controller.length)
@@ -697,11 +837,13 @@ class LayeredRenderer:
             now_s=now_s,
             allow_triggers=not player.transition_active and not transitioning,
             sync_offset_s=sync_offset_s,
+            structure_state=structure_state,
         )
 
         while len(self._effect_buffers) < len(self.scheduler.active):
             self._effect_buffers.append(Stripe(controller.length))
 
+        modifiers = _structure_modifiers(structure_state)
         layers: list[tuple[np.ndarray, float]] = []
         for index, active in enumerate(self.scheduler.active):
             buffer = self._effect_buffers[index]
@@ -716,13 +858,17 @@ class LayeredRenderer:
             layers.append(
                 (
                     buffer.pixels(),
-                    active.definition.strength * active.intensity,
+                    active.definition.strength
+                    * active.intensity
+                    * modifiers.effect_scale,
                 )
             )
 
-        base_intensity = self.scheduler.quiet_floor + (
-            1.0 - self.scheduler.quiet_floor
-        ) * snapshot.musical_impact
+        base_intensity = (
+            self.scheduler.quiet_floor
+            + (1.0 - self.scheduler.quiet_floor) * snapshot.musical_impact
+        )
+        base_intensity *= modifiers.output_scale
         composed = _visible_rgb(self._base_buffer.pixels()) * base_intensity
         budget = self.scheduler.config.max_overlay_strength
         used = 0.0
