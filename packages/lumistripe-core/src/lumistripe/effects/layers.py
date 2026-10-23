@@ -39,6 +39,13 @@ class EffectTriggerResult(str, Enum):
     NO_CANDIDATE = "no-candidate"
 
 
+class DropAccentStatus(str, Enum):
+    IDLE = "idle"
+    PENDING = "pending"
+    ACTIVATED = "activated"
+    SKIPPED = "skipped"
+
+
 @dataclass(frozen=True, slots=True)
 class EffectDefinition:
     name: str
@@ -144,6 +151,12 @@ class EffectTriggerStatus:
 
 
 @dataclass(frozen=True, slots=True)
+class DropAccentDiagnostics:
+    status: DropAccentStatus = DropAccentStatus.IDLE
+    reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class EffectSchedulerDiagnostics:
     active: tuple[EffectLayerStatus, ...]
     active_limit: int
@@ -153,6 +166,7 @@ class EffectSchedulerDiagnostics:
     accent_cooldown_remaining_s: float
     rhythmic: EffectTriggerStatus
     accent: EffectTriggerStatus
+    drop_accent: DropAccentDiagnostics
     late_ticks_dropped: int
     late_ticks_coalesced: int
     beat_lateness_p95_ms: float
@@ -208,6 +222,9 @@ class EffectScheduler:
         default_factory=deque, init=False
     )
     _pending_drop_accent_at_s: float | None = field(default=None, init=False)
+    _drop_accent_diagnostics: DropAccentDiagnostics = field(
+        default_factory=DropAccentDiagnostics, init=False
+    )
     _last_clock_subdivision_scheduled: int | None = field(default=None, init=False)
     _recent_grid_indices: deque[int] = field(default_factory=deque, init=False)
     _recent_grid_index_set: set[int] = field(default_factory=set, init=False)
@@ -249,6 +266,7 @@ class EffectScheduler:
         self._last_beat_event_sequence = 0
         self._pending_beats.clear()
         self._pending_drop_accent_at_s = None
+        self._drop_accent_diagnostics = DropAccentDiagnostics()
         self._last_clock_subdivision_scheduled = None
         self._recent_grid_indices.clear()
         self._recent_grid_index_set.clear()
@@ -298,6 +316,7 @@ class EffectScheduler:
             ),
             rhythmic=self._rhythmic_status,
             accent=self._accent_status,
+            drop_accent=self._drop_accent_diagnostics,
             late_ticks_dropped=self._late_ticks_dropped,
             late_ticks_coalesced=self._late_ticks_coalesced,
             beat_lateness_p95_ms=self._beat_lateness_p95_ms,
@@ -514,6 +533,15 @@ class EffectScheduler:
                     else EffectTriggerResult.NO_CANDIDATE
                 )
                 self._last_accent_at_s = now_s
+            if accent_result is EffectTriggerResult.ACTIVATED:
+                self._drop_accent_diagnostics = DropAccentDiagnostics(
+                    DropAccentStatus.ACTIVATED
+                )
+            else:
+                self._drop_accent_diagnostics = DropAccentDiagnostics(
+                    DropAccentStatus.SKIPPED,
+                    self._drop_accent_reason_for_trigger(accent_result),
+                )
             self._accent_status = EffectTriggerStatus(
                 EffectCategory.ACCENT,
                 "drop",
@@ -571,19 +599,29 @@ class EffectScheduler:
     ) -> None:
         if self._pending_drop_accent_at_s is not None:
             return
-        if (
-            state.confidence < 0.6
-            or clock is None
-            or clock.confidence < self.config.clock_confidence_threshold
-            or clock.bpm <= 0.0
-            or clock.next_beat_at is None
-        ):
+        if state.confidence < 0.6:
+            self._drop_accent_diagnostics = DropAccentDiagnostics(
+                DropAccentStatus.SKIPPED, "structure-confidence-low"
+            )
+            return
+        if clock is None or clock.bpm <= 0.0 or clock.next_beat_at is None:
+            self._drop_accent_diagnostics = DropAccentDiagnostics(
+                DropAccentStatus.SKIPPED, "beat-clock-unavailable"
+            )
+            return
+        if clock.confidence < self.config.clock_confidence_threshold:
+            self._drop_accent_diagnostics = DropAccentDiagnostics(
+                DropAccentStatus.SKIPPED, "beat-clock-uncertain"
+            )
             return
         period = 60.0 / clock.bpm
         due_at = clock.next_beat_at + sync_offset_s
         while due_at <= now_s:
             due_at += period
         self._pending_drop_accent_at_s = due_at
+        self._drop_accent_diagnostics = DropAccentDiagnostics(
+            DropAccentStatus.PENDING
+        )
 
     def _drop_accent_due(self, now_s: float, lateness_limit_s: float) -> bool:
         due_at = self._pending_drop_accent_at_s
@@ -592,8 +630,24 @@ class EffectScheduler:
         self._pending_drop_accent_at_s = None
         if now_s - due_at > lateness_limit_s + 1e-9:
             self._late_ticks_dropped += 1
+            self._drop_accent_diagnostics = DropAccentDiagnostics(
+                DropAccentStatus.SKIPPED, "late"
+            )
             return False
         return True
+
+    @staticmethod
+    def _drop_accent_reason_for_trigger(result: EffectTriggerResult) -> str:
+        return {
+            EffectTriggerResult.COOLDOWN: "accent-cooldown",
+            EffectTriggerResult.CATEGORY_ACTIVE: "accent-already-active",
+            EffectTriggerResult.CAPACITY: "effect-capacity",
+            EffectTriggerResult.TRANSITION: "transition-in-progress",
+            EffectTriggerResult.NO_CANDIDATE: "drop-effect-unavailable",
+            EffectTriggerResult.BELOW_THRESHOLD: "below-threshold",
+            EffectTriggerResult.NOT_EVALUATED: "not-evaluated",
+            EffectTriggerResult.ACTIVATED: "",
+        }[result]
 
     def _activate_drop_accent(
         self,

@@ -2713,7 +2713,18 @@ profile.audio_config(microphone=True),
             noise_floor = ordered_noise[int((len(ordered_noise) - 1) * 0.2)]
         processor = self._audio_health.processor
         clock = self.playback.beat_clock_state
-        scheduler_diagnostics = self.playback.layered_renderer.diagnostics()
+        dynamic_playbacks = tuple(
+            playback
+            for _, playback in self._target_playbacks(None)
+            if playback.mode is PlaybackMode.DYNAMIC
+        )
+        structure_engine = next(
+            (playback for playback in dynamic_playbacks if playback.music_active),
+            dynamic_playbacks[0] if dynamic_playbacks else self.playback,
+        )
+        scheduler_diagnostics = structure_engine.layered_renderer.diagnostics()
+        structure_state = structure_engine.music_structure_state
+        drop_accent = scheduler_diagnostics.drop_accent
         calibration_output_diagnostics = (
             self._sync_calibration_player.diagnostics()
             if self._sync_calibration_player is not None
@@ -2844,6 +2855,21 @@ profile.audio_config(microphone=True),
             gate_spectral_balance=min(1.0, max(0.0, spectral_balance)),
             gate_reason=gate_reason,
             gate_checks=checks,
+            music_structure_phase=structure_state.phase.value,
+            music_structure_confidence=structure_state.confidence,
+            music_structure_buildup_progress=structure_state.buildup_progress,
+            music_structure_drop_count=structure_engine.confirmed_drop_count,
+            music_structure_active=(
+                structure_engine.mode is PlaybackMode.DYNAMIC
+                and structure_engine.music_active
+            ),
+            music_structure_fresh=(
+                structure_engine.mode is PlaybackMode.DYNAMIC
+                and structure_engine.music_active
+                and self._audio_frame.fresh
+            ),
+            drop_accent_status=drop_accent.status.value,
+            drop_accent_reason=drop_accent.reason,
             health=self._audio_health_status(self._uptime_seconds()),
         )
         with self._snapshot_lock:

@@ -584,4 +584,14 @@ class AudioTelemetry(BaseModel):
     gate_spectral_balance: float = Field(default=0.0, ge=0.0, le=1.0)
     gate_reason: str = ""
     gate_checks: tuple[dict[str, object], ...] = ()
+    music_structure_phase: Literal[
+        "idle", "breakdown", "groove", "buildup", "drop"
+    ] = "idle"
+    music_structure_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    music_structure_buildup_progress: float = Field(default=0.0, ge=0.0, le=1.0)
+    music_structure_drop_count: int = Field(default=0, ge=0)
+    music_structure_active: bool = False
+    music_structure_fresh: bool = False
+    drop_accent_status: Literal["idle", "pending", "activated", "skipped"] = "idle"
+    drop_accent_reason: str | None = None
     health: str = "inactive"

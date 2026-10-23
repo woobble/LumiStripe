@@ -66,6 +66,14 @@ export interface AudioTelemetry {
   gate_spectral_balance?: number
   gate_reason?: string
   gate_checks?: Array<{ id: string; label: string; value: number; threshold: number; passed: boolean }>
+  music_structure_phase: "idle" | "breakdown" | "groove" | "buildup" | "drop"
+  music_structure_confidence: number
+  music_structure_buildup_progress: number
+  music_structure_drop_count: number
+  music_structure_active: boolean
+  music_structure_fresh: boolean
+  drop_accent_status: "idle" | "pending" | "activated" | "skipped"
+  drop_accent_reason: string | null
   health: string
 }
 export type AudioTuningValues = RestSchema<"AudioTuningValues">

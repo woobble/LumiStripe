@@ -66,6 +66,7 @@ class PlaybackEngine:
     _music_structure_state: MusicStructureState = field(
         init=False, default_factory=MusicStructureState
     )
+    _confirmed_drop_count: int = field(init=False, default=0)
     sync_offset_s: float = field(init=False, default=0.0)
 
     def __post_init__(self) -> None:
@@ -110,6 +111,10 @@ class PlaybackEngine:
     def music_structure_state(self) -> MusicStructureState:
         return self._music_structure_state
 
+    @property
+    def confirmed_drop_count(self) -> int:
+        return self._confirmed_drop_count
+
     def set_sync_offset(self, offset_s: float) -> None:
         if not -0.5 <= offset_s <= 0.5:
             raise ValueError("audio sync offset must be between -0.5 and 0.5 seconds")
@@ -129,6 +134,7 @@ class PlaybackEngine:
         self.activity_detector.reset()
         self._structure_tracker.reset()
         self._music_structure_state = MusicStructureState()
+        self._confirmed_drop_count = 0
         self.layered_renderer.reset()
         self.reactive_smoother.reset()
         self.player.cancel_transition()
@@ -144,6 +150,7 @@ class PlaybackEngine:
         self._music_active = False
         self._structure_tracker.reset()
         self._music_structure_state = MusicStructureState()
+        self._confirmed_drop_count = 0
 
     def set_dynamic_response(self, response: float) -> None:
         if not 0.0 <= response <= 1.0:
@@ -158,6 +165,7 @@ class PlaybackEngine:
             self._music_active = False
             self._structure_tracker.reset()
             self._music_structure_state = MusicStructureState()
+            self._confirmed_drop_count = 0
 
     def select_animation(self, name: str) -> None:
         index = self.player.index_of(name)
@@ -224,6 +232,7 @@ class PlaybackEngine:
             if not self._music_active:
                 self._structure_tracker.reset()
                 self._music_structure_state = MusicStructureState()
+                self._confirmed_drop_count = 0
                 if was_active:
                     self.layered_renderer.reset()
                     self.reactive_smoother.reset()
@@ -253,10 +262,21 @@ class PlaybackEngine:
 
             if not was_active:
                 self._structure_tracker.reset()
-            self._music_structure_state = self._structure_tracker.update(
-                features,
-                now,
-            )
+                self._music_structure_state = MusicStructureState()
+                self._confirmed_drop_count = 0
+            if snapshot is not None and snapshot.fresh:
+                self._music_structure_state = self._structure_tracker.update(
+                    features,
+                    now,
+                )
+                if self._music_structure_state.drop_event:
+                    self._confirmed_drop_count += 1
+            else:
+                # Drop events are edges. Do not let a held state schedule the
+                # same accent again while no new audio frame has arrived.
+                self._music_structure_state = replace(
+                    self._music_structure_state, drop_event=False
+                )
             self._idle_rendered = False
             self.last_decision = self.dynamic_selector.update(
                 self.player,

@@ -424,6 +424,14 @@ def test_audio_settings_api_and_telemetry_websocket(
             assert telemetry["gate_preview"] is True
             assert telemetry["beat_scheduler_late_ticks_dropped"] >= 0
             assert telemetry["beat_scheduler_lateness_p95_ms"] >= 0
+            assert telemetry["music_structure_phase"] == "idle"
+            assert telemetry["music_structure_confidence"] == 0.0
+            assert telemetry["music_structure_buildup_progress"] == 0.0
+            assert telemetry["music_structure_drop_count"] == 0
+            assert telemetry["music_structure_active"] is False
+            assert telemetry["music_structure_fresh"] is False
+            assert telemetry["drop_accent_status"] == "idle"
+            assert telemetry["drop_accent_reason"] is None
             assert telemetry["calibration_output_underflow_count"] == 0
             assert telemetry["calibration_output_callback_error_count"] == 0
 

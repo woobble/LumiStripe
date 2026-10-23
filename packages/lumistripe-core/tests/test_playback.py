@@ -269,14 +269,61 @@ def test_dynamic_playback_tracks_music_structure_and_resets_on_mode_change() -> 
     assert engine.music_structure_state.phase is MusicStructurePhase.BUILDUP
     assert engine.music_structure_state.buildup_progress > 0.0
 
+    stale_drop = MusicFeatures(
+        energy=0.9,
+        bass_energy=0.75,
+        mid_energy=0.4,
+        treble_energy=0.3,
+        onset_strength=0.4,
+        drop_detected=True,
+    )
     engine.step(
         stripe,
-        snapshot=AudioSnapshot.from_parts(AudioFrame(), MusicFeatures(silence=True)),
+        snapshot=AudioSnapshot.from_parts(
+            AudioFrame(timestamp=4.5, fresh=False), stale_drop
+        ),
         now_s=4.5,
+    )
+
+    assert engine.music_structure_state.phase is MusicStructurePhase.BUILDUP
+    assert engine.music_structure_state.buildup_progress > 0.0
+    assert engine.confirmed_drop_count == 0
+
+    engine.step(
+        stripe,
+        snapshot=AudioSnapshot.from_parts(
+            AudioFrame(timestamp=4.6, fresh=True), stale_drop
+        ),
+        now_s=4.6,
+    )
+
+    assert engine.music_structure_state.phase is MusicStructurePhase.DROP
+    assert engine.music_structure_state.drop_event is True
+    assert engine.confirmed_drop_count == 1
+
+    engine.step(
+        stripe,
+        snapshot=AudioSnapshot.from_parts(
+            AudioFrame(timestamp=4.7, fresh=False), stale_drop
+        ),
+        now_s=4.7,
+    )
+
+    assert engine.music_structure_state.phase is MusicStructurePhase.DROP
+    assert engine.music_structure_state.drop_event is False
+    assert engine.confirmed_drop_count == 1
+
+    engine.step(
+        stripe,
+        snapshot=AudioSnapshot.from_parts(
+            AudioFrame(timestamp=4.8, fresh=True), MusicFeatures(silence=True)
+        ),
+        now_s=4.8,
     )
 
     assert engine.music_structure_state.phase is MusicStructurePhase.IDLE
     assert engine.music_structure_state.confidence == 0.0
+    assert engine.confirmed_drop_count == 0
 
     engine.set_mode(PlaybackMode.STATIC, now_s=5.0)
 

@@ -433,6 +433,7 @@ def test_structure_drop_accent_uses_next_beat_and_negative_sync_offset() -> None
         structure_state=drop,
     )
     assert scheduler._pending_drop_accent_at_s == pytest.approx(1.915)
+    assert scheduler.diagnostics().drop_accent.status.value == "pending"
     assert scheduler.active_names == ()
 
     scheduler.update(
@@ -446,6 +447,7 @@ def test_structure_drop_accent_uses_next_beat_and_negative_sync_offset() -> None
     assert scheduler.active_names == ("drop_explosion",)
     assert scheduler.active[0].intensity == 1.0
     assert scheduler.diagnostics().accent.result is EffectTriggerResult.ACTIVATED
+    assert scheduler.diagnostics().drop_accent.status.value == "activated"
 
     scheduler.update(
         player,
@@ -509,6 +511,8 @@ def test_structure_drop_accent_is_skipped_when_late_or_clock_is_uncertain() -> N
     )
     assert late_scheduler.active_names == ()
     assert late_scheduler.diagnostics().late_ticks_dropped == 1
+    assert late_scheduler.diagnostics().drop_accent.status.value == "skipped"
+    assert late_scheduler.diagnostics().drop_accent.reason == "late"
 
     uncertain_scheduler = EffectScheduler(EffectSchedulerConfig(seed=4))
     uncertain_scheduler.update(
@@ -519,6 +523,8 @@ def test_structure_drop_accent_is_skipped_when_late_or_clock_is_uncertain() -> N
     )
     assert uncertain_scheduler._pending_drop_accent_at_s is None
     assert uncertain_scheduler.active_names == ()
+    assert uncertain_scheduler.diagnostics().drop_accent.status.value == "skipped"
+    assert uncertain_scheduler.diagnostics().drop_accent.reason == "beat-clock-uncertain"
 
 
 @pytest.mark.parametrize(

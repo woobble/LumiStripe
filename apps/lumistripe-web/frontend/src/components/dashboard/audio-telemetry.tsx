@@ -66,6 +66,14 @@ export const emptyTelemetry: AudioTelemetry = {
   gate_spectral_balance: 0,
   gate_reason: "",
   gate_checks: [],
+  music_structure_phase: "idle",
+  music_structure_confidence: 0,
+  music_structure_buildup_progress: 0,
+  music_structure_drop_count: 0,
+  music_structure_active: false,
+  music_structure_fresh: false,
+  drop_accent_status: "idle",
+  drop_accent_reason: null,
   health: "inactive",
 }
 
@@ -181,6 +189,30 @@ function percent(value: number) {
   return Math.round(Math.min(1, Math.max(0, value)) * 100)
 }
 
+function structurePhaseLabel(phase: AudioTelemetry["music_structure_phase"]) {
+  if (phase === "buildup") return "Build-up"
+  return phase.charAt(0).toUpperCase() + phase.slice(1)
+}
+
+function dropAccentMessage(telemetry: AudioTelemetry) {
+  if (telemetry.drop_accent_status === "pending") return "Scheduled for the next confident beat"
+  if (telemetry.drop_accent_status === "activated") return "Accent activated"
+  if (telemetry.drop_accent_status !== "skipped") return "Waiting for a confirmed drop"
+
+  const reasons: Record<string, string> = {
+    "structure-confidence-low": "Structure confidence was too low",
+    "beat-clock-unavailable": "No usable beat clock was available",
+    "beat-clock-uncertain": "Beat clock confidence was too low",
+    late: "Accent missed the scheduler timing window",
+    "accent-cooldown": "Accent cooldown was active",
+    "accent-already-active": "Another accent effect was active",
+    "effect-capacity": "Effect capacity was full",
+    "transition-in-progress": "An animation transition was in progress",
+    "drop-effect-unavailable": "No drop accent effect was available",
+  }
+  return `Skipped · ${reasons[telemetry.drop_accent_reason ?? ""] ?? "Reason unavailable"}`
+}
+
 function GateMetric({ label, value, threshold }: GateMetricConfig) {
   const width = percent(value)
   const marker = threshold === undefined ? null : percent(threshold)
@@ -259,6 +291,46 @@ export function AudioTelemetryCards({
           <div>
             <div className="mb-1.5 flex justify-between text-xs"><span>Program reference</span><span className="text-muted-foreground">{telemetry.program_loudness.toFixed(3)}</span></div>
             <div className="h-2 overflow-hidden rounded-full bg-white/5"><div className="h-full rounded-full bg-violet-400 transition-[width] duration-150" style={{ width: `${percent(telemetry.program_loudness)}%` }} /></div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-white/5 bg-card/80">
+        <CardHeader className="grid-cols-[1fr_auto]">
+          <div>
+            <CardTitle className="flex items-center gap-2"><ActivityIcon className="size-4 text-fuchsia-300" />Music structure</CardTitle>
+            <CardDescription>Illustrative estimate of the current musical section; future drops are not predicted.</CardDescription>
+          </div>
+          <Badge variant={telemetry.music_structure_fresh ? "default" : "outline"}>
+            {telemetry.music_structure_fresh
+              ? "Current"
+              : telemetry.music_structure_active
+                ? "Held · waiting for fresh audio"
+                : "Waiting for Dynamic audio"}
+          </Badge>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-end justify-between gap-4">
+            <p className="text-3xl font-semibold">{structurePhaseLabel(telemetry.music_structure_phase)}</p>
+            <p className="text-sm tabular-nums text-muted-foreground">{percent(telemetry.music_structure_confidence)}% confidence</p>
+          </div>
+          <div>
+            <div className="mb-1.5 flex justify-between text-xs">
+              <span>Build-up progression</span>
+              <span className="tabular-nums text-muted-foreground">{percent(telemetry.music_structure_buildup_progress)}%</span>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-white/5">
+              <div className="h-full rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-300 transition-[width] duration-150" style={{ width: `${percent(telemetry.music_structure_buildup_progress)}%` }} />
+            </div>
+          </div>
+          <div className="grid grid-cols-[auto_1fr] items-center gap-3 rounded-xl bg-white/[0.035] p-3">
+            <div className="min-w-16 text-center">
+              <p className="text-2xl font-semibold tabular-nums">{telemetry.music_structure_drop_count}</p>
+              <p className="text-[11px] text-muted-foreground">Confirmed drops</p>
+            </div>
+            <p className="border-l border-white/10 pl-3 text-sm text-muted-foreground" aria-live="polite">
+              {dropAccentMessage(telemetry)}
+            </p>
           </div>
         </CardContent>
       </Card>

@@ -581,12 +581,26 @@ describe("App", () => {
       gate_onset: 0.2,
       gate_beat_density: 0.3,
       gate_brightness: 0.25,
+      music_structure_phase: "buildup",
+      music_structure_confidence: 0.87,
+      music_structure_buildup_progress: 0.72,
+      music_structure_drop_count: 3,
+      music_structure_active: true,
+      music_structure_fresh: true,
+      drop_accent_status: "skipped",
+      drop_accent_reason: "beat-clock-uncertain",
       health: "healthy",
     }))
     expect(screen.getByText("42%")).toBeInTheDocument()
     expect(screen.getByText("128 BPM")).toBeInTheDocument()
     expect(screen.getByText("92%")).toBeInTheDocument()
     expect(screen.getByText("music")).toBeInTheDocument()
+    expect(screen.getByText("Music structure")).toBeInTheDocument()
+    expect(screen.getByText("Build-up")).toBeInTheDocument()
+    expect(screen.getByText("87% confidence")).toBeInTheDocument()
+    expect(screen.getByText("72%")).toBeInTheDocument()
+    expect(screen.getByText("3")).toBeInTheDocument()
+    expect(screen.getByText("Skipped · Beat clock confidence was too low")).toBeInTheDocument()
   })
 
   it("keeps audio tuning behind Setup and resets the active microphone profile", async () => {

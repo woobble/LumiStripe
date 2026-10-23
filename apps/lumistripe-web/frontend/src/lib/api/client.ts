@@ -461,6 +461,14 @@ const audioTelemetrySchema = z.object({
     threshold: z.number(),
     passed: z.boolean(),
   }).strict()).optional(),
+  music_structure_phase: z.enum(["idle", "breakdown", "groove", "buildup", "drop"]).optional().default("idle"),
+  music_structure_confidence: z.number().min(0).max(1).optional().default(0),
+  music_structure_buildup_progress: z.number().min(0).max(1).optional().default(0),
+  music_structure_drop_count: z.number().int().nonnegative().optional().default(0),
+  music_structure_active: z.boolean().optional().default(false),
+  music_structure_fresh: z.boolean().optional().default(false),
+  drop_accent_status: z.enum(["idle", "pending", "activated", "skipped"]).optional().default("idle"),
+  drop_accent_reason: z.string().nullable().optional().default(null),
   health: z.string(),
 }).strict()
 
