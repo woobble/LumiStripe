@@ -8,6 +8,7 @@ from math import exp
 from random import Random
 
 from ..animation.base import AnimationPlayer
+from ..animation.catalog import animation_catalog
 from ..audio.beat import BeatClockTracker
 from ..audio.dsp import features_from_frame
 from ..audio.structure import MusicStructureState, MusicStructureTracker
@@ -25,6 +26,7 @@ from ..effects.layers import (
     LayeredRenderer,
 )
 from ..selector import (
+    AnimationRole,
     DynamicSelector,
     DynamicSelectorDiagnostics,
     SelectorDecision,
@@ -44,6 +46,11 @@ from .config import (
 )
 from .quantized import QuantizedSwitchCoordinator, QuantizedSwitchDiagnostics
 from .renderer import PlaybackRenderer
+from .sequence import (
+    AnimationSequence,
+    AnimationSequenceCoordinator,
+    SequencePlaybackState,
+)
 from .state import PlaybackDecision, RenderPlan, build_render_plan, decide_playback
 
 
@@ -79,6 +86,7 @@ class PlaybackEngine:
         init=False, default_factory=MusicalTimelineState
     )
     _quantized_switcher: QuantizedSwitchCoordinator = field(init=False)
+    _sequence_coordinator: AnimationSequenceCoordinator = field(init=False)
     sync_offset_s: float = field(init=False, default=0.0)
 
     def __post_init__(self) -> None:
@@ -94,6 +102,12 @@ class PlaybackEngine:
         self.layered_renderer = LayeredRenderer(scheduler)
         self._quantized_switcher = QuantizedSwitchCoordinator(
             self.config.switch_quantization,
+            confidence_threshold=effect_config.clock_confidence_threshold,
+            subdivisions_per_beat=effect_config.subdivisions_per_beat,
+        )
+        self._validate_animation_sequence(self.config.animation_sequence)
+        self._sequence_coordinator = AnimationSequenceCoordinator(
+            self.config.animation_sequence,
             confidence_threshold=effect_config.clock_confidence_threshold,
             subdivisions_per_beat=effect_config.subdivisions_per_beat,
         )
@@ -133,6 +147,40 @@ class PlaybackEngine:
     @property
     def musical_timeline_state(self) -> MusicalTimelineState:
         return self._musical_timeline_state
+
+    @property
+    def sequence_playback_state(self) -> SequencePlaybackState:
+        return self._sequence_coordinator.state
+
+    def set_animation_sequence(self, sequence: AnimationSequence | None) -> None:
+        """Replace the active Dynamic sequence, cancelling its current timing session."""
+
+        self._validate_animation_sequence(sequence)
+        self._sequence_coordinator.set_sequence(sequence)
+        self.config = replace(self.config, animation_sequence=sequence)
+
+    def _validate_animation_sequence(
+        self, sequence: AnimationSequence | None
+    ) -> None:
+        if sequence is None:
+            return
+        definitions = {definition.name: definition for definition in animation_catalog(self.player)}
+        for step in sequence.steps:
+            definition = definitions.get(step.animation_name)
+            if definition is None:
+                raise ValueError(f"unknown animation in sequence: {step.animation_name}")
+            metadata = definition.dynamic_metadata
+            if (
+                not definition.automatic
+                or definition.role is not AnimationRole.BASE
+                or metadata is None
+                or metadata.role is not AnimationRole.BASE
+                or not metadata.dynamic_safe
+                or definition.effect_metadata is not None
+            ):
+                raise ValueError(
+                    f"animation is not eligible for Dynamic sequences: {step.animation_name}"
+                )
 
     def quantized_switch_diagnostics(
         self, *, now_s: float | None = None
@@ -203,6 +251,7 @@ class PlaybackEngine:
         self._music_structure_state = MusicStructureState()
         self._confirmed_drop_count = 0
         self._quantized_switcher.reset()
+        self._sequence_coordinator.reset_session()
         self.layered_renderer.reset()
         self.reactive_smoother.reset()
         self.player.cancel_transition()
@@ -236,6 +285,7 @@ class PlaybackEngine:
             self._music_structure_state = MusicStructureState()
             self._confirmed_drop_count = 0
             self._quantized_switcher.reset()
+            self._sequence_coordinator.reset_session()
 
     def select_animation(self, name: str) -> None:
         index = self.player.index_of(name)
@@ -304,6 +354,7 @@ class PlaybackEngine:
             self._music_active = self.activity_detector.update(features, now_s=now)
             if not self._music_active:
                 self._quantized_switcher.reset()
+                self._sequence_coordinator.reset_session()
                 self._structure_tracker.reset()
                 self._music_structure_state = MusicStructureState()
                 self._confirmed_drop_count = 0
@@ -336,6 +387,7 @@ class PlaybackEngine:
 
             if not was_active:
                 self._quantized_switcher.reset()
+                self._sequence_coordinator.reset_session()
                 self._structure_tracker.reset()
                 self._music_structure_state = MusicStructureState()
                 self._confirmed_drop_count = 0
@@ -354,66 +406,101 @@ class PlaybackEngine:
                 )
             self._idle_rendered = False
             switched_this_step = False
-            if not was_active:
-                # Keep activation responsive even when later switches are
-                # quantized. The first active selection establishes a fresh
-                # Dynamic session and begins its normal crossfade immediately.
-                self.last_decision = self.dynamic_selector.update(
-                    self.player,
-                    features,
-                    now_s=now,
-                    quiet=False,
-                    force_switch=True,
-                )
-                switched_this_step = self.last_decision.should_switch
-            elif self.config.switch_quantization is SwitchQuantization.OFF:
-                self.last_decision = self.dynamic_selector.update(
-                    self.player,
-                    features,
-                    now_s=now,
-                    quiet=False,
-                    force_switch=False,
-                )
-                switched_this_step = self.last_decision.should_switch
-                if switched_this_step:
-                    self.player.begin_transition(
-                        duration_ms=self.player.transition_ms,
-                        source=controller.pixels(),
-                    )
-            else:
-                self.last_decision = self.dynamic_selector.propose(
-                    self.player,
-                    features,
-                    now_s=now,
-                    quiet=False,
-                    force_switch=False,
-                )
-                due_decision = self._quantized_switcher.update(
-                    self.last_decision,
+            sequence_controls_playback = False
+            if self.config.animation_sequence is not None:
+                sequence_animation = self._sequence_coordinator.update(
                     self._musical_timeline_state,
                     now_s=now,
                     sync_offset_s=self.sync_offset_s,
-                    transition_active=self.player.transition_active,
+                    music_active=True,
                 )
-                if due_decision is not None:
-                    source = controller.pixels()
-                    switched_this_step = self.dynamic_selector.commit(
-                        self.player,
-                        due_decision,
-                        now_s=now,
-                        transition_ms=0,
-                    )
-                    if switched_this_step:
+                if sequence_animation is not None:
+                    target_index = self.player.index_of(sequence_animation)
+                    if target_index is None:
+                        raise RuntimeError(
+                            f"configured sequence animation disappeared: {sequence_animation}"
+                        )
+                    if target_index != self.player.current_index():
+                        source = controller.pixels()
+                        self.player.set_index(target_index, transition_ms=0)
                         self.player.begin_transition(
                             duration_ms=self.player.transition_ms,
                             source=source,
                         )
+                        switched_this_step = True
+                sequence_controls_playback = (
+                    self._sequence_coordinator.controls_playback
+                )
+                if sequence_controls_playback:
+                    current = self.player.name_at(self.player.current_index())
+                    self.last_decision = SelectorDecision(
+                        selected_name=current,
+                        selected_score=0.0,
+                        current_name=current,
+                        should_switch=switched_this_step,
+                        reason="sequence",
+                    )
+
+            if not sequence_controls_playback:
+                if not was_active:
+                    # Keep activation responsive when automatic Dynamic mode
+                    # starts without a configured custom sequence.
+                    self.last_decision = self.dynamic_selector.update(
+                        self.player,
+                        features,
+                        now_s=now,
+                        quiet=False,
+                        force_switch=True,
+                    )
+                    switched_this_step = self.last_decision.should_switch
+                elif self.config.switch_quantization is SwitchQuantization.OFF:
+                    self.last_decision = self.dynamic_selector.update(
+                        self.player,
+                        features,
+                        now_s=now,
+                        quiet=False,
+                        force_switch=False,
+                    )
+                    switched_this_step = self.last_decision.should_switch
+                    if switched_this_step:
+                        self.player.begin_transition(
+                            duration_ms=self.player.transition_ms,
+                            source=controller.pixels(),
+                        )
+                else:
+                    self.last_decision = self.dynamic_selector.propose(
+                        self.player,
+                        features,
+                        now_s=now,
+                        quiet=False,
+                        force_switch=False,
+                    )
+                    due_decision = self._quantized_switcher.update(
+                        self.last_decision,
+                        self._musical_timeline_state,
+                        now_s=now,
+                        sync_offset_s=self.sync_offset_s,
+                        transition_active=self.player.transition_active,
+                    )
+                    if due_decision is not None:
+                        source = controller.pixels()
+                        switched_this_step = self.dynamic_selector.commit(
+                            self.player,
+                            due_decision,
+                            now_s=now,
+                            transition_ms=0,
+                        )
+                        if switched_this_step:
+                            self.player.begin_transition(
+                                duration_ms=self.player.transition_ms,
+                                source=source,
+                            )
             active_snapshot = snapshot or AudioSnapshot.silence()
             active_snapshot = replace(
                 active_snapshot,
                 frame=self.reactive_smoother.update(active_snapshot.frame),
             )
-            if not was_active:
+            if not was_active and not sequence_controls_playback:
                 if not switched_this_step:
                     self.player.set_index(
                         self.player.current_index(),

@@ -18,9 +18,18 @@ from .config import (
 from .engine import PlaybackEngine, demo_snapshot
 from .quantized import QuantizedSwitchCoordinator, QuantizedSwitchDiagnostics
 from .renderer import PlaybackRenderer
+from .sequence import (
+    AnimationSequence,
+    AnimationSequenceCoordinator,
+    AnimationSequenceStep,
+    SequencePlaybackState,
+)
 from .state import PlaybackDecision, RenderPlan, build_render_plan, decide_playback
 
 __all__ = [
+    "AnimationSequence",
+    "AnimationSequenceCoordinator",
+    "AnimationSequenceStep",
     "AudioSource",
     "CycleOrder",
     "CycleTiming",
@@ -37,6 +46,7 @@ __all__ = [
     "QuantizedSwitchDiagnostics",
     "ReactiveFrameSmoother",
     "RenderPlan",
+    "SequencePlaybackState",
     "SwitchQuantization",
     "build_render_plan",
     "decide_playback",

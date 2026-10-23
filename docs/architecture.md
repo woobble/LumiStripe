@@ -80,9 +80,10 @@ new integrations should use narrower modules:
   bounded sample batches, the DSP worker owns native processing state, the
   structure tracker classifies timestamped features for Dynamic playback, and
   the timeline maps the beat clock onto an estimated 4/4 bar and phrase grid
-- `lumistripe.playback.config`, `.activity`, `.state`, `.renderer`, and
-  `.engine`; Dynamic playback passes the current structure state to the effect
-  scheduler, while `PlaybackDecision` and `RenderPlan` remain pure policy outputs
+- `lumistripe.playback.config`, `.activity`, `.state`, `.renderer`, `.engine`,
+  and `.sequence`; Dynamic playback passes the current structure state to the
+  effect scheduler, while `PlaybackDecision` and `RenderPlan` remain pure
+  policy outputs
 - `lumistripe.animation.catalog`; `AnimationDefinition` is the single
   registration record used to build the party player
 - `lumistripe.effects.definitions`, `.scheduler`, and `.renderer`
@@ -114,3 +115,20 @@ Dashboard state reports per-output estimated beat, bar, and phrase positions,
 clock confidence, pending animation, remaining time to its switch, and whether
 the switch is waiting for confidence. These diagnostics are read-only and do
 not imply that the estimated grid has detected musical downbeats.
+
+## Core animation sequences
+
+`PlaybackConfig.animation_sequence` optionally enables a core-only Dynamic
+sequence. An `AnimationSequence` contains at most 32 ordered
+`AnimationSequenceStep` values, each using an eligible automatic Dynamic base
+animation for 1, 2, 4, or 8 estimated bars. The sequence starts on the next
+confident estimated bar boundary, applies the configured audio sync offset,
+and can repeat or return to the automatic Dynamic selector when it finishes.
+
+`AnimationSequenceCoordinator` freezes the current step while beat-clock
+confidence is low. On relock or after a stalled render skips bar boundaries,
+it reanchors the remaining duration to future boundaries without catching up
+or replaying missed steps. Its immutable `SequencePlaybackState` exposes the
+active step, remaining bars, waiting state, and next scheduled transition.
+Sequence playback remains disabled by default and uses the same animation
+player crossfades and effect rendering path as ordinary Dynamic playback.

@@ -32,6 +32,9 @@ from .controller import (
     ScaledMultiController,
 )
 from .playback import (
+    AnimationSequence,
+    AnimationSequenceCoordinator,
+    AnimationSequenceStep,
     AudioSource,
     CycleOrder,
     CycleTiming,
@@ -46,6 +49,7 @@ from .playback import (
     QuantizedSwitchDiagnostics,
     ReactiveFrameSmoother,
     RenderPlan,
+    SequencePlaybackState,
     SwitchQuantization,
     build_render_plan,
     decide_playback,
@@ -192,6 +196,9 @@ def __getattr__(name: str) -> Any:
 
 
 __all__ = [
+    "AnimationSequence",
+    "AnimationSequenceCoordinator",
+    "AnimationSequenceStep",
     "AudioSource",
     "BrightnessController",
     "Color",
@@ -227,6 +234,7 @@ __all__ = [
     "Rgb",
     "Rgba",
     "ScaledMultiController",
+    "SequencePlaybackState",
     "Stripe",
     "SubStripe",
     "SwitchQuantization",

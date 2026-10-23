@@ -10,6 +10,7 @@ from ..color import Color, Rgb
 from ..effects.layers import EffectSchedulerConfig
 from ..selector import DynamicSelectorConfig
 from .activity import MusicActivityConfig
+from .sequence import AnimationSequence
 
 
 class PlaybackMode(str, Enum):
@@ -63,6 +64,7 @@ class PlaybackConfig:
     cycling: CyclingConfig = field(default_factory=CyclingConfig)
     dynamic: DynamicSelectorConfig = field(default_factory=DynamicSelectorConfig)
     switch_quantization: SwitchQuantization = SwitchQuantization.OFF
+    animation_sequence: AnimationSequence | None = None
     musical_timeline: MusicalTimelineConfig = field(
         default_factory=MusicalTimelineConfig
     )
@@ -74,6 +76,10 @@ class PlaybackConfig:
     effects: EffectSchedulerConfig = field(default_factory=EffectSchedulerConfig)
 
     def __post_init__(self) -> None:
+        if self.animation_sequence is not None and not isinstance(
+            self.animation_sequence, AnimationSequence
+        ):
+            raise TypeError("animation_sequence must be an AnimationSequence or None")
         if not 0.0 <= self.idle_brightness <= 1.0:
             raise ValueError("idle_brightness must be between zero and one")
         if self.transition_duration_s < 0.0:
