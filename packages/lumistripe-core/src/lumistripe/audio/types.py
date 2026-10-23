@@ -120,6 +120,8 @@ class AudioProcessorStats:
     input_peak: float = 0.0
     clipping_fraction: float = 0.0
     microphone_gate_open: bool = False
+    native_dropped_beat_events: int = 0
+    queued_dropped_beat_events: int = 0
 
 
 @dataclass(frozen=True, slots=True)

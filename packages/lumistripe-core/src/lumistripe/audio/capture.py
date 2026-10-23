@@ -340,7 +340,11 @@ class AudioInput:
             last_callback_age=last_callback_age,
             last_frame_age=frame_age,
             dropped_batches=self._buffer.dropped_count,
-            dropped_beat_events=self._beat_events.dropped_count,
+            dropped_beat_events=(
+                self._beat_events.dropped_count
+                + processor.native_dropped_beat_events
+                + processor.queued_dropped_beat_events
+            ),
             pending_beat_events=self._beat_events.pending_count,
             worker_error=worker_error,
             processor=processor,

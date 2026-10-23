@@ -130,11 +130,11 @@ describe("dashboardApi", () => {
     }))
 
     fetchMock.mockReturnValueOnce(jsonResponse({
-      start_at_ms: 1_800_000_000_000,
+      start_at_ms: null,
       sync_route: settings.sync_route,
       sync_offset_ms: 125,
     }))
-    expect((await dashboardApi.setAudioSyncCalibration(true)).start_at_ms).toBe(1_800_000_000_000)
+    expect((await dashboardApi.setAudioSyncCalibration(true)).start_at_ms).toBeNull()
     expect(fetchMock).toHaveBeenLastCalledWith("/api/audio/sync-calibration", expect.objectContaining({
       method: "POST",
       body: JSON.stringify({ active: true }),

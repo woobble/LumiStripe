@@ -28,6 +28,7 @@ try:
 except (ImportError, OSError):
     _native_audio = None
 _audio = _native_audio
+_MAX_QUEUED_BEAT_EVENTS = 256
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +123,21 @@ class NativeStatsResult:
             input_rms=float(_native_field(value, "input_rms", 5)),
             program_loudness=float(_native_field(value, "program_loudness", 6)),
             musical_impact=float(_native_field(value, "musical_impact", 7)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class NativeBeatEventResult:
+    sequence: int
+    sample_position: int
+    strength: float
+
+    @classmethod
+    def from_native(cls, value: object) -> NativeBeatEventResult:
+        return cls(
+            sequence=int(_native_field(value, "sequence", 0)),
+            sample_position=int(_native_field(value, "sample_position", 1)),
+            strength=float(_native_field(value, "strength", 2)),
         )
 
 
@@ -240,7 +256,9 @@ class AudioState:
         self._frame = AudioFrame()
         self._features = MusicFeatures()
         self._last_sequence = 0
+        self._samples_seen = 0
         self._beat_events: deque[BeatEvent] = deque()
+        self._queued_dropped_beat_events = 0
 
     def frame(self) -> AudioFrame:
         return self._frame
@@ -273,6 +291,8 @@ class AudioState:
             input_peak=float(native.get("input_peak", 0.0)) if isinstance(native, Mapping) else 0.0,
             clipping_fraction=float(native.get("clipping_fraction", 0.0)) if isinstance(native, Mapping) else 0.0,
             microphone_gate_open=bool(native.get("microphone_gate_open", False)) if isinstance(native, Mapping) else False,
+            native_dropped_beat_events=int(native.get("dropped_beat_events", 0)) if isinstance(native, Mapping) else 0,
+            queued_dropped_beat_events=self._queued_dropped_beat_events,
         )
 
     def reconfigure(self, config: AudioConfig) -> None:
@@ -284,7 +304,9 @@ class AudioState:
         self._frame = AudioFrame()
         self._features = MusicFeatures()
         self._last_sequence = 0
+        self._samples_seen = 0
         self._beat_events.clear()
+        self._queued_dropped_beat_events = 0
 
     def copy(self) -> AudioState:
         clone = object.__new__(AudioState)
@@ -294,21 +316,31 @@ class AudioState:
         clone._frame = self._frame
         clone._features = self._features
         clone._last_sequence = self._last_sequence
+        clone._samples_seen = self._samples_seen
         clone._beat_events = deque(self._beat_events)
+        clone._queued_dropped_beat_events = self._queued_dropped_beat_events
         return clone
+
+    def _queue_beat_event(self, event: BeatEvent) -> None:
+        if len(self._beat_events) >= _MAX_QUEUED_BEAT_EVENTS:
+            self._beat_events.popleft()
+            self._queued_dropped_beat_events += 1
+        self._beat_events.append(event)
 
     def feed_samples(self, samples: npt.ArrayLike, *, captured_at: float | None = None) -> None:
         array = np.asarray(samples, dtype=np.float32).reshape(-1)
         if array.size == 0:
             return
 
+        batch_end_at = time.monotonic() if captured_at is None else captured_at
         self._processor.feed_samples(array)
+        self._samples_seen += int(array.size)
         frame = NativeFrameResult.from_native(self._processor.frame())
         timestamp = self._frame.timestamp
         fresh = self._frame.fresh
         new_frame = frame.sequence > self._last_sequence
         if new_frame:
-            timestamp = time.monotonic() if captured_at is None else captured_at
+            timestamp = batch_end_at
             fresh = True
             self._last_sequence = frame.sequence
         self._frame = AudioFrame(
@@ -321,8 +353,26 @@ class AudioState:
             fresh=fresh,
         )
 
-        if new_frame and frame.beat:
-            self._beat_events.append(
+        drain_events = getattr(self._processor, "drain_beat_events", None)
+        if callable(drain_events):
+            native_events = tuple(
+                NativeBeatEventResult.from_native(event) for event in drain_events()
+            )
+            for event in native_events:
+                event_at = batch_end_at + (
+                    event.sample_position - self._samples_seen
+                ) / self._sample_rate
+                self._queue_beat_event(
+                    BeatEvent(
+                        sequence=event.sequence,
+                        timestamp=event_at,
+                        strength=max(event.strength, 0.0),
+                    )
+                )
+        elif new_frame and frame.beat:
+            # Compatibility with native extensions built before beat-event
+            # draining was added.
+            self._queue_beat_event(
                 BeatEvent(
                     sequence=frame.sequence,
                     timestamp=timestamp,

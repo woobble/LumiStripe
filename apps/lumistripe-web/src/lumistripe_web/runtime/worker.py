@@ -140,6 +140,7 @@ from .state import (
     _ControllerFactory,
     _StripeTestSession,
 )
+from .sync_calibration import AudioSyncCalibrationTone, sync_calibration_led_on
 from .topology import (
     default_controller_factory as topology_controller_factory,
 )
@@ -375,6 +376,8 @@ class RuntimeWorker:
         self._last_beat_event: BeatEvent | None = None
         self._sync_calibration_start_s: float | None = None
         self._sync_calibration_until_s: float | None = None
+        self._sync_calibration_route: str | None = None
+        self._sync_calibration_player: AudioSyncCalibrationTone | None = None
         self._music_features = MusicFeatures()
         self._demo_tick = 0
         self._audio_status = "No audio source active."
@@ -1826,6 +1829,7 @@ profile.audio_config(microphone=True),
         device_name = self._device_name_for_selector(device)
         if self._audio_calibration is not None:
             raise RuntimeCommandError("discard microphone calibration before changing audio settings")
+        self._stop_audio_sync_calibration()
         candidate: AudioInput | None = None
         current = self._audio_input
         target_is_bluetooth = device_name == BLUETOOTH_PROFILE_KEY
@@ -2070,6 +2074,7 @@ profile.audio_config(microphone=True),
     def _set_audio_source(self, source: str) -> None:
         if self._audio_calibration is not None:
             raise RuntimeCommandError("discard microphone calibration before changing audio source")
+        self._stop_audio_sync_calibration()
         if source not in {"auto", "off", "demo", "mic", "bluetooth", "spotify"}:
             raise RuntimeCommandError(f"invalid audio source: {source}")
         if self.playback.mode is PlaybackMode.DYNAMIC and source == "off":
@@ -2144,16 +2149,21 @@ profile.audio_config(microphone=True),
         route = self._audio_sync_route_key()
         offset_ms = self._audio_sync_offsets_ms.get(route, 0.0)
         if active:
-            self._sync_calibration_start_s = time.monotonic() + 1.5
-            self._sync_calibration_until_s = self._sync_calibration_start_s + 45.0
-            start_at_ms = int((time.time() + 1.5) * 1000.0)
+            self._stop_audio_sync_calibration()
+            try:
+                player = AudioSyncCalibrationTone()
+            except RuntimeError as exc:
+                raise RuntimeCommandError(str(exc)) from exc
+            self._sync_calibration_player = player
+            self._sync_calibration_start_s = player.start_at_monotonic
+            self._sync_calibration_until_s = player.start_at_monotonic + 45.0
+            self._sync_calibration_route = route
         else:
-            self._sync_calibration_start_s = None
-            self._sync_calibration_until_s = None
-            start_at_ms = None
-            self.playback.beat_clock_tracker.reset()
+            self._stop_audio_sync_calibration()
         return AudioSyncCalibrationResponse(
-            start_at_ms=start_at_ms,
+            # Retained in the REST response for cached clients. The calibration
+            # clock now lives entirely on the Pi and does not use epoch time.
+            start_at_ms=None,
             sync_route=route,
             sync_offset_ms=offset_ms,
         )
@@ -2161,12 +2171,28 @@ profile.audio_config(microphone=True),
     def _render_sync_calibration_flash(self, now_s: float) -> None:
         assert self._controller is not None
         assert self._sync_calibration_start_s is not None
-        phase = (now_s - self._sync_calibration_start_s - self.playback.sync_offset_s) % 0.5
-        if phase < 0.075:
+        if sync_calibration_led_on(
+            now_s,
+            self._sync_calibration_start_s,
+            self.playback.sync_offset_s,
+        ):
             self._controller.fill(Rgb(255, 255, 255))
         else:
             self._controller.clear()
         self._flush_power_limited_outputs()
+
+    def _stop_audio_sync_calibration(self) -> None:
+        player = self._sync_calibration_player
+        self._sync_calibration_player = None
+        self._sync_calibration_start_s = None
+        self._sync_calibration_until_s = None
+        self._sync_calibration_route = None
+        if player is not None:
+            try:
+                player.close()
+            except Exception as exc:  # noqa: BLE001 - calibration stop should not block cleanup
+                self._fatal_error = self._fatal_error or str(exc)
+        self.playback.beat_clock_tracker.reset()
 
     def _set_startup_restore(self, enabled: bool) -> None:
         if enabled:
@@ -2438,6 +2464,11 @@ profile.audio_config(microphone=True),
         assert self._controller is not None
         self._maintain_audio_monitor()
         self._apply_sync_offset_for_route()
+        if (
+            self._sync_calibration_start_s is not None
+            and self._sync_calibration_route != self._audio_sync_route_key()
+        ):
+            self._stop_audio_sync_calibration()
         session = self._calibration
         if session is not None:
             if (
@@ -2499,8 +2530,7 @@ profile.audio_config(microphone=True),
         if self._sync_calibration_start_s is not None:
             now = time.monotonic()
             if self._sync_calibration_until_s is not None and now >= self._sync_calibration_until_s:
-                self._sync_calibration_start_s = None
-                self._sync_calibration_until_s = None
+                self._stop_audio_sync_calibration()
             else:
                 self._render_sync_calibration_flash(now)
                 self._update_audio_telemetry()
@@ -3227,6 +3257,7 @@ profile.audio_config(microphone=True),
 
     def _cleanup(self) -> None:
         self._cancel_startup_persist_timer()
+        self._stop_audio_sync_calibration()
         if self._restore_last_state:
             self._flush_startup_settings()
         try:

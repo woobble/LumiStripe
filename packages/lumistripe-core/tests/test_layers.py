@@ -204,6 +204,121 @@ def test_scheduler_predicts_negative_offset_before_next_beat() -> None:
     assert len(scheduler.active) == 2
 
 
+def test_scheduler_deduplicates_detected_onsets_by_musical_grid_index() -> None:
+    scheduler = EffectScheduler(
+        EffectSchedulerConfig(seed=4, subdivisions_per_beat=4)
+    )
+    player = AnimationPlayer.party()
+    period = 60.0 / 128.0
+    clock = BeatClockState(
+        bpm=128.0,
+        phase=0.85,
+        confidence=0.95,
+        beat_index=10,
+        last_beat_at=1.0,
+        next_beat_at=1.0 + period,
+    )
+    event = BeatEvent(1001, 1.0 + period, 0.9)
+    snapshot = replace(
+        _event_snapshot(),
+        beat_events=(event,),
+        beat_event_stream=True,
+        beat_clock=clock,
+    )
+
+    scheduler.update(player, snapshot, now_s=1.4)
+
+    assert tuple(scheduler._recent_grid_indices) == (44,)
+    assert len(scheduler._pending_beats) == 1
+    assert scheduler._pending_beats[0].event == event
+
+    scheduler.update(player, replace(snapshot, beat_events=()), now_s=1.48)
+    scheduler.update(
+        player,
+        replace(snapshot, beat_events=(BeatEvent(1002, event.timestamp, 0.9),)),
+        now_s=1.5,
+    )
+
+    assert tuple(scheduler._recent_grid_indices) == (44,)
+    assert not scheduler._pending_beats
+    assert scheduler._rhythmic_status.result is EffectTriggerResult.BELOW_THRESHOLD
+
+
+def test_scheduler_keeps_sixteenth_grid_ticks_separate_from_visual_cooldowns() -> None:
+    scheduler = EffectScheduler(
+        EffectSchedulerConfig(seed=4, subdivisions_per_beat=4)
+    )
+    player = AnimationPlayer.party()
+    base = replace(
+        _event_snapshot(),
+        frame=replace(_event_snapshot().frame, beat=False, beat_strength=0.0),
+        features=replace(_event_snapshot().features, beat=False, beat_strength=0.0),
+        beat_events=(),
+        beat_event_stream=True,
+    )
+    beat_period = 60.0 / 128.0
+    results: list[EffectTriggerResult] = []
+
+    for frame in range(76):
+        now_s = frame * 0.02
+        beat_index = int(now_s / beat_period)
+        last_beat_at = beat_index * beat_period
+        clock = BeatClockState(
+            bpm=128.0,
+            phase=(now_s - last_beat_at) / beat_period,
+            confidence=0.95,
+            beat_index=beat_index,
+            last_beat_at=last_beat_at,
+            next_beat_at=last_beat_at + beat_period,
+        )
+        scheduler.update(
+            player,
+            replace(base, beat_clock=clock),
+            now_s=now_s,
+        )
+        results.append(scheduler._rhythmic_status.result)
+
+    assert tuple(scheduler._recent_grid_indices) == tuple(range(1, 14))
+    assert EffectTriggerResult.ACTIVATED in results
+    assert any(
+        result in {EffectTriggerResult.COOLDOWN, EffectTriggerResult.CATEGORY_ACTIVE}
+        for result in results
+    )
+
+
+def test_scheduler_catches_up_grid_indices_after_a_late_render() -> None:
+    scheduler = EffectScheduler(
+        EffectSchedulerConfig(seed=4, subdivisions_per_beat=4)
+    )
+    base = replace(
+        _event_snapshot(),
+        frame=replace(_event_snapshot().frame, beat=False, beat_strength=0.0),
+        features=replace(_event_snapshot().features, beat=False, beat_strength=0.0),
+        beat_events=(),
+        beat_event_stream=True,
+    )
+    period = 60.0 / 128.0
+    start_clock = BeatClockState(
+        bpm=128.0,
+        phase=0.0,
+        confidence=0.95,
+        beat_index=0,
+        last_beat_at=0.0,
+        next_beat_at=period,
+    )
+    late_clock = replace(start_clock, phase=0.85)
+
+    scheduler.update(
+        AnimationPlayer.party(), replace(base, beat_clock=start_clock), now_s=0.0
+    )
+    scheduler.update(
+        AnimationPlayer.party(), replace(base, beat_clock=late_clock), now_s=0.4
+    )
+
+    assert tuple(scheduler._recent_grid_indices) == (1, 2, 3, 4)
+    assert [beat.grid_index for beat in scheduler._pending_beats] == [2, 3, 4]
+
+
 def test_scheduler_suppresses_wild_effects_during_quiet_passages() -> None:
     scheduler = EffectScheduler(EffectSchedulerConfig(seed=4))
     quiet_event = replace(

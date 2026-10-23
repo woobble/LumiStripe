@@ -9,6 +9,8 @@
 #define FFT_SIZE 2048
 #define FFT_HOP_SIZE 512
 #define NUM_BANDS 8
+#define MAX_BEAT_EVENTS 128
+#define BEAT_EVENT_REFRACTORY_SECONDS 0.18f
 #define RMS_HISTORY_SIZE 200
 #define ONSET_HISTORY_SIZE 512
 #define MAX_IOI_BUFFER 12
@@ -78,6 +80,13 @@ typedef struct {
     float frame_bands[NUM_BANDS];
     int frame_beat;
     float frame_beat_strength;
+    long long beat_event_sequences[MAX_BEAT_EVENTS];
+    long long beat_event_sample_positions[MAX_BEAT_EVENTS];
+    float beat_event_strengths[MAX_BEAT_EVENTS];
+    long long last_beat_event_sample_position;
+    int beat_event_head;
+    int beat_event_count;
+    long long dropped_beat_events;
 
     float features_bpm;
     float features_energy;
@@ -378,6 +387,19 @@ static void _compute_features(AudioProcessor *self, float rms, float *bands,
     s->features_beat_confidence = s->features_silence ? 0.0f : _clamp01f(fmaxf(beat_strength, s->smooth_onset * 0.55f));
 }
 
+static void _queue_beat_event(AudioProcessorState *s) {
+    if (s->beat_event_count >= MAX_BEAT_EVENTS) {
+        s->beat_event_head = (s->beat_event_head + 1) % MAX_BEAT_EVENTS;
+        s->beat_event_count--;
+        s->dropped_beat_events++;
+    }
+    int tail = (s->beat_event_head + s->beat_event_count) % MAX_BEAT_EVENTS;
+    s->beat_event_sequences[tail] = s->fft_call_count;
+    s->beat_event_sample_positions[tail] = s->samples_seen;
+    s->beat_event_strengths[tail] = s->frame_beat_strength;
+    s->beat_event_count++;
+}
+
 static void _process_fft(AudioProcessor *self) {
     AudioProcessorState *s = &self->s;
     s->fft_call_count++;
@@ -570,6 +592,20 @@ static void _process_fft(AudioProcessor *self) {
     _compute_features(self, rms, bands, mags, beat, beat_strength);
     s->frame_beat = s->features_beat;
     s->frame_beat_strength = s->features_beat_strength;
+    long long refractory_samples = (long long)(
+        BEAT_EVENT_REFRACTORY_SECONDS * s->sample_rate
+    );
+    /* Overlap repeats one kick's bass rise; predicted grid ticks cover subdivisions. */
+    if (
+        s->frame_beat
+        && (
+            s->last_beat_event_sample_position == 0
+            || s->samples_seen - s->last_beat_event_sample_position >= refractory_samples
+        )
+    ) {
+        _queue_beat_event(s);
+        s->last_beat_event_sample_position = s->samples_seen;
+    }
 }
 
 static int AudioProcessor_init(AudioProcessor *self, PyObject *args, PyObject *kwds) {
@@ -715,8 +751,6 @@ static PyObject* AudioProcessor_feed_samples(AudioProcessor *self, PyObject *arg
     }
 
     self->s.feed_count++;
-    self->s.samples_seen += (long long)size;
-
     float abs_sum = 0.0f;
     for (Py_ssize_t i = 0; i < size; i++) abs_sum += fabsf(samples[i]);
     self->s.sample_sum += abs_sum;
@@ -741,6 +775,7 @@ static PyObject* AudioProcessor_feed_samples(AudioProcessor *self, PyObject *arg
         }
         self->s.buffer_pos += chunk;
         offset += chunk;
+        self->s.samples_seen += (long long)chunk;
         if (self->s.buffer_pos >= FFT_SIZE) {
             _process_fft(self);
             int retained = FFT_SIZE - FFT_HOP_SIZE;
@@ -812,6 +847,30 @@ static PyObject* AudioProcessor_frame(AudioProcessor *self, PyObject *Py_UNUSED(
         Py_DECREF(result);
         return NULL;
     }
+    return result;
+}
+
+static PyObject* AudioProcessor_drain_beat_events(
+    AudioProcessor *self, PyObject *Py_UNUSED(ignored)
+) {
+    AudioProcessorState *s = &self->s;
+    PyObject *result = PyTuple_New(s->beat_event_count);
+    if (!result) return NULL;
+    for (int i = 0; i < s->beat_event_count; i++) {
+        int index = (s->beat_event_head + i) % MAX_BEAT_EVENTS;
+        PyObject *event = PyDict_New();
+        if (!event ||
+            _dict_set_int(event, "sequence", s->beat_event_sequences[index]) < 0 ||
+            _dict_set_int(event, "sample_position", s->beat_event_sample_positions[index]) < 0 ||
+            _dict_set_float(event, "strength", s->beat_event_strengths[index]) < 0) {
+            Py_XDECREF(event);
+            Py_DECREF(result);
+            return NULL;
+        }
+        PyTuple_SET_ITEM(result, i, event);
+    }
+    s->beat_event_head = 0;
+    s->beat_event_count = 0;
     return result;
 }
 
@@ -915,7 +974,8 @@ static PyObject* AudioProcessor_stats(AudioProcessor *self, PyObject *Py_UNUSED(
         _dict_set_float(result, "clipping_fraction", self->s.clipping_fraction) < 0 ||
         _dict_set_int(result, "microphone_gate_open", self->s.microphone_gate_open) < 0 ||
         _dict_set_float(result, "program_loudness", self->s.level_estimate) < 0 ||
-        _dict_set_float(result, "musical_impact", self->s.musical_impact) < 0) {
+        _dict_set_float(result, "musical_impact", self->s.musical_impact) < 0 ||
+        _dict_set_int(result, "dropped_beat_events", self->s.dropped_beat_events) < 0) {
         Py_DECREF(result);
         return NULL;
     }
@@ -925,6 +985,7 @@ static PyObject* AudioProcessor_stats(AudioProcessor *self, PyObject *Py_UNUSED(
 static PyMethodDef AudioProcessor_methods[] = {
     {"feed_samples", (PyCFunction)AudioProcessor_feed_samples, METH_VARARGS, "Feed audio samples"},
     {"frame", (PyCFunction)AudioProcessor_frame, METH_NOARGS, "Get current AudioFrame as named fields"},
+    {"drain_beat_events", (PyCFunction)AudioProcessor_drain_beat_events, METH_NOARGS, "Drain detected beat events with sample positions"},
     {"features", (PyCFunction)AudioProcessor_features, METH_NOARGS, "Get current MusicFeatures as named fields"},
     {"state_copy", (PyCFunction)AudioProcessor_state_copy, METH_NOARGS, "Deep clone state"},
     {"reset", (PyCFunction)AudioProcessor_reset, METH_NOARGS, "Reset state to initial values"},

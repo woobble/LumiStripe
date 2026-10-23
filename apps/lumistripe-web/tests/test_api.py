@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import lumistripe_web.runtime as runtime_module
+import lumistripe_web.runtime.worker as worker_module
 import pytest
 from fastapi.testclient import TestClient
 from lumistripe import AudioInputDevice
@@ -310,6 +312,15 @@ def test_audio_settings_api_and_telemetry_websocket(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    class FakeCalibrationTone:
+        @property
+        def start_at_monotonic(self) -> float:
+            return time.monotonic() + 1.5
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(worker_module, "AudioSyncCalibrationTone", FakeCalibrationTone)
     monkeypatch.setattr(
         runtime_module,
         "list_input_device_details",
@@ -344,7 +355,7 @@ def test_audio_settings_api_and_telemetry_websocket(
             "/api/audio/sync-calibration", json={"active": True}
         )
         assert calibration.status_code == 200
-        assert calibration.json()["start_at_ms"] is not None
+        assert calibration.json()["start_at_ms"] is None
         assert calibration.json()["sync_offset_ms"] == 100
         stopped = client.post(
             "/api/audio/sync-calibration", json={"active": False}

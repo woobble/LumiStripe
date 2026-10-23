@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from ..audio.types import AudioFrame, AudioSnapshot, BeatEvent
+from ..audio.types import AudioFrame, AudioSnapshot, BeatClockState, BeatEvent
 from ..color import Rgba
 from ..controller import BrightnessController, Controller
 from ..stripe import Stripe
@@ -154,6 +154,14 @@ class EffectSchedulerDiagnostics:
     accent: EffectTriggerStatus
 
 
+@dataclass(frozen=True, slots=True)
+class _ScheduledBeat:
+    due_at_s: float
+    strength: float
+    event: BeatEvent | None
+    grid_index: int | None = None
+
+
 @dataclass(slots=True)
 class EffectScheduler:
     config: EffectSchedulerConfig = field(default_factory=EffectSchedulerConfig)
@@ -167,13 +175,12 @@ class EffectScheduler:
     _accent_status: EffectTriggerStatus = field(init=False)
     _response: float = field(default=0.65, init=False)
     _last_beat_event_sequence: int = field(default=0, init=False)
-    _pending_beats: deque[tuple[float, float, BeatEvent | None]] = field(
+    _pending_beats: deque[_ScheduledBeat] = field(
         default_factory=deque, init=False
     )
     _last_clock_subdivision_scheduled: int | None = field(default=None, init=False)
-    _recent_predicted_due: deque[float] = field(
-        default_factory=lambda: deque(maxlen=8), init=False
-    )
+    _recent_grid_indices: deque[int] = field(default_factory=deque, init=False)
+    _recent_grid_index_set: set[int] = field(default_factory=set, init=False)
     _sync_offset_s: float = field(default=0.0, init=False)
 
     def __post_init__(self) -> None:
@@ -206,7 +213,8 @@ class EffectScheduler:
         self._last_beat_event_sequence = 0
         self._pending_beats.clear()
         self._last_clock_subdivision_scheduled = None
-        self._recent_predicted_due.clear()
+        self._recent_grid_indices.clear()
+        self._recent_grid_index_set.clear()
         self._sync_offset_s = 0.0
         self._reset_trigger_statuses()
 
@@ -262,18 +270,11 @@ class EffectScheduler:
     ) -> None:
         self._last_update_at_s = now_s
         if sync_offset_s != self._sync_offset_s:
+            offset_delta = sync_offset_s - self._sync_offset_s
             self._pending_beats = deque(
-                sorted(
-                    (
-                        (event.timestamp + sync_offset_s, strength, event)
-                        for _, strength, event in self._pending_beats
-                        if event is not None
-                    ),
-                    key=lambda item: item[0],
-                )
+                replace(beat, due_at_s=beat.due_at_s + offset_delta)
+                for beat in self._pending_beats
             )
-            self._recent_predicted_due.clear()
-            self._last_clock_subdivision_scheduled = None
             self._sync_offset_s = sync_offset_s
         self.active = [
             effect
@@ -291,34 +292,38 @@ class EffectScheduler:
             for event in snapshot.beat_events
             if event.sequence > self._last_beat_event_sequence
         )
+        clock = snapshot.beat_clock
         for event in new_events:
             self._last_beat_event_sequence = max(
                 self._last_beat_event_sequence, event.sequence
             )
             due_at = event.timestamp + sync_offset_s
-            if not any(
-                abs(predicted_at - due_at) <= 0.12
-                for predicted_at in self._recent_predicted_due
-            ):
-                matching_prediction = next(
+            grid_index = self._event_grid_index(event, clock)
+            if grid_index is None:
+                self._enqueue_beat(due_at, event.strength, event)
+                continue
+            if grid_index in self._recent_grid_index_set:
+                pending_prediction = next(
                     (
                         index
-                        for index, (pending_at, _, pending_event) in enumerate(
-                            self._pending_beats
-                        )
-                        if pending_event is None
-                        and abs(pending_at - due_at) <= 0.12
+                        for index, pending in enumerate(self._pending_beats)
+                        if pending.grid_index == grid_index and pending.event is None
                     ),
                     None,
                 )
-                if matching_prediction is not None:
+                if pending_prediction is not None:
                     pending = list(self._pending_beats)
-                    del pending[matching_prediction]
-                    self._pending_beats = deque(pending)
-                self._enqueue_beat(due_at, event.strength, event)
+                    pending[pending_prediction] = _ScheduledBeat(
+                        due_at, event.strength, event, grid_index
+                    )
+                    self._pending_beats = deque(
+                        sorted(pending, key=lambda item: item.due_at_s)
+                    )
+            else:
+                self._remember_grid_index(grid_index)
+                self._enqueue_beat(due_at, event.strength, event, grid_index)
 
         predicted_beat = False
-        clock = snapshot.beat_clock
         if (
             clock is not None
             and clock.bpm > 0.0
@@ -329,25 +334,39 @@ class EffectScheduler:
             position = min(division - 1, int(clock.phase * division))
             subdivision = clock.beat_index * division + position
             next_subdivision = subdivision + 1
-            if (
-                self._last_clock_subdivision_scheduled is None
-                or next_subdivision > self._last_clock_subdivision_scheduled
-            ):
-                period = 60.0 / clock.bpm
-                target_at = clock.last_beat_at + (position + 1) * period / division
-                due_at = target_at + sync_offset_s
-                if not self._has_nearby_prediction(due_at):
-                    self._enqueue_beat(due_at, 0.8, None)
-                self._last_clock_subdivision_scheduled = next_subdivision
+            first_subdivision = (
+                next_subdivision
+                if self._last_clock_subdivision_scheduled is None
+                else self._last_clock_subdivision_scheduled + 1
+            )
+            if next_subdivision - first_subdivision >= 64:
+                first_subdivision = next_subdivision - 63
+            for grid_index in range(first_subdivision, next_subdivision + 1):
+                if grid_index in self._recent_grid_index_set:
+                    continue
+                target_at = self._clock_grid_time(clock, grid_index, division)
+                self._remember_grid_index(grid_index)
+                self._enqueue_beat(
+                    target_at + sync_offset_s,
+                    0.8,
+                    None,
+                    grid_index,
+                )
+            self._last_clock_subdivision_scheduled = max(
+                next_subdivision,
+                self._last_clock_subdivision_scheduled
+                if self._last_clock_subdivision_scheduled is not None
+                else next_subdivision,
+            )
 
         due_event: BeatEvent | None = None
         due_strength = 0.0
         due_found = False
-        while self._pending_beats and self._pending_beats[0][0] <= now_s:
-            due_at, due_strength, due_event = self._pending_beats.popleft()
+        while self._pending_beats and self._pending_beats[0].due_at_s <= now_s:
+            due = self._pending_beats.popleft()
+            due_strength = due.strength
+            due_event = due.event
             due_found = True
-            if due_event is None:
-                self._recent_predicted_due.append(due_at)
             break
         predicted_beat = due_found and due_event is None
         event_due = due_found
@@ -443,18 +462,61 @@ class EffectScheduler:
         )
 
     def _enqueue_beat(
-        self, due_at: float, strength: float, event: BeatEvent | None
+        self,
+        due_at: float,
+        strength: float,
+        event: BeatEvent | None,
+        grid_index: int | None = None,
     ) -> None:
         if len(self._pending_beats) >= 64:
             self._pending_beats.popleft()
-        items = [*self._pending_beats, (due_at, strength, event)]
-        items.sort(key=lambda item: item[0])
+        items = [
+            *self._pending_beats,
+            _ScheduledBeat(due_at, strength, event, grid_index),
+        ]
+        items.sort(key=lambda item: item.due_at_s)
         self._pending_beats = deque(items)
 
-    def _has_nearby_prediction(self, due_at: float) -> bool:
-        return any(abs(predicted_at - due_at) <= 0.12 for predicted_at in self._recent_predicted_due) or any(
-            event is None and abs(predicted_at - due_at) <= 0.12
-            for predicted_at, _, event in self._pending_beats
+    def _remember_grid_index(self, grid_index: int) -> None:
+        if grid_index in self._recent_grid_index_set:
+            return
+        if len(self._recent_grid_indices) >= 256:
+            expired = self._recent_grid_indices.popleft()
+            self._recent_grid_index_set.discard(expired)
+        self._recent_grid_indices.append(grid_index)
+        self._recent_grid_index_set.add(grid_index)
+
+    def _event_grid_index(
+        self, event: BeatEvent, clock: BeatClockState | None
+    ) -> int | None:
+        if (
+            clock is None
+            or clock.confidence < self.config.clock_confidence_threshold
+            or clock.last_beat_at is None
+            or clock.bpm <= 0.0
+        ):
+            return None
+        division = self.config.subdivisions_per_beat
+        subdivision_period = 60.0 / clock.bpm / division
+        position = (event.timestamp - clock.last_beat_at) / subdivision_period
+        grid_position = round(position)
+        if abs(position - grid_position) > 0.35:
+            return None
+        return clock.beat_index * division + grid_position
+
+    @staticmethod
+    def _clock_grid_time(
+        clock: BeatClockState,
+        grid_index: int,
+        division: int,
+    ) -> float:
+        assert clock.last_beat_at is not None
+        period = 60.0 / clock.bpm
+        beat_delta, subdivision = divmod(grid_index, division)
+        return (
+            clock.last_beat_at
+            + (beat_delta - clock.beat_index) * period
+            + subdivision * period / division
         )
 
     def _trigger_result(

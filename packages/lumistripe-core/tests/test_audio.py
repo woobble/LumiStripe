@@ -515,6 +515,89 @@ def test_audio_state_emits_capture_timestamped_beat_once(
     assert state.take_beat_events() == ()
 
 
+def test_audio_state_bounds_queued_beat_events_and_reports_drops(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lumistripe.audio import dsp
+
+    class FakeProcessor:
+        def __init__(self, config, sample_rate):
+            del config, sample_rate
+            self.events = tuple(
+                {
+                    "sequence": sequence,
+                    "sample_position": sequence,
+                    "strength": 0.8,
+                }
+                for sequence in range(1, 301)
+            )
+
+        def feed_samples(self, samples):
+            del samples
+
+        def frame(self):
+            return {
+                "rms": 0.0,
+                "bands": [0.0] * 8,
+                "beat": False,
+                "beat_strength": 0.0,
+                "sequence": 1,
+            }
+
+        def drain_beat_events(self):
+            events = self.events
+            self.events = ()
+            return events
+
+        def features(self):
+            return {
+                "bpm": 120.0,
+                "energy": 0.0,
+                "bass": 0.0,
+                "brightness": 0.0,
+                "onset_strength": 0.0,
+                "dynamic_range": 0.0,
+                "beat": False,
+                "beat_strength": 0.0,
+                "bands": [0.0] * 8,
+                "bass_energy": 0.0,
+                "mid_energy": 0.0,
+                "treble_energy": 0.0,
+                "spectral_centroid": 0.0,
+                "spectral_flux": 0.0,
+                "beat_confidence": 0.0,
+                "rolling_loudness": 0.0,
+                "silence": True,
+                "drop_detected": False,
+                "section_change": False,
+                "program_loudness": 0.0,
+                "musical_impact": 0.0,
+            }
+
+        def stats(self):
+            return {
+                "feed_count": 1,
+                "samples_seen": 300,
+                "fft_count": 1,
+                "sample_abs_sum": 0.0,
+                "normalization_gain": 1.0,
+                "input_rms": 0.0,
+                "program_loudness": 0.0,
+                "musical_impact": 0.0,
+                "dropped_beat_events": 0,
+            }
+
+    monkeypatch.setattr(dsp, "_audio", SimpleNamespace(AudioProcessor=FakeProcessor))
+    state = dsp.AudioState()
+    state.feed_samples(np.zeros(300, dtype=np.float32), captured_at=100.0)
+
+    events = state.take_beat_events()
+
+    assert len(events) == 256
+    assert [event.sequence for event in events] == list(range(45, 301))
+    assert state.stats().queued_dropped_beat_events == 44
+
+
 def test_audio_state_uses_configured_fft_hop() -> None:
     state = AudioState(AudioConfig.raw())
     window = np.sin(
@@ -545,6 +628,39 @@ def test_audio_state_stats_count_multiple_ffts_from_one_feed() -> None:
     assert stats.fft_count == 3
     assert stats.sample_abs_sum > 0.0
     assert stats.normalization_gain == pytest.approx(1.0)
+
+
+def test_audio_state_drains_each_synthetic_onset_from_a_large_batch() -> None:
+    sample_rate = 44_100.0
+    duration_s = 5.0
+    sample_count = int(sample_rate * duration_s)
+    times = np.arange(sample_count, dtype=np.float32) / sample_rate
+    samples = np.zeros(sample_count, dtype=np.float32)
+    onset_times = np.arange(0.25, 4.76, 0.5)
+    for onset_at in onset_times:
+        start = int(onset_at * sample_rate)
+        end = min(sample_count, start + int(0.14 * sample_rate))
+        samples[start:end] = 0.9 * np.sin(
+            2.0 * np.pi * 80.0 * times[start:end]
+        )
+
+    captured_at = 50.0 + sample_count / sample_rate
+    state = AudioState(AudioConfig.raw(), sample_rate=sample_rate)
+    state.feed_samples(samples, captured_at=captured_at)
+    events = state.take_beat_events()
+
+    assert len(events) == len(onset_times)
+    assert [event.sequence for event in events] == sorted(
+        event.sequence for event in events
+    )
+    assert [event.timestamp for event in events] == sorted(
+        event.timestamp for event in events
+    )
+    assert all(50.0 <= event.timestamp <= captured_at for event in events)
+    assert [event.timestamp for event in events] == pytest.approx(
+        [50.0 + onset_at for onset_at in onset_times], abs=0.05
+    )
+    assert state.stats().native_dropped_beat_events == 0
 
 
 def test_audio_stats_expose_level_before_noise_floor() -> None:
