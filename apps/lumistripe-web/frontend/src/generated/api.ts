@@ -396,6 +396,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/audio/sync-calibration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set Audio Sync Calibration */
+        post: operations["set_audio_sync_calibration_api_audio_sync_calibration_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/audio/sync-offset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set Audio Sync Offset */
+        put: operations["set_audio_sync_offset_api_audio_sync_offset_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/logout": {
         parameters: {
             query?: never;
@@ -954,6 +988,16 @@ export interface components {
             /** Source */
             source: string;
             spotify: components["schemas"]["SpotifyStatusResponse"];
+            /**
+             * Sync Offset Ms
+             * @default 0
+             */
+            sync_offset_ms: number;
+            /**
+             * Sync Route
+             * @default mic|unknown|default
+             */
+            sync_route: string;
         };
         /** AudioSourceRequest */
         AudioSourceRequest: {
@@ -962,6 +1006,25 @@ export interface components {
              * @enum {string}
              */
             source: "auto" | "off" | "demo" | "mic" | "bluetooth" | "spotify";
+        };
+        /** AudioSyncCalibrationRequest */
+        AudioSyncCalibrationRequest: {
+            /** Active */
+            active: boolean;
+        };
+        /** AudioSyncCalibrationResponse */
+        AudioSyncCalibrationResponse: {
+            /** Start At Ms */
+            start_at_ms?: number | null;
+            /** Sync Offset Ms */
+            sync_offset_ms: number;
+            /** Sync Route */
+            sync_route: string;
+        };
+        /** AudioSyncOffsetRequest */
+        AudioSyncOffsetRequest: {
+            /** Offset Ms */
+            offset_ms: number;
         };
         /** AudioTuningValues */
         AudioTuningValues: {
@@ -2601,6 +2664,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SpotifyStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_audio_sync_calibration_api_audio_sync_calibration_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AudioSyncCalibrationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudioSyncCalibrationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_audio_sync_offset_api_audio_sync_offset_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AudioSyncOffsetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudioSettingsResponse"];
                 };
             };
             /** @description Validation Error */

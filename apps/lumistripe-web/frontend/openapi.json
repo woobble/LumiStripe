@@ -594,6 +594,18 @@
           },
           "spotify": {
             "$ref": "#/components/schemas/SpotifyStatusResponse"
+          },
+          "sync_offset_ms": {
+            "default": 0.0,
+            "maximum": 500.0,
+            "minimum": -500.0,
+            "title": "Sync Offset Ms",
+            "type": "number"
+          },
+          "sync_route": {
+            "default": "mic|unknown|default",
+            "title": "Sync Route",
+            "type": "string"
           }
         },
         "required": [
@@ -623,6 +635,65 @@
           "source"
         ],
         "title": "AudioSourceRequest",
+        "type": "object"
+      },
+      "AudioSyncCalibrationRequest": {
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "active"
+        ],
+        "title": "AudioSyncCalibrationRequest",
+        "type": "object"
+      },
+      "AudioSyncCalibrationResponse": {
+        "properties": {
+          "start_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start At Ms"
+          },
+          "sync_offset_ms": {
+            "maximum": 500.0,
+            "minimum": -500.0,
+            "title": "Sync Offset Ms",
+            "type": "number"
+          },
+          "sync_route": {
+            "title": "Sync Route",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sync_route",
+          "sync_offset_ms"
+        ],
+        "title": "AudioSyncCalibrationResponse",
+        "type": "object"
+      },
+      "AudioSyncOffsetRequest": {
+        "properties": {
+          "offset_ms": {
+            "maximum": 500.0,
+            "minimum": -500.0,
+            "title": "Offset Ms",
+            "type": "number"
+          }
+        },
+        "required": [
+          "offset_ms"
+        ],
+        "title": "AudioSyncOffsetRequest",
         "type": "object"
       },
       "AudioTuningValues": {
@@ -3515,6 +3586,82 @@
           }
         },
         "summary": "Control Spotify"
+      }
+    },
+    "/api/audio/sync-calibration": {
+      "post": {
+        "operationId": "set_audio_sync_calibration_api_audio_sync_calibration_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudioSyncCalibrationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudioSyncCalibrationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Audio Sync Calibration"
+      }
+    },
+    "/api/audio/sync-offset": {
+      "put": {
+        "operationId": "set_audio_sync_offset_api_audio_sync_offset_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudioSyncOffsetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudioSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Audio Sync Offset"
       }
     },
     "/api/auth/logout": {

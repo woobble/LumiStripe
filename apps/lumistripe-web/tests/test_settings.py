@@ -57,7 +57,7 @@ def test_settings_round_trip_both_profiles_atomically(tmp_path: Path) -> None:
     assert warning is None
     assert profiles["primary"] == ColorCorrection(255, 220, 180)
     assert profiles["secondary"] == ColorCorrection(200, 210, 220)
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 5
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 6
     assert not list(path.parent.glob("*.tmp"))
 
 
@@ -119,7 +119,7 @@ def test_power_budget_round_trip_and_legacy_defaults(tmp_path: Path) -> None:
     assert loaded.stripe_topology == topology
     assert topology.available_led_watts == 185.0
     assert topology.effective_power_budget_watts == 18.5
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 5
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 6
 
     path.write_text(
         json.dumps(
@@ -139,6 +139,32 @@ def test_power_budget_round_trip_and_legacy_defaults(tmp_path: Path) -> None:
     assert legacy.stripe_topology == StripeTopologySettings(
         outputs=(StripeOutputSettings(id="legacy", name="Legacy", pixels=10),)
     )
+
+
+def test_audio_sync_offsets_persist_per_route_and_migrate_from_v5(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.json"
+    store = CalibrationSettingsStore(path)
+    store.save_audio_sync_offset("bluetooth|AA:BB|bluez_output", 100.0)
+    store.save_audio_sync_offset("mic|USB Mic|analog_output", -35.0)
+
+    loaded, warning = store.load_all()
+
+    assert warning is None
+    assert loaded.audio_sync_offsets_ms == {
+        "bluetooth|AA:BB|bluez_output": 100.0,
+        "mic|USB Mic|analog_output": -35.0,
+    }
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 6
+
+    path.write_text(
+        json.dumps({"version": 5, "selected_audio_device": "USB Mic"}),
+        encoding="utf-8",
+    )
+    legacy, warning = store.load_all()
+    assert warning is None
+    assert legacy.audio_sync_offsets_ms == {}
 
 
 def test_shared_supply_budget_can_reach_zero_and_combine_with_led_limit() -> None:

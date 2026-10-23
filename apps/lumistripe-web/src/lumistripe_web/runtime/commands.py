@@ -90,6 +90,16 @@ class _AudioSourceCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class _AudioSyncOffsetCommand:
+    offset_ms: float
+
+
+@dataclass(frozen=True, slots=True)
+class _AudioSyncCalibrationCommand:
+    active: bool
+
+
+@dataclass(frozen=True, slots=True)
 class _SpotifyCommand:
     action: str
     value: object | None = None
@@ -127,6 +137,8 @@ __all__ = [
     "_AudioDeviceCommand",
     "_AudioSettingsCommand",
     "_AudioSourceCommand",
+    "_AudioSyncCalibrationCommand",
+    "_AudioSyncOffsetCommand",
     "_CalibrationFinishCommand",
     "_CalibrationStartCommand",
     "_CalibrationUpdateCommand",

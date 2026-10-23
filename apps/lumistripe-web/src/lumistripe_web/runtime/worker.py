@@ -41,6 +41,7 @@ from lumistripe.audio.types import (
     AudioInputHealth,
     AudioSnapshot,
     BandTuple,
+    BeatEvent,
     MusicFeatures,
 )
 from lumistripe.gpio import GPIOStripe
@@ -69,6 +70,7 @@ from ..models import (
     AudioDeviceOption,
     AudioOutputDeviceInfo,
     AudioSettingsResponse,
+    AudioSyncCalibrationResponse,
     AudioTelemetry,
     AudioTuningValues,
     BluetoothCapabilities,
@@ -112,6 +114,8 @@ from .commands import (
     _AudioDeviceCommand,
     _AudioSettingsCommand,
     _AudioSourceCommand,
+    _AudioSyncCalibrationCommand,
+    _AudioSyncOffsetCommand,
     _CalibrationFinishCommand,
     _CalibrationStartCommand,
     _CalibrationUpdateCommand,
@@ -299,6 +303,7 @@ class RuntimeWorker:
             or _topology_from_runtime(self.settings)
         )
         self._audio_profiles = loaded_settings.audio_profiles
+        self._audio_sync_offsets_ms = loaded_settings.audio_sync_offsets_ms
         self._selected_audio_device = (
             loaded_settings.selected_audio_device or self.settings.audio_device
         )
@@ -367,6 +372,9 @@ class RuntimeWorker:
         self._next_audio_route_check_at = 0.0
         self._spotify_last_active: bool | None = None
         self._audio_frame = AudioFrame()
+        self._last_beat_event: BeatEvent | None = None
+        self._sync_calibration_start_s: float | None = None
+        self._sync_calibration_until_s: float | None = None
         self._music_features = MusicFeatures()
         self._demo_tick = 0
         self._audio_status = "No audio source active."
@@ -541,6 +549,7 @@ class RuntimeWorker:
             ),
             self._selected_audio_device,
         )
+        sync_route = self._audio_sync_route_key()
         return AudioSettingsResponse(
             source=self._audio_source_setting,
             active_source=self._monitor_audio_source.value,
@@ -560,6 +569,8 @@ class RuntimeWorker:
                 )
             ),
             configured_noise_floor=self._audio_profile.audio_config().smoothing.noise_floor,
+            sync_route=sync_route,
+            sync_offset_ms=self._audio_sync_offsets_ms.get(sync_route, 0.0),
             **_hardware_gain_values(self._hardware_gain),
             bluetooth=self._bluetooth_status_response(),
             spotify=self._spotify_status_response(),
@@ -749,6 +760,22 @@ class RuntimeWorker:
         return cast(
             Future[AudioSettingsResponse],
             self._submit("audio_source", _AudioSourceCommand(source)),
+        )
+
+    def set_audio_sync_offset(self, offset_ms: float) -> Future[AudioSettingsResponse]:
+        return cast(
+            Future[AudioSettingsResponse],
+            self._submit("audio_sync_offset", _AudioSyncOffsetCommand(offset_ms)),
+        )
+
+    def set_audio_sync_calibration(
+        self, active: bool
+    ) -> Future[AudioSyncCalibrationResponse]:
+        return cast(
+            Future[AudioSyncCalibrationResponse],
+            self._submit(
+                "audio_sync_calibration", _AudioSyncCalibrationCommand(active)
+            ),
         )
 
     def spotify_status(self) -> SpotifyStatusResponse:
@@ -1284,6 +1311,15 @@ class RuntimeWorker:
                 self._set_audio_source(audio_source.source)
                 self._publish(running=True)
                 result = self.audio_settings()
+            elif command.name == "audio_sync_offset":
+                sync_offset = _expect(command.value, _AudioSyncOffsetCommand)
+                result = self._set_audio_sync_offset(sync_offset.offset_ms)
+                self._publish(running=True)
+            elif command.name == "audio_sync_calibration":
+                sync_calibration = _expect(
+                    command.value, _AudioSyncCalibrationCommand
+                )
+                result = self._set_audio_sync_calibration(sync_calibration.active)
             elif command.name == "spotify":
                 spotify = _expect(command.value, _SpotifyCommand)
                 try:
@@ -2047,6 +2083,11 @@ profile.audio_config(microphone=True),
         else:
             self._configured_audio_source = AudioSource(source)
         self._close_audio_input()
+        self.playback.beat_clock_tracker.reset()
+        self.playback.layered_renderer.reset()
+        for _, playback in self._playbacks.values():
+            playback.beat_clock_tracker.reset()
+            playback.layered_renderer.reset()
         self._active_audio_source = AudioSource.OFF
         self._monitor_audio_source = AudioSource.OFF
         self._audio_monitor_error = None
@@ -2060,6 +2101,72 @@ profile.audio_config(microphone=True),
             )
             else AudioSource.OFF
         )
+
+    def _audio_sync_route_key(self) -> str:
+        source = self._monitor_audio_source.value
+        input_route = (
+            self._active_bluetooth_address
+            or self._active_audio_device_name
+            or self._selected_audio_device
+            or source
+        )
+        output_route = self._bluetooth.status().default_sink or "default"
+        return f"{source}|{input_route}|{output_route}"
+
+    def _apply_sync_offset_for_route(self) -> None:
+        route = self._audio_sync_route_key()
+        offset_s = self._audio_sync_offsets_ms.get(route, 0.0) / 1000.0
+        self.playback.set_sync_offset(offset_s)
+        for _, playback in self._playbacks.values():
+            playback.set_sync_offset(offset_s)
+
+    def _set_audio_sync_offset(self, offset_ms: float) -> AudioSettingsResponse:
+        if not -500.0 <= offset_ms <= 500.0:
+            raise RuntimeCommandError("audio sync offset must be between -500 and 500 ms")
+        route = self._audio_sync_route_key()
+        previous = self._audio_sync_offsets_ms.get(route)
+        self._audio_sync_offsets_ms[route] = offset_ms
+        try:
+            with self._settings_io_lock:
+                self._settings_store.save_audio_sync_offset(route, offset_ms)
+        except OSError as exc:
+            if previous is None:
+                self._audio_sync_offsets_ms.pop(route, None)
+            else:
+                self._audio_sync_offsets_ms[route] = previous
+            raise RuntimeCommandError(f"could not save audio sync offset: {exc}") from exc
+        self._apply_sync_offset_for_route()
+        return self.audio_settings()
+
+    def _set_audio_sync_calibration(
+        self, active: bool
+    ) -> AudioSyncCalibrationResponse:
+        route = self._audio_sync_route_key()
+        offset_ms = self._audio_sync_offsets_ms.get(route, 0.0)
+        if active:
+            self._sync_calibration_start_s = time.monotonic() + 1.5
+            self._sync_calibration_until_s = self._sync_calibration_start_s + 45.0
+            start_at_ms = int((time.time() + 1.5) * 1000.0)
+        else:
+            self._sync_calibration_start_s = None
+            self._sync_calibration_until_s = None
+            start_at_ms = None
+            self.playback.beat_clock_tracker.reset()
+        return AudioSyncCalibrationResponse(
+            start_at_ms=start_at_ms,
+            sync_route=route,
+            sync_offset_ms=offset_ms,
+        )
+
+    def _render_sync_calibration_flash(self, now_s: float) -> None:
+        assert self._controller is not None
+        assert self._sync_calibration_start_s is not None
+        phase = (now_s - self._sync_calibration_start_s - self.playback.sync_offset_s) % 0.5
+        if phase < 0.075:
+            self._controller.fill(Rgb(255, 255, 255))
+        else:
+            self._controller.clear()
+        self._flush_power_limited_outputs()
 
     def _set_startup_restore(self, enabled: bool) -> None:
         if enabled:
@@ -2330,6 +2437,7 @@ profile.audio_config(microphone=True),
     def _step(self) -> float:
         assert self._controller is not None
         self._maintain_audio_monitor()
+        self._apply_sync_offset_for_route()
         session = self._calibration
         if session is not None:
             if (
@@ -2346,10 +2454,15 @@ profile.audio_config(microphone=True),
         snapshot: AudioSnapshot | None = None
         if self._audio_input is not None:
             self._audio_frame = self._audio_input.read()
+            read_events = getattr(self._audio_input, "read_beat_events", None)
+            beat_events = read_events() if callable(read_events) else ()
+            beat_event_stream = callable(read_events)
+            if beat_events:
+                self._last_beat_event = beat_events[-1]
             self._audio_health = self._audio_input.health()
             self._music_features = (
                 self._audio_input.read_features()
-                if self._audio_frame.fresh
+                if self._audio_frame.fresh or beat_events
                 else MusicFeatures()
             )
             snapshot = (
@@ -2357,11 +2470,14 @@ profile.audio_config(microphone=True),
                     self._audio_frame,
                     self._music_features,
                     self._audio_health,
+                    beat_events=beat_events,
+                    beat_event_stream=beat_event_stream,
                 )
-                if self._audio_frame.fresh
+                if self._audio_frame.fresh or beat_events
                 else AudioSnapshot.silence(
                     frame=self._audio_frame,
                     health=self._audio_health,
+                    beat_event_stream=beat_event_stream,
                 )
             )
             if self._audio_frame.fresh:
@@ -2379,6 +2495,18 @@ profile.audio_config(microphone=True),
             self._audio_frame = AudioFrame()
             self._music_features = MusicFeatures()
             self._audio_health = AudioInputHealth()
+
+        if self._sync_calibration_start_s is not None:
+            now = time.monotonic()
+            if self._sync_calibration_until_s is not None and now >= self._sync_calibration_until_s:
+                self._sync_calibration_start_s = None
+                self._sync_calibration_until_s = None
+            else:
+                self._render_sync_calibration_flash(now)
+                self._update_audio_telemetry()
+                self._record_frame()
+                self._publish(running=True)
+                return MIN_FRAME_SECONDS
 
         self._tick_audio_calibration()
         if self._topology.layout == "independent" and self._output_gates:
@@ -2534,6 +2662,14 @@ profile.audio_config(microphone=True),
         if ordered_noise:
             noise_floor = ordered_noise[int((len(ordered_noise) - 1) * 0.2)]
         processor = self._audio_health.processor
+        clock = self.playback.beat_clock_state
+        sync_route = self._audio_sync_route_key()
+        sync_offset_ms = self._audio_sync_offsets_ms.get(sync_route, 0.0)
+        next_beat_in_ms = (
+            None
+            if clock.next_beat_at is None
+            else max(0.0, (clock.next_beat_at - time.monotonic()) * 1000.0)
+        )
         telemetry = AudioTelemetry(
             sequence=self._audio_frame.sequence,
             fresh=self._audio_frame.fresh,
@@ -2556,7 +2692,18 @@ profile.audio_config(microphone=True),
                     self._music_features.beat_strength,
                 ),
             ),
-            bpm=max(0.0, self._music_features.bpm),
+            bpm=max(0.0, clock.bpm if clock.confidence > 0.0 else self._music_features.bpm),
+            bpm_confidence=clock.confidence,
+            beat_phase=clock.phase,
+            beat_index=clock.beat_index,
+            next_beat_in_ms=next_beat_in_ms,
+            beat_event_sequence=(
+                self._last_beat_event.sequence if self._last_beat_event is not None else 0
+            ),
+            dropped_beat_events=self._audio_health.dropped_beat_events,
+            pending_beat_events=self._audio_health.pending_beat_events,
+            sync_offset_ms=sync_offset_ms,
+            sync_route=sync_route,
             estimated_noise_floor=noise_floor,
             configured_noise_floor=self._audio_profile.audio_config().smoothing.noise_floor,
             normalization_gain=max(0.0, processor.normalization_gain),

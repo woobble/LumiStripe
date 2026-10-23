@@ -8,8 +8,9 @@ from math import exp
 from random import Random
 
 from ..animation.base import AnimationPlayer
+from ..audio.beat import BeatClockTracker
 from ..audio.dsp import features_from_frame
-from ..audio.types import AudioSnapshot, MusicFeatures
+from ..audio.types import AudioSnapshot, BeatClockState, MusicFeatures
 from ..color import Color
 from ..controller import Controller
 from ..effects.layers import (
@@ -58,6 +59,9 @@ class PlaybackEngine:
     _idle_rendered: bool = field(init=False, default=False)
     _rng: Random = field(init=False)
     solid_color: Color = field(init=False)
+    beat_clock_tracker: BeatClockTracker = field(init=False)
+    _beat_clock_state: BeatClockState = field(init=False)
+    sync_offset_s: float = field(init=False, default=0.0)
 
     def __post_init__(self) -> None:
         self.mode = self.config.mode
@@ -72,6 +76,8 @@ class PlaybackEngine:
         self.layered_renderer = LayeredRenderer(scheduler)
         self.reactive_smoother = ReactiveFrameSmoother()
         self.render_adapter = PlaybackRenderer()
+        self.beat_clock_tracker = BeatClockTracker()
+        self._beat_clock_state = self.beat_clock_tracker.state(0.0)
         self.player.transition_ms = int(self.config.transition_duration_s * 1000.0)
         self._rng = Random(self.config.cycling.seed)
 
@@ -89,6 +95,15 @@ class PlaybackEngine:
 
     def effect_diagnostics(self, *, now_s: float | None = None) -> EffectSchedulerDiagnostics:
         return self.layered_renderer.diagnostics(now_s=now_s)
+
+    @property
+    def beat_clock_state(self) -> BeatClockState:
+        return self._beat_clock_state
+
+    def set_sync_offset(self, offset_s: float) -> None:
+        if not -0.5 <= offset_s <= 0.5:
+            raise ValueError("audio sync offset must be between -0.5 and 0.5 seconds")
+        self.sync_offset_s = offset_s
 
     def selector_diagnostics(self, *, now_s: float | None = None) -> DynamicSelectorDiagnostics:
         return self.dynamic_selector.diagnostics(now_s=now_s)
@@ -157,6 +172,15 @@ class PlaybackEngine:
         flush: bool = True,
     ) -> float:
         now = time.monotonic() if now_s is None else now_s
+        if snapshot is not None:
+            self._beat_clock_state = self.beat_clock_tracker.update(
+                snapshot.beat_events,
+                now_s=now,
+                fallback_bpm=snapshot.features.bpm,
+            )
+            snapshot = replace(snapshot, beat_clock=self._beat_clock_state)
+        else:
+            self._beat_clock_state = self.beat_clock_tracker.state(now)
         if self._cycle_started_at_s is None:
             self._cycle_started_at_s = now
 
@@ -260,6 +284,7 @@ class PlaybackEngine:
                 plan.snapshot or active_snapshot,
                 now_s=now,
                 flush=plan.flush,
+                sync_offset_s=self.sync_offset_s,
             )
 
         audio_frame = None

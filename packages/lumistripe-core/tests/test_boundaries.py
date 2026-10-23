@@ -2,8 +2,9 @@ import numpy as np
 import pytest
 from lumistripe.animation.base import Animation
 from lumistripe.animation.catalog import AnimationDefinition, validate_animation_catalog
-from lumistripe.audio.capture import BoundedAudioBatchBuffer
+from lumistripe.audio.capture import BoundedAudioBatchBuffer, BoundedBeatEventBuffer
 from lumistripe.audio.dsp import NativeFrameResult, NativeStatsResult
+from lumistripe.audio.types import BeatEvent
 from lumistripe.playback import (
     MusicGateState,
     PlaybackMode,
@@ -32,6 +33,31 @@ def test_bounded_audio_buffer_drops_oldest_batch() -> None:
     np.testing.assert_array_equal(received, third)
     buffer.task_done()
     assert buffer.wait_until_idle(timeout=0.0) is True
+
+
+def test_audio_batch_buffer_preserves_capture_timestamp() -> None:
+    buffer = BoundedAudioBatchBuffer(max_batches=2)
+    samples = np.array([0.25], dtype=np.float32)
+    buffer.push(samples, captured_at=123.5)
+
+    received = buffer.pop_batch(timeout=0.0)
+
+    assert received is not None
+    assert received.captured_at == pytest.approx(123.5)
+    np.testing.assert_array_equal(received.samples, samples)
+    buffer.task_done()
+
+
+def test_bounded_beat_event_buffer_reports_overload_and_keeps_order() -> None:
+    events = BoundedBeatEventBuffer(max_events=2)
+    events.push(BeatEvent(1, 1.0, 0.5))
+    events.push(BeatEvent(2, 2.0, 0.6))
+    events.push(BeatEvent(3, 3.0, 0.7))
+
+    assert events.dropped_count == 1
+    assert events.pending_count == 2
+    assert [event.sequence for event in events.drain()] == [2, 3]
+    assert events.pending_count == 0
 
 
 def test_native_results_accept_named_fields() -> None:

@@ -50,6 +50,19 @@ function formatMilliseconds(value: number | null | undefined) {
   return `${minutes}:${seconds}`
 }
 
+function scheduleSyncClick(context: AudioContext, at: number) {
+  const oscillator = context.createOscillator()
+  const gain = context.createGain()
+  oscillator.frequency.value = 880
+  gain.gain.setValueAtTime(0.0001, at)
+  gain.gain.exponentialRampToValueAtTime(0.12, at + 0.004)
+  gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.055)
+  oscillator.connect(gain)
+  gain.connect(context.destination)
+  oscillator.start(at)
+  oscillator.stop(at + 0.06)
+}
+
 type SpotifySliderKey = "position" | "volume"
 type SpotifySliderCommand = {
   queuedValue: number | null
@@ -67,6 +80,13 @@ function AudioInputPanelView() {
   const [saving, setSaving] = useState(false)
   const [source, setSource] = useState<AudioSourceValue>("auto")
   const [sourceSaving, setSourceSaving] = useState(false)
+  const [syncOffsetDraft, setSyncOffsetDraft] = useState(0)
+  const [syncOffsetSaving, setSyncOffsetSaving] = useState(false)
+  const [syncCalibrationRunning, setSyncCalibrationRunning] = useState(false)
+  const syncAudioContext = useRef<AudioContext | null>(null)
+  const syncClickTimer = useRef<number | null>(null)
+  const syncStopTimer = useRef<number | null>(null)
+  const syncNextClickAt = useRef(0)
   const [spotify, setSpotify] = useState<SpotifyStatusResponse | null>(null)
   const [spotifyCommandBusy, setSpotifyCommandBusy] = useState(false)
   const [spotifyPositionDraft, setSpotifyPositionDraft] = useState<number | null>(null)
@@ -119,6 +139,7 @@ function AudioInputPanelView() {
     try {
       const next = await dashboardApi.getAudioSettings()
       setResponse(next)
+      setSyncOffsetDraft(next.sync_offset_ms)
       updateSpotifyStatus(next.spotify)
       if (next.bluetooth) replaceStatus(next.bluetooth)
       if (next.bluetooth?.adapter_alias) setBluetoothAlias(next.bluetooth.adapter_alias)
@@ -154,12 +175,88 @@ function AudioInputPanelView() {
     }
   }, [updateSpotifyStatus])
 
+  useEffect(() => () => {
+    if (syncClickTimer.current !== null) window.clearInterval(syncClickTimer.current)
+    if (syncStopTimer.current !== null) window.clearTimeout(syncStopTimer.current)
+    syncClickTimer.current = null
+    syncStopTimer.current = null
+    const context = syncAudioContext.current
+    syncAudioContext.current = null
+    if (context) {
+      void context.close()
+      void dashboardApi.setAudioSyncCalibration(false).catch(() => undefined)
+    }
+  }, [])
+
+  const startSyncCalibration = async () => {
+    if (syncCalibrationRunning) return
+    let context: AudioContext | null = null
+    try {
+      context = new window.AudioContext()
+      await context.resume()
+      const session = await dashboardApi.setAudioSyncCalibration(true)
+      if (session.start_at_ms === null) throw new Error("The calibration clock did not start.")
+      syncAudioContext.current = context
+      syncNextClickAt.current = session.start_at_ms
+      syncClickTimer.current = window.setInterval(() => {
+        const now = Date.now()
+        while (syncNextClickAt.current < now + 120) {
+          if (syncNextClickAt.current >= now - 40) {
+            const when = context!.currentTime + (syncNextClickAt.current - now) / 1000
+            scheduleSyncClick(context!, when)
+          }
+          syncNextClickAt.current += 500
+        }
+      }, 25)
+      setSyncCalibrationRunning(true)
+      syncStopTimer.current = window.setTimeout(() => {
+        void stopSyncCalibration()
+      }, 45_000)
+    } catch (error) {
+      if (context) void context.close()
+      toast.error(error instanceof Error ? error.message : "Could not start sync calibration.")
+    }
+  }
+
+  const stopSyncCalibration = async () => {
+    if (syncClickTimer.current !== null) window.clearInterval(syncClickTimer.current)
+    if (syncStopTimer.current !== null) window.clearTimeout(syncStopTimer.current)
+    syncClickTimer.current = null
+    syncStopTimer.current = null
+    const context = syncAudioContext.current
+    syncAudioContext.current = null
+    if (context) await context.close()
+    setSyncCalibrationRunning(false)
+    try {
+      await dashboardApi.setAudioSyncCalibration(false)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not stop sync calibration.")
+    }
+  }
+
+  const saveSyncOffset = async () => {
+    if (syncOffsetSaving) return
+    setSyncOffsetSaving(true)
+    try {
+      const next = await dashboardApi.setAudioSyncOffset(syncOffsetDraft)
+      setResponse(next)
+      setSyncOffsetDraft(next.sync_offset_ms)
+      toast.success("Sync offset saved for this audio route.")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Sync offset could not be saved.")
+    } finally {
+      setSyncOffsetSaving(false)
+    }
+  }
+
   const saveSource = async () => {
     if (sourceSaving || source === response?.source) return
+    if (syncCalibrationRunning) await stopSyncCalibration()
     setSourceSaving(true)
     try {
       const next = await dashboardApi.setAudioSource(source)
       setResponse(next)
+      setSyncOffsetDraft(next.sync_offset_ms)
       updateSpotifyStatus(next.spotify)
       if (next.bluetooth) replaceStatus(next.bluetooth)
       setOutputVolumeDraft(next.bluetooth?.output_volume ?? null)
@@ -263,7 +360,7 @@ function AudioInputPanelView() {
     action: BluetoothAction,
     operation: () => Promise<BluetoothStatusResponse>,
   ) => {
-    void runBluetoothAction(action, operation)
+    void runBluetoothAction(action, operation, undefined, () => void load())
   }
 
   const save = async ({ selected }: InputFormValues) => {
@@ -272,6 +369,7 @@ function AudioInputPanelView() {
     try {
       const next = await dashboardApi.selectAudioDevice(selected)
       setResponse(next)
+      setSyncOffsetDraft(next.sync_offset_ms)
       updateSpotifyStatus(next.spotify)
       if (next.bluetooth) replaceStatus(next.bluetooth)
       setOutputVolumeDraft(next.bluetooth?.output_volume ?? null)
@@ -415,6 +513,33 @@ function AudioInputPanelView() {
                 </div>
               ) : <p className="text-sm text-muted-foreground">No PipeWire output devices were found.</p>}
               <p className="text-xs text-muted-foreground">The output volume is the Pi’s software level. The connected speaker may have a separate hardware volume.</p>
+            </CardContent>
+          </Card>
+
+          <Card className="border-white/5 bg-card/80">
+            <CardHeader>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <CardTitle className="flex items-center gap-2"><AudioLinesIcon className="size-4 text-fuchsia-300" />Audio-to-LED sync</CardTitle>
+                  <CardDescription>Compare the repeating strip flash with the audible click, then save an offset for this input and output route.</CardDescription>
+                </div>
+                <Badge variant={syncCalibrationRunning ? "default" : "outline"}>{syncCalibrationRunning ? "Calibrating" : "Ready"}</Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="truncate text-xs text-muted-foreground" title={response?.sync_route}>Route: {response?.sync_route ?? "Loading route…"}</p>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3 text-sm"><span>Sync offset</span><span className="font-mono tabular-nums">{syncOffsetDraft > 0 ? "+" : ""}{Math.round(syncOffsetDraft)} ms</span></div>
+                <Slider aria-label="Audio to LED sync offset" min={-500} max={500} step={5} value={[syncOffsetDraft]} onValueChange={(value) => setSyncOffsetDraft(firstSliderValue(value))} />
+                <div className="flex justify-between text-[11px] text-muted-foreground"><span>LED earlier</span><span>LED later</span></div>
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                {syncCalibrationRunning
+                  ? <Button variant="outline" className="flex-1" onClick={() => void stopSyncCalibration()}><PauseIcon />Stop calibration</Button>
+                  : <Button variant="outline" className="flex-1" disabled={!response?.monitoring} onClick={() => void startSyncCalibration()}><PlayIcon />Play sync cue</Button>}
+                <Button className="flex-1" disabled={syncOffsetSaving || Math.round(syncOffsetDraft) === Math.round(response?.sync_offset_ms ?? 0)} onClick={() => void saveSyncOffset()}><SaveIcon />{syncOffsetSaving ? "Saving…" : "Save offset"}</Button>
+              </div>
+              <p className="text-xs text-muted-foreground">Positive values delay the LEDs. Sync settings are saved separately for each active input and output route.</p>
             </CardContent>
           </Card>
 

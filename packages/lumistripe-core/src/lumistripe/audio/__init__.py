@@ -4,8 +4,9 @@
 # provide a sounddevice-compatible implementation.
 import importlib as importlib
 
+from .beat import BeatClockTracker
 from .calibration import calibrate_audio_input, recommend_audio_calibration
-from .capture import AudioInput, BoundedAudioBatchBuffer
+from .capture import AudioInput, BoundedAudioBatchBuffer, BoundedBeatEventBuffer
 from .config import (
     AUDIO_FRESH_SECONDS,
     BAND_LIMITS_HZ,
@@ -43,6 +44,8 @@ from .types import (
     AudioProcessorStats,
     AudioSnapshot,
     BandTuple,
+    BeatClockState,
+    BeatEvent,
     MusicFeatures,
 )
 
@@ -70,7 +73,11 @@ __all__ = [
     "AudioSource",
     "AudioState",
     "BandTuple",
+    "BeatClockState",
+    "BeatClockTracker",
+    "BeatEvent",
     "BoundedAudioBatchBuffer",
+    "BoundedBeatEventBuffer",
     "HardwareGainController",
     "HardwareGainStatus",
     "MusicFeatures",

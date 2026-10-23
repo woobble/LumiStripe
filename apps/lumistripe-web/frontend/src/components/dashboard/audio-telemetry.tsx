@@ -29,6 +29,15 @@ export const emptyTelemetry: AudioTelemetry = {
   beat: false,
   beat_strength: 0,
   bpm: 0,
+  bpm_confidence: 0,
+  beat_phase: 0,
+  beat_index: 0,
+  next_beat_in_ms: null,
+  beat_event_sequence: 0,
+  dropped_beat_events: 0,
+  pending_beat_events: 0,
+  sync_offset_ms: 0,
+  sync_route: "mic|unknown|default",
   estimated_noise_floor: 0,
   configured_noise_floor: 0.015,
   normalization_gain: 1,
@@ -223,6 +232,12 @@ export function AudioTelemetryCards({
             <div className="rounded-xl bg-white/[0.035] p-3 text-center"><ActivityIcon className="mx-auto mb-1 size-4" /><p className="font-semibold">{telemetry.normalization_gain.toFixed(2)}×</p><p className="text-[11px] text-muted-foreground">Auto gain</p></div>
             <div className="rounded-xl bg-white/[0.035] p-3 text-center"><GaugeIcon className="mx-auto mb-1 size-4" /><p className="font-semibold">{telemetry.hardware_gain_value == null ? "—" : `${Math.round(telemetry.hardware_gain_value * 100)}%`}</p><p className="text-[11px] text-muted-foreground">Hardware gain</p></div>
             <div className="rounded-xl bg-white/[0.035] p-3 text-center"><GaugeIcon className="mx-auto mb-1 size-4" /><p className="font-semibold">{percent(telemetry.musical_impact)}%</p><p className="text-[11px] text-muted-foreground">Musical impact</p></div>
+          </div>
+          <div className="space-y-2 rounded-xl border border-white/5 bg-white/[0.025] p-3">
+            <div className="flex items-center justify-between gap-3 text-sm"><span>Beat phase</span><span className="font-mono tabular-nums">{percent(telemetry.beat_phase / 1)}% · {Math.round(telemetry.bpm_confidence * 100)}% confidence</span></div>
+            <div className="h-2 overflow-hidden rounded-full bg-white/5"><div className="h-full rounded-full bg-fuchsia-400 transition-[width] duration-75" style={{ width: `${percent(telemetry.beat_phase) || 0.5}%` }} /></div>
+            <div className="flex flex-wrap justify-between gap-x-4 gap-y-1 text-[11px] text-muted-foreground"><span>Next beat {telemetry.next_beat_in_ms === null ? "—" : `${Math.round(telemetry.next_beat_in_ms)} ms`}</span><span>Event #{telemetry.beat_event_sequence}</span><span>{telemetry.dropped_beat_events} dropped · {telemetry.pending_beat_events} queued</span></div>
+            <p className="truncate text-[11px] text-muted-foreground">Route {telemetry.sync_route} · offset {telemetry.sync_offset_ms > 0 ? "+" : ""}{Math.round(telemetry.sync_offset_ms)} ms</p>
           </div>
           <div>
             <div className="mb-1.5 flex justify-between text-xs"><span>Program reference</span><span className="text-muted-foreground">{telemetry.program_loudness.toFixed(3)}</span></div>

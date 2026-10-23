@@ -29,6 +29,15 @@ export interface AudioTelemetry {
   beat: boolean
   beat_strength: number
   bpm: number
+  bpm_confidence: number
+  beat_phase: number
+  beat_index: number
+  next_beat_in_ms: number | null
+  beat_event_sequence: number
+  dropped_beat_events: number
+  pending_beat_events: number
+  sync_offset_ms: number
+  sync_route: string
   estimated_noise_floor: number
   configured_noise_floor: number
   normalization_gain: number

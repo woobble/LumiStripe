@@ -325,6 +325,8 @@ const audioSettingsSchema = z.object({
   devices: z.array(audioDeviceSchema),
   settings: audioTuningSchema,
   configured_noise_floor: z.number(),
+  sync_route: z.string().optional().default("mic|unknown|default"),
+  sync_offset_ms: z.number().min(-500).max(500).optional().default(0),
   hardware_gain_supported: z.boolean(),
   hardware_gain_writable: z.boolean(),
   hardware_gain_backend: z.string().nullable().optional(),
@@ -416,6 +418,15 @@ const audioTelemetrySchema = z.object({
   beat: z.boolean(),
   beat_strength: z.number(),
   bpm: z.number(),
+  bpm_confidence: z.number().min(0).max(1).optional().default(0),
+  beat_phase: z.number().min(0).max(1).optional().default(0),
+  beat_index: z.number().int().optional().default(0),
+  next_beat_in_ms: z.number().nonnegative().nullable().optional().default(null),
+  beat_event_sequence: z.number().int().optional().default(0),
+  dropped_beat_events: z.number().int().nonnegative().optional().default(0),
+  pending_beat_events: z.number().int().nonnegative().optional().default(0),
+  sync_offset_ms: z.number().min(-500).max(500).optional().default(0),
+  sync_route: z.string().optional().default("mic|unknown|default"),
   estimated_noise_floor: z.number(),
   configured_noise_floor: z.number(),
   normalization_gain: z.number(),
@@ -549,6 +560,20 @@ export const dashboardApi = {
       body: JSON.stringify({ save }),
     }, dashboardStateSchema),
   getAudioSettings: () => request("/api/audio/settings", undefined, audioSettingsSchema),
+  setAudioSyncOffset: (offsetMs: number) =>
+    request("/api/audio/sync-offset", {
+      method: "PUT",
+      body: JSON.stringify({ offset_ms: offsetMs }),
+    }, audioSettingsSchema),
+  setAudioSyncCalibration: (active: boolean) =>
+    request("/api/audio/sync-calibration", {
+      method: "POST",
+      body: JSON.stringify({ active }),
+    }, z.object({
+      start_at_ms: z.number().int().nullable().optional().default(null),
+      sync_route: z.string(),
+      sync_offset_ms: z.number().min(-500).max(500),
+    }).strict()),
   setAudioSource: (source: "auto" | "off" | "demo" | "mic" | "bluetooth" | "spotify") =>
     request("/api/audio/source", {
       method: "PUT",

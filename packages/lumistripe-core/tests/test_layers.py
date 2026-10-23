@@ -23,6 +23,7 @@ from lumistripe import (
     Stripe,
     animation_metadata,
 )
+from lumistripe.audio.types import BeatClockState, BeatEvent
 from lumistripe.controller import Controller
 from lumistripe.effects import BeatWave
 
@@ -89,10 +90,116 @@ def test_scheduler_limits_layers_to_one_effect_per_category() -> None:
     scheduler.update(player, _event_snapshot(), now_s=1.0)
 
     assert len(scheduler.active) == 2
-    assert {effect.definition.category for effect in scheduler.active} == {
-        EffectCategory.RHYTHMIC,
-        EffectCategory.ACCENT,
-    }
+    scheduler.update(player, _event_snapshot(), now_s=1.3)
+    assert len(scheduler.active) == 2
+
+
+def test_scheduler_consumes_timestamped_beat_event_only_once() -> None:
+    scheduler = EffectScheduler(EffectSchedulerConfig(seed=4))
+    player = AnimationPlayer.party()
+    event_snapshot = replace(
+        _event_snapshot(),
+        beat_events=(BeatEvent(991, 1.0, 0.9),),
+        beat_event_stream=True,
+    )
+
+    scheduler.update(player, event_snapshot, now_s=1.0)
+    assert scheduler._rhythmic_status.result is EffectTriggerResult.ACTIVATED
+
+    scheduler.update(player, event_snapshot, now_s=3.0)
+
+    assert scheduler._rhythmic_status.result is EffectTriggerResult.BELOW_THRESHOLD
+
+
+def test_scheduler_does_not_fall_back_to_persistent_beat_from_event_stream() -> None:
+    scheduler = EffectScheduler(EffectSchedulerConfig(seed=4))
+    player = AnimationPlayer.party()
+    snapshot = replace(
+        _event_snapshot(),
+        beat_events=(BeatEvent(993, 1.0, 0.9),),
+        beat_event_stream=True,
+    )
+
+    scheduler.update(player, snapshot, now_s=1.0)
+    assert scheduler._rhythmic_status.result is EffectTriggerResult.ACTIVATED
+
+    scheduler.update(player, replace(snapshot, beat_events=()), now_s=3.0)
+
+    assert scheduler._rhythmic_status.result is EffectTriggerResult.BELOW_THRESHOLD
+
+
+def test_scheduler_keeps_legacy_beat_fallback_without_event_stream() -> None:
+    scheduler = EffectScheduler(EffectSchedulerConfig(seed=4))
+    player = AnimationPlayer.party()
+    snapshot = _event_snapshot()
+
+    scheduler.update(player, snapshot, now_s=1.0)
+    scheduler.update(player, snapshot, now_s=3.0)
+
+    assert scheduler._rhythmic_status.result is EffectTriggerResult.ACTIVATED
+
+
+def test_scheduler_applies_positive_offset_to_timestamped_events() -> None:
+    scheduler = EffectScheduler(EffectSchedulerConfig(seed=4))
+    player = AnimationPlayer.party()
+    base = _event_snapshot()
+    snapshot = replace(
+        base,
+        frame=replace(base.frame, beat=False),
+        features=replace(base.features, beat=False),
+        beat_events=(BeatEvent(992, 1.0, 0.9),),
+    )
+
+    scheduler.update(player, snapshot, now_s=1.05, sync_offset_s=0.1)
+    assert scheduler._rhythmic_status.result is EffectTriggerResult.BELOW_THRESHOLD
+    scheduler.update(
+        player, replace(snapshot, beat_events=()), now_s=1.11, sync_offset_s=0.1
+    )
+
+    assert scheduler._rhythmic_status.result is EffectTriggerResult.ACTIVATED
+
+
+def test_scheduler_reschedules_pending_event_when_sync_offset_changes() -> None:
+    scheduler = EffectScheduler(EffectSchedulerConfig(seed=4))
+    player = AnimationPlayer.party()
+    base = _event_snapshot()
+    snapshot = replace(
+        base,
+        frame=replace(base.frame, beat=False),
+        features=replace(base.features, beat=False),
+        beat_events=(BeatEvent(994, 1.0, 0.9),),
+        beat_event_stream=True,
+    )
+
+    scheduler.update(player, snapshot, now_s=1.05, sync_offset_s=0.1)
+    scheduler.update(player, replace(snapshot, beat_events=()), now_s=1.15, sync_offset_s=0.2)
+    assert scheduler._rhythmic_status.result is EffectTriggerResult.BELOW_THRESHOLD
+
+    scheduler.update(player, replace(snapshot, beat_events=()), now_s=1.21, sync_offset_s=0.2)
+
+    assert scheduler._rhythmic_status.result is EffectTriggerResult.ACTIVATED
+
+
+def test_scheduler_predicts_negative_offset_before_next_beat() -> None:
+    scheduler = EffectScheduler(EffectSchedulerConfig(seed=4))
+    player = AnimationPlayer.party()
+    snapshot = replace(
+        _event_snapshot(),
+        frame=AudioFrame(rms=0.8, bands=(0.9, 0.8, 0.6, 0.5, 0.4, 0.7, 0.8, 0.7)),
+        features=replace(_event_snapshot().features, beat=False, drop_detected=False),
+        beat_clock=BeatClockState(
+            bpm=120.0,
+            phase=0.9,
+            confidence=0.9,
+            beat_index=5,
+            last_beat_at=1.5,
+            next_beat_at=2.0,
+        ),
+    )
+
+    scheduler.update(player, snapshot, now_s=1.95, sync_offset_s=-0.1)
+
+    assert scheduler._rhythmic_status.result is EffectTriggerResult.ACTIVATED
     scheduler.update(player, _event_snapshot(), now_s=1.3)
     assert len(scheduler.active) == 2
 

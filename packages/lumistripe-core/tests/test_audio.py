@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 from lumistripe.audio import (
@@ -449,6 +451,68 @@ def test_audio_state_waits_for_full_fft_window() -> None:
     assert state.frame().fresh is True
     assert state.stats().fft_count == 1
     assert state.stats().samples_seen == FFT_SIZE
+
+
+def test_audio_state_emits_capture_timestamped_beat_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lumistripe.audio import dsp
+
+    class FakeProcessor:
+        def __init__(self, config, sample_rate):
+            del config, sample_rate
+            self.sequence = 0
+
+        def feed_samples(self, samples):
+            del samples
+            self.sequence += 1
+
+        def frame(self):
+            return {
+                "rms": 0.5,
+                "bands": [0.5] * 8,
+                "beat": True,
+                "beat_strength": 0.8,
+                "sequence": self.sequence,
+            }
+
+        def features(self):
+            return {
+                "bpm": 120.0,
+                "energy": 0.5,
+                "bass": 0.5,
+                "brightness": 0.5,
+                "onset_strength": 0.8,
+                "dynamic_range": 0.5,
+                "beat": True,
+                "beat_strength": 0.8,
+                "bands": [0.5] * 8,
+                "bass_energy": 0.5,
+                "mid_energy": 0.5,
+                "treble_energy": 0.5,
+                "spectral_centroid": 0.5,
+                "spectral_flux": 0.5,
+                "beat_confidence": 0.8,
+                "rolling_loudness": 0.5,
+                "silence": False,
+                "drop_detected": False,
+                "section_change": False,
+                "program_loudness": 0.5,
+                "musical_impact": 0.7,
+            }
+
+    monkeypatch.setattr(dsp, "_audio", SimpleNamespace(AudioProcessor=FakeProcessor))
+    state = dsp.AudioState()
+
+    state.feed_samples(np.ones(512, dtype=np.float32), captured_at=123.25)
+    state.feed_samples(np.ones(512, dtype=np.float32), captured_at=124.0)
+    events = state.take_beat_events()
+
+    assert state.frame().timestamp == pytest.approx(124.0)
+    assert [event.sequence for event in events] == [1, 2]
+    assert [event.timestamp for event in events] == pytest.approx([123.25, 124.0])
+    assert all(event.strength == pytest.approx(0.8) for event in events)
+    assert state.take_beat_events() == ()
 
 
 def test_audio_state_uses_configured_fft_hop() -> None:

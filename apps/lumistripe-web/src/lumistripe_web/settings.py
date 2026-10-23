@@ -21,7 +21,7 @@ from lumistripe.playback import (
 )
 from lumistripe_app_support import build_audio_config
 
-SETTINGS_VERSION = 5
+SETTINGS_VERSION = 6
 PROFILE_NAMES = ("primary", "secondary")
 StripeLayout = Literal["mirrored", "continuous", "independent"]
 StripeBackend = Literal["spi", "gpio"]
@@ -261,6 +261,7 @@ class DashboardSettings:
     )
     selected_audio_device: str | None = None
     audio_profiles: dict[str, AudioTuningProfile] = field(default_factory=dict)
+    audio_sync_offsets_ms: dict[str, float] = field(default_factory=dict)
     stripe_topology: StripeTopologySettings | None = None
     restore_last_state: bool = False
     remembered_playback: StartupPlaybackSettings = field(
@@ -293,9 +294,9 @@ class CalibrationSettingsStore:
             if not isinstance(payload, dict):
                 raise TypeError("settings must be an object")
             version = payload.get("version")
-            if version not in {1, 2, 3, 4, SETTINGS_VERSION}:
+            if version not in {1, 2, 3, 4, 5, SETTINGS_VERSION}:
                 raise ValueError(
-                    f"expected settings version 1, 2, 3, 4, or {SETTINGS_VERSION}"
+                    f"expected settings version 1, 2, 3, 4, 5, or {SETTINGS_VERSION}"
                 )
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             return settings, f"Dashboard settings are invalid: {exc}"
@@ -320,7 +321,7 @@ class CalibrationSettingsStore:
                 except (TypeError, ValueError) as exc:
                     warnings.append(str(exc))
 
-        if payload.get("version") in {2, 3, 4, SETTINGS_VERSION}:
+        if payload.get("version") in {2, 3, 4, 5, SETTINGS_VERSION}:
             selected = payload.get("selected_audio_device")
             if selected is not None and not isinstance(selected, str):
                 warnings.append("selected_audio_device must be a string or null")
@@ -358,13 +359,13 @@ class CalibrationSettingsStore:
                     except (TypeError, ValueError) as exc:
                         warnings.append(str(exc))
 
-        if payload.get("version") in {3, 4, SETTINGS_VERSION} and "stripes" in payload:
+        if payload.get("version") in {3, 4, 5, SETTINGS_VERSION} and "stripes" in payload:
             try:
                 settings.stripe_topology = _decode_stripes(payload["stripes"])
             except (TypeError, ValueError) as exc:
                 warnings.append(str(exc))
 
-        if payload.get("version") in {4, SETTINGS_VERSION}:
+        if payload.get("version") in {4, 5, SETTINGS_VERSION}:
             restore = payload.get("restore_last_state", False)
             if not isinstance(restore, bool):
                 warnings.append("restore_last_state must be a boolean")
@@ -385,6 +386,24 @@ class CalibrationSettingsStore:
                     settings.remembered_playback = remembered_settings
                 except (TypeError, ValueError) as exc:
                     warnings.append(str(exc))
+
+        if payload.get("version") == SETTINGS_VERSION:
+            encoded_offsets = payload.get("audio_sync_offsets_ms", {})
+            if not isinstance(encoded_offsets, dict):
+                warnings.append("audio_sync_offsets_ms must be an object")
+            else:
+                for route, value in encoded_offsets.items():
+                    try:
+                        if not isinstance(route, str) or not route:
+                            raise TypeError("audio sync route keys must be non-empty strings")
+                        if isinstance(value, bool) or not isinstance(value, (int, float)):
+                            raise TypeError(f"audio sync offset for {route!r} must be a number")
+                        offset = float(value)
+                        if not -500.0 <= offset <= 500.0:
+                            raise ValueError(f"audio sync offset for {route!r} must be between -500 and 500 ms")
+                        settings.audio_sync_offsets_ms[route] = offset
+                    except (TypeError, ValueError) as exc:
+                        warnings.append(str(exc))
 
         warning = None
         if warnings:
@@ -408,6 +427,11 @@ class CalibrationSettingsStore:
         settings, _ = self.load_all()
         settings.selected_audio_device = selected_device
         settings.audio_profiles = dict(profiles)
+        self.save_all(settings)
+
+    def save_audio_sync_offset(self, route: str, offset_ms: float) -> None:
+        settings, _ = self.load_all()
+        settings.audio_sync_offsets_ms[route] = offset_ms
         self.save_all(settings)
 
     def save_stripes(self, topology: StripeTopologySettings) -> None:
@@ -446,6 +470,7 @@ class CalibrationSettingsStore:
                 }
                 for device_name, profile in settings.audio_profiles.items()
             },
+            "audio_sync_offsets_ms": dict(settings.audio_sync_offsets_ms),
             "stripes": (
                 None
                 if settings.stripe_topology is None

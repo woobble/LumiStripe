@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from random import Random
@@ -7,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from ..audio.types import AudioFrame, AudioSnapshot
+from ..audio.types import AudioFrame, AudioSnapshot, BeatEvent
 from ..color import Rgba
 from ..controller import BrightnessController, Controller
 from ..stripe import Stripe
@@ -90,6 +91,8 @@ class EffectSchedulerConfig:
     accent_cooldown_s: float = 1.25
     max_active_effects: int = 2
     max_overlay_strength: float = 0.75
+    subdivisions_per_beat: int = 1
+    clock_confidence_threshold: float = 0.65
     seed: int | None = None
 
     def __post_init__(self) -> None:
@@ -103,6 +106,10 @@ class EffectSchedulerConfig:
             raise ValueError("max_active_effects must be one or two")
         if not 0.0 < self.max_overlay_strength <= 1.0:
             raise ValueError("max_overlay_strength must be between zero and one")
+        if self.subdivisions_per_beat not in (1, 2, 4):
+            raise ValueError("subdivisions_per_beat must be 1, 2, or 4")
+        if not 0.0 <= self.clock_confidence_threshold <= 1.0:
+            raise ValueError("clock_confidence_threshold must be between zero and one")
 
 
 @dataclass(slots=True)
@@ -159,6 +166,15 @@ class EffectScheduler:
     _rhythmic_status: EffectTriggerStatus = field(init=False)
     _accent_status: EffectTriggerStatus = field(init=False)
     _response: float = field(default=0.65, init=False)
+    _last_beat_event_sequence: int = field(default=0, init=False)
+    _pending_beats: deque[tuple[float, float, BeatEvent | None]] = field(
+        default_factory=deque, init=False
+    )
+    _last_clock_subdivision_scheduled: int | None = field(default=None, init=False)
+    _recent_predicted_due: deque[float] = field(
+        default_factory=lambda: deque(maxlen=8), init=False
+    )
+    _sync_offset_s: float = field(default=0.0, init=False)
 
     def __post_init__(self) -> None:
         self._rng = Random(self.config.seed)
@@ -187,6 +203,11 @@ class EffectScheduler:
         self._last_accent_at_s = -9999.0
         self._recent.clear()
         self._last_update_at_s = 0.0
+        self._last_beat_event_sequence = 0
+        self._pending_beats.clear()
+        self._last_clock_subdivision_scheduled = None
+        self._recent_predicted_due.clear()
+        self._sync_offset_s = 0.0
         self._reset_trigger_statuses()
 
     def clear_active(self) -> None:
@@ -237,8 +258,23 @@ class EffectScheduler:
         *,
         now_s: float,
         allow_triggers: bool = True,
+        sync_offset_s: float = 0.0,
     ) -> None:
         self._last_update_at_s = now_s
+        if sync_offset_s != self._sync_offset_s:
+            self._pending_beats = deque(
+                sorted(
+                    (
+                        (event.timestamp + sync_offset_s, strength, event)
+                        for _, strength, event in self._pending_beats
+                        if event is not None
+                    ),
+                    key=lambda item: item[0],
+                )
+            )
+            self._recent_predicted_due.clear()
+            self._last_clock_subdivision_scheduled = None
+            self._sync_offset_s = sync_offset_s
         self.active = [
             effect
             for effect in self.active
@@ -250,14 +286,102 @@ class EffectScheduler:
             features.beat_strength,
             features.beat_confidence,
         )
-        beat = snapshot.frame.beat or features.beat
+        new_events = tuple(
+            event
+            for event in snapshot.beat_events
+            if event.sequence > self._last_beat_event_sequence
+        )
+        for event in new_events:
+            self._last_beat_event_sequence = max(
+                self._last_beat_event_sequence, event.sequence
+            )
+            due_at = event.timestamp + sync_offset_s
+            if not any(
+                abs(predicted_at - due_at) <= 0.12
+                for predicted_at in self._recent_predicted_due
+            ):
+                matching_prediction = next(
+                    (
+                        index
+                        for index, (pending_at, _, pending_event) in enumerate(
+                            self._pending_beats
+                        )
+                        if pending_event is None
+                        and abs(pending_at - due_at) <= 0.12
+                    ),
+                    None,
+                )
+                if matching_prediction is not None:
+                    pending = list(self._pending_beats)
+                    del pending[matching_prediction]
+                    self._pending_beats = deque(pending)
+                self._enqueue_beat(due_at, event.strength, event)
+
+        predicted_beat = False
+        clock = snapshot.beat_clock
+        if (
+            clock is not None
+            and clock.bpm > 0.0
+            and clock.last_beat_at is not None
+            and clock.confidence >= self.config.clock_confidence_threshold
+        ):
+            division = self.config.subdivisions_per_beat
+            position = min(division - 1, int(clock.phase * division))
+            subdivision = clock.beat_index * division + position
+            next_subdivision = subdivision + 1
+            if (
+                self._last_clock_subdivision_scheduled is None
+                or next_subdivision > self._last_clock_subdivision_scheduled
+            ):
+                period = 60.0 / clock.bpm
+                target_at = clock.last_beat_at + (position + 1) * period / division
+                due_at = target_at + sync_offset_s
+                if not self._has_nearby_prediction(due_at):
+                    self._enqueue_beat(due_at, 0.8, None)
+                self._last_clock_subdivision_scheduled = next_subdivision
+
+        due_event: BeatEvent | None = None
+        due_strength = 0.0
+        due_found = False
+        while self._pending_beats and self._pending_beats[0][0] <= now_s:
+            due_at, due_strength, due_event = self._pending_beats.popleft()
+            due_found = True
+            if due_event is None:
+                self._recent_predicted_due.append(due_at)
+            break
+        predicted_beat = due_found and due_event is None
+        event_due = due_found
+        legacy_beat = (
+            not snapshot.beat_event_stream
+            and not snapshot.beat_events
+            and (snapshot.frame.beat or features.beat)
+        )
+        beat = event_due or legacy_beat
+        beat_strength = max(beat_strength, due_strength)
         impact = snapshot.musical_impact
+        trigger_snapshot = snapshot
+        if event_due:
+            trigger_snapshot = replace(
+                snapshot,
+                frame=replace(
+                    snapshot.frame,
+                    beat=True,
+                    beat_strength=max(snapshot.frame.beat_strength, due_strength),
+                ),
+            )
         rhythmic_result = self._trigger_result(
             category=EffectCategory.RHYTHMIC,
             triggered=(
                 beat
                 and beat_strength >= self.config.beat_confidence_threshold
-                and impact >= self.impact_threshold
+                and (
+                    impact >= self.impact_threshold
+                    or (
+                        predicted_beat
+                        and clock is not None
+                        and clock.confidence >= self.config.clock_confidence_threshold
+                    )
+                )
             ),
             now_s=now_s,
             last_trigger_at_s=self._last_rhythmic_at_s,
@@ -265,7 +389,9 @@ class EffectScheduler:
             allow_triggers=allow_triggers,
         )
         if rhythmic_result is EffectTriggerResult.ACTIVATED:
-            activated = self._activate(player, RHYTHMIC_EFFECTS, snapshot, now_s)
+            activated = self._activate(
+                player, RHYTHMIC_EFFECTS, trigger_snapshot, now_s
+            )
             rhythmic_result = (
                 EffectTriggerResult.ACTIVATED
                 if activated
@@ -314,6 +440,21 @@ class EffectScheduler:
             1.0 if features.drop_detected else features.onset_strength,
             1.0 if features.drop_detected else self.config.onset_threshold,
             accent_result,
+        )
+
+    def _enqueue_beat(
+        self, due_at: float, strength: float, event: BeatEvent | None
+    ) -> None:
+        if len(self._pending_beats) >= 64:
+            self._pending_beats.popleft()
+        items = [*self._pending_beats, (due_at, strength, event)]
+        items.sort(key=lambda item: item[0])
+        self._pending_beats = deque(items)
+
+    def _has_nearby_prediction(self, due_at: float) -> bool:
+        return any(abs(predicted_at - due_at) <= 0.12 for predicted_at in self._recent_predicted_due) or any(
+            event is None and abs(predicted_at - due_at) <= 0.12
+            for predicted_at, _, event in self._pending_beats
         )
 
     def _trigger_result(
@@ -431,6 +572,7 @@ class LayeredRenderer:
         *,
         now_s: float,
         flush: bool = True,
+        sync_offset_s: float = 0.0,
     ) -> float:
         if self._base_buffer is None or self._base_buffer.length != controller.length:
             self._base_buffer = Stripe(controller.length)
@@ -447,6 +589,7 @@ class LayeredRenderer:
             snapshot,
             now_s=now_s,
             allow_triggers=not player.transition_active and not transitioning,
+            sync_offset_s=sync_offset_s,
         )
 
         while len(self._effect_buffers) < len(self.scheduler.active):

@@ -5,8 +5,11 @@ from __future__ import annotations
 import threading
 import time
 from collections import deque
+from dataclasses import dataclass
+from itertools import count
+from math import isfinite
 from types import TracebackType
-from typing import Any, Self
+from typing import Any, Self, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -21,7 +24,50 @@ from .devices import (
 )
 from .dsp import AudioState
 from .protocols import AudioBatchBuffer
-from .types import AudioFrame, AudioInputHealth, MusicFeatures
+from .types import AudioFrame, AudioInputHealth, BeatEvent, MusicFeatures
+
+_BEAT_EVENT_SEQUENCE = count(1)
+
+
+@dataclass(frozen=True, slots=True)
+class CapturedAudioBatch:
+    samples: npt.NDArray[np.float32]
+    captured_at: float | None
+
+
+class BoundedBeatEventBuffer:
+    """Thread-safe drop-oldest event stream with explicit overload accounting."""
+
+    def __init__(self, max_events: int = 64) -> None:
+        if max_events <= 0:
+            raise ValueError("max_events must be greater than zero")
+        self._max_events = max_events
+        self._items: deque[BeatEvent] = deque()
+        self._lock = threading.Lock()
+        self._dropped = 0
+
+    def push(self, event: BeatEvent) -> None:
+        with self._lock:
+            if len(self._items) >= self._max_events:
+                self._items.popleft()
+                self._dropped += 1
+            self._items.append(event)
+
+    def drain(self) -> tuple[BeatEvent, ...]:
+        with self._lock:
+            events = tuple(self._items)
+            self._items.clear()
+            return events
+
+    @property
+    def dropped_count(self) -> int:
+        with self._lock:
+            return self._dropped
+
+    @property
+    def pending_count(self) -> int:
+        with self._lock:
+            return len(self._items)
 
 
 class BoundedAudioBatchBuffer:
@@ -31,13 +77,15 @@ class BoundedAudioBatchBuffer:
         if max_batches <= 0:
             raise ValueError("max_batches must be greater than zero")
         self._max_batches = max_batches
-        self._items: deque[npt.NDArray[np.float32]] = deque()
+        self._items: deque[CapturedAudioBatch] = deque()
         self._condition = threading.Condition()
         self._unfinished = 0
         self._dropped = 0
         self._closed = False
 
-    def push(self, samples: npt.NDArray[np.float32]) -> bool:
+    def push(
+        self, samples: npt.NDArray[np.float32], captured_at: float | None = None
+    ) -> bool:
         with self._condition:
             if self._closed:
                 return False
@@ -45,12 +93,16 @@ class BoundedAudioBatchBuffer:
                 self._items.popleft()
                 self._unfinished -= 1
                 self._dropped += 1
-            self._items.append(samples)
+            self._items.append(CapturedAudioBatch(samples, captured_at))
             self._unfinished += 1
             self._condition.notify_all()
             return True
 
     def pop(self, timeout: float | None = None) -> npt.NDArray[np.float32] | None:
+        batch = self.pop_batch(timeout)
+        return None if batch is None else batch.samples
+
+    def pop_batch(self, timeout: float | None = None) -> CapturedAudioBatch | None:
         with self._condition:
             deadline = None if timeout is None else time.monotonic() + timeout
             while not self._items:
@@ -110,6 +162,7 @@ class AudioInput:
         self._state_lock = threading.Lock()
         self._health_lock = threading.Lock()
         self._buffer = buffer or BoundedAudioBatchBuffer(buffer_size)
+        self._beat_events = BoundedBeatEventBuffer()
         self._closed = False
         self._worker_error: str | None = None
         self._callback_count = 0
@@ -130,7 +183,8 @@ class AudioInput:
         self._worker.start()
 
         def callback(indata: Any, frames: int, time_info: Any, status: Any) -> None:
-            del frames, time_info
+            callback_time = time.monotonic()
+            captured_at = _capture_timestamp(time_info, frames, sample_rate, callback_time)
             try:
                 samples = np.asarray(indata, dtype=np.float32)
                 if samples.ndim == 2:
@@ -154,7 +208,13 @@ class AudioInput:
                 if status:
                     self._status_count += 1
                     self._last_status = str(status)
-            self._buffer.push(batch)
+                push = cast(Any, self._buffer).push
+                try:
+                    push(batch, captured_at)
+                except TypeError:
+                    # Older injected buffers implement the original one-argument
+                    # callback contract; they still receive samples safely.
+                    push(batch)
 
         try:
             self._stream = sounddevice.InputStream(
@@ -191,12 +251,22 @@ class AudioInput:
 
     def _process_batches(self) -> None:
         while True:
-            batch = self._buffer.pop()
-            if batch is None:
+            pop_batch = getattr(self._buffer, "pop_batch", None)
+            item = pop_batch() if callable(pop_batch) else self._buffer.pop()
+            if item is None:
                 return
+            if isinstance(item, CapturedAudioBatch):
+                samples = item.samples
+                captured_at = item.captured_at
+            else:
+                samples = item
+                captured_at = None
             try:
                 with self._state_lock:
-                    self._state.feed_samples(batch)
+                    self._state.feed_samples(samples, captured_at=captured_at)
+                    events = self._state.take_beat_events()
+                for event in events:
+                    self._publish_beat_event(event)
             except Exception as exc:  # noqa: BLE001 - DSP backend errors vary
                 with self._health_lock:
                     self._worker_error = f"audio DSP worker failed: {exc}"
@@ -232,6 +302,21 @@ class AudioInput:
         with self._state_lock:
             return self._state.music_features()
 
+    def read_beat_events(self) -> tuple[BeatEvent, ...]:
+        """Consume pending onset events once for the single playback reader."""
+        self._wait_for_worker()
+        return self._beat_events.drain()
+
+    def _publish_beat_event(self, event: BeatEvent) -> None:
+        self._beat_events.push(
+            BeatEvent(
+                sequence=next(_BEAT_EVENT_SEQUENCE),
+                timestamp=event.timestamp,
+                strength=event.strength,
+                origin=event.origin,
+            )
+        )
+
     def health(self) -> AudioInputHealth:
         self._wait_for_worker()
         with self._health_lock:
@@ -246,16 +331,20 @@ class AudioInput:
                 if last_callback_at is None
                 else max(0.0, time.monotonic() - last_callback_at)
             )
-            return AudioInputHealth(
-                callback_count=callback_count,
-                status_count=status_count,
-                last_status=last_status,
-                last_callback_age=last_callback_age,
-                last_frame_age=self._state.frame_age(),
-                dropped_batches=self._buffer.dropped_count,
-                worker_error=worker_error,
-                processor=self._state.stats(),
-            )
+            frame_age = self._state.frame_age()
+            processor = self._state.stats()
+        return AudioInputHealth(
+            callback_count=callback_count,
+            status_count=status_count,
+            last_status=last_status,
+            last_callback_age=last_callback_age,
+            last_frame_age=frame_age,
+            dropped_batches=self._buffer.dropped_count,
+            dropped_beat_events=self._beat_events.dropped_count,
+            pending_beat_events=self._beat_events.pending_count,
+            worker_error=worker_error,
+            processor=processor,
+        )
 
     def reconfigure(self, config: AudioConfig) -> None:
         self._wait_for_worker()
@@ -290,4 +379,23 @@ class AudioInput:
         self.close()
 
 
-__all__ = ["AudioInput", "BoundedAudioBatchBuffer"]
+def _capture_timestamp(time_info: Any, frames: int, sample_rate: float, fallback: float) -> float:
+    """Map PortAudio's ADC clock into Python's monotonic clock."""
+    try:
+        adc_start = float(time_info.inputBufferAdcTime)
+        callback_time = float(time_info.currentTime)
+        values = (adc_start, callback_time, sample_rate)
+        if frames <= 0 or not all(isfinite(value) for value in values) or sample_rate <= 0:
+            return fallback
+        adc_end = adc_start + max(0, frames - 1) / sample_rate
+        return fallback - (callback_time - adc_end)
+    except (AttributeError, TypeError, ValueError):
+        return fallback
+
+
+__all__ = [
+    "AudioInput",
+    "BoundedAudioBatchBuffer",
+    "BoundedBeatEventBuffer",
+    "CapturedAudioBatch",
+]

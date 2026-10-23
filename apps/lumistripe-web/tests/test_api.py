@@ -333,6 +333,25 @@ def test_audio_settings_api_and_telemetry_websocket(
         assert updated.json()["active_device"] == "2"
         assert updated.json()["settings"]["target_level"] == 0.5
 
+        route = updated.json()["sync_route"]
+        synced = client.put("/api/audio/sync-offset", json={"offset_ms": 100})
+        assert synced.status_code == 200
+        assert synced.json()["sync_route"] == route
+        assert synced.json()["sync_offset_ms"] == 100
+        assert client.put("/api/audio/sync-offset", json={"offset_ms": 501}).status_code == 422
+
+        calibration = client.post(
+            "/api/audio/sync-calibration", json={"active": True}
+        )
+        assert calibration.status_code == 200
+        assert calibration.json()["start_at_ms"] is not None
+        assert calibration.json()["sync_offset_ms"] == 100
+        stopped = client.post(
+            "/api/audio/sync-calibration", json={"active": False}
+        )
+        assert stopped.status_code == 200
+        assert stopped.json()["start_at_ms"] is None
+
         selected = client.put("/api/audio/device", json={"device": "2"})
         assert selected.status_code == 200
         assert selected.json()["active_device"] == "2"

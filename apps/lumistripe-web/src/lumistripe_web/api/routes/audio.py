@@ -13,6 +13,9 @@ from ...contracts.audio import (
     AudioSettingsRequest,
     AudioSettingsResponse,
     AudioSourceRequest,
+    AudioSyncCalibrationRequest,
+    AudioSyncCalibrationResponse,
+    AudioSyncOffsetRequest,
     SpotifyControlRequest,
     SpotifyStatusResponse,
 )
@@ -26,6 +29,27 @@ router = APIRouter()
 @router.get("/api/audio/settings", response_model=AudioSettingsResponse)
 async def audio_settings(request: Request) -> AudioSettingsResponse:
     return runtime_from_request(request).audio_settings()
+
+
+@router.put("/api/audio/sync-offset", response_model=AudioSettingsResponse)
+async def set_audio_sync_offset(
+    request: Request, body: AudioSyncOffsetRequest
+) -> AudioSettingsResponse:
+    return await await_command(
+        runtime_from_request(request).set_audio_sync_offset(body.offset_ms)
+    )
+
+
+@router.post(
+    "/api/audio/sync-calibration",
+    response_model=AudioSyncCalibrationResponse,
+)
+async def set_audio_sync_calibration(
+    request: Request, body: AudioSyncCalibrationRequest
+) -> AudioSyncCalibrationResponse:
+    return await await_command(
+        runtime_from_request(request).set_audio_sync_calibration(body.active)
+    )
 
 
 @router.put("/api/audio/source", response_model=AudioSettingsResponse)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import ModuleType
@@ -17,6 +18,7 @@ from .types import (
     AudioFrame,
     AudioProcessorStats,
     BandTuple,
+    BeatEvent,
     MusicFeatures,
 )
 
@@ -238,6 +240,7 @@ class AudioState:
         self._frame = AudioFrame()
         self._features = MusicFeatures()
         self._last_sequence = 0
+        self._beat_events: deque[BeatEvent] = deque()
 
     def frame(self) -> AudioFrame:
         return self._frame
@@ -281,6 +284,7 @@ class AudioState:
         self._frame = AudioFrame()
         self._features = MusicFeatures()
         self._last_sequence = 0
+        self._beat_events.clear()
 
     def copy(self) -> AudioState:
         clone = object.__new__(AudioState)
@@ -290,9 +294,10 @@ class AudioState:
         clone._frame = self._frame
         clone._features = self._features
         clone._last_sequence = self._last_sequence
+        clone._beat_events = deque(self._beat_events)
         return clone
 
-    def feed_samples(self, samples: npt.ArrayLike) -> None:
+    def feed_samples(self, samples: npt.ArrayLike, *, captured_at: float | None = None) -> None:
         array = np.asarray(samples, dtype=np.float32).reshape(-1)
         if array.size == 0:
             return
@@ -301,8 +306,9 @@ class AudioState:
         frame = NativeFrameResult.from_native(self._processor.frame())
         timestamp = self._frame.timestamp
         fresh = self._frame.fresh
-        if frame.sequence > self._last_sequence:
-            timestamp = time.monotonic()
+        new_frame = frame.sequence > self._last_sequence
+        if new_frame:
+            timestamp = time.monotonic() if captured_at is None else captured_at
             fresh = True
             self._last_sequence = frame.sequence
         self._frame = AudioFrame(
@@ -314,6 +320,15 @@ class AudioState:
             timestamp=timestamp,
             fresh=fresh,
         )
+
+        if new_frame and frame.beat:
+            self._beat_events.append(
+                BeatEvent(
+                    sequence=frame.sequence,
+                    timestamp=timestamp,
+                    strength=max(frame.beat_strength, 0.0),
+                )
+            )
 
         features = NativeFeaturesResult.from_native(self._processor.features())
         self._features = MusicFeatures(
@@ -345,6 +360,11 @@ class AudioState:
             drop_detected=features.drop_detected,
             section_change=features.section_change,
         )
+
+    def take_beat_events(self) -> tuple[BeatEvent, ...]:
+        events = tuple(self._beat_events)
+        self._beat_events.clear()
+        return events
 
 
 __all__ = [

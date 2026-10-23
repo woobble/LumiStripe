@@ -85,6 +85,62 @@ describe("dashboardApi", () => {
     )
   })
 
+  it("saves a route sync offset and starts the sync calibration cue", async () => {
+    const settings = {
+      source: "mic",
+      active_source: "mic",
+      monitoring: true,
+      active_device: "2",
+      fallback_device: "2",
+      active_device_name: "USB Mic",
+      devices: [],
+      settings: {
+        target_level: 0.36,
+        hardware_gain_target: null,
+        noise_floor: 0.015,
+        input_noise_floor: 0.003,
+        dynamic_response: 0.65,
+        rms_attack: 0.45,
+        rms_release: 0.15,
+        band_attack: 0.55,
+        band_release: 0.12,
+        beat_release: 0.18,
+        energy_threshold: 0.1,
+        onset_threshold: 0.1,
+        beat_density_threshold: 0.15,
+        brightness_threshold: 0.2,
+        spectral_balance_ratio: 0.1,
+      },
+      configured_noise_floor: 0.015,
+      sync_route: "mic|USB Mic|analog-output",
+      sync_offset_ms: 125,
+      hardware_gain_supported: false,
+      hardware_gain_writable: false,
+      hardware_gain_backend: null,
+      hardware_gain_control: null,
+      hardware_gain_value: null,
+      hardware_gain_error: null,
+    }
+    fetchMock.mockReturnValueOnce(jsonResponse(settings))
+
+    expect((await dashboardApi.setAudioSyncOffset(125)).sync_offset_ms).toBe(125)
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/audio/sync-offset", expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ offset_ms: 125 }),
+    }))
+
+    fetchMock.mockReturnValueOnce(jsonResponse({
+      start_at_ms: 1_800_000_000_000,
+      sync_route: settings.sync_route,
+      sync_offset_ms: 125,
+    }))
+    expect((await dashboardApi.setAudioSyncCalibration(true)).start_at_ms).toBe(1_800_000_000_000)
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/audio/sync-calibration", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ active: true }),
+    }))
+  })
+
   it("normalizes legacy Bluetooth responses without capability metadata", async () => {
     fetchMock.mockReturnValueOnce(jsonResponse({
       available: true,

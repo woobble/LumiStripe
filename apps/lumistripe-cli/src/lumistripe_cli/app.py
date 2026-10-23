@@ -291,12 +291,30 @@ class HeadlessApp:
         if source is AudioSource.MIC and self.audio_input is not None:
             audio_frame = self.audio_input.read()
             health = self._audio_health()
+            read_events = getattr(self.audio_input, "read_beat_events", None)
+            beat_events = read_events() if callable(read_events) else ()
+            beat_event_stream = callable(read_events)
             self.audio_frame = audio_frame
-            self.music_features = self.audio_input.read_features() if audio_frame.fresh else MusicFeatures()
+            self.music_features = (
+                self.audio_input.read_features()
+                if audio_frame.fresh or beat_events
+                else MusicFeatures()
+            )
             self.audio_snapshot = (
-                AudioSnapshot.from_parts(audio_frame, self.music_features, health)
+                AudioSnapshot.from_parts(
+                    audio_frame,
+                    self.music_features,
+                    health,
+                    beat_events=beat_events,
+                    beat_event_stream=beat_event_stream,
+                )
                 if audio_frame.fresh
-                else AudioSnapshot.silence(frame=audio_frame, health=health)
+                or beat_events
+                else AudioSnapshot.silence(
+                    frame=audio_frame,
+                    health=health,
+                    beat_event_stream=beat_event_stream,
+                )
             )
         elif source is AudioSource.DEMO:
             self.audio_snapshot = demo_snapshot(self.demo_tick)

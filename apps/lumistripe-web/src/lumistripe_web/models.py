@@ -417,6 +417,8 @@ class AudioSettingsResponse(BaseModel):
     devices: tuple[AudioDeviceOption, ...] = ()
     settings: AudioTuningValues = AudioTuningValues()
     configured_noise_floor: float = 0.015
+    sync_route: str = "mic|unknown|default"
+    sync_offset_ms: float = Field(default=0.0, ge=-500.0, le=500.0)
     hardware_gain_supported: bool = False
     hardware_gain_writable: bool = False
     hardware_gain_backend: str | None = None
@@ -431,6 +433,20 @@ class AudioSettingsResponse(BaseModel):
 class AudioSettingsRequest(BaseModel):
     device: str = Field(min_length=1)
     settings: AudioTuningValues
+
+
+class AudioSyncOffsetRequest(BaseModel):
+    offset_ms: float = Field(ge=-500.0, le=500.0)
+
+
+class AudioSyncCalibrationRequest(BaseModel):
+    active: bool
+
+
+class AudioSyncCalibrationResponse(BaseModel):
+    start_at_ms: int | None = None
+    sync_route: str
+    sync_offset_ms: float = Field(ge=-500.0, le=500.0)
 
 
 class AudioResetRequest(BaseModel):
@@ -531,6 +547,15 @@ class AudioTelemetry(BaseModel):
     beat: bool = False
     beat_strength: float = Field(default=0.0, ge=0.0, le=1.0)
     bpm: float = 0.0
+    bpm_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    beat_phase: float = Field(default=0.0, ge=0.0, lt=1.0)
+    beat_index: int = 0
+    next_beat_in_ms: float | None = Field(default=None, ge=0.0)
+    beat_event_sequence: int = 0
+    dropped_beat_events: int = 0
+    pending_beat_events: int = 0
+    sync_offset_ms: float = Field(default=0.0, ge=-500.0, le=500.0)
+    sync_route: str = "mic|unknown|default"
     estimated_noise_floor: float = Field(default=0.0, ge=0.0, le=1.0)
     configured_noise_floor: float = Field(default=0.015, ge=0.0, le=1.0)
     normalization_gain: float = Field(default=1.0, ge=0.0)

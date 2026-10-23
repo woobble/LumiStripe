@@ -8,7 +8,7 @@ import numpy as np
 import numpy.typing as npt
 
 from .config import AudioConfig
-from .types import AudioFrame, AudioInputHealth, AudioSnapshot, MusicFeatures
+from .types import AudioFrame, AudioInputHealth, AudioSnapshot, BeatEvent, MusicFeatures
 
 
 class AudioProcessor(Protocol):
@@ -51,16 +51,20 @@ class AudioSource(Protocol):
 
     def health(self) -> AudioInputHealth: ...
 
+    def read_beat_events(self) -> tuple[BeatEvent, ...]: ...
+
     def close(self) -> None: ...
 
 
 def snapshot_from_source(source: AudioSource) -> AudioSnapshot:
     """Build an immutable snapshot from a capture source."""
-
+    read_events = getattr(source, "read_beat_events", None)
     return AudioSnapshot.from_parts(
         source.read(),
         source.read_features(),
         source.health(),
+        beat_events=read_events() if callable(read_events) else (),
+        beat_event_stream=callable(read_events),
     )
 
 

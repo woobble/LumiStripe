@@ -65,6 +65,8 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "AudioConfig": ("lumistripe.audio.config", "AudioConfig"),
     "AudioFeatures": ("lumistripe.audio.types", "AudioFeatures"),
     "AudioFrame": ("lumistripe.audio.types", "AudioFrame"),
+    "BeatClockState": ("lumistripe.audio.types", "BeatClockState"),
+    "BeatEvent": ("lumistripe.audio.types", "BeatEvent"),
     "AudioInput": ("lumistripe.audio.capture", "AudioInput"),
     "AudioInputDevice": ("lumistripe.audio.types", "AudioInputDevice"),
     "AudioInputHealth": ("lumistripe.audio.types", "AudioInputHealth"),

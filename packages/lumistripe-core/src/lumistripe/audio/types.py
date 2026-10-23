@@ -26,6 +26,28 @@ class AudioFrame:
 
 
 @dataclass(frozen=True, slots=True)
+class BeatEvent:
+    """A single onset with its audio capture time in the monotonic clock domain."""
+
+    sequence: int
+    timestamp: float
+    strength: float
+    origin: str = "bass-transient"
+
+
+@dataclass(frozen=True, slots=True)
+class BeatClockState:
+    """A continuously advancing estimate of the musical beat timeline."""
+
+    bpm: float = 120.0
+    phase: float = 0.0
+    confidence: float = 0.0
+    beat_index: int = 0
+    next_beat_at: float | None = None
+    last_beat_at: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class MusicFeatures:
     bpm: float = 120.0
     bpm_confidence: float = 0.0
@@ -108,6 +130,8 @@ class AudioInputHealth:
     last_callback_age: float | None = None
     last_frame_age: float | None = None
     dropped_batches: int = 0
+    dropped_beat_events: int = 0
+    pending_beat_events: int = 0
     worker_error: str | None = None
     processor: AudioProcessorStats = field(default_factory=AudioProcessorStats)
 
@@ -121,16 +145,21 @@ class _AudioSnapshotSilence:
             *,
             frame: AudioFrame | None = None,
             health: AudioInputHealth | None = None,
+            beat_event_stream: bool = False,
         ) -> AudioSnapshot:
             if frame is None:
-                return owner(health=health)
+                return owner(health=health, beat_event_stream=beat_event_stream)
             silent = replace(
                 AudioFrame(),
                 sequence=frame.sequence,
                 timestamp=frame.timestamp,
                 fresh=False,
             )
-            return owner(frame=silent, health=health)
+            return owner(
+                frame=silent,
+                health=health,
+                beat_event_stream=beat_event_stream,
+            )
 
         return create
 
@@ -140,6 +169,9 @@ class AudioSnapshot:
     frame: AudioFrame = field(default_factory=AudioFrame)
     features: MusicFeatures = field(default_factory=MusicFeatures)
     health: AudioInputHealth | None = None
+    beat_events: tuple[BeatEvent, ...] = ()
+    beat_clock: BeatClockState | None = None
+    beat_event_stream: bool = False
 
     silence = _AudioSnapshotSilence()
 
@@ -149,12 +181,22 @@ class AudioSnapshot:
         frame: AudioFrame,
         features: MusicFeatures | None = None,
         health: AudioInputHealth | None = None,
+        beat_events: tuple[BeatEvent, ...] = (),
+        beat_clock: BeatClockState | None = None,
+        beat_event_stream: bool = False,
     ) -> AudioSnapshot:
         if features is None:
             from .dsp import features_from_frame
 
             features = features_from_frame(frame)
-        return cls(frame=frame, features=features, health=health)
+        return cls(
+            frame=frame,
+            features=features,
+            health=health,
+            beat_events=beat_events,
+            beat_clock=beat_clock,
+            beat_event_stream=beat_event_stream,
+        )
 
     @property
     def fresh(self) -> bool:
@@ -288,5 +330,7 @@ __all__ = [
     "AudioProcessorStats",
     "AudioSnapshot",
     "BandTuple",
+    "BeatClockState",
+    "BeatEvent",
     "MusicFeatures",
 ]
