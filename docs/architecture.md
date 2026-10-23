@@ -75,9 +75,10 @@ or hardware-output pressure.
 The core package keeps compatibility exports in `lumistripe.__init__`, while
 new integrations should use narrower modules:
 
-- `lumistripe.audio.types`, `.config`, `.capture`, `.dsp`, `.devices`, and
-  `.calibration`; capture callbacks enqueue bounded sample batches and the DSP
-  worker owns native processing state
+- `lumistripe.audio.types`, `.config`, `.capture`, `.dsp`, `.devices`,
+  `.calibration`, and `.structure`; capture callbacks enqueue bounded sample
+  batches, the DSP worker owns native processing state, and the structure
+  tracker classifies timestamped features independently of playback/rendering
 - `lumistripe.playback.config`, `.activity`, `.state`, `.renderer`, and
   `.engine`; `PlaybackDecision` and `RenderPlan` are pure policy outputs
 - `lumistripe.animation.catalog`; `AnimationDefinition` is the single

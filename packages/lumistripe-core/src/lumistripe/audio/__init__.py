@@ -34,6 +34,7 @@ from .protocols import (
     AudioSource,
     snapshot_from_source,
 )
+from .structure import MusicStructurePhase, MusicStructureState, MusicStructureTracker
 from .types import (
     NUM_BANDS,
     AudioCalibrationResult,
@@ -81,6 +82,9 @@ __all__ = [
     "HardwareGainController",
     "HardwareGainStatus",
     "MusicFeatures",
+    "MusicStructurePhase",
+    "MusicStructureState",
+    "MusicStructureTracker",
     "NativeFeaturesResult",
     "NativeFrameResult",
     "NativeStatsResult",
