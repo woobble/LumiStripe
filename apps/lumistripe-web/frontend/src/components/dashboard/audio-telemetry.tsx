@@ -93,7 +93,7 @@ export function useAudioTelemetry() {
   const [history, setHistory] = useState<AudioHistoryPoint[]>([])
   const lastSample = useRef(0)
 
-  const { data } = useWebSocketStream<AudioTelemetry>({
+  const { data, status: connection } = useWebSocketStream<AudioTelemetry>({
     url: audioWebsocketUrl(),
     parse: parseAudioMessage,
   })
@@ -113,7 +113,7 @@ export function useAudioTelemetry() {
     }])
   }, [data])
 
-  return { telemetry, history }
+  return { telemetry, history, connection }
 }
 
 export function AudioHistoryChart({ history }: { history: AudioHistoryPoint[] }) {

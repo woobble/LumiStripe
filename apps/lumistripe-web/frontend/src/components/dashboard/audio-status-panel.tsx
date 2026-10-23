@@ -2,10 +2,17 @@ import { Link } from "react-router"
 import { memo } from "react"
 import { AudioLinesIcon, Settings2Icon } from "lucide-react"
 
+import { Badge } from "@/components/ui/badge"
+import { Card, CardContent } from "@/components/ui/card"
 import { AudioHistoryChart, AudioTelemetryCards, useAudioTelemetry } from "@/components/dashboard/audio-telemetry"
 
-function AudioStatusPanelView() {
-  const { telemetry, history } = useAudioTelemetry()
+function AudioStatusPanelView({ audioStatus }: { audioStatus: string }) {
+  const { telemetry, history, connection } = useAudioTelemetry()
+  const connectionLabel = connection === "connected"
+    ? "Audio stream connected"
+    : connection === "connecting"
+      ? "Connecting to audio stream"
+      : "Audio stream reconnecting"
 
   return (
     <div className="space-y-4 pb-4">
@@ -18,6 +25,18 @@ function AudioStatusPanelView() {
           <Settings2Icon className="size-4" />
         </Link>
       </div>
+
+      <Card className="border-white/5 bg-card/80">
+        <CardContent className="flex flex-wrap items-center justify-between gap-2 pt-4 text-sm">
+          <div className="space-y-1">
+            <p className="font-medium" aria-live="polite">{audioStatus}</p>
+            <p className="text-xs text-muted-foreground">{connectionLabel}</p>
+          </div>
+          <Badge variant={telemetry.fresh ? "default" : "outline"}>
+            {telemetry.fresh ? "Samples active" : "Waiting for samples"}
+          </Badge>
+        </CardContent>
+      </Card>
 
       <AudioTelemetryCards telemetry={telemetry} />
       <AudioHistoryChart history={history} />

@@ -8,7 +8,13 @@ import lumistripe_web.runtime as runtime_module
 import lumistripe_web.runtime.worker as worker_module
 import pytest
 from fastapi.testclient import TestClient
-from lumistripe import AudioInputDevice
+from lumistripe import (
+    AudioFrame,
+    AudioInputDevice,
+    AudioInputHealth,
+    AudioProcessorStats,
+    MusicFeatures,
+)
 from lumistripe_web.api import encode_preview_frame
 from lumistripe_web.api.routes import system as system_routes
 from lumistripe_web.app import build_parser, create_app, main
@@ -434,6 +440,72 @@ def test_audio_settings_api_and_telemetry_websocket(
             assert telemetry["drop_accent_reason"] is None
             assert telemetry["calibration_output_underflow_count"] == 0
             assert telemetry["calibration_output_callback_error_count"] == 0
+
+
+def test_audio_websocket_streams_live_microphone_telemetry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class FakeAudioInput:
+        def __init__(self) -> None:
+            self.sequence = 0
+
+        def device_name(self) -> str:
+            return "USB Mic"
+
+        def read(self) -> AudioFrame:
+            self.sequence += 1
+            return AudioFrame(
+                rms=0.31,
+                bands=(0.1, 0.2, 0.3, 0.4, 0.5, 0.4, 0.3, 0.2),
+                sequence=self.sequence,
+                fresh=True,
+            )
+
+        def read_features(self) -> MusicFeatures:
+            return MusicFeatures()
+
+        def health(self) -> AudioInputHealth:
+            return AudioInputHealth(
+                processor=AudioProcessorStats(
+                    input_rms=0.42,
+                    input_peak=0.61,
+                    program_loudness=0.28,
+                    musical_impact=0.35,
+                )
+            )
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        runtime_module,
+        "list_input_device_details",
+        lambda: [AudioInputDevice(index=2, name="USB Mic")],
+    )
+    audio_input = FakeAudioInput()
+    settings = RuntimeSettings(
+        pixels=8,
+        audio_source="mic",
+        audio_device="2",
+        settings_file=tmp_path / "settings.json",
+    )
+    app = create_app(
+        settings,
+        runtime_factory=lambda runtime_settings: LumiStripeRuntime(
+            runtime_settings,
+            audio_factory=lambda _device, _config: audio_input,
+        ),
+    )
+
+    with TestClient(app) as client, client.websocket_connect("/ws/audio") as websocket:
+        telemetry = websocket.receive_json()
+        assert telemetry["fresh"] is True
+        assert telemetry["sequence"] > 0
+        assert telemetry["input_level"] == pytest.approx(0.42)
+        assert telemetry["input_peak"] == pytest.approx(0.61)
+        assert telemetry["processed_level"] == pytest.approx(0.31)
+        assert telemetry["bands"] == [0.1, 0.2, 0.3, 0.4, 0.5, 0.4, 0.3, 0.2]
 
 
 def test_audio_source_and_bluetooth_api(

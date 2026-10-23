@@ -113,6 +113,10 @@ class MockWebSocket {
 
   close() {}
 
+  disconnect() {
+    this.onclose?.(new CloseEvent("close", { code: 1006 }))
+  }
+
   emit(state: unknown) {
     this.onmessage?.(new MessageEvent("message", { data: JSON.stringify(state) }))
   }
@@ -554,6 +558,7 @@ describe("App", () => {
     await user.click(screen.getByRole("link", { name: "Audio" }))
     expect(await screen.findByRole("heading", { name: "Audio status" })).toBeInTheDocument()
     expect(screen.getByText("Live input")).toBeInTheDocument()
+    expect(screen.getByText("No audio source active.")).toBeInTheDocument()
     expect(screen.queryByText("USB Mic")).not.toBeInTheDocument()
 
     const audioSocket = await waitFor(() => {
@@ -561,6 +566,7 @@ describe("App", () => {
       if (!socket) throw new Error("Audio WebSocket was not created")
       return socket
     })
+    expect(await screen.findByText("Audio stream connected")).toBeInTheDocument()
     act(() => audioSocket.emit({
       sequence: 4,
       fresh: true,
@@ -601,6 +607,42 @@ describe("App", () => {
     expect(screen.getByText("72%")).toBeInTheDocument()
     expect(screen.getByText("3")).toBeInTheDocument()
     expect(screen.getByText("Skipped · Beat clock confidence was too low")).toBeInTheDocument()
+
+    act(() => audioSocket.emit({
+      sequence: 5,
+      fresh: true,
+      input_level: 0.18,
+      processed_level: 0.12,
+      bands: [0.05, 0.1, 0.15, 0.2, 0.25, 0.2, 0.15, 0.1],
+      beat: false,
+      beat_strength: 0.1,
+      bpm: 96,
+      estimated_noise_floor: 0.01,
+      configured_noise_floor: 0.015,
+      normalization_gain: 1.1,
+      program_loudness: 0.2,
+      musical_impact: 0.3,
+      gate: "calm",
+      gate_preview: true,
+      gate_energy: 0.1,
+      gate_onset: 0.08,
+      gate_beat_density: 0.02,
+      gate_brightness: 0.12,
+      music_structure_phase: "groove",
+      music_structure_confidence: 0.5,
+      music_structure_buildup_progress: 0.2,
+      music_structure_drop_count: 3,
+      music_structure_active: false,
+      music_structure_fresh: false,
+      drop_accent_status: "idle",
+      drop_accent_reason: null,
+      health: "healthy",
+    }))
+    expect(screen.getByText("18%")).toBeInTheDocument()
+    expect(screen.getByText("96 BPM")).toBeInTheDocument()
+
+    act(() => audioSocket.disconnect())
+    expect(await screen.findByText("Audio stream reconnecting")).toBeInTheDocument()
   })
 
   it("keeps audio tuning behind Setup and resets the active microphone profile", async () => {
