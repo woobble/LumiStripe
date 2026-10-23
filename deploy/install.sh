@@ -486,12 +486,14 @@ render_service_unit() {
   local rendered_file
   local project_replacement
   local home_replacement
+  local python_replacement
   local user_replacement
   local group_replacement
   local uid_replacement
   rendered_file="$(mktemp /tmp/lumistripe-service.XXXXXX)"
   project_replacement="$(printf '%s' "$PROJECT_DIR" | sed 's/[&|\\]/\\&/g')"
   home_replacement="$(printf '%s' "$SERVICE_HOME" | sed 's/[&|\\]/\\&/g')"
+  python_replacement="$(printf '%s' "$PYTHON_VERSION" | sed 's/[&|\\]/\\&/g')"
   user_replacement="$(printf '%s' "$SERVICE_USER" | sed 's/[&|\\]/\\&/g')"
   group_replacement="$(printf '%s' "$SERVICE_GROUP" | sed 's/[&|\\]/\\&/g')"
   uid_replacement="$(printf '%s' "$SERVICE_UID" | sed 's/[&|\\]/\\&/g')"
@@ -501,6 +503,7 @@ render_service_unit() {
     -e "s|@LUMI_SERVICE_GROUP@|$group_replacement|g" \
     -e "s|@LUMI_PROJECT_DIR@|$project_replacement|g" \
     -e "s|@LUMI_HOME@|$home_replacement|g" \
+    -e "s|@LUMI_PYTHON_VERSION@|$python_replacement|g" \
     -e "s|@LUMI_SERVICE_UID@|$uid_replacement|g" \
     "$PROJECT_DIR/deploy/lumistripe-web.service" > "$rendered_file"
   if grep -q '@LUMI_[A-Z_]*@' "$rendered_file"; then

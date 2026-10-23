@@ -42,6 +42,10 @@ service remains disabled. Existing
 official builds are downloaded on the Pi and are not bundled or redistributed
 by LumiStripe.
 
+The systemd service uses the same Python version selected by the installer and
+syncs only production dependencies. Set `LUMI_PYTHON_VERSION` when installing
+or updating to choose a different supported interpreter version.
+
 The installer uses the non-root account that invoked `sudo` (or the checkout
 owner when run from a root shell). For another account or checkout, set
 `LUMI_SERVICE_USER` and/or `LUMI_PROJECT_DIR`:
