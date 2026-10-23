@@ -69,6 +69,9 @@ class StripeTopology(BaseModel):
     outputs: tuple[StripeOutputConfig, ...] = Field(default=(), max_length=2)
     power_budget_enabled: bool = False
     power_budget_watts: float | None = Field(default=None, gt=0.0)
+    shared_supply_enabled: bool = False
+    supply_capacity_watts: float = Field(default=200.0, gt=0.0)
+    pi_reserve_watts: float = Field(default=15.0, ge=0.0)
 
     @model_validator(mode="after")
     def validate_power_budget(self) -> StripeTopology:
@@ -90,11 +93,15 @@ class PowerBudgetState(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     enabled: bool = False
-    budget_watts: float | None = Field(default=None, gt=0.0)
+    budget_watts: float | None = Field(default=None, ge=0.0)
     estimated_watts: float = Field(default=0.0, ge=0.0)
     applied_scale: float = Field(default=1.0, ge=0.0, le=1.0)
     limiting_output_id: str | None = None
     outputs: tuple[PowerOutputState, ...] = ()
+    shared_supply_enabled: bool = False
+    supply_capacity_watts: float | None = Field(default=None, gt=0.0)
+    pi_reserve_watts: float | None = Field(default=None, ge=0.0)
+    available_led_watts: float | None = Field(default=None, ge=0.0)
 
 
 class StripePlaybackState(BaseModel):
@@ -191,6 +198,9 @@ class StripeTopologyRequest(BaseModel):
     outputs: tuple[StripeOutputConfig, ...] = Field(max_length=2)
     power_budget_enabled: bool = False
     power_budget_watts: float | None = Field(default=None, gt=0.0)
+    shared_supply_enabled: bool = False
+    supply_capacity_watts: float = Field(default=200.0, gt=0.0)
+    pi_reserve_watts: float = Field(default=15.0, ge=0.0)
 
     @model_validator(mode="after")
     def validate_power_budget(self) -> StripeTopologyRequest:

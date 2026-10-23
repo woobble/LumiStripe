@@ -198,7 +198,14 @@ export function StatusPanel({ controller, onLogout }: { controller: DashboardCon
         </CardHeader>
         <CardContent className="grid grid-cols-2 gap-2">
           <Metric icon={ZapIcon} label="Estimated load" value={formatWatts(state.power_budget.estimated_watts)} />
-          <Metric icon={GaugeIcon} label="Configured cap" value={formatWatts(state.power_budget.budget_watts)} />
+          <Metric icon={GaugeIcon} label="Effective LED cap" value={formatWatts(state.power_budget.budget_watts)} />
+          {state.power_budget.shared_supply_enabled && (
+            <>
+              <Metric icon={ZapIcon} label="PSU capacity" value={formatWatts(state.power_budget.supply_capacity_watts)} />
+              <Metric icon={GaugeIcon} label="Pi + buck reserve" value={formatWatts(state.power_budget.pi_reserve_watts)} />
+              <Metric icon={GaugeIcon} label="Available to LEDs" value={formatWatts(state.power_budget.available_led_watts)} />
+            </>
+          )}
           <Metric icon={GaugeIcon} label="Applied scale" value={`${Math.round(state.power_budget.applied_scale * 100)}%`} />
           <Metric
             icon={ZapIcon}

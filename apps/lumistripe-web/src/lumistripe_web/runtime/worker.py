@@ -193,6 +193,33 @@ class RuntimeUnavailableError(RuntimeError):
     pass
 
 
+def _power_budget_state_for(
+    topology: StripeTopologySettings,
+    *,
+    estimated_watts: float = 0.0,
+    applied_scale: float = 1.0,
+    limiting_output_id: str | None = None,
+    outputs: tuple[PowerOutputState, ...] = (),
+) -> PowerBudgetState:
+    shared_supply_enabled = topology.shared_supply_enabled
+    return PowerBudgetState(
+        enabled=topology.power_limiting_enabled,
+        budget_watts=topology.effective_power_budget_watts,
+        estimated_watts=estimated_watts,
+        applied_scale=applied_scale,
+        limiting_output_id=limiting_output_id,
+        outputs=outputs,
+        shared_supply_enabled=shared_supply_enabled,
+        supply_capacity_watts=(
+            topology.supply_capacity_watts if shared_supply_enabled else None
+        ),
+        pi_reserve_watts=topology.pi_reserve_watts if shared_supply_enabled else None,
+        available_led_watts=(
+            topology.available_led_watts if shared_supply_enabled else None
+        ),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _FrameTimingStats:
     frame_count: int = 0
@@ -312,10 +339,7 @@ class RuntimeWorker:
         self._preview_sequence = 0
         self._preview_outputs: tuple[bytes, ...] = ()
         self._power_preview_override: tuple[bytes, ...] | None = None
-        self._power_budget_state = PowerBudgetState(
-            enabled=self._topology.power_budget_enabled,
-            budget_watts=self._topology.power_budget_watts,
-        )
+        self._power_budget_state = _power_budget_state_for(self._topology)
         self._snapshot = DashboardState(
             runtime=self.settings.kind,
             mode=PlaybackMode.STATIC,
@@ -1414,10 +1438,7 @@ class RuntimeWorker:
         elif previous.layout != "independent" and topology.layout == "independent":
             self._playbacks.clear()
         self._topology = topology
-        self._power_budget_state = PowerBudgetState(
-            enabled=topology.power_budget_enabled,
-            budget_watts=topology.power_budget_watts,
-        )
+        self._power_budget_state = _power_budget_state_for(topology)
         self._power_preview_override = None
         self._install_topology(built)
         try:
@@ -1525,10 +1546,7 @@ class RuntimeWorker:
                 raise RuntimeCommandError(self._fatal_error) from rollback_exc
             raise RuntimeCommandError(f"temporary configuration failed: {exc}") from exc
         self._topology = topology
-        self._power_budget_state = PowerBudgetState(
-            enabled=topology.power_budget_enabled,
-            budget_watts=topology.power_budget_watts,
-        )
+        self._power_budget_state = _power_budget_state_for(topology)
         self._power_preview_override = None
         self._install_topology(built)
 
@@ -2389,10 +2407,7 @@ profile.audio_config(microphone=True),
         if not gates:
             assert self._controller is not None
             self._controller.flush()
-            self._power_budget_state = PowerBudgetState(
-                enabled=self._topology.power_budget_enabled,
-                budget_watts=self._topology.power_budget_watts,
-            )
+            self._power_budget_state = _power_budget_state_for(self._topology)
             self._power_preview_override = None
             return
 
@@ -2443,12 +2458,11 @@ profile.audio_config(microphone=True),
 
         result = apply_power_budget(
             estimates,
-            enabled=self._topology.power_budget_enabled and not shared_blackout,
-            budget_watts=self._topology.power_budget_watts,
+            enabled=self._topology.power_limiting_enabled and not shared_blackout,
+            budget_watts=self._topology.effective_power_budget_watts,
         )
-        self._power_budget_state = PowerBudgetState(
-            enabled=self._topology.power_budget_enabled,
-            budget_watts=self._topology.power_budget_watts,
+        self._power_budget_state = _power_budget_state_for(
+            self._topology,
             estimated_watts=result.estimated_watts,
             applied_scale=result.applied_scale,
             limiting_output_id=result.limiting_output_id,
@@ -2766,6 +2780,9 @@ profile.audio_config(microphone=True),
             layout=self._topology.layout,
             power_budget_enabled=self._topology.power_budget_enabled,
             power_budget_watts=self._topology.power_budget_watts,
+            shared_supply_enabled=self._topology.shared_supply_enabled,
+            supply_capacity_watts=self._topology.supply_capacity_watts,
+            pi_reserve_watts=self._topology.pi_reserve_watts,
             outputs=tuple(
                 StripeOutputConfig(
                     id=output.id,

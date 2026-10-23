@@ -78,8 +78,8 @@ def apply_power_budget(
 ) -> PowerBudgetResult:
     """Choose one global scale from global and per-output limits."""
 
-    if budget_watts is not None and budget_watts <= 0.0:
-        raise ValueError("budget_watts must be greater than zero")
+    if budget_watts is not None and budget_watts < 0.0:
+        raise ValueError("budget_watts must not be negative")
     output_values = tuple(estimates)
     total_watts = sum(max(0.0, estimate.watts) for estimate in output_values)
     if not enabled:

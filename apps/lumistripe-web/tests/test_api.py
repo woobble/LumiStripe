@@ -253,6 +253,9 @@ def test_stripe_power_budget_api_round_trip_and_validation(tmp_path: Path) -> No
         "layout": "mirrored",
         "power_budget_enabled": True,
         "power_budget_watts": 24.0,
+        "shared_supply_enabled": True,
+        "supply_capacity_watts": 200.0,
+        "pi_reserve_watts": 15.0,
         "outputs": [
             {
                 "id": "primary",
@@ -270,8 +273,14 @@ def test_stripe_power_budget_api_round_trip_and_validation(tmp_path: Path) -> No
         state = applied.json()
         assert state["stripe_topology"]["power_budget_enabled"] is True
         assert state["stripe_topology"]["power_budget_watts"] == 24.0
+        assert state["stripe_topology"]["shared_supply_enabled"] is True
+        assert state["stripe_topology"]["supply_capacity_watts"] == 200.0
+        assert state["stripe_topology"]["pi_reserve_watts"] == 15.0
         assert state["stripe_topology"]["outputs"][0]["voltage_v"] == 5.1
         assert state["power_budget"]["enabled"] is True
+        assert state["power_budget"]["budget_watts"] == 24.0
+        assert state["power_budget"]["available_led_watts"] == 185.0
+        assert state["power_budget"]["supply_capacity_watts"] == 200.0
         assert client.get("/api/stripes").json()["outputs"][0]["power_limit_watts"] == 18.0
 
         invalid = client.put(
@@ -284,6 +293,17 @@ def test_stripe_power_budget_api_round_trip_and_validation(tmp_path: Path) -> No
             },
         )
         assert invalid.status_code == 422
+
+        invalid_supply = client.put(
+            "/api/stripes",
+            json={
+                "layout": "mirrored",
+                "shared_supply_enabled": True,
+                "supply_capacity_watts": 0,
+                "outputs": [],
+            },
+        )
+        assert invalid_supply.status_code == 422
 
 
 def test_audio_settings_api_and_telemetry_websocket(

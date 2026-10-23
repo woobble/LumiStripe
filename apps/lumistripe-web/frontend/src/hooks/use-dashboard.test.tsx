@@ -72,7 +72,17 @@ describe("useDashboard", () => {
     await waitFor(() => expect(result.current.state?.revision).toBe(1))
 
     const { power_budget: _powerBudget, ...legacyState } = initialState
-    act(() => MockWebSocket.instances[0].emit({ ...legacyState, revision: 2 }))
+    const {
+      shared_supply_enabled: _sharedSupplyEnabled,
+      supply_capacity_watts: _supplyCapacityWatts,
+      pi_reserve_watts: _piReserveWatts,
+      ...legacyTopology
+    } = legacyState.stripe_topology
+    act(() => MockWebSocket.instances[0].emit({
+      ...legacyState,
+      stripe_topology: legacyTopology,
+      revision: 2,
+    }))
 
     await waitFor(() => expect(result.current.state?.power_budget).toEqual({
       enabled: false,
@@ -81,7 +91,14 @@ describe("useDashboard", () => {
       applied_scale: 1,
       limiting_output_id: null,
       outputs: [],
+      shared_supply_enabled: false,
+      supply_capacity_watts: null,
+      pi_reserve_watts: null,
+      available_led_watts: null,
     }))
+    expect(result.current.state?.stripe_topology.shared_supply_enabled).toBe(false)
+    expect(result.current.state?.stripe_topology.supply_capacity_watts).toBe(200)
+    expect(result.current.state?.stripe_topology.pi_reserve_watts).toBe(15)
   })
 
   it("marks a dropped socket as reconnecting and opens a replacement", async () => {

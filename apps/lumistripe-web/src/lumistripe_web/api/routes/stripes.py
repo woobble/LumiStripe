@@ -21,6 +21,9 @@ def topology_settings(body: StripeTopologyRequest) -> StripeTopologySettings:
         layout=body.layout,
         power_budget_enabled=body.power_budget_enabled,
         power_budget_watts=body.power_budget_watts,
+        shared_supply_enabled=body.shared_supply_enabled,
+        supply_capacity_watts=body.supply_capacity_watts,
+        pi_reserve_watts=body.pi_reserve_watts,
         outputs=tuple(
             StripeOutputSettings(
                 **output.model_dump(exclude={"last_output_at", "error"})

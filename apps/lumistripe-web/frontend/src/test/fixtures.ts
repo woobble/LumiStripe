@@ -50,6 +50,9 @@ export const initialState: DashboardState = {
     }],
     power_budget_enabled: false,
     power_budget_watts: null,
+    shared_supply_enabled: false,
+    supply_capacity_watts: 200,
+    pi_reserve_watts: 15,
   },
   power_budget: {
     enabled: false,
@@ -58,6 +61,10 @@ export const initialState: DashboardState = {
     applied_scale: 1,
     limiting_output_id: null,
     outputs: [],
+    shared_supply_enabled: false,
+    supply_capacity_watts: null,
+    pi_reserve_watts: null,
+    available_led_watts: null,
   },
   stripe_playback: [{
     stripe_id: "primary", mode: "static", solid_color: "#7C3AED",

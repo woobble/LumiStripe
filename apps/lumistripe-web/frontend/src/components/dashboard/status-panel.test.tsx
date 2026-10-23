@@ -20,12 +20,15 @@ const systemStats: SystemStats = {
   sampled_at: "2026-01-01T00:00:00Z",
 }
 
-function renderStatus(runtime: DashboardState["runtime"]) {
+function renderStatus(
+  runtime: DashboardState["runtime"],
+  powerBudget = initialState.power_budget,
+) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: Infinity } },
   })
   const controller = {
-    state: { ...initialState, runtime },
+    state: { ...initialState, runtime, power_budget: powerBudget },
     connection: "connected",
   } as DashboardController
   return render(
@@ -73,6 +76,27 @@ describe("StatusPanel system resources", () => {
       await vi.advanceTimersByTimeAsync(5000)
     })
     expect(getSystemStats).toHaveBeenCalledTimes(2)
+  })
+
+  it("shows shared supply capacity, Pi reserve, and available LED power", () => {
+    renderStatus("simulation", {
+      ...initialState.power_budget,
+      enabled: true,
+      budget_watts: 185,
+      estimated_watts: 120,
+      applied_scale: 1,
+      shared_supply_enabled: true,
+      supply_capacity_watts: 200,
+      pi_reserve_watts: 15,
+      available_led_watts: 185,
+    })
+
+    expect(screen.getByText("PSU capacity")).toBeInTheDocument()
+    expect(screen.getByText("Pi + buck reserve")).toBeInTheDocument()
+    expect(screen.getByText("Available to LEDs")).toBeInTheDocument()
+    expect(screen.getByText("200.0 W")).toBeInTheDocument()
+    expect(screen.getByText("15.0 W")).toBeInTheDocument()
+    expect(screen.getAllByText("185.0 W")).toHaveLength(2)
   })
 
   it("does not fetch or show host metrics in simulation mode", async () => {

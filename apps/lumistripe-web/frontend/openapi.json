@@ -1454,7 +1454,8 @@
               "applied_scale": 1.0,
               "enabled": false,
               "estimated_watts": 0.0,
-              "outputs": []
+              "outputs": [],
+              "shared_supply_enabled": false
             }
           },
           "recent_frame_miss_rate": {
@@ -1512,7 +1513,10 @@
             "default": {
               "layout": "mirrored",
               "outputs": [],
-              "power_budget_enabled": false
+              "pi_reserve_watts": 15.0,
+              "power_budget_enabled": false,
+              "shared_supply_enabled": false,
+              "supply_capacity_watts": 200.0
             }
           },
           "uptime_seconds": {
@@ -1658,10 +1662,22 @@
             "title": "Applied Scale",
             "type": "number"
           },
+          "available_led_watts": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Available Led Watts"
+          },
           "budget_watts": {
             "anyOf": [
               {
-                "exclusiveMinimum": 0.0,
+                "minimum": 0.0,
                 "type": "number"
               },
               {
@@ -1699,6 +1715,35 @@
             },
             "title": "Outputs",
             "type": "array"
+          },
+          "pi_reserve_watts": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pi Reserve Watts"
+          },
+          "shared_supply_enabled": {
+            "default": false,
+            "title": "Shared Supply Enabled",
+            "type": "boolean"
+          },
+          "supply_capacity_watts": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supply Capacity Watts"
           }
         },
         "title": "PowerBudgetState",
@@ -2247,6 +2292,12 @@
             "title": "Outputs",
             "type": "array"
           },
+          "pi_reserve_watts": {
+            "default": 15.0,
+            "minimum": 0.0,
+            "title": "Pi Reserve Watts",
+            "type": "number"
+          },
           "power_budget_enabled": {
             "default": false,
             "title": "Power Budget Enabled",
@@ -2263,6 +2314,17 @@
               }
             ],
             "title": "Power Budget Watts"
+          },
+          "shared_supply_enabled": {
+            "default": false,
+            "title": "Shared Supply Enabled",
+            "type": "boolean"
+          },
+          "supply_capacity_watts": {
+            "default": 200.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Supply Capacity Watts",
+            "type": "number"
           }
         },
         "title": "StripeTopology",
@@ -2287,6 +2349,12 @@
             "title": "Outputs",
             "type": "array"
           },
+          "pi_reserve_watts": {
+            "default": 15.0,
+            "minimum": 0.0,
+            "title": "Pi Reserve Watts",
+            "type": "number"
+          },
           "power_budget_enabled": {
             "default": false,
             "title": "Power Budget Enabled",
@@ -2303,6 +2371,17 @@
               }
             ],
             "title": "Power Budget Watts"
+          },
+          "shared_supply_enabled": {
+            "default": false,
+            "title": "Shared Supply Enabled",
+            "type": "boolean"
+          },
+          "supply_capacity_watts": {
+            "default": 200.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Supply Capacity Watts",
+            "type": "number"
           }
         },
         "required": [

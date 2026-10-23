@@ -99,6 +99,9 @@ def test_power_budget_round_trip_and_legacy_defaults(tmp_path: Path) -> None:
         layout="mirrored",
         power_budget_enabled=True,
         power_budget_watts=18.5,
+        shared_supply_enabled=True,
+        supply_capacity_watts=200.0,
+        pi_reserve_watts=15.0,
         outputs=(
             StripeOutputSettings(
                 id="left",
@@ -114,6 +117,8 @@ def test_power_budget_round_trip_and_legacy_defaults(tmp_path: Path) -> None:
     loaded, warning = store.load_all()
     assert warning is None
     assert loaded.stripe_topology == topology
+    assert topology.available_led_watts == 185.0
+    assert topology.effective_power_budget_watts == 18.5
     assert json.loads(path.read_text(encoding="utf-8"))["version"] == 5
 
     path.write_text(
@@ -134,6 +139,32 @@ def test_power_budget_round_trip_and_legacy_defaults(tmp_path: Path) -> None:
     assert legacy.stripe_topology == StripeTopologySettings(
         outputs=(StripeOutputSettings(id="legacy", name="Legacy", pixels=10),)
     )
+
+
+def test_shared_supply_budget_can_reach_zero_and_combine_with_led_limit() -> None:
+    shared_only = StripeTopologySettings(
+        shared_supply_enabled=True,
+        supply_capacity_watts=200.0,
+        pi_reserve_watts=15.0,
+    )
+    assert shared_only.effective_power_budget_watts == 185.0
+
+    both_limits = StripeTopologySettings(
+        power_budget_enabled=True,
+        power_budget_watts=100.0,
+        shared_supply_enabled=True,
+        supply_capacity_watts=200.0,
+        pi_reserve_watts=15.0,
+    )
+    assert both_limits.effective_power_budget_watts == 100.0
+
+    reserve_exceeds_capacity = StripeTopologySettings(
+        shared_supply_enabled=True,
+        supply_capacity_watts=200.0,
+        pi_reserve_watts=210.0,
+    )
+    assert reserve_exceeds_capacity.available_led_watts == 0.0
+    assert reserve_exceeds_capacity.effective_power_budget_watts == 0.0
 
 
 def test_invalid_settings_fall_back_to_neutral_with_warning(tmp_path: Path) -> None:

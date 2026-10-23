@@ -222,6 +222,47 @@ def test_power_budget_scales_rendered_frame_without_changing_requested_brightnes
         runtime.stop()
 
 
+@pytest.mark.parametrize(
+    ("supply_capacity_watts", "pi_reserve_watts", "expected_led_watts", "scale"),
+    ((15.6, 15.0, 0.6, 0.5), (15.0, 16.0, 0.0, 0.0)),
+)
+def test_shared_supply_budget_reserves_pi_power_and_scales_leds(
+    tmp_path: Path,
+    supply_capacity_watts: float,
+    pi_reserve_watts: float,
+    expected_led_watts: float,
+    scale: float,
+) -> None:
+    path = tmp_path / "settings.json"
+    CalibrationSettingsStore(path).save_stripes(
+        StripeTopologySettings(
+            outputs=(StripeOutputSettings(id="left", name="Left", pixels=4),),
+            shared_supply_enabled=True,
+            supply_capacity_watts=supply_capacity_watts,
+            pi_reserve_watts=pi_reserve_watts,
+        )
+    )
+    runtime = LumiStripeRuntime(RuntimeSettings(pixels=4, settings_file=path))
+    runtime.start()
+    try:
+        runtime.set_mode(PlaybackMode.SOLID, solid_color="#FFFFFF").result(timeout=1)
+        deadline = time.monotonic() + 1
+        while runtime.snapshot().power_budget.estimated_watts < 1.0:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        state = runtime.snapshot()
+        assert state.power_budget.enabled is True
+        assert state.power_budget.shared_supply_enabled is True
+        assert state.power_budget.supply_capacity_watts == supply_capacity_watts
+        assert state.power_budget.pi_reserve_watts == pi_reserve_watts
+        assert state.power_budget.available_led_watts == pytest.approx(expected_led_watts)
+        assert state.power_budget.budget_watts == pytest.approx(expected_led_watts)
+        assert state.power_budget.applied_scale == pytest.approx(scale)
+        assert runtime.preview_frame().outputs[0][3] == int(255 * scale)
+    finally:
+        runtime.stop()
+
+
 def test_power_budget_uses_tighter_per_output_limit_for_independent_outputs(
     tmp_path: Path,
 ) -> None:

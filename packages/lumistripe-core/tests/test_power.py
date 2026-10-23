@@ -54,6 +54,25 @@ def test_disabled_budget_reports_estimate_without_scaling() -> None:
     assert result.limiting_output_id is None
 
 
+def test_zero_watt_budget_scales_led_output_to_zero() -> None:
+    result = apply_power_budget(
+        (OutputPowerEstimate("left", watts=10.0),),
+        enabled=True,
+        budget_watts=0.0,
+    )
+    assert result.applied_scale == 0.0
+    assert result.estimated_watts == 10.0
+
+
+def test_negative_budget_is_rejected() -> None:
+    with pytest.raises(ValueError, match="negative"):
+        apply_power_budget(
+            (OutputPowerEstimate("left", watts=10.0),),
+            enabled=True,
+            budget_watts=-1.0,
+        )
+
+
 def test_enabled_budget_requires_positive_limit() -> None:
     with pytest.raises(ValueError, match="requires"):
         apply_power_budget(

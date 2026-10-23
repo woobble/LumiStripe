@@ -79,6 +79,9 @@ const stripeTopologySchema = z.object({
   outputs: z.array(stripeOutputSchema),
   power_budget_enabled: z.boolean().optional().default(false),
   power_budget_watts: z.number().nullable().optional(),
+  shared_supply_enabled: z.boolean().optional().default(false),
+  supply_capacity_watts: z.number().positive().optional().default(200),
+  pi_reserve_watts: z.number().nonnegative().optional().default(15),
 }).strict()
 const stripePlaybackSchema = z.object({
   stripe_id: z.string(),
@@ -103,6 +106,10 @@ const powerBudgetSchema = z.object({
   applied_scale: z.number(),
   limiting_output_id: z.string().nullable().optional(),
   outputs: z.array(powerOutputSchema),
+  shared_supply_enabled: z.boolean().optional().default(false),
+  supply_capacity_watts: z.number().positive().nullable().optional(),
+  pi_reserve_watts: z.number().nonnegative().nullable().optional(),
+  available_led_watts: z.number().nonnegative().nullable().optional(),
 }).strict()
 const diagnosticIssueSchema = z.object({
   severity: z.string(),
@@ -167,6 +174,10 @@ const dashboardStateSchema = z.object({
     applied_scale: 1,
     limiting_output_id: null,
     outputs: [],
+    shared_supply_enabled: false,
+    supply_capacity_watts: null,
+    pi_reserve_watts: null,
+    available_led_watts: null,
   }),
   stripe_playback: z.array(stripePlaybackSchema),
   diagnostic_issues: z.array(diagnosticIssueSchema),

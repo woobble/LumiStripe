@@ -35,6 +35,9 @@ const stripeTopologySchema = z.object({
   layout: z.enum(["mirrored", "continuous", "independent"]),
   power_budget_enabled: z.boolean(),
   power_budget_watts: z.number().positive("Set a positive wagon power limit.").nullable(),
+  shared_supply_enabled: z.boolean(),
+  supply_capacity_watts: z.number().positive("Supply capacity must be greater than zero."),
+  pi_reserve_watts: z.number().nonnegative("Pi reserve must not be negative."),
   outputs: z.array(z.object({
     id: z.string().min(1),
     name: z.string().trim().min(1, "Every stripe needs a name.").max(40),
@@ -53,6 +56,9 @@ function copyTopology(topology: StripeTopology): StripeTopology {
     layout: topology.layout,
     power_budget_enabled: topology.power_budget_enabled,
     power_budget_watts: topology.power_budget_watts,
+    shared_supply_enabled: topology.shared_supply_enabled,
+    supply_capacity_watts: topology.supply_capacity_watts,
+    pi_reserve_watts: topology.pi_reserve_watts,
     outputs: topology.outputs.map((output) => ({ ...output })),
   }
 }
@@ -83,7 +89,7 @@ function newStripe(existing: StripeOutputConfig[]): StripeOutputConfig {
 
 export function StripeManagementPanel({ controller }: { controller: DashboardController }) {
   const { state, pendingCommand } = controller
-  const form = useForm<StripeTopology>({ resolver: zodResolver(stripeTopologySchema) as never, defaultValues: { layout: "mirrored", power_budget_enabled: false, power_budget_watts: null, outputs: [] } })
+  const form = useForm<StripeTopology>({ resolver: zodResolver(stripeTopologySchema) as never, defaultValues: { layout: "mirrored", power_budget_enabled: false, power_budget_watts: null, shared_supply_enabled: false, supply_capacity_watts: 200, pi_reserve_watts: 15, outputs: [] } })
   const { control, watch, setValue, reset, handleSubmit, formState: { isDirty, errors } } = form
   const { fields, append, remove: removeField, move: moveField } = useFieldArray({ control, name: "outputs" })
   const draft = watch()
@@ -170,7 +176,46 @@ export function StripeManagementPanel({ controller }: { controller: DashboardCon
               <InlineError message={errors.power_budget_watts?.message} />
             </Field>
           )}
+          <Toggle
+            pressed={draft.shared_supply_enabled}
+            onPressedChange={(pressed) => setValue("shared_supply_enabled", pressed, { shouldDirty: true, shouldValidate: true })}
+            variant="outline"
+            aria-label={`Shared supply limit ${draft.shared_supply_enabled ? "on" : "off"}`}
+            className="h-11 w-full justify-between px-3 data-pressed:border-violet-300/30 data-pressed:bg-violet-400/15 data-pressed:text-violet-100"
+          >
+            <span>Limit shared PSU power</span>
+            <span className="text-xs text-muted-foreground">{draft.shared_supply_enabled ? "On" : "Off"}</span>
+          </Toggle>
+          {draft.shared_supply_enabled && (
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="PSU capacity (W)">
+                <Input
+                  type="number"
+                  min={0.1}
+                  step={1}
+                  inputMode="decimal"
+                  value={draft.supply_capacity_watts}
+                  aria-invalid={errors.supply_capacity_watts ? true : undefined}
+                  onChange={(event) => setValue("supply_capacity_watts", Number(event.target.value), { shouldDirty: true, shouldValidate: true })}
+                />
+                <InlineError message={errors.supply_capacity_watts?.message} />
+              </Field>
+              <Field label="Pi + buck input at PSU (W)">
+                <Input
+                  type="number"
+                  min={0}
+                  step={1}
+                  inputMode="decimal"
+                  value={draft.pi_reserve_watts}
+                  aria-invalid={errors.pi_reserve_watts ? true : undefined}
+                  onChange={(event) => setValue("pi_reserve_watts", Number(event.target.value), { shouldDirty: true, shouldValidate: true })}
+                />
+                <InlineError message={errors.pi_reserve_watts?.message} />
+              </Field>
+            </div>
+          )}
           <p className="text-xs text-muted-foreground">The estimate uses each strip’s voltage and full-white current calibration. The cap changes output brightness without changing animation settings.</p>
+          {draft.shared_supply_enabled && <p className="text-xs text-muted-foreground">LED allowance: {Math.max(0, draft.supply_capacity_watts - draft.pi_reserve_watts).toFixed(1)} W. Enter the Pi and converter draw at the PSU, including conversion losses. LumiStripe does not measure their power draw.</p>}
         </CardContent>
       </Card>
 

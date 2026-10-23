@@ -54,13 +54,16 @@ read-only home directory with `--settings-file /path/to/settings.json`. The
 mobile Calibration page pauses normal playback, isolates the selected output,
 and restores the previous lighting state after Save or Cancel.
 
-The Setup → Stripes page also supports an optional software power budget. Enter
-the strip voltage and full-white current per pixel (the defaults are 5 V and
-60 mA), then set a wagon-wide or per-output watt limit. LumiStripe estimates
-each rendered frame and applies one shared brightness cap when a limit would be
-exceeded; the Status page shows the estimate and limiting output. Calibrate the
-current value against the actual strip and power supply because this is an
-estimate, not a current sensor.
+The Setup → Stripes page also supports software power limits. Enter the strip
+voltage and full-white current per pixel (the defaults are 5 V and 60 mA), then
+set an optional LED-only or per-output watt limit. For a shared supply, enable
+the shared PSU limit and enter its capacity and the Pi plus buck converter draw
+at the PSU input, including conversion losses. The shared supply fields start
+at 200 W and a 15 W reserve, with the limit off; the remaining capacity becomes
+the LED allowance. LumiStripe estimates each
+rendered frame and applies one shared brightness cap when a limit would be
+exceeded. Calibrate strip current and the Pi reserve against the actual hardware:
+these are estimates, not current measurements.
 
 For a mirrored second strip on a separate controller, enable SPI1 with
 `dtoverlay=spi1-1cs`, wire GPIO20 / pin 38 to data and GPIO21 / pin 40 to

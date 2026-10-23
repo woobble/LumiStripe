@@ -102,6 +102,9 @@ class StripeTopologySettings:
     outputs: tuple[StripeOutputSettings, ...] = ()
     power_budget_enabled: bool = False
     power_budget_watts: float | None = None
+    shared_supply_enabled: bool = False
+    supply_capacity_watts: float = 200.0
+    pi_reserve_watts: float = 15.0
 
     def __post_init__(self) -> None:
         if self.layout not in {"mirrored", "continuous", "independent"}:
@@ -114,6 +117,20 @@ class StripeTopologySettings:
             raise ValueError("power budget must be greater than zero")
         if self.power_budget_enabled and self.power_budget_watts is None:
             raise ValueError("an enabled power budget requires a watt limit")
+        if not isinstance(self.shared_supply_enabled, bool):
+            raise TypeError("shared_supply_enabled must be a boolean")
+        if (
+            isinstance(self.supply_capacity_watts, bool)
+            or not isinstance(self.supply_capacity_watts, (int, float))
+            or self.supply_capacity_watts <= 0.0
+        ):
+            raise ValueError("supply capacity must be greater than zero")
+        if (
+            isinstance(self.pi_reserve_watts, bool)
+            or not isinstance(self.pi_reserve_watts, (int, float))
+            or self.pi_reserve_watts < 0.0
+        ):
+            raise ValueError("Pi reserve must not be negative")
         ids = [output.id for output in self.outputs]
         if len(ids) != len(set(ids)):
             raise ValueError("stripe ids must be unique")
@@ -128,6 +145,27 @@ class StripeTopologySettings:
         ]
         if len(pins) != len(set(pins)):
             raise ValueError("GPIO pins must be unique")
+
+    @property
+    def available_led_watts(self) -> float:
+        """Return PSU capacity remaining after the configured Pi reserve."""
+
+        return max(0.0, self.supply_capacity_watts - self.pi_reserve_watts)
+
+    @property
+    def power_limiting_enabled(self) -> bool:
+        return self.power_budget_enabled or self.shared_supply_enabled
+
+    @property
+    def effective_power_budget_watts(self) -> float | None:
+        """Return the tightest active global LED limit, if any."""
+
+        limits: list[float] = []
+        if self.power_budget_enabled and self.power_budget_watts is not None:
+            limits.append(self.power_budget_watts)
+        if self.shared_supply_enabled:
+            limits.append(self.available_led_watts)
+        return min(limits) if limits else None
 
 
 def default_settings_path() -> Path:
@@ -415,6 +453,9 @@ class CalibrationSettingsStore:
                     "layout": settings.stripe_topology.layout,
                     "power_budget_enabled": settings.stripe_topology.power_budget_enabled,
                     "power_budget_watts": settings.stripe_topology.power_budget_watts,
+                    "shared_supply_enabled": settings.stripe_topology.shared_supply_enabled,
+                    "supply_capacity_watts": settings.stripe_topology.supply_capacity_watts,
+                    "pi_reserve_watts": settings.stripe_topology.pi_reserve_watts,
                     "outputs": [
                         {
                             field_name: getattr(output, field_name)
@@ -465,8 +506,17 @@ def _decode_stripes(encoded: object) -> StripeTopologySettings | None:
     outputs = encoded.get("outputs", [])
     power_budget_enabled = encoded.get("power_budget_enabled", False)
     power_budget_watts = encoded.get("power_budget_watts")
+    shared_supply_enabled = encoded.get("shared_supply_enabled", False)
+    supply_capacity_watts = encoded.get("supply_capacity_watts", 200.0)
+    pi_reserve_watts = encoded.get("pi_reserve_watts", 15.0)
     if not isinstance(layout, str) or not isinstance(outputs, list):
         raise TypeError("stripe layout must be a string and outputs must be a list")
+    for field_name, value in (
+        ("supply_capacity_watts", supply_capacity_watts),
+        ("pi_reserve_watts", pi_reserve_watts),
+    ):
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise TypeError(f"{field_name} must be a number")
     decoded: list[StripeOutputSettings] = []
     defaults = StripeOutputSettings(id="default", name="Stripe", pixels=80)
     for index, output in enumerate(outputs):
@@ -487,6 +537,9 @@ def _decode_stripes(encoded: object) -> StripeTopologySettings | None:
         power_budget_watts=(
             None if power_budget_watts is None else float(power_budget_watts)
         ),
+        shared_supply_enabled=shared_supply_enabled,
+        supply_capacity_watts=float(supply_capacity_watts),
+        pi_reserve_watts=float(pi_reserve_watts),
     )  # type: ignore[arg-type]
 
 

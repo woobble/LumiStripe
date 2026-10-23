@@ -1358,7 +1358,8 @@ export interface components {
              *       "applied_scale": 1,
              *       "enabled": false,
              *       "estimated_watts": 0,
-             *       "outputs": []
+             *       "outputs": [],
+             *       "shared_supply_enabled": false
              *     }
              */
             power_budget: components["schemas"]["PowerBudgetState"];
@@ -1399,7 +1400,10 @@ export interface components {
              * @default {
              *       "layout": "mirrored",
              *       "outputs": [],
-             *       "power_budget_enabled": false
+             *       "pi_reserve_watts": 15,
+             *       "power_budget_enabled": false,
+             *       "shared_supply_enabled": false,
+             *       "supply_capacity_watts": 200
              *     }
              */
             stripe_topology: components["schemas"]["StripeTopology"];
@@ -1454,6 +1458,8 @@ export interface components {
              * @default 1
              */
             applied_scale: number;
+            /** Available Led Watts */
+            available_led_watts?: number | null;
             /** Budget Watts */
             budget_watts?: number | null;
             /**
@@ -1473,6 +1479,15 @@ export interface components {
              * @default []
              */
             outputs: components["schemas"]["PowerOutputState"][];
+            /** Pi Reserve Watts */
+            pi_reserve_watts?: number | null;
+            /**
+             * Shared Supply Enabled
+             * @default false
+             */
+            shared_supply_enabled: boolean;
+            /** Supply Capacity Watts */
+            supply_capacity_watts?: number | null;
         };
         /** PowerOutputState */
         PowerOutputState: {
@@ -1741,12 +1756,27 @@ export interface components {
              */
             outputs: components["schemas"]["StripeOutputConfig"][];
             /**
+             * Pi Reserve Watts
+             * @default 15
+             */
+            pi_reserve_watts: number;
+            /**
              * Power Budget Enabled
              * @default false
              */
             power_budget_enabled: boolean;
             /** Power Budget Watts */
             power_budget_watts?: number | null;
+            /**
+             * Shared Supply Enabled
+             * @default false
+             */
+            shared_supply_enabled: boolean;
+            /**
+             * Supply Capacity Watts
+             * @default 200
+             */
+            supply_capacity_watts: number;
         };
         /** StripeTopologyRequest */
         StripeTopologyRequest: {
@@ -1758,12 +1788,27 @@ export interface components {
             /** Outputs */
             outputs: components["schemas"]["StripeOutputConfig"][];
             /**
+             * Pi Reserve Watts
+             * @default 15
+             */
+            pi_reserve_watts: number;
+            /**
              * Power Budget Enabled
              * @default false
              */
             power_budget_enabled: boolean;
             /** Power Budget Watts */
             power_budget_watts?: number | null;
+            /**
+             * Shared Supply Enabled
+             * @default false
+             */
+            shared_supply_enabled: boolean;
+            /**
+             * Supply Capacity Watts
+             * @default 200
+             */
+            supply_capacity_watts: number;
         };
         /**
          * SystemStats
