@@ -25,6 +25,7 @@ def main() -> None:
         before_input_ids = manager.calibration_output_input_ids()
         player = AudioSyncCalibrationTone()
         manager.verify_calibration_output_route(before_input_ids, args.sink)
+        player.arm()
         time.sleep(args.duration)
         stats = player.diagnostics()
         print(
