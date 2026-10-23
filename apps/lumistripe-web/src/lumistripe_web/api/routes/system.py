@@ -83,12 +83,8 @@ def check_for_updates(request: Request) -> UpdateStatus | JSONResponse:
             {"detail": "The system updater is not installed."},
             status_code=status.HTTP_409_CONFLICT,
         )
-    if current.install_state == "running":
-        return JSONResponse(
-            {"detail": "An update is already being installed."},
-            status_code=status.HTTP_409_CONFLICT,
-        )
-
+    # The checker exits while an update holds its lock and reconciles stale
+    # "running" states after the updater stops.
     project_dir: Path = request.app.state.update_project_dir
     helper = project_dir / "deploy" / "update_state.py"
     if not helper.is_file():

@@ -39,7 +39,9 @@ export function SystemUpdateNotice() {
 
   useEffect(() => {
     void refresh().then((current) => {
-      if (current?.supported && navigator.onLine) void check()
+      if (current?.supported && (navigator.onLine || current.install_state === "running")) {
+        void check()
+      }
     })
     const onOnline = () => {
       void refresh().then((current) => {
