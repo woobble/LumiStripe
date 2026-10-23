@@ -19,6 +19,13 @@ class PlaybackMode(str, Enum):
     DYNAMIC = "dynamic"
 
 
+class SwitchQuantization(str, Enum):
+    OFF = "off"
+    BEAT = "beat"
+    BAR = "bar"
+    PHRASE = "phrase"
+
+
 class AudioSource(str, Enum):
     OFF = "off"
     MIC = "mic"
@@ -55,6 +62,7 @@ class PlaybackConfig:
     solid_color: Color = field(default_factory=lambda: Rgb(124, 58, 237))
     cycling: CyclingConfig = field(default_factory=CyclingConfig)
     dynamic: DynamicSelectorConfig = field(default_factory=DynamicSelectorConfig)
+    switch_quantization: SwitchQuantization = SwitchQuantization.OFF
     musical_timeline: MusicalTimelineConfig = field(
         default_factory=MusicalTimelineConfig
     )
@@ -81,4 +89,5 @@ __all__ = [
     "CyclingConfig",
     "PlaybackConfig",
     "PlaybackMode",
+    "SwitchQuantization",
 ]

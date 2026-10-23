@@ -159,6 +159,12 @@ accent layer. Automatic base changes crossfade, while manual and Cycling modes
 keep every standalone animation available. Strobe, Rainbow Strobe, and Police
 remain excluded from Dynamic selection.
 
+Dynamic base-animation changes are immediate by default. Core users can opt in
+to `SwitchQuantization.BEAT`, `.BAR`, or `.PHRASE` through
+`PlaybackConfig(switch_quantization=...)`; quantized changes require a confident
+beat clock and honor the configured audio sync offset. Bar and phrase positions
+use an estimated 4/4 alignment anchored to the first observed beat.
+
 ## Simulator
 
 Launch the Tkinter GUI simulator:

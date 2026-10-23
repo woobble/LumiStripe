@@ -13,6 +13,7 @@ from .config import (
     CyclingConfig,
     PlaybackConfig,
     PlaybackMode,
+    SwitchQuantization,
 )
 from .engine import PlaybackEngine, demo_snapshot
 from .renderer import PlaybackRenderer
@@ -33,6 +34,7 @@ __all__ = [
     "PlaybackRenderer",
     "ReactiveFrameSmoother",
     "RenderPlan",
+    "SwitchQuantization",
     "build_render_plan",
     "decide_playback",
     "demo_snapshot",

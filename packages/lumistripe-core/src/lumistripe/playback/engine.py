@@ -36,7 +36,9 @@ from .config import (
     CycleTiming,
     PlaybackConfig,
     PlaybackMode,
+    SwitchQuantization,
 )
+from .quantized import QuantizedSwitchCoordinator
 from .renderer import PlaybackRenderer
 from .state import PlaybackDecision, RenderPlan, build_render_plan, decide_playback
 
@@ -72,6 +74,7 @@ class PlaybackEngine:
     _musical_timeline_state: MusicalTimelineState = field(
         init=False, default_factory=MusicalTimelineState
     )
+    _quantized_switcher: QuantizedSwitchCoordinator = field(init=False)
     sync_offset_s: float = field(init=False, default=0.0)
 
     def __post_init__(self) -> None:
@@ -85,6 +88,11 @@ class PlaybackEngine:
         scheduler = EffectScheduler(effect_config)
         scheduler.set_response(self.config.dynamic_response)
         self.layered_renderer = LayeredRenderer(scheduler)
+        self._quantized_switcher = QuantizedSwitchCoordinator(
+            self.config.switch_quantization,
+            confidence_threshold=effect_config.clock_confidence_threshold,
+            subdivisions_per_beat=effect_config.subdivisions_per_beat,
+        )
         self.reactive_smoother = ReactiveFrameSmoother()
         self.render_adapter = PlaybackRenderer()
         self.beat_clock_tracker = BeatClockTracker()
@@ -150,6 +158,7 @@ class PlaybackEngine:
         self._structure_tracker.reset()
         self._music_structure_state = MusicStructureState()
         self._confirmed_drop_count = 0
+        self._quantized_switcher.reset()
         self.layered_renderer.reset()
         self.reactive_smoother.reset()
         self.player.cancel_transition()
@@ -166,6 +175,7 @@ class PlaybackEngine:
         self._structure_tracker.reset()
         self._music_structure_state = MusicStructureState()
         self._confirmed_drop_count = 0
+        self._quantized_switcher.reset()
 
     def set_dynamic_response(self, response: float) -> None:
         if not 0.0 <= response <= 1.0:
@@ -181,6 +191,7 @@ class PlaybackEngine:
             self._structure_tracker.reset()
             self._music_structure_state = MusicStructureState()
             self._confirmed_drop_count = 0
+            self._quantized_switcher.reset()
 
     def select_animation(self, name: str) -> None:
         index = self.player.index_of(name)
@@ -248,6 +259,7 @@ class PlaybackEngine:
             was_active = self._music_active
             self._music_active = self.activity_detector.update(features, now_s=now)
             if not self._music_active:
+                self._quantized_switcher.reset()
                 self._structure_tracker.reset()
                 self._music_structure_state = MusicStructureState()
                 self._confirmed_drop_count = 0
@@ -279,6 +291,7 @@ class PlaybackEngine:
                 return 0.05
 
             if not was_active:
+                self._quantized_switcher.reset()
                 self._structure_tracker.reset()
                 self._music_structure_state = MusicStructureState()
                 self._confirmed_drop_count = 0
@@ -296,25 +309,68 @@ class PlaybackEngine:
                     self._music_structure_state, drop_event=False
                 )
             self._idle_rendered = False
-            self.last_decision = self.dynamic_selector.update(
-                self.player,
-                features,
-                now_s=now,
-                quiet=False,
-                force_switch=was_active != self._music_active,
-            )
-            if was_active and self.last_decision.should_switch:
-                self.player.begin_transition(
-                    duration_ms=self.player.transition_ms,
-                    source=controller.pixels(),
+            switched_this_step = False
+            if not was_active:
+                # Keep activation responsive even when later switches are
+                # quantized. The first active selection establishes a fresh
+                # Dynamic session and begins its normal crossfade immediately.
+                self.last_decision = self.dynamic_selector.update(
+                    self.player,
+                    features,
+                    now_s=now,
+                    quiet=False,
+                    force_switch=True,
                 )
+                switched_this_step = self.last_decision.should_switch
+            elif self.config.switch_quantization is SwitchQuantization.OFF:
+                self.last_decision = self.dynamic_selector.update(
+                    self.player,
+                    features,
+                    now_s=now,
+                    quiet=False,
+                    force_switch=False,
+                )
+                switched_this_step = self.last_decision.should_switch
+                if switched_this_step:
+                    self.player.begin_transition(
+                        duration_ms=self.player.transition_ms,
+                        source=controller.pixels(),
+                    )
+            else:
+                self.last_decision = self.dynamic_selector.propose(
+                    self.player,
+                    features,
+                    now_s=now,
+                    quiet=False,
+                    force_switch=False,
+                )
+                due_decision = self._quantized_switcher.update(
+                    self.last_decision,
+                    self._musical_timeline_state,
+                    now_s=now,
+                    sync_offset_s=self.sync_offset_s,
+                    transition_active=self.player.transition_active,
+                )
+                if due_decision is not None:
+                    source = controller.pixels()
+                    switched_this_step = self.dynamic_selector.commit(
+                        self.player,
+                        due_decision,
+                        now_s=now,
+                        transition_ms=0,
+                    )
+                    if switched_this_step:
+                        self.player.begin_transition(
+                            duration_ms=self.player.transition_ms,
+                            source=source,
+                        )
             active_snapshot = snapshot or AudioSnapshot.silence()
             active_snapshot = replace(
                 active_snapshot,
                 frame=self.reactive_smoother.update(active_snapshot.frame),
             )
             if not was_active:
-                if not self.last_decision.should_switch:
+                if not switched_this_step:
                     self.player.set_index(
                         self.player.current_index(),
                         transition_ms=0,
@@ -330,7 +386,7 @@ class PlaybackEngine:
                 music_active=True,
                 gate_state=self.music_gate_state,
                 brightness=self.player.brightness,
-                should_switch=self.last_decision.should_switch,
+                should_switch=switched_this_step,
             )
             plan = build_render_plan(
                 decision,

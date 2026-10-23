@@ -69,6 +69,27 @@ class DynamicSelector:
         quiet: bool = False,
         force_switch: bool = False,
     ) -> SelectorDecision:
+        decision = self.propose(
+            player,
+            features,
+            now_s=now_s,
+            quiet=quiet,
+            force_switch=force_switch,
+        )
+        self.commit(player, decision, now_s=now_s)
+        return decision
+
+    def propose(
+        self,
+        player: AnimationPlayer,
+        features: AudioFeatures,
+        *,
+        now_s: float,
+        quiet: bool = False,
+        force_switch: bool = False,
+    ) -> SelectorDecision:
+        """Rank a candidate without changing the active animation or its history."""
+
         self._last_update_at_s = now_s
         current = player.name_at(player.current_index())
         candidates = [
@@ -88,12 +109,6 @@ class DynamicSelector:
             best = ranked[0] if ranked else None
             selected = best.name if best is not None else current
             should_switch = selected is not None and selected != current
-            if selected is not None and selected != current:
-                index = player.index_of(selected)
-                if index is not None:
-                    player.set_index(index)
-                    self._remember(current)
-                    self.current_name = selected
             self.last_decision = SelectorDecision(
                 selected_name=selected,
                 selected_score=best.score if best is not None else 0.0,
@@ -160,17 +175,6 @@ class DynamicSelector:
             selected_name = best.name if should_switch else current
             selected_score = best.score if should_switch else selected_score
 
-        if should_switch and selected_name is not None:
-            index = player.index_of(selected_name)
-            if index is not None and index != player.current_index():
-                previous = current
-                player.set_index(index)
-                self._remember(previous)
-                self.current_name = selected_name
-                self.last_switch_at_s = now_s
-                if reason == "drop":
-                    self.last_drop_switch_at_s = now_s
-
         self.last_decision = SelectorDecision(
             selected_name=selected_name,
             selected_score=selected_score,
@@ -180,6 +184,33 @@ class DynamicSelector:
             scores=ranked[:5],
         )
         return self.last_decision
+
+    def commit(
+        self,
+        player: AnimationPlayer,
+        decision: SelectorDecision,
+        *,
+        now_s: float,
+        transition_ms: int | None = None,
+    ) -> bool:
+        """Apply a proposed switch and account for it only when it takes effect."""
+
+        selected_name = decision.selected_name
+        if not decision.should_switch or selected_name is None:
+            return False
+        index = player.index_of(selected_name)
+        if index is None or index == player.current_index():
+            return False
+
+        previous = player.name_at(player.current_index())
+        player.set_index(index, transition_ms=transition_ms)
+        self._remember(previous)
+        self.current_name = selected_name
+        self.last_switch_at_s = now_s
+        if decision.reason == "drop":
+            self.last_drop_switch_at_s = now_s
+        self.last_decision = decision
+        return True
 
     def _remember(self, name: str | None) -> None:
         if not name:
