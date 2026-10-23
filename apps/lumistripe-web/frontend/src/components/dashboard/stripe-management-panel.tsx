@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import { useEffect, useRef, useState, type FocusEvent, type ReactNode } from "react"
 import { useFieldArray, useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { ArrowDownIcon, ArrowUpIcon, CableIcon, PlusIcon, SaveIcon, Trash2Icon, ZapIcon } from "lucide-react"
@@ -95,15 +95,18 @@ export function StripeManagementPanel({ controller }: { controller: DashboardCon
   const draft = watch()
   useUnsavedChangesGuard(isDirty)
   const [removeIndex, setRemoveIndex] = useState<number | null>(null)
+  const [formFocused, setFormFocused] = useState(false)
   const syncedTopologyRef = useRef<string | null>(null)
+  const topology = state?.stripe_topology
 
   useEffect(() => {
-    if (!state || isDirty) return
-    const topologyKey = JSON.stringify(state.stripe_topology)
+    // reset() regenerates field-array keys, so wait for focus to leave before replacing controls.
+    if (!topology || isDirty || formFocused) return
+    const topologyKey = JSON.stringify(topology)
     if (topologyKey === syncedTopologyRef.current) return
-    reset(copyTopology(state.stripe_topology))
+    reset(copyTopology(topology))
     syncedTopologyRef.current = topologyKey
-  }, [isDirty, reset, state?.stripe_topology])
+  }, [formFocused, isDirty, reset, topology])
 
   if (!state || !draft) return null
   const busy = pendingCommand !== null
@@ -131,8 +134,15 @@ export function StripeManagementPanel({ controller }: { controller: DashboardCon
     moveField(index, target)
   }
 
+  const handleFormBlur = (event: FocusEvent<HTMLDivElement>) => {
+    const container = event.currentTarget
+    queueMicrotask(() => {
+      setFormFocused(container.contains(document.activeElement))
+    })
+  }
+
   return (
-    <SetupPage>
+    <SetupPage onFocusCapture={() => setFormFocused(true)} onBlurCapture={handleFormBlur}>
       <Card className="border-white/5 bg-card/80">
         <CardHeader>
           <CardTitle>Layout</CardTitle>

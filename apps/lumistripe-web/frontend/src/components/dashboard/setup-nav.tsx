@@ -1,11 +1,11 @@
-import type { ReactNode } from "react"
+import type { ComponentProps, ReactNode } from "react"
 import { GuardedNavLink } from "@/hooks/use-unsaved-changes"
 
 import { cn } from "@/lib/utils"
 
-export function SetupPage({ children }: { children: ReactNode }) {
+export function SetupPage({ children, ...props }: ComponentProps<"div">) {
   return (
-    <div className="space-y-4 pb-4">
+    <div {...props} className={cn("space-y-4 pb-4", props.className)}>
       <div>
         <h2 className="text-lg font-semibold">Setup</h2>
         <p className="text-sm text-muted-foreground">Configure hardware, audio, color, and startup behavior.</p>
