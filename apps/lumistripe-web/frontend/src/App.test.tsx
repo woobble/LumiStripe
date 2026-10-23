@@ -556,9 +556,12 @@ describe("App", () => {
     expect(screen.getByText("Live input")).toBeInTheDocument()
     expect(screen.queryByText("USB Mic")).not.toBeInTheDocument()
 
-    const audioSocket = MockWebSocket.instances.find((socket) => socket.url.endsWith("/ws/audio"))
-    expect(audioSocket).toBeDefined()
-    act(() => audioSocket!.emit({
+    const audioSocket = await waitFor(() => {
+      const socket = MockWebSocket.instances.find((instance) => instance.url.endsWith("/ws/audio"))
+      if (!socket) throw new Error("Audio WebSocket was not created")
+      return socket
+    })
+    act(() => audioSocket.emit({
       sequence: 4,
       fresh: true,
       input_level: 0.42,
@@ -601,9 +604,12 @@ describe("App", () => {
     expect(screen.getByRole("group", { name: "Calm ↔ Dramatic" })).toBeInTheDocument()
     expect(screen.getByText("0.650")).toBeInTheDocument()
 
-    const audioSocket = MockWebSocket.instances.find((socket) => socket.url.endsWith("/ws/audio"))
-    expect(audioSocket).toBeDefined()
-    act(() => audioSocket!.emit({
+    const audioSocket = await waitFor(() => {
+      const socket = MockWebSocket.instances.find((instance) => instance.url.endsWith("/ws/audio"))
+      if (!socket) throw new Error("Audio WebSocket was not created")
+      return socket
+    })
+    act(() => audioSocket.emit({
       sequence: 4,
       fresh: true,
       input_level: 0.42,
