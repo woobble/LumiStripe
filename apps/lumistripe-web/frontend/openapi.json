@@ -2312,6 +2312,140 @@
         "title": "StripeTopologyRequest",
         "type": "object"
       },
+      "SystemStats": {
+        "description": "Best-effort host resource metrics for the dashboard.",
+        "properties": {
+          "cpu_temperature_c": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpu Temperature C"
+          },
+          "cpu_usage_percent": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpu Usage Percent"
+          },
+          "disk_total_bytes": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disk Total Bytes"
+          },
+          "disk_usage_percent": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disk Usage Percent"
+          },
+          "disk_used_bytes": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disk Used Bytes"
+          },
+          "memory_total_bytes": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Total Bytes"
+          },
+          "memory_usage_percent": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Usage Percent"
+          },
+          "memory_used_bytes": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Used Bytes"
+          },
+          "sampled_at": {
+            "format": "date-time",
+            "title": "Sampled At",
+            "type": "string"
+          },
+          "uptime_seconds": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uptime Seconds"
+          }
+        },
+        "required": [
+          "cpu_temperature_c",
+          "cpu_usage_percent",
+          "memory_used_bytes",
+          "memory_total_bytes",
+          "memory_usage_percent",
+          "disk_used_bytes",
+          "disk_total_bytes",
+          "disk_usage_percent",
+          "uptime_seconds",
+          "sampled_at"
+        ],
+        "title": "SystemStats",
+        "type": "object"
+      },
       "UpdateStatus": {
         "properties": {
           "available_commit": {
@@ -3806,6 +3940,24 @@
           }
         },
         "summary": "Test Stripe"
+      }
+    },
+    "/api/system/stats": {
+      "get": {
+        "operationId": "system_stats_api_system_stats_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemStats"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "System Stats"
       }
     },
     "/api/system/update": {

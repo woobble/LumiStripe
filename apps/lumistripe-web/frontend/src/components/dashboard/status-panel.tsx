@@ -5,24 +5,28 @@ import {
   CircleAlertIcon,
   Clock3Icon,
   CpuIcon,
+  HardDriveIcon,
   GaugeIcon,
   LogOutIcon,
+  MemoryStickIcon,
   MusicIcon,
   PackageIcon,
   RadioIcon,
   RefreshCwIcon,
+  ThermometerIcon,
   TriangleAlertIcon,
   ShieldCheckIcon,
   WrenchIcon,
   ZapIcon,
 } from "lucide-react"
+import { useQuery } from "@tanstack/react-query"
 
 import { ConnectionBadge } from "@/components/dashboard/connection-badge"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import type { DashboardController } from "@/hooks/use-dashboard"
-import type { DiagnosticIssue } from "@/lib/api"
+import { dashboardApi, type DiagnosticIssue, type SystemStats } from "@/lib/api"
 
 function displayName(value: string) {
   return value.replaceAll("_", " ").replaceAll("-", " ")
@@ -54,6 +58,25 @@ function formatFrequency(hertz: number | null | undefined) {
 function formatWatts(watts: number | null | undefined) {
   if (watts == null) return "—"
   return `${watts.toFixed(1)} W`
+}
+
+function formatBytes(bytes: number) {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GiB`
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(0)} MiB`
+  return `${(bytes / 1024).toFixed(0)} KiB`
+}
+
+function formatCapacity(used: number | null, total: number | null, percent: number | null) {
+  if (used == null || total == null) return "—"
+  return `${formatBytes(used)} / ${formatBytes(total)}${percent == null ? "" : ` (${percent.toFixed(0)}%)`}`
+}
+
+function formatTemperature(temperature: number | null | undefined) {
+  return temperature == null ? "—" : `${temperature.toFixed(1)} °C`
+}
+
+function formatPercent(percent: number | null | undefined) {
+  return percent == null ? "—" : `${percent.toFixed(1)}%`
 }
 
 function Metric({ icon: Icon, label, value }: { icon: typeof GaugeIcon; label: string; value: string }) {
@@ -90,11 +113,21 @@ function Issue({ issue }: { issue: DiagnosticIssue }) {
 
 export function StatusPanel({ controller, onLogout }: { controller: DashboardController; onLogout?: () => Promise<void> }) {
   const { state, connection } = controller
+  const systemStatsQuery = useQuery({
+    queryKey: ["system-stats"],
+    queryFn: dashboardApi.getSystemStats,
+    enabled: state?.runtime === "hardware",
+    staleTime: 0,
+    refetchInterval: state?.runtime === "hardware" ? 5000 : false,
+    refetchIntervalInBackground: false,
+    retry: false,
+  })
   if (!state) return null
 
   const outputValue = state.runtime === "simulation"
     ? "Simulation only"
     : formatAge(state.last_output_age_seconds)
+  const systemStats: SystemStats | undefined = systemStatsQuery.data
 
   return (
     <div className="space-y-4 pb-4">
@@ -127,6 +160,34 @@ export function StatusPanel({ controller, onLogout }: { controller: DashboardCon
           </CardContent>
         )}
       </Card>
+
+      {state.runtime === "hardware" && (
+        <Card className="border-white/5 bg-card/80 shadow-xl shadow-black/10 backdrop-blur-xl">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><ActivityIcon className="size-4 text-emerald-300" aria-hidden="true" />System resources</CardTitle>
+            <CardDescription>
+              {systemStatsQuery.isError
+                ? "Host metrics are currently unavailable."
+                : "Host resource usage refreshes every 5 seconds."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid grid-cols-2 gap-2">
+            <Metric icon={ThermometerIcon} label="CPU temperature" value={formatTemperature(systemStats?.cpu_temperature_c)} />
+            <Metric icon={CpuIcon} label="CPU usage" value={formatPercent(systemStats?.cpu_usage_percent)} />
+            <Metric
+              icon={MemoryStickIcon}
+              label="Memory used"
+              value={formatCapacity(systemStats?.memory_used_bytes ?? null, systemStats?.memory_total_bytes ?? null, systemStats?.memory_usage_percent ?? null)}
+            />
+            <Metric
+              icon={HardDriveIcon}
+              label="Disk used"
+              value={formatCapacity(systemStats?.disk_used_bytes ?? null, systemStats?.disk_total_bytes ?? null, systemStats?.disk_usage_percent ?? null)}
+            />
+            <Metric icon={Clock3Icon} label="System uptime" value={systemStats?.uptime_seconds == null ? "—" : formatDuration(systemStats.uptime_seconds)} />
+          </CardContent>
+        </Card>
+      )}
 
       <Card className="border-white/5 bg-card/80 shadow-xl shadow-black/10 backdrop-blur-xl">
         <CardHeader>

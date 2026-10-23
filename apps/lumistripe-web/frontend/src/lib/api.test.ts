@@ -30,6 +30,28 @@ describe("dashboardApi", () => {
     expect(websocketUrl()).toBe("ws://localhost:3000/ws/state")
   })
 
+  it("reads strictly validated host system stats", async () => {
+    const systemStats = {
+      cpu_temperature_c: 53.5,
+      cpu_usage_percent: 60,
+      memory_used_bytes: 768 * 1024,
+      memory_total_bytes: 1024 * 1024,
+      memory_usage_percent: 75,
+      disk_used_bytes: 4 * 1024 ** 3,
+      disk_total_bytes: 8 * 1024 ** 3,
+      disk_usage_percent: 50,
+      uptime_seconds: 1234.5,
+      sampled_at: "2026-01-01T00:00:00Z",
+    }
+    fetchMock.mockReturnValueOnce(jsonResponse(systemStats))
+
+    expect(await dashboardApi.getSystemStats()).toEqual(systemStats)
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/system/stats", expect.any(Object))
+
+    fetchMock.mockReturnValueOnce(jsonResponse({ ...systemStats, extra_metric: 1 }))
+    await expect(dashboardApi.getSystemStats()).rejects.toThrow()
+  })
+
   it("reads update status and exposes fixed check and install requests", async () => {
     const updateStatus = {
       supported: true,

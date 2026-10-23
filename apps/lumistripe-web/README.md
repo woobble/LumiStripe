@@ -41,6 +41,13 @@ uv run lumistripe-web --hardware --pixels 80 \
   --pairing-code 0427
 ```
 
+In hardware mode, the Diagnostics → System resources card shows host CPU
+temperature and usage, memory and root filesystem usage, and system uptime.
+It refreshes every five seconds while the page is open. The authenticated
+`GET /api/system/stats` endpoint reads Linux procfs/sysfs metrics; a metric is
+returned as `null` when its source is unavailable, and CPU usage is `null`
+until two samples are available.
+
 Color calibration profiles are saved per output in
 `~/.config/lumistripe/settings.json`. Override the location for a service or
 read-only home directory with `--settings-file /path/to/settings.json`. The

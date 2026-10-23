@@ -10,6 +10,7 @@ import type {
   PlaybackMode,
   SpotifyControlAction,
   StripeTopology,
+  SystemStats,
   UpdateStatus,
 } from "@/lib/api/contracts"
 
@@ -41,6 +42,7 @@ export type {
   RuntimeKind,
   StartupPlaybackState,
   StartupSettingsResponse,
+  SystemStats,
   StripeBackend,
   StripeLayout,
   StripeOutputConfig,
@@ -369,6 +371,18 @@ const updateStatusSchema = z.object({
   install_finished_at: z.string().nullable(),
   install_error: z.string().nullable(),
 }).strict() satisfies z.ZodType<UpdateStatus>
+const systemStatsSchema = z.object({
+  cpu_temperature_c: z.number().nullable(),
+  cpu_usage_percent: z.number().nullable(),
+  memory_used_bytes: z.number().int().nullable(),
+  memory_total_bytes: z.number().int().nullable(),
+  memory_usage_percent: z.number().nullable(),
+  disk_used_bytes: z.number().int().nullable(),
+  disk_total_bytes: z.number().int().nullable(),
+  disk_usage_percent: z.number().nullable(),
+  uptime_seconds: z.number().nullable(),
+  sampled_at: z.string(),
+}).strict() satisfies z.ZodType<SystemStats>
 const calibrationSessionSchema = z.object({
   session_id: z.string(),
   state: dashboardStateSchema,
@@ -464,6 +478,7 @@ async function request<T>(
 
 export const dashboardApi = {
   getState: () => request("/api/state", undefined, dashboardStateSchema),
+  getSystemStats: () => request("/api/system/stats", undefined, systemStatsSchema),
   getUpdateStatus: () => request("/api/system/update", undefined, updateStatusSchema),
   checkForUpdates: () => request("/api/system/update/check", { method: "POST" }, updateStatusSchema),
   installUpdate: () => request("/api/system/update/install", { method: "POST" }, updateStatusSchema),

@@ -63,7 +63,7 @@ from .stripes import (
     StripeTopology,
     StripeTopologyRequest,
 )
-from .system import UpdateStatus
+from .system import SystemStats, UpdateStatus
 
 __all__ = [
     "AccessStatus",
@@ -113,5 +113,6 @@ __all__ = [
     "StripeTestRequest",
     "StripeTopology",
     "StripeTopologyRequest",
+    "SystemStats",
     "UpdateStatus",
 ]

@@ -636,6 +636,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/system/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** System Stats */
+        get: operations["system_stats_api_system_stats_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/system/update": {
         parameters: {
             query?: never;
@@ -1747,6 +1764,35 @@ export interface components {
             power_budget_enabled: boolean;
             /** Power Budget Watts */
             power_budget_watts?: number | null;
+        };
+        /**
+         * SystemStats
+         * @description Best-effort host resource metrics for the dashboard.
+         */
+        SystemStats: {
+            /** Cpu Temperature C */
+            cpu_temperature_c: number | null;
+            /** Cpu Usage Percent */
+            cpu_usage_percent: number | null;
+            /** Disk Total Bytes */
+            disk_total_bytes: number | null;
+            /** Disk Usage Percent */
+            disk_usage_percent: number | null;
+            /** Disk Used Bytes */
+            disk_used_bytes: number | null;
+            /** Memory Total Bytes */
+            memory_total_bytes: number | null;
+            /** Memory Usage Percent */
+            memory_usage_percent: number | null;
+            /** Memory Used Bytes */
+            memory_used_bytes: number | null;
+            /**
+             * Sampled At
+             * Format: date-time
+             */
+            sampled_at: string;
+            /** Uptime Seconds */
+            uptime_seconds: number | null;
         };
         /** UpdateStatus */
         UpdateStatus: {
@@ -2973,6 +3019,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    system_stats_api_system_stats_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemStats"];
                 };
             };
         };

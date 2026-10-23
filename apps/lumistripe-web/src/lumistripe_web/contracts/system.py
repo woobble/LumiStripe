@@ -3,7 +3,24 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class SystemStats(BaseModel):
+    """Best-effort host resource metrics for the dashboard."""
+
+    model_config = ConfigDict(frozen=True)
+
+    cpu_temperature_c: float | None
+    cpu_usage_percent: float | None = Field(ge=0.0, le=100.0)
+    memory_used_bytes: int | None = Field(ge=0)
+    memory_total_bytes: int | None = Field(ge=0)
+    memory_usage_percent: float | None = Field(ge=0.0, le=100.0)
+    disk_used_bytes: int | None = Field(ge=0)
+    disk_total_bytes: int | None = Field(ge=0)
+    disk_usage_percent: float | None = Field(ge=0.0, le=100.0)
+    uptime_seconds: float | None = Field(ge=0.0)
+    sampled_at: datetime
 
 
 class UpdateStatus(BaseModel):
@@ -22,4 +39,4 @@ class UpdateStatus(BaseModel):
     install_error: str | None
 
 
-__all__ = ["UpdateStatus"]
+__all__ = ["SystemStats", "UpdateStatus"]

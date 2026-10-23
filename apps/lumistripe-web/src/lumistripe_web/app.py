@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from .api import router
 from .auth import SESSION_COOKIE, PairingAuth
 from .runtime import LumiStripeRuntime, RuntimeSettings
+from .system_stats import SystemStatsCollector
 
 RuntimeFactory = Callable[[RuntimeSettings], LumiStripeRuntime]
 
@@ -25,6 +26,7 @@ def create_app(
     pairing_code: str | None = None,
     update_state_file: Path | None = None,
     project_dir: Path | None = None,
+    system_stats_collector: SystemStatsCollector | None = None,
 ) -> FastAPI:
     resolved_settings = settings or RuntimeSettings()
 
@@ -54,6 +56,7 @@ def create_app(
     app.state.update_project_dir = project_dir or Path(
         os.environ.get("LUMI_PROJECT_DIR", Path(__file__).resolve().parents[4])
     )
+    app.state.system_stats_collector = system_stats_collector or SystemStatsCollector()
 
     @app.middleware("http")
     async def require_pairing(request: Request, call_next):

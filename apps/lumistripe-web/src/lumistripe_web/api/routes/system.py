@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from ...contracts.common import AnimationList, DashboardState
-from ...contracts.system import UpdateStatus
+from ...contracts.system import SystemStats, UpdateStatus
 from ..dependencies import runtime_from_request
 
 router = APIRouter()
@@ -39,6 +39,11 @@ async def state(request: Request) -> DashboardState:
 @router.get("/api/animations", response_model=AnimationList)
 async def animations(request: Request) -> AnimationList:
     return AnimationList(items=runtime_from_request(request).animations())
+
+
+@router.get("/api/system/stats", response_model=SystemStats)
+async def system_stats(request: Request) -> SystemStats:
+    return request.app.state.system_stats_collector.collect()
 
 
 def _update_status(request: Request) -> UpdateStatus:
