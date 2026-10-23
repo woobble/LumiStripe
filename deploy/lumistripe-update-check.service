@@ -1,0 +1,15 @@
+[Unit]
+Description=Check LumiStripe for updates
+After=network.target
+
+[Service]
+Type=oneshot
+User=@LUMI_SERVICE_USER@
+Group=@LUMI_SERVICE_GROUP@
+WorkingDirectory=@LUMI_PROJECT_DIR@
+Environment=HOME=@LUMI_SERVICE_HOME@
+Environment=PATH=@LUMI_SERVICE_HOME@/.bun/bin:@LUMI_SERVICE_HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=LUMI_UPDATE_STATE_FILE=/var/lib/lumistripe/update/status.json
+ExecStart=/usr/bin/python3 @LUMI_PROJECT_DIR@/deploy/update_state.py check --project-dir @LUMI_PROJECT_DIR@ --state-file /var/lib/lumistripe/update/status.json
+TimeoutStartSec=40
+

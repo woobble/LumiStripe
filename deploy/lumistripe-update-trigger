@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+if (($# != 0)); then
+  echo "This command does not accept arguments." >&2
+  exit 2
+fi
+
+exec /usr/bin/systemctl start --no-block lumistripe-update.service
+

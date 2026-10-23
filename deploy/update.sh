@@ -4,11 +4,13 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=deploy/tls.sh
 source "$SCRIPT_DIR/tls.sh"
+# shellcheck source=deploy/update-support.sh
+source "$SCRIPT_DIR/update-support.sh"
 PROJECT_DIR="${LUMI_PROJECT_DIR:-$(cd -- "$SCRIPT_DIR/.." && pwd -P)}"
 PROJECT_USER="${LUMI_SERVICE_USER:-${SUDO_USER:-}}"
 PYTHON_VERSION="${LUMI_PYTHON_VERSION:-3.12}"
 UV_VERSION="${LUMI_UV_VERSION:-0.13.0}"
-TARGET_REF="${1:-origin/main}"
+TARGET_REF="${1:-refs/remotes/lumistripe-upstream/main}"
 LOCK_FILE=/run/lock/lumistripe-update.lock
 SERVICE_FILE=/etc/systemd/system/lumistripe-web.service
 SPOTIFY_SERVICE_FILE=/etc/systemd/system/lumistripe-spotify.service
@@ -21,7 +23,7 @@ PREVIOUS_REF=
 ROLLING_BACK=0
 
 if [[ $EUID -ne 0 ]]; then
-  echo "Run this updater as root (for example: sudo $0 origin/main)." >&2
+  echo "Run this updater as root (for example: sudo $0)." >&2
   exit 1
 fi
 [[ -d "$PROJECT_DIR" ]] || { echo "Project directory not found: $PROJECT_DIR" >&2; exit 1; }
@@ -42,6 +44,10 @@ id "$PROJECT_USER" >/dev/null 2>&1 || {
 }
 PROJECT_HOME="$(getent passwd "$PROJECT_USER" | cut -d: -f6)"
 PROJECT_GROUP="$(id -gn "$PROJECT_USER")"
+SERVICE_USER="$PROJECT_USER"
+SERVICE_HOME="$PROJECT_HOME"
+SERVICE_GROUP="$PROJECT_GROUP"
+UPDATE_STATE_FILE="${LUMI_UPDATE_STATE_FILE:-/var/lib/lumistripe/update/status.json}"
 UV_BIN="$PROJECT_HOME/.local/bin/uv"
 BUN_BIN="$PROJECT_HOME/.bun/bin/bun"
 WIREPLUMBER_DIR="$PROJECT_HOME/.config/wireplumber/wireplumber.conf.d"
@@ -58,6 +64,7 @@ command -v curl >/dev/null || { echo "curl is required" >&2; exit 1; }
 [[ -x "$BUN_BIN" ]] || { echo "Bun is missing at $BUN_BIN; run deploy/install.sh first." >&2; exit 1; }
 
 exec 9>"$LOCK_FILE"
+chmod 644 "$LOCK_FILE"
 flock -n 9 || { echo "Another LumiStripe update is already running." >&2; exit 1; }
 
 as_user() {
@@ -272,7 +279,9 @@ refresh_deployment_files() {
   install_wireplumber_config
   render_service_unit
   render_spotify_service_unit
+  install_update_support
   systemctl daemon-reload
+  systemctl enable --now lumistripe-update-check.timer
 
   install -d -m 755 /etc/nginx/sites-available /etc/nginx/sites-enabled
   install -o root -g root -m 644 \
@@ -300,15 +309,32 @@ rollback() {
   systemctl restart lumistripe-web.service || true
   systemctl restart lumistripe-spotify.service || true
 }
-trap rollback ERR
+
+record_update_state() {
+  /usr/bin/python3 "$SCRIPT_DIR/update_state.py" "$1" \
+    --project-dir "$PROJECT_DIR" \
+    --state-file "$UPDATE_STATE_FILE" || true
+}
+
+handle_update_error() {
+  local exit_status=$?
+  trap - ERR
+  rollback
+  record_update_state install-failed
+  exit "$exit_status"
+}
+trap handle_update_error ERR
 
 STATUS=$(git_user status --porcelain)
 [[ -z "$STATUS" ]] || { echo "Working tree is dirty; commit or stash changes before updating." >&2; exit 1; }
+record_update_state install-start
 ensure_uv_version
 PREVIOUS_REF=$(git_user rev-parse HEAD)
-git_user fetch --prune --tags origin
+git_user -c core.hooksPath=/dev/null fetch --prune \
+  https://github.com/woobble/LumiStripe.git \
+  +refs/heads/main:refs/remotes/lumistripe-upstream/main
 TARGET_COMMIT=$(git_user rev-parse --verify "${TARGET_REF}^{commit}")
-git_user switch --detach "$TARGET_COMMIT"
+git_user -c core.hooksPath=/dev/null switch --detach "$TARGET_COMMIT"
 
 install_audio_bridge_packages
 create_spotify_environment_file
@@ -329,6 +355,7 @@ systemctl is-active --quiet lumistripe-web.service
 for _ in {1..30}; do
   if curl --fail --silent --show-error http://127.0.0.1:8000/api/health >/dev/null; then
     echo "LumiStripe updated to $(git_user rev-parse --short HEAD)."
+    record_update_state install-succeeded
     trap - ERR
     exit 0
   fi

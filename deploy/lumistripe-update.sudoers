@@ -1,0 +1,2 @@
+@LUMI_SERVICE_USER@ ALL=(root) NOPASSWD: /usr/local/sbin/lumistripe-update-trigger
+

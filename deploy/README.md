@@ -62,6 +62,34 @@ The generated CA is stored at the service
 user's mkcert CA path and must be installed/trusted on each phone or PC that
 opens the HTTPS dashboard.
 
+## Systemd updates
+
+The systemd installation checks LumiStripe's public GitHub `main` branch every
+six hours. Opening the paired dashboard while online, or reconnecting the phone to
+the Pi while the dashboard is open, also starts a check. A failed check while
+offline is recorded quietly and retried later. When an update is available,
+the dashboard shows its commit and an **Install update** button; installation
+starts only after you select it. The Pi rebuilds the app, restarts the services,
+and checks that the dashboard is healthy. The updater attempts to roll back if
+that check fails.
+
+The updater is installed by `deploy/install.sh`. To add it to an existing
+systemd installation, first update the checkout to a version containing these
+files, then rerun:
+
+```bash
+sudo ./deploy/install.sh
+```
+
+This is safe to rerun; it preserves the existing pairing and Spotify settings.
+For a manual update, use `sudo ./deploy/update.sh`. Check background updater
+logs with:
+
+```bash
+sudo journalctl -u lumistripe-update-check.service \
+  -u lumistripe-update.service --since today
+```
+
 ## Docker Compose installation
 
 Docker is supported as an alternative to the systemd installation. The

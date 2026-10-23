@@ -1,0 +1,12 @@
+[Unit]
+Description=Check LumiStripe for updates every six hours
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=6h
+RandomizedDelaySec=5min
+Unit=lumistripe-update-check.service
+
+[Install]
+WantedBy=timers.target
+

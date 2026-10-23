@@ -94,6 +94,8 @@ done
 
 # shellcheck source=deploy/tls.sh
 source "$SCRIPT_DIR/tls.sh"
+# shellcheck source=deploy/update-support.sh
+source "$SCRIPT_DIR/update-support.sh"
 
 command -v apt-get >/dev/null 2>&1 || {
   echo "This installer requires apt-get (Raspberry Pi OS/Debian)." >&2
@@ -457,6 +459,8 @@ start_deployment_services() {
     return 1
   fi
 
+  systemctl enable --now lumistripe-update-check.timer
+
   for _ in {1..30}; do
     if curl --fail --silent http://127.0.0.1:8000/api/health >/dev/null; then
       systemctl --no-pager --full status lumistripe-web.service
@@ -635,6 +639,7 @@ install_project_dependencies
 create_tls_certificate
 render_service_unit
 render_spotify_service_unit
+install_update_support
 install_wireplumber_config
 start_bluetooth
 start_user_audio

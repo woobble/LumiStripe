@@ -2312,6 +2312,127 @@
         "title": "StripeTopologyRequest",
         "type": "object"
       },
+      "UpdateStatus": {
+        "properties": {
+          "available_commit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Available Commit"
+          },
+          "check_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check Error"
+          },
+          "checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          },
+          "install_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Install Error"
+          },
+          "install_finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Install Finished At"
+          },
+          "install_started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Install Started At"
+          },
+          "install_state": {
+            "enum": [
+              "idle",
+              "running",
+              "success",
+              "failed"
+            ],
+            "title": "Install State",
+            "type": "string"
+          },
+          "installed_commit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Installed Commit"
+          },
+          "supported": {
+            "title": "Supported",
+            "type": "boolean"
+          },
+          "update_available": {
+            "title": "Update Available",
+            "type": "boolean"
+          },
+          "working_tree_dirty": {
+            "title": "Working Tree Dirty",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "supported",
+          "installed_commit",
+          "available_commit",
+          "update_available",
+          "working_tree_dirty",
+          "checked_at",
+          "check_error",
+          "install_state",
+          "install_started_at",
+          "install_finished_at",
+          "install_error"
+        ],
+        "title": "UpdateStatus",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -3685,6 +3806,60 @@
           }
         },
         "summary": "Test Stripe"
+      }
+    },
+    "/api/system/update": {
+      "get": {
+        "operationId": "update_status_api_system_update_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Update Status"
+      }
+    },
+    "/api/system/update/check": {
+      "post": {
+        "operationId": "check_for_updates_api_system_update_check_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Check For Updates"
+      }
+    },
+    "/api/system/update/install": {
+      "post": {
+        "operationId": "install_update_api_system_update_install_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Install Update"
       }
     }
   }

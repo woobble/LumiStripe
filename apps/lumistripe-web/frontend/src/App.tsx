@@ -5,6 +5,7 @@ import { PairingScreen } from "@/components/auth/pairing-screen"
 import { ConnectionBadge } from "@/components/dashboard/connection-badge"
 import { DashboardNavigation } from "@/components/dashboard/dashboard-navigation"
 import { DashboardRoutes } from "@/components/dashboard/dashboard-routes"
+import { SystemUpdateNotice } from "@/components/dashboard/system-update-notice"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Toaster } from "@/components/ui/sonner"
@@ -105,6 +106,8 @@ function LiveDashboard({ access }: { access: AccessController }) {
           </div>
           <ConnectionBadge status={connection} />
         </header>
+
+        <SystemUpdateNotice />
 
         {loading && !state ? (
           <DashboardSkeleton />

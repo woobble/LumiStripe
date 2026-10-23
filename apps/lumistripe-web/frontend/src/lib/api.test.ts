@@ -30,6 +30,39 @@ describe("dashboardApi", () => {
     expect(websocketUrl()).toBe("ws://localhost:3000/ws/state")
   })
 
+  it("reads update status and exposes fixed check and install requests", async () => {
+    const updateStatus = {
+      supported: true,
+      installed_commit: "a".repeat(40),
+      available_commit: "b".repeat(40),
+      update_available: true,
+      working_tree_dirty: false,
+      checked_at: "2026-01-01T00:00:00Z",
+      check_error: null,
+      install_state: "idle",
+      install_started_at: null,
+      install_finished_at: null,
+      install_error: null,
+    }
+    fetchMock.mockReturnValueOnce(jsonResponse(updateStatus))
+    expect(await dashboardApi.getUpdateStatus()).toEqual(updateStatus)
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/system/update", expect.any(Object))
+
+    fetchMock.mockReturnValueOnce(jsonResponse(updateStatus))
+    await dashboardApi.checkForUpdates()
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/system/update/check",
+      expect.objectContaining({ method: "POST" }),
+    )
+
+    fetchMock.mockReturnValueOnce(jsonResponse({ ...updateStatus, install_state: "running" }))
+    await dashboardApi.installUpdate()
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/system/update/install",
+      expect.objectContaining({ method: "POST" }),
+    )
+  })
+
   it("normalizes legacy Bluetooth responses without capability metadata", async () => {
     fetchMock.mockReturnValueOnce(jsonResponse({
       available: true,

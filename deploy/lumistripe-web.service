@@ -17,6 +17,8 @@ WorkingDirectory=@LUMI_PROJECT_DIR@
 # Keep the toolchains available when systemd starts without a login shell.
 Environment=PATH=@LUMI_HOME@/.bun/bin:@LUMI_HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=PYTHONUNBUFFERED=1
+Environment=LUMI_PROJECT_DIR=@LUMI_PROJECT_DIR@
+Environment=LUMI_UPDATE_STATE_FILE=/var/lib/lumistripe/update/status.json
 # System services do not inherit the user's PipeWire runtime environment.
 # PortAudio's Pulse/ALSA bridge needs this socket to capture the Bluetooth
 # monitor, while bluetooth.py also uses it for wpctl/pactl probes.

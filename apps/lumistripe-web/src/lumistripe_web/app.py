@@ -23,6 +23,8 @@ def create_app(
     runtime_factory: RuntimeFactory = LumiStripeRuntime,
     static_dir: Path | None = None,
     pairing_code: str | None = None,
+    update_state_file: Path | None = None,
+    project_dir: Path | None = None,
 ) -> FastAPI:
     resolved_settings = settings or RuntimeSettings()
 
@@ -44,6 +46,14 @@ def create_app(
 
     app = FastAPI(title="LumiStripe", lifespan=lifespan)
     app.state.access = PairingAuth(pairing_code)
+    app.state.update_state_file = update_state_file or Path(
+        os.environ.get(
+            "LUMI_UPDATE_STATE_FILE", "/var/lib/lumistripe/update/status.json"
+        )
+    )
+    app.state.update_project_dir = project_dir or Path(
+        os.environ.get("LUMI_PROJECT_DIR", Path(__file__).resolve().parents[4])
+    )
 
     @app.middleware("http")
     async def require_pairing(request: Request, call_next):

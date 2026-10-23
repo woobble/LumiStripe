@@ -59,6 +59,7 @@ export type PowerBudgetState = RestSchema<"PowerBudgetState">
 export type PowerOutputState = RestSchema<"PowerOutputState">
 export type StartupPlaybackState = RestSchema<"StartupPlaybackState">
 export type StartupSettingsResponse = RestSchema<"StartupSettingsResponse">
+export type UpdateStatus = RestSchema<"UpdateStatus">
 export type StripeOutputConfig = RestSchema<"StripeOutputConfig">
 export type StripePlaybackState = RestSchema<"StripePlaybackState">
 export type StripeTopology = RestSchema<"StripeTopology">

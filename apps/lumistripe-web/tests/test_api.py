@@ -7,7 +7,9 @@ import pytest
 from fastapi.testclient import TestClient
 from lumistripe import AudioInputDevice
 from lumistripe_web.api import encode_preview_frame
+from lumistripe_web.api.routes import system as system_routes
 from lumistripe_web.app import build_parser, create_app, main
+from lumistripe_web.contracts.system import UpdateStatus
 from lumistripe_web.runtime import LumiStripeRuntime, PreviewFrame, RuntimeSettings
 from starlette.websockets import WebSocketDisconnect
 
@@ -68,6 +70,109 @@ def test_control_api_round_trip() -> None:
         assert animation.status_code == 200
         assert animation.json()["animation"] == options[1]["name"]
         assert animation.json()["mode"] == "static"
+
+
+def test_update_status_and_install_api_require_pairing_and_start_fixed_service(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_file = tmp_path / "update-status.json"
+    state_file.write_text(
+        UpdateStatus(
+            supported=True,
+            installed_commit="a" * 40,
+            available_commit="b" * 40,
+            update_available=True,
+            working_tree_dirty=False,
+            checked_at=None,
+            check_error=None,
+            install_state="idle",
+            install_started_at=None,
+            install_finished_at=None,
+            install_error=None,
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    app = create_app(
+        RuntimeSettings(pixels=8),
+        pairing_code="1234",
+        update_state_file=state_file,
+        project_dir=tmp_path,
+    )
+    invocations: list[list[str]] = []
+
+    def start_service(command: list[str], **_kwargs: object) -> None:
+        invocations.append(command)
+
+    monkeypatch.setattr(system_routes.subprocess, "run", start_service)
+
+    with TestClient(app) as client:
+        assert client.get("/api/system/update").status_code == 401
+        assert client.post("/api/system/update/install").status_code == 401
+        assert client.post("/api/auth/pair", json={"code": "1234"}).status_code == 200
+
+        current = client.get("/api/system/update")
+        assert current.status_code == 200
+        assert current.json()["available_commit"] == "b" * 40
+
+        started = client.post("/api/system/update/install")
+        assert started.status_code == 202
+        assert started.json()["install_state"] == "running"
+
+    assert invocations == [[
+        "/usr/bin/sudo",
+        "-n",
+        "/usr/local/sbin/lumistripe-update-trigger",
+    ]]
+
+
+def test_update_install_rejects_dirty_checkout_and_check_starts_helper(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_file = tmp_path / "update-status.json"
+    state_file.write_text(
+        UpdateStatus(
+            supported=True,
+            installed_commit=None,
+            available_commit=None,
+            update_available=True,
+            working_tree_dirty=True,
+            checked_at=None,
+            check_error=None,
+            install_state="idle",
+            install_started_at=None,
+            install_finished_at=None,
+            install_error=None,
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    project_dir = tmp_path / "project"
+    helper = project_dir / "deploy" / "update_state.py"
+    helper.parent.mkdir(parents=True)
+    helper.write_text("", encoding="utf-8")
+    app = create_app(
+        RuntimeSettings(pixels=8),
+        update_state_file=state_file,
+        project_dir=project_dir,
+    )
+    launched: list[tuple[list[str], dict[str, object]]] = []
+
+    def launch_check(command: list[str], **kwargs: object) -> None:
+        launched.append((command, kwargs))
+
+    monkeypatch.setattr(system_routes.subprocess, "Popen", launch_check)
+
+    with TestClient(app) as client:
+        rejected = client.post("/api/system/update/install")
+        assert rejected.status_code == 409
+        assert "local changes" in rejected.json()["detail"]
+
+        checked = client.post("/api/system/update/check")
+        assert checked.status_code == 202
+
+    assert launched and launched[0][0][1] == str(helper)
+    assert launched[0][1]["start_new_session"] is True
 
 
 def test_api_maps_validation_and_runtime_errors() -> None:

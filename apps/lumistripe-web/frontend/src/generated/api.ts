@@ -636,6 +636,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/system/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Update Status */
+        get: operations["update_status_api_system_update_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/system/update/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Check For Updates */
+        post: operations["check_for_updates_api_system_update_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/system/update/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Install Update */
+        post: operations["install_update_api_system_update_install_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1696,6 +1747,34 @@ export interface components {
             power_budget_enabled: boolean;
             /** Power Budget Watts */
             power_budget_watts?: number | null;
+        };
+        /** UpdateStatus */
+        UpdateStatus: {
+            /** Available Commit */
+            available_commit: string | null;
+            /** Check Error */
+            check_error: string | null;
+            /** Checked At */
+            checked_at: string | null;
+            /** Install Error */
+            install_error: string | null;
+            /** Install Finished At */
+            install_finished_at: string | null;
+            /** Install Started At */
+            install_started_at: string | null;
+            /**
+             * Install State
+             * @enum {string}
+             */
+            install_state: "idle" | "running" | "success" | "failed";
+            /** Installed Commit */
+            installed_commit: string | null;
+            /** Supported */
+            supported: boolean;
+            /** Update Available */
+            update_available: boolean;
+            /** Working Tree Dirty */
+            working_tree_dirty: boolean;
         };
         /** ValidationError */
         ValidationError: {
@@ -2894,6 +2973,66 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_status_api_system_update_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateStatus"];
+                };
+            };
+        };
+    };
+    check_for_updates_api_system_update_check_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateStatus"];
+                };
+            };
+        };
+    };
+    install_update_api_system_update_install_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateStatus"];
                 };
             };
         };

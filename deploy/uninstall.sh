@@ -16,6 +16,12 @@ ENV_FILE="$ENV_DIR/lumistripe-web.env"
 SPOTIFY_ENV_FILE="$ENV_DIR/lumistripe-spotify.env"
 SERVICE_FILE=/etc/systemd/system/lumistripe-web.service
 SPOTIFY_SERVICE_FILE=/etc/systemd/system/lumistripe-spotify.service
+UPDATE_SERVICE_FILE=/etc/systemd/system/lumistripe-update.service
+UPDATE_CHECK_SERVICE_FILE=/etc/systemd/system/lumistripe-update-check.service
+UPDATE_CHECK_TIMER_FILE=/etc/systemd/system/lumistripe-update-check.timer
+UPDATE_SUDOERS_FILE=/etc/sudoers.d/lumistripe-update
+UPDATE_TRIGGER_FILE=/usr/local/sbin/lumistripe-update-trigger
+UPDATE_LIBEXEC_DIR=/usr/local/libexec/lumistripe/deploy
 SOLOIST_BIN=/usr/local/bin/soloist
 STATE_DIR=/var/lib/lumistripe
 STATE_FILE="$STATE_DIR/install-state"
@@ -181,9 +187,19 @@ restart_user_audio() {
 
 stop_service lumistripe-web.service
 stop_service lumistripe-spotify.service
+stop_service lumistripe-update-check.timer
+stop_service lumistripe-update.service
+stop_service lumistripe-update-check.service
 
 remove_file "$SERVICE_FILE"
 remove_file "$SPOTIFY_SERVICE_FILE"
+remove_file "$UPDATE_SERVICE_FILE"
+remove_file "$UPDATE_CHECK_SERVICE_FILE"
+remove_file "$UPDATE_CHECK_TIMER_FILE"
+remove_file "$UPDATE_SUDOERS_FILE"
+remove_file "$UPDATE_TRIGGER_FILE"
+remove_directory "$UPDATE_LIBEXEC_DIR"
+rmdir /usr/local/libexec/lumistripe 2>/dev/null || true
 systemctl daemon-reload
 
 remove_file "$WIREPLUMBER_FILE"
@@ -226,6 +242,7 @@ remove_directory "$PROJECT_FRONTEND_DIR/dist"
 remove_directory "$PROJECT_STATIC_DIR"
 
 remove_file "$STATE_FILE"
+remove_directory /var/lib/lumistripe/update
 remove_empty_directory "$STATE_DIR"
 remove_empty_directory /var/backups/lumistripe
 

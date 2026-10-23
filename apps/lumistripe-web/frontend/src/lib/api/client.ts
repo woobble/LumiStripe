@@ -10,6 +10,7 @@ import type {
   PlaybackMode,
   SpotifyControlAction,
   StripeTopology,
+  UpdateStatus,
 } from "@/lib/api/contracts"
 
 export type {
@@ -48,6 +49,7 @@ export type {
   SpotifyControlAction,
   SpotifyStatusResponse,
   SpotifyTrackInfo,
+  UpdateStatus,
 } from "@/lib/api/contracts"
 
 export const ACCESS_REVOKED_EVENT = "lumistripe:access-revoked"
@@ -354,6 +356,19 @@ const startupSettingsSchema = z.object({
     blackout: z.boolean(),
   }).strict(),
 }).strict()
+const updateStatusSchema = z.object({
+  supported: z.boolean(),
+  installed_commit: z.string().nullable(),
+  available_commit: z.string().nullable(),
+  update_available: z.boolean(),
+  working_tree_dirty: z.boolean(),
+  checked_at: z.string().nullable(),
+  check_error: z.string().nullable(),
+  install_state: z.enum(["idle", "running", "success", "failed"]),
+  install_started_at: z.string().nullable(),
+  install_finished_at: z.string().nullable(),
+  install_error: z.string().nullable(),
+}).strict() satisfies z.ZodType<UpdateStatus>
 const calibrationSessionSchema = z.object({
   session_id: z.string(),
   state: dashboardStateSchema,
@@ -449,6 +464,9 @@ async function request<T>(
 
 export const dashboardApi = {
   getState: () => request("/api/state", undefined, dashboardStateSchema),
+  getUpdateStatus: () => request("/api/system/update", undefined, updateStatusSchema),
+  checkForUpdates: () => request("/api/system/update/check", { method: "POST" }, updateStatusSchema),
+  installUpdate: () => request("/api/system/update/install", { method: "POST" }, updateStatusSchema),
   getAnimations: async () => (await request("/api/animations", undefined, animationListSchema)).items,
   setMode: (mode: PlaybackMode, color?: string, stripeId?: string, musicRecognitionEnabled?: boolean) =>
     request("/api/mode", {
