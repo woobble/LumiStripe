@@ -33,6 +33,28 @@ and native build profile the same. The 512-sample result represents the normal
 capture callback workload; larger batches cover integrations that submit more
 than one FFT hop at a time.
 
+Measure the real PipeWire output callback on the Raspberry Pi and confirm the
+stream is connected to the named active sync sink:
+
+```bash
+uv run python scripts/benchmark_audio_sync_output.py \
+  --sink alsa_output.usb-speakers --duration 20
+```
+
+The command plays the nonuniform calibration cue and reports the sample rate,
+PortAudio block duration, callback p50/p95/p99 processing time, p95 callback
+interval jitter, underflow/overflow counts, and callback errors. It exits with a clear
+error if PipeWire cannot identify the calibration stream or if that stream is
+connected to a different sink. Run it at least three times with idle system
+load, then repeat under representative CPU and LED output load. Compare the
+callback p95/p99 with the PortAudio block duration and record interval jitter
+and status counts.
+
+During live playback, audio telemetry reports beat scheduler p95 lateness,
+dropped stale ticks, and coalesced ticks. A stall must not cause old beat
+flashes to burst on later frames. A tick is eligible only when it is at most
+50 ms late and no later than half a configured subdivision interval.
+
 ## Physical audio and LED measurement
 
 Use one recorder or oscilloscope with two synchronized channels: a measurement
@@ -55,7 +77,8 @@ runs.
    transition from the photodiode channel. Pair transitions to the nearest kick
    within one half beat. Calculate `LED transition time - audible onset time`
    per beat. Report signed median, median absolute deviation, p95 and p99
-   absolute error, and missed/unpaired beats.
+   absolute error, and missed/unpaired beats. Record scheduler stale drops,
+   coalesced ticks, and scheduler p95 lateness from audio telemetry.
 5. Start **Audio-to-LED sync** calibration for that route. The Pi plays a
    repeating nonuniform cue while the strip displays the matching flash pattern.
    Adjust the offset until the speaker cue and flash coincide, save it, then
@@ -68,12 +91,12 @@ There is no fixed pass threshold in this procedure. Establish a threshold after
 the baseline measurements and choose it for the target Pi, speaker, LEDs, and
 installation. Use the same threshold for the corrected matrix.
 
-| Input route | PipeWire sink | Offset | Beats | Median delay | Median abs. deviation | p95 abs. error | p99 abs. error | Missed beats |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Microphone |  | 0 ms |  |  |  |  |  |  |
-| Microphone |  |  |  |  |  |  |  |  |
-| Bluetooth |  | 0 ms |  |  |  |  |  |  |
-| Bluetooth |  |  |  |  |  |  |  |  |
+| Input route | PipeWire sink | Offset | Beats | Median delay | Median abs. deviation | p95 abs. error | p99 abs. error | Missed beats | Scheduler dropped / coalesced | Scheduler p95 lateness |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Microphone |  | 0 ms |  |  |  |  |  |  |  |  |
+| Microphone |  |  |  |  |  |  |  |  |  |  |
+| Bluetooth |  | 0 ms |  |  |  |  |  |  |  |  |
+| Bluetooth |  |  |  |  |  |  |  |  |  |  |
 
 The shared recorder clock measures audible output and physical LED transitions
 directly. The calibration UI provides an operator adjustment; it does not

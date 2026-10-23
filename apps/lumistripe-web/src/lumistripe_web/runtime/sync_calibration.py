@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import threading
 import time
+from dataclasses import dataclass
 from math import isfinite
 from typing import Any
 
@@ -16,6 +16,21 @@ SYNC_PATTERN_PERIOD_S = 3.0
 SYNC_TONE_FREQUENCY_HZ = 880.0
 SYNC_TONE_AMPLITUDE = 0.18
 SYNC_START_DELAY_S = 1.5
+_CALLBACK_SAMPLE_CAPACITY = 2048
+
+
+@dataclass(frozen=True, slots=True)
+class CalibrationOutputDiagnostics:
+    callback_count: int = 0
+    sample_rate: float = 0.0
+    block_duration_ms: float = 0.0
+    callback_p50_ms: float = 0.0
+    callback_p95_ms: float = 0.0
+    callback_p99_ms: float = 0.0
+    interval_jitter_p95_ms: float = 0.0
+    underflow_count: int = 0
+    overflow_count: int = 0
+    callback_error_count: int = 0
 
 
 def sync_calibration_led_on(
@@ -35,26 +50,44 @@ def sync_calibration_led_on(
 
 
 class AudioSyncCalibrationTone:
-    """Play a distinctive cue through the system's PulseAudio default sink.
-
-    The cue uses PortAudio's DAC timestamps. Its monotonic start is derived from
-    the same stream clock, so browser time and browser output latency do not
-    enter the LED comparison.
-    """
+    """Play a precomputed cue through the system's PipeWire/Pulse output."""
 
     def __init__(self, sounddevice_module: Any | None = None) -> None:
         self._sounddevice = sounddevice_module or _load_sounddevice()
-        self._lock = threading.Lock()
-        self._ready = threading.Event()
         self._start_at_monotonic: float | None = None
         self._start_at_stream_time: float | None = None
         self._callback_error: str | None = None
         self._closed = False
+        self._armed = False
+        self._callback_timing_ready = False
+        self._latest_dac_time: float | None = None
+        self._latest_stream_offset_s: float | None = None
         self._sample_rate, device_index = self._select_pipewire_output()
+        self._waveform = self._build_waveform(self._sample_rate)
+        self._waveform_sample_rate = self._sample_rate
+        self._callback_count = 0
+        self._callback_durations_ns = [0] * _CALLBACK_SAMPLE_CAPACITY
+        self._callback_interval_jitter_ns = [0] * _CALLBACK_SAMPLE_CAPACITY
+        self._last_callback_started_ns: int | None = None
+        self._last_callback_frames = 0
+        self._underflow_count = 0
+        self._overflow_count = 0
+        self._callback_error_count = 0
+        self._diagnostics_updated_at_s = float("-inf")
+        self._cached_callback_percentiles_ms = (0.0, 0.0, 0.0, 0.0)
         self._stream: Any | None = None
         self._open_stream(device_index)
-        if not self._ready.wait(timeout=2.0):
+        deadline = time.monotonic() + 2.0
+        while (
+            not self._callback_timing_ready
+            and self._callback_error is None
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.005)
+        if not self._callback_timing_ready:
             self.close()
+            if self._callback_error is not None:
+                raise RuntimeError(self._callback_error)
             raise RuntimeError(
                 "The selected PipeWire output did not provide audio timing data."
             )
@@ -66,14 +99,76 @@ class AudioSyncCalibrationTone:
     @property
     def start_at_monotonic(self) -> float:
         if self._start_at_monotonic is None:
-            raise RuntimeError("The calibration output stream has not started.")
+            raise RuntimeError("The calibration output stream has not been armed.")
         return self._start_at_monotonic
 
+    def arm(self) -> None:
+        """Schedule the cue after the caller has verified its PipeWire route."""
+        if self._callback_error is not None:
+            raise RuntimeError(self._callback_error)
+        if self._latest_dac_time is None or self._latest_stream_offset_s is None:
+            raise RuntimeError("The calibration output stream has no timing anchor.")
+        self._start_at_stream_time = self._latest_dac_time + SYNC_START_DELAY_S
+        self._start_at_monotonic = (
+            self._start_at_stream_time + self._latest_stream_offset_s
+        )
+        self._armed = True
+
+    def diagnostics(self) -> CalibrationOutputDiagnostics:
+        count = self._callback_count
+        now_s = time.monotonic()
+        if now_s - self._diagnostics_updated_at_s >= 0.25:
+            self._cached_callback_percentiles_ms = self._calculate_callback_percentiles(
+                count
+            )
+            self._diagnostics_updated_at_s = now_s
+        p50, p95, p99, interval_jitter_p95 = self._cached_callback_percentiles_ms
+        return CalibrationOutputDiagnostics(
+            callback_count=count,
+            sample_rate=self._sample_rate,
+            block_duration_ms=512.0 / self._sample_rate * 1000.0,
+            callback_p50_ms=p50,
+            callback_p95_ms=p95,
+            callback_p99_ms=p99,
+            interval_jitter_p95_ms=interval_jitter_p95,
+            underflow_count=self._underflow_count,
+            overflow_count=self._overflow_count,
+            callback_error_count=self._callback_error_count,
+        )
+
+    def _calculate_callback_percentiles(
+        self, count: int
+    ) -> tuple[float, float, float, float]:
+        sample_count = min(count, _CALLBACK_SAMPLE_CAPACITY)
+        if not sample_count:
+            return (0.0, 0.0, 0.0, 0.0)
+        first = (count - sample_count) % _CALLBACK_SAMPLE_CAPACITY
+        samples = [
+            self._callback_durations_ns[(first + index) % _CALLBACK_SAMPLE_CAPACITY]
+            for index in range(sample_count)
+        ]
+        samples.sort()
+        p50 = self._duration_percentile_ms(samples, 0.50)
+        p95 = self._duration_percentile_ms(samples, 0.95)
+        p99 = self._duration_percentile_ms(samples, 0.99)
+        interval_count = min(max(0, count - 1), _CALLBACK_SAMPLE_CAPACITY)
+        interval_first = (count - interval_count) % _CALLBACK_SAMPLE_CAPACITY
+        intervals = [
+            self._callback_interval_jitter_ns[
+                (interval_first + index) % _CALLBACK_SAMPLE_CAPACITY
+            ]
+            for index in range(interval_count)
+        ]
+        intervals.sort()
+        interval_jitter_p95 = (
+            self._duration_percentile_ms(intervals, 0.95) if intervals else 0.0
+        )
+        return (p50, p95, p99, interval_jitter_p95)
+
     def close(self) -> None:
-        with self._lock:
-            if self._closed:
-                return
-            self._closed = True
+        if self._closed:
+            return
+        self._closed = True
         stream = self._stream
         self._stream = None
         if stream is not None:
@@ -151,6 +246,9 @@ class AudioSyncCalibrationTone:
                 )
                 self._stream = stream
                 self._sample_rate = sample_rate
+                if sample_rate != self._waveform_sample_rate:
+                    self._waveform = self._build_waveform(sample_rate)
+                    self._waveform_sample_rate = sample_rate
                 stream.start()
                 return
             except Exception as exc:  # noqa: BLE001 - host support varies
@@ -165,6 +263,24 @@ class AudioSyncCalibrationTone:
         detail = errors[-1] if errors else "no compatible sample rate"
         raise RuntimeError(f"Could not open the PipeWire calibration output: {detail}")
 
+    @staticmethod
+    def _build_waveform(sample_rate: float) -> np.ndarray:
+        period_samples = round(sample_rate * SYNC_PATTERN_PERIOD_S)
+        waveform = np.zeros(period_samples, dtype=np.float32)
+        duration_samples = round(sample_rate * SYNC_PULSE_DURATION_S)
+        phase = np.arange(duration_samples, dtype=np.float64) / sample_rate
+        envelope = np.minimum(1.0, phase / 0.005)
+        envelope = np.minimum(envelope, (SYNC_PULSE_DURATION_S - phase) / 0.02)
+        pulse = (
+            np.sin(2.0 * np.pi * SYNC_TONE_FREQUENCY_HZ * phase)
+            * np.maximum(0.0, envelope)
+            * SYNC_TONE_AMPLITUDE
+        ).astype(np.float32)
+        for pulse_at in SYNC_PULSE_TIMES_S:
+            start = round(pulse_at * sample_rate)
+            waveform[start : start + duration_samples] = pulse
+        return waveform
+
     def _callback(
         self,
         outdata: np.ndarray,
@@ -172,50 +288,62 @@ class AudioSyncCalibrationTone:
         time_info: Any,
         status: Any,
     ) -> None:
-        del status
+        callback_started_ns = time.perf_counter_ns()
+        previous_started_ns = self._last_callback_started_ns
+        if previous_started_ns is not None:
+            expected_interval_ns = round(
+                self._last_callback_frames * 1_000_000_000 / self._sample_rate
+            )
+            self._callback_interval_jitter_ns[
+                self._callback_count % _CALLBACK_SAMPLE_CAPACITY
+            ] = abs(callback_started_ns - previous_started_ns - expected_interval_ns)
+        self._last_callback_started_ns = callback_started_ns
+        self._last_callback_frames = frames
         outdata.fill(0.0)
         try:
             current_time = float(time_info.currentTime)
             dac_time = float(time_info.outputBufferDacTime)
             if not isfinite(current_time) or not isfinite(dac_time):
                 raise ValueError("The PipeWire output returned invalid timing data.")
-            callback_monotonic = time.monotonic()
-            stream_offset = callback_monotonic - current_time
-            with self._lock:
-                if self._closed:
-                    return
-                if self._start_at_stream_time is None:
-                    self._start_at_stream_time = dac_time + SYNC_START_DELAY_S
-                    self._start_at_monotonic = (
-                        self._start_at_stream_time + stream_offset
-                    )
-                    self._ready.set()
-                start_at = self._start_at_stream_time
-
-            assert start_at is not None
-            stream_times = dac_time + np.arange(frames, dtype=np.float64) / self._sample_rate
-            relative = stream_times - start_at
-            pattern_position = np.mod(relative, SYNC_PATTERN_PERIOD_S)
-            active = relative >= 0.0
-            samples = np.zeros(frames, dtype=np.float32)
-            for pulse_at in SYNC_PULSE_TIMES_S:
-                pulse_phase = pattern_position - pulse_at
-                in_pulse = active & (pulse_phase >= 0.0) & (pulse_phase < SYNC_PULSE_DURATION_S)
-                if not np.any(in_pulse):
-                    continue
-                phase = pulse_phase[in_pulse]
-                envelope = np.minimum(1.0, phase / 0.005)
-                envelope = np.minimum(
-                    envelope,
-                    (SYNC_PULSE_DURATION_S - phase) / 0.02,
-                )
-                samples[in_pulse] = (
-                    np.sin(2.0 * np.pi * SYNC_TONE_FREQUENCY_HZ * phase)
-                    * np.maximum(0.0, envelope)
-                    * SYNC_TONE_AMPLITUDE
-                ).astype(np.float32)
-            outdata[:, 0] = samples
+            self._latest_dac_time = dac_time
+            self._latest_stream_offset_s = time.monotonic() - current_time
+            self._callback_timing_ready = True
+            if not self._closed and self._armed:
+                self._render_callback_audio(outdata, frames, dac_time)
+            if bool(getattr(status, "output_underflow", False)):
+                self._underflow_count += 1
+            if bool(getattr(status, "output_overflow", False)):
+                self._overflow_count += 1
         except Exception as exc:  # noqa: BLE001 - exceptions cannot cross PortAudio callback
-            with self._lock:
-                self._callback_error = str(exc)
-                self._ready.set()
+            self._callback_error = str(exc)
+            self._callback_error_count += 1
+            outdata.fill(0.0)
+        finally:
+            index = self._callback_count % _CALLBACK_SAMPLE_CAPACITY
+            self._callback_durations_ns[index] = time.perf_counter_ns() - callback_started_ns
+            self._callback_count += 1
+
+    def _render_callback_audio(
+        self, outdata: np.ndarray, frames: int, dac_time: float
+    ) -> None:
+        start_at = self._start_at_stream_time
+        if start_at is None:
+            return
+        sample_index = round((dac_time - start_at) * self._sample_rate)
+        destination = 0
+        if sample_index < 0:
+            destination = min(frames, -sample_index)
+            sample_index = 0
+        while destination < frames:
+            waveform_index = sample_index % len(self._waveform)
+            count = min(frames - destination, len(self._waveform) - waveform_index)
+            outdata[destination : destination + count, 0] = self._waveform[
+                waveform_index : waveform_index + count
+            ]
+            destination += count
+            sample_index += count
+
+    @staticmethod
+    def _duration_percentile_ms(samples: list[int], percentile: float) -> float:
+        index = min(len(samples) - 1, int((len(samples) - 1) * percentile))
+        return samples[index] / 1_000_000.0

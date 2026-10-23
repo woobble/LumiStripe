@@ -60,7 +60,9 @@ class FakeSoundDevice:
         return stream
 
 
-def test_calibration_tone_uses_pipewire_pulse_default_and_closes() -> None:
+def test_calibration_tone_uses_pipewire_pulse_default_and_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     sounddevice = FakeSoundDevice(
         [
             {
@@ -84,16 +86,58 @@ def test_calibration_tone_uses_pipewire_pulse_default_and_closes() -> None:
     stream = sounddevice.streams[0]
     assert stream.device == 4
     assert stream.started
+    with pytest.raises(RuntimeError, match="not been armed"):
+        _ = player.start_at_monotonic
+    player.arm()
     assert player.start_at_monotonic > 0.0
 
     output = np.empty((512, 1), dtype=np.float32)
+    with monkeypatch.context() as patcher:
+        patcher.setattr(
+            np,
+            "arange",
+            lambda *args, **kwargs: pytest.fail("callback constructed a sample array"),
+        )
+        stream.callback(
+            output,
+            512,
+            SimpleNamespace(currentTime=1001.0, outputBufferDacTime=1001.54),
+            SimpleNamespace(output_underflow=True, output_overflow=False),
+        )
+    assert np.max(np.abs(output)) > 0.0
+    diagnostics = player.diagnostics()
+    assert diagnostics.callback_count == 2
+    assert diagnostics.underflow_count == 1
+    assert diagnostics.overflow_count == 0
+    assert diagnostics.callback_p95_ms >= 0.0
+
+    before_wrap = np.empty((512, 1), dtype=np.float32)
+    after_wrap = np.empty((512, 1), dtype=np.float32)
+    wrap_time = player.start_at_monotonic  # anchor is independent of DAC time
     stream.callback(
-        output,
+        before_wrap,
         512,
-        SimpleNamespace(currentTime=1001.0, outputBufferDacTime=1001.54),
+        SimpleNamespace(currentTime=1002.0, outputBufferDacTime=1004.5173333333),
         None,
     )
-    assert np.max(np.abs(output)) > 0.0
+    stream.callback(
+        after_wrap,
+        512,
+        SimpleNamespace(currentTime=1002.01, outputBufferDacTime=1004.52),
+        None,
+    )
+    assert wrap_time > 0.0
+    np.testing.assert_allclose(before_wrap[128:, 0], after_wrap[:384, 0])
+
+    failed_output = np.empty((512, 1), dtype=np.float32)
+    stream.callback(
+        failed_output,
+        512,
+        SimpleNamespace(currentTime=float("nan"), outputBufferDacTime=1004.54),
+        None,
+    )
+    assert np.max(np.abs(failed_output)) == 0.0
+    assert player.diagnostics().callback_error_count == 1
 
     player.close()
     assert stream.stopped

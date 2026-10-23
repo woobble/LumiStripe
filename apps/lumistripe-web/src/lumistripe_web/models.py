@@ -554,6 +554,19 @@ class AudioTelemetry(BaseModel):
     beat_event_sequence: int = 0
     dropped_beat_events: int = 0
     pending_beat_events: int = 0
+    beat_scheduler_late_ticks_dropped: int = 0
+    beat_scheduler_late_ticks_coalesced: int = 0
+    beat_scheduler_lateness_p95_ms: float = Field(default=0.0, ge=0.0)
+    calibration_output_callback_count: int = 0
+    calibration_output_sample_rate: float = Field(default=0.0, ge=0.0)
+    calibration_output_block_duration_ms: float = Field(default=0.0, ge=0.0)
+    calibration_output_callback_p50_ms: float = Field(default=0.0, ge=0.0)
+    calibration_output_callback_p95_ms: float = Field(default=0.0, ge=0.0)
+    calibration_output_callback_p99_ms: float = Field(default=0.0, ge=0.0)
+    calibration_output_interval_jitter_p95_ms: float = Field(default=0.0, ge=0.0)
+    calibration_output_underflow_count: int = 0
+    calibration_output_overflow_count: int = 0
+    calibration_output_callback_error_count: int = 0
     sync_offset_ms: float = Field(default=0.0, ge=-500.0, le=500.0)
     sync_route: str = "mic|unknown|default"
     estimated_noise_floor: float = Field(default=0.0, ge=0.0, le=1.0)

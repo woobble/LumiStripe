@@ -88,14 +88,14 @@ class PipeWireProvider:
     def sources(self) -> str:
         return self._runner(("pactl", "list", "short", "sources"), 2.0)
 
-    def sinks(self) -> str:
-        return self._runner(("pactl", "list", "short", "sinks"), 2.0)
+    def sinks(self, timeout: float = 2.0) -> str:
+        return self._runner(("pactl", "list", "short", "sinks"), timeout)
 
     def sink_details(self) -> str:
         return self._runner(("pactl", "list", "sinks"), 2.0)
 
-    def sink_inputs(self) -> str:
-        return self._runner(("pactl", "list", "short", "sink-inputs"), 2.0)
+    def sink_inputs(self, timeout: float = 2.0) -> str:
+        return self._runner(("pactl", "list", "short", "sink-inputs"), timeout)
 
     def modules(self) -> str:
         return self._runner(("pactl", "list", "short", "modules"), 2.0)

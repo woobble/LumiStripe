@@ -152,6 +152,9 @@ class EffectSchedulerDiagnostics:
     accent_cooldown_remaining_s: float
     rhythmic: EffectTriggerStatus
     accent: EffectTriggerStatus
+    late_ticks_dropped: int
+    late_ticks_coalesced: int
+    beat_lateness_p95_ms: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +185,12 @@ class EffectScheduler:
     _recent_grid_indices: deque[int] = field(default_factory=deque, init=False)
     _recent_grid_index_set: set[int] = field(default_factory=set, init=False)
     _sync_offset_s: float = field(default=0.0, init=False)
+    _late_ticks_dropped: int = field(default=0, init=False)
+    _late_ticks_coalesced: int = field(default=0, init=False)
+    _beat_lateness_p95_ms: float = field(default=0.0, init=False)
+    _beat_lateness_samples_ms: deque[float] = field(
+        default_factory=lambda: deque(maxlen=256), init=False
+    )
 
     def __post_init__(self) -> None:
         self._rng = Random(self.config.seed)
@@ -216,6 +225,10 @@ class EffectScheduler:
         self._recent_grid_indices.clear()
         self._recent_grid_index_set.clear()
         self._sync_offset_s = 0.0
+        self._late_ticks_dropped = 0
+        self._late_ticks_coalesced = 0
+        self._beat_lateness_p95_ms = 0.0
+        self._beat_lateness_samples_ms.clear()
         self._reset_trigger_statuses()
 
     def clear_active(self) -> None:
@@ -257,6 +270,9 @@ class EffectScheduler:
             ),
             rhythmic=self._rhythmic_status,
             accent=self._accent_status,
+            late_ticks_dropped=self._late_ticks_dropped,
+            late_ticks_coalesced=self._late_ticks_coalesced,
+            beat_lateness_p95_ms=self._beat_lateness_p95_ms,
         )
 
     def update(
@@ -359,15 +375,29 @@ class EffectScheduler:
                 else next_subdivision,
             )
 
-        due_event: BeatEvent | None = None
-        due_strength = 0.0
-        due_found = False
+        lateness_limit_s = self._maximum_beat_lateness_s(clock)
+        due_beats: list[_ScheduledBeat] = []
         while self._pending_beats and self._pending_beats[0].due_at_s <= now_s:
-            due = self._pending_beats.popleft()
-            due_strength = due.strength
-            due_event = due.event
-            due_found = True
-            break
+            due_beats.append(self._pending_beats.popleft())
+        fresh_beats = [
+            due
+            for due in due_beats
+            if now_s - due.due_at_s <= lateness_limit_s + 1e-9
+        ]
+        self._late_ticks_dropped += len(due_beats) - len(fresh_beats)
+        if len(fresh_beats) > 1:
+            self._late_ticks_coalesced += len(fresh_beats) - 1
+        due = fresh_beats[-1] if fresh_beats else None
+        due_event = due.event if due is not None else None
+        due_strength = due.strength if due is not None else 0.0
+        due_found = due is not None
+        if due is not None:
+            self._beat_lateness_samples_ms.append(
+                max(0.0, now_s - due.due_at_s) * 1000.0
+            )
+            self._beat_lateness_p95_ms = self._percentile(
+                self._beat_lateness_samples_ms, 0.95
+            )
         predicted_beat = due_found and due_event is None
         event_due = due_found
         legacy_beat = (
@@ -460,6 +490,21 @@ class EffectScheduler:
             1.0 if features.drop_detected else self.config.onset_threshold,
             accent_result,
         )
+
+    def _maximum_beat_lateness_s(self, clock: BeatClockState | None) -> float:
+        maximum_s = 0.05
+        if clock is None or clock.bpm <= 0.0:
+            return maximum_s
+        subdivision_s = 60.0 / clock.bpm / self.config.subdivisions_per_beat
+        return min(maximum_s, subdivision_s / 2.0)
+
+    @staticmethod
+    def _percentile(samples: deque[float], percentile: float) -> float:
+        if not samples:
+            return 0.0
+        ordered = sorted(samples)
+        index = min(len(ordered) - 1, int((len(ordered) - 1) * percentile))
+        return ordered[index]
 
     def _enqueue_beat(
         self,

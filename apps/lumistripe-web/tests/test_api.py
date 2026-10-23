@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import lumistripe_web.runtime as runtime_module
 import lumistripe_web.runtime.worker as worker_module
@@ -11,6 +12,7 @@ from lumistripe import AudioInputDevice
 from lumistripe_web.api import encode_preview_frame
 from lumistripe_web.api.routes import system as system_routes
 from lumistripe_web.app import build_parser, create_app, main
+from lumistripe_web.bluetooth import BluetoothManager, BluetoothStatus
 from lumistripe_web.contracts.system import UpdateStatus
 from lumistripe_web.runtime import LumiStripeRuntime, PreviewFrame, RuntimeSettings
 from starlette.websockets import WebSocketDisconnect
@@ -313,6 +315,9 @@ def test_audio_settings_api_and_telemetry_websocket(
     tmp_path: Path,
 ) -> None:
     class FakeCalibrationTone:
+        def arm(self) -> None:
+            pass
+
         @property
         def start_at_monotonic(self) -> float:
             return time.monotonic() + 1.5
@@ -320,7 +325,38 @@ def test_audio_settings_api_and_telemetry_websocket(
         def close(self) -> None:
             pass
 
+        def diagnostics(self) -> SimpleNamespace:
+            return SimpleNamespace(
+                callback_count=1,
+                sample_rate=48_000.0,
+                block_duration_ms=512 / 48_000 * 1000,
+                callback_p50_ms=0.2,
+                callback_p95_ms=0.3,
+                callback_p99_ms=0.4,
+                interval_jitter_p95_ms=0.1,
+                underflow_count=0,
+                overflow_count=0,
+                callback_error_count=0,
+            )
+
+    class FakeBluetoothManager(BluetoothManager):
+        def __init__(self, *, enabled: bool = False) -> None:
+            super().__init__(enabled=enabled)
+
+        def status(self) -> BluetoothStatus:
+            return BluetoothStatus(default_sink="alsa_output.usb-speakers")
+
+        def calibration_output_input_ids(self) -> frozenset[str]:
+            return frozenset()
+
+        def verify_calibration_output_route(
+            self, before_input_ids: frozenset[str], expected_sink: str
+        ) -> None:
+            assert before_input_ids == frozenset()
+            assert expected_sink == "alsa_output.usb-speakers"
+
     monkeypatch.setattr(worker_module, "AudioSyncCalibrationTone", FakeCalibrationTone)
+    monkeypatch.setattr(worker_module, "BluetoothManager", FakeBluetoothManager)
     monkeypatch.setattr(
         runtime_module,
         "list_input_device_details",
@@ -357,6 +393,12 @@ def test_audio_settings_api_and_telemetry_websocket(
         assert calibration.status_code == 200
         assert calibration.json()["start_at_ms"] is None
         assert calibration.json()["sync_offset_ms"] == 100
+        with client.websocket_connect("/ws/audio") as websocket:
+            calibration_telemetry = websocket.receive_json()
+            if calibration_telemetry["calibration_output_callback_count"] == 0:
+                calibration_telemetry = websocket.receive_json()
+            assert calibration_telemetry["calibration_output_callback_count"] == 1
+            assert calibration_telemetry["calibration_output_interval_jitter_p95_ms"] == 0.1
         stopped = client.post(
             "/api/audio/sync-calibration", json={"active": False}
         )
@@ -380,6 +422,10 @@ def test_audio_settings_api_and_telemetry_websocket(
             telemetry = websocket.receive_json()
             assert len(telemetry["bands"]) == 8
             assert telemetry["gate_preview"] is True
+            assert telemetry["beat_scheduler_late_ticks_dropped"] >= 0
+            assert telemetry["beat_scheduler_lateness_p95_ms"] >= 0
+            assert telemetry["calibration_output_underflow_count"] == 0
+            assert telemetry["calibration_output_callback_error_count"] == 0
 
 
 def test_audio_source_and_bluetooth_api(

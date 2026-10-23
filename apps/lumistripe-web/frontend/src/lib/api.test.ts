@@ -171,12 +171,16 @@ describe("dashboardApi", () => {
 
   it("uses explicit defaults for microphone fields from older telemetry", () => {
     const legacy = { ...emptyTelemetry } as Record<string, unknown>
-    for (const key of ["input_peak", "clipping_fraction", "microphone_gate_open", "configured_input_noise_floor"]) delete legacy[key]
+    for (const key of ["input_peak", "clipping_fraction", "microphone_gate_open", "configured_input_noise_floor", "beat_scheduler_late_ticks_dropped", "beat_scheduler_late_ticks_coalesced", "beat_scheduler_lateness_p95_ms", "calibration_output_callback_count", "calibration_output_sample_rate", "calibration_output_block_duration_ms", "calibration_output_callback_p50_ms", "calibration_output_callback_p95_ms", "calibration_output_callback_p99_ms", "calibration_output_interval_jitter_p95_ms", "calibration_output_underflow_count", "calibration_output_overflow_count", "calibration_output_callback_error_count"]) delete legacy[key]
     const parsed = parseAudioTelemetry(legacy)
     expect(parsed.input_peak).toBe(0)
     expect(parsed.clipping_fraction).toBe(0)
     expect(parsed.microphone_gate_open).toBe(false)
     expect(parsed.configured_input_noise_floor).toBeNull()
+    expect(parsed.beat_scheduler_late_ticks_dropped).toBe(0)
+    expect(parsed.calibration_output_underflow_count).toBe(0)
+    expect(parsed.calibration_output_interval_jitter_p95_ms).toBe(0)
+    expect(parsed.calibration_output_callback_error_count).toBe(0)
     expect(() => parseAudioTelemetry({ ...legacy, clipping_fraction: 2 })).toThrow()
     expect(() => parseAudioTelemetry({ ...legacy, microphone_gate_open: "yes" })).toThrow()
     expect(() => parseAudioTelemetry({ ...legacy, extra_field: 1 })).toThrow()

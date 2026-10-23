@@ -54,6 +54,82 @@ def test_bluetooth_scan_uses_sixty_second_discovery_window() -> None:
     ]
 
 
+def test_calibration_output_route_requires_one_new_stream_on_profile_sink() -> None:
+    sink_input_results = iter(("", "55\t43\tPipeWire\tfloat32le 1ch 48000Hz\tRUNNING"))
+
+    def runner(command: tuple[str, ...], timeout: float) -> str:
+        del timeout
+        if command == ("pactl", "list", "short", "sink-inputs"):
+            return next(sink_input_results)
+        if command == ("pactl", "list", "short", "sinks"):
+            return "43\talsa_output.usb-speakers\tPipeWire\ts16le 2ch 48000Hz\tRUNNING"
+        raise AssertionError(f"unexpected command: {command}")
+
+    manager = BluetoothManager(enabled=True, runner=runner)
+    before_ids = manager.calibration_output_input_ids()
+
+    manager.verify_calibration_output_route(before_ids, "alsa_output.usb-speakers")
+
+
+def test_calibration_output_route_rejects_wrong_sink() -> None:
+    sink_input_results = iter(("", "55\t44\tPipeWire\tfloat32le 1ch 48000Hz\tRUNNING"))
+
+    def runner(command: tuple[str, ...], timeout: float) -> str:
+        del timeout
+        if command == ("pactl", "list", "short", "sink-inputs"):
+            return next(sink_input_results)
+        if command == ("pactl", "list", "short", "sinks"):
+            return (
+                "43\talsa_output.usb-speakers\tPipeWire\ts16le 2ch 48000Hz\tRUNNING\n"
+                "44\tbluez_output.headphones\tPipeWire\ts16le 2ch 48000Hz\tRUNNING"
+            )
+        raise AssertionError(f"unexpected command: {command}")
+
+    manager = BluetoothManager(enabled=True, runner=runner)
+    before_ids = manager.calibration_output_input_ids()
+
+    try:
+        manager.verify_calibration_output_route(
+            before_ids, "alsa_output.usb-speakers"
+        )
+    except BluetoothCommandError as exc:
+        assert "routed to bluez_output.headphones" in str(exc)
+    else:
+        raise AssertionError("calibration accepted a stream on the wrong sink")
+
+
+def test_calibration_output_route_rejects_ambiguous_new_streams() -> None:
+    sink_input_results = iter(
+        (
+            "",
+            (
+                "55\t43\tPipeWire\tfloat32le 1ch 48000Hz\tRUNNING\n"
+                "56\t43\tPipeWire\tfloat32le 1ch 48000Hz\tRUNNING"
+            ),
+        )
+    )
+
+    def runner(command: tuple[str, ...], timeout: float) -> str:
+        del timeout
+        if command == ("pactl", "list", "short", "sink-inputs"):
+            return next(sink_input_results)
+        if command == ("pactl", "list", "short", "sinks"):
+            return "43\talsa_output.usb-speakers\tPipeWire\ts16le 2ch 48000Hz\tRUNNING"
+        raise AssertionError(f"unexpected command: {command}")
+
+    manager = BluetoothManager(enabled=True, runner=runner)
+    before_ids = manager.calibration_output_input_ids()
+
+    try:
+        manager.verify_calibration_output_route(
+            before_ids, "alsa_output.usb-speakers"
+        )
+    except BluetoothCommandError as exc:
+        assert "could not identify" in str(exc)
+    else:
+        raise AssertionError("calibration accepted ambiguous output streams")
+
+
 def _pipewire_runner(command: tuple[str, ...], timeout: float) -> str:
     del timeout
     if command == ("bluetoothctl", "show"):

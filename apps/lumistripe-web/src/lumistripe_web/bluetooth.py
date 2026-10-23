@@ -177,6 +177,72 @@ class BluetoothManager:
         self._ensure_spotify_route(normalized, create=False)
         return self.refresh()
 
+    def calibration_output_input_ids(self) -> frozenset[str]:
+        """Return current PipeWire sink-input ids before opening calibration audio."""
+        try:
+            return frozenset(
+                fields[0]
+                for line in self._pipewire.sink_inputs(timeout=0.5).splitlines()
+                if len(fields := line.split()) >= 2 and fields[0].isdigit()
+            )
+        except BluetoothCommandError:
+            raise
+        except Exception as exc:
+            raise BluetoothCommandError(
+                f"could not inspect PipeWire output streams: {exc}"
+            ) from exc
+
+    def verify_calibration_output_route(
+        self, before_input_ids: frozenset[str], expected_sink: str
+    ) -> None:
+        """Ensure the newly opened PortAudio stream is connected to its profile sink."""
+        expected_sink = _validate_selector(expected_sink)
+        try:
+            sink_indices = {
+                fields[0]: fields[1]
+                for line in self._pipewire.sinks(timeout=0.5).splitlines()
+                if len(fields := line.split()) >= 2 and fields[0].isdigit()
+            }
+            expected_index = next(
+                (index for index, name in sink_indices.items() if name == expected_sink),
+                None,
+            )
+            if expected_index is None:
+                raise BluetoothCommandError(
+                    "the active audio sync profile's PipeWire sink is unavailable"
+                )
+            new_routes = [
+                (fields[0], fields[1])
+                for line in self._pipewire.sink_inputs(timeout=0.5).splitlines()
+                if len(fields := line.split()) >= 2
+                and fields[0].isdigit()
+                and fields[0] not in before_input_ids
+            ]
+            if len(new_routes) != 1:
+                raise BluetoothCommandError(
+                    "could not identify the calibration audio stream in PipeWire"
+                )
+            _, actual_index = new_routes[0]
+            if actual_index != expected_index:
+                actual_sink = next(
+                    (
+                        name
+                        for index, name in sink_indices.items()
+                        if index == actual_index
+                    ),
+                    "unknown",
+                )
+                raise BluetoothCommandError(
+                    "calibration audio is routed to "
+                    f"{actual_sink}, but this sync profile uses {expected_sink}"
+                )
+        except BluetoothCommandError:
+            raise
+        except Exception as exc:
+            raise BluetoothCommandError(
+                f"could not verify the calibration PipeWire route: {exc}"
+            ) from exc
+
     def _resolve_output_selector(self, selector: str) -> str:
         """Return an available output's canonical selector, never the request value."""
         requested = _validate_selector(selector)

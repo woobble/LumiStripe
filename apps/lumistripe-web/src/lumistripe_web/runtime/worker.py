@@ -2150,8 +2150,28 @@ profile.audio_config(microphone=True),
         offset_ms = self._audio_sync_offsets_ms.get(route, 0.0)
         if active:
             self._stop_audio_sync_calibration()
+            expected_sink = self._bluetooth.status().default_sink
+            capture_input_ids = getattr(
+                self._bluetooth, "calibration_output_input_ids", None
+            )
+            verify_output_route = getattr(
+                self._bluetooth, "verify_calibration_output_route", None
+            )
+            if not expected_sink or not callable(capture_input_ids) or not callable(
+                verify_output_route
+            ):
+                raise RuntimeCommandError(
+                    "could not verify the active PipeWire output for calibration"
+                )
             try:
+                before_input_ids = capture_input_ids()
                 player = AudioSyncCalibrationTone()
+                try:
+                    verify_output_route(before_input_ids, expected_sink)
+                    player.arm()
+                except RuntimeError:
+                    player.close()
+                    raise
             except RuntimeError as exc:
                 raise RuntimeCommandError(str(exc)) from exc
             self._sync_calibration_player = player
@@ -2693,6 +2713,12 @@ profile.audio_config(microphone=True),
             noise_floor = ordered_noise[int((len(ordered_noise) - 1) * 0.2)]
         processor = self._audio_health.processor
         clock = self.playback.beat_clock_state
+        scheduler_diagnostics = self.playback.layered_renderer.diagnostics()
+        calibration_output_diagnostics = (
+            self._sync_calibration_player.diagnostics()
+            if self._sync_calibration_player is not None
+            else None
+        )
         sync_route = self._audio_sync_route_key()
         sync_offset_ms = self._audio_sync_offsets_ms.get(sync_route, 0.0)
         next_beat_in_ms = (
@@ -2732,6 +2758,65 @@ profile.audio_config(microphone=True),
             ),
             dropped_beat_events=self._audio_health.dropped_beat_events,
             pending_beat_events=self._audio_health.pending_beat_events,
+            beat_scheduler_late_ticks_dropped=(
+                scheduler_diagnostics.late_ticks_dropped
+            ),
+            beat_scheduler_late_ticks_coalesced=(
+                scheduler_diagnostics.late_ticks_coalesced
+            ),
+            beat_scheduler_lateness_p95_ms=(
+                scheduler_diagnostics.beat_lateness_p95_ms
+            ),
+            calibration_output_callback_count=(
+                calibration_output_diagnostics.callback_count
+                if calibration_output_diagnostics is not None
+                else 0
+            ),
+            calibration_output_sample_rate=(
+                calibration_output_diagnostics.sample_rate
+                if calibration_output_diagnostics is not None
+                else 0.0
+            ),
+            calibration_output_block_duration_ms=(
+                calibration_output_diagnostics.block_duration_ms
+                if calibration_output_diagnostics is not None
+                else 0.0
+            ),
+            calibration_output_callback_p50_ms=(
+                calibration_output_diagnostics.callback_p50_ms
+                if calibration_output_diagnostics is not None
+                else 0.0
+            ),
+            calibration_output_callback_p95_ms=(
+                calibration_output_diagnostics.callback_p95_ms
+                if calibration_output_diagnostics is not None
+                else 0.0
+            ),
+            calibration_output_callback_p99_ms=(
+                calibration_output_diagnostics.callback_p99_ms
+                if calibration_output_diagnostics is not None
+                else 0.0
+            ),
+            calibration_output_interval_jitter_p95_ms=(
+                calibration_output_diagnostics.interval_jitter_p95_ms
+                if calibration_output_diagnostics is not None
+                else 0.0
+            ),
+            calibration_output_underflow_count=(
+                calibration_output_diagnostics.underflow_count
+                if calibration_output_diagnostics is not None
+                else 0
+            ),
+            calibration_output_overflow_count=(
+                calibration_output_diagnostics.overflow_count
+                if calibration_output_diagnostics is not None
+                else 0
+            ),
+            calibration_output_callback_error_count=(
+                calibration_output_diagnostics.callback_error_count
+                if calibration_output_diagnostics is not None
+                else 0
+            ),
             sync_offset_ms=sync_offset_ms,
             sync_route=sync_route,
             estimated_noise_floor=noise_floor,

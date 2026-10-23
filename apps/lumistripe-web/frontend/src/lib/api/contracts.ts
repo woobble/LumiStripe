@@ -36,6 +36,19 @@ export interface AudioTelemetry {
   beat_event_sequence: number
   dropped_beat_events: number
   pending_beat_events: number
+  beat_scheduler_late_ticks_dropped: number
+  beat_scheduler_late_ticks_coalesced: number
+  beat_scheduler_lateness_p95_ms: number
+  calibration_output_callback_count: number
+  calibration_output_sample_rate: number
+  calibration_output_block_duration_ms: number
+  calibration_output_callback_p50_ms: number
+  calibration_output_callback_p95_ms: number
+  calibration_output_callback_p99_ms: number
+  calibration_output_interval_jitter_p95_ms: number
+  calibration_output_underflow_count: number
+  calibration_output_overflow_count: number
+  calibration_output_callback_error_count: number
   sync_offset_ms: number
   sync_route: string
   estimated_noise_floor: number

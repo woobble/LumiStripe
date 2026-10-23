@@ -316,7 +316,39 @@ def test_scheduler_catches_up_grid_indices_after_a_late_render() -> None:
     )
 
     assert tuple(scheduler._recent_grid_indices) == (1, 2, 3, 4)
-    assert [beat.grid_index for beat in scheduler._pending_beats] == [2, 3, 4]
+    assert [beat.grid_index for beat in scheduler._pending_beats] == [4]
+    diagnostics = scheduler.diagnostics()
+    assert diagnostics.late_ticks_dropped == 2
+    assert diagnostics.late_ticks_coalesced == 0
+
+    scheduler.update(
+        AnimationPlayer.party(), replace(base, beat_clock=late_clock), now_s=0.48
+    )
+    assert not scheduler._pending_beats
+    assert scheduler.diagnostics().late_ticks_dropped == 2
+
+
+def test_scheduler_coalesces_fresh_overdue_events_and_reports_jitter() -> None:
+    scheduler = EffectScheduler(EffectSchedulerConfig(seed=4))
+    player = AnimationPlayer.party()
+    snapshot = replace(
+        _event_snapshot(),
+        beat_events=(
+            BeatEvent(1010, 0.36, 0.9),
+            BeatEvent(1011, 0.38, 0.9),
+            BeatEvent(1012, 0.39, 0.9),
+        ),
+        beat_event_stream=True,
+        beat_clock=None,
+    )
+
+    scheduler.update(player, snapshot, now_s=0.4)
+
+    diagnostics = scheduler.diagnostics()
+    assert not scheduler._pending_beats
+    assert diagnostics.late_ticks_dropped == 0
+    assert diagnostics.late_ticks_coalesced == 2
+    assert diagnostics.beat_lateness_p95_ms == pytest.approx(10.0)
 
 
 def test_scheduler_suppresses_wild_effects_during_quiet_passages() -> None:
