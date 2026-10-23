@@ -11,7 +11,11 @@ from ..animation.base import AnimationPlayer
 from ..audio.beat import BeatClockTracker
 from ..audio.dsp import features_from_frame
 from ..audio.structure import MusicStructureState, MusicStructureTracker
-from ..audio.timeline import MusicalTimelineState, MusicalTimelineTracker
+from ..audio.timeline import (
+    MusicalTimelineConfig,
+    MusicalTimelineState,
+    MusicalTimelineTracker,
+)
 from ..audio.types import AudioSnapshot, BeatClockState, MusicFeatures
 from ..color import Color
 from ..controller import Controller
@@ -38,7 +42,7 @@ from .config import (
     PlaybackMode,
     SwitchQuantization,
 )
-from .quantized import QuantizedSwitchCoordinator
+from .quantized import QuantizedSwitchCoordinator, QuantizedSwitchDiagnostics
 from .renderer import PlaybackRenderer
 from .state import PlaybackDecision, RenderPlan, build_render_plan, decide_playback
 
@@ -129,6 +133,46 @@ class PlaybackEngine:
     @property
     def musical_timeline_state(self) -> MusicalTimelineState:
         return self._musical_timeline_state
+
+    def quantized_switch_diagnostics(
+        self, *, now_s: float | None = None
+    ) -> QuantizedSwitchDiagnostics:
+        now = time.monotonic() if now_s is None else now_s
+        candidate_waiting = (
+            self.mode is PlaybackMode.DYNAMIC
+            and self._music_active
+            and self.dynamic_selector.last_decision.should_switch
+        )
+        return self._quantized_switcher.diagnostics(
+            self._musical_timeline_state,
+            now_s=now,
+            sync_offset_s=self.sync_offset_s,
+            candidate_waiting=candidate_waiting,
+        )
+
+    def set_sequencer_config(
+        self,
+        switch_quantization: SwitchQuantization,
+        musical_timeline: MusicalTimelineConfig,
+    ) -> None:
+        """Apply sequencer settings and discard any switch queued under the old grid."""
+
+        if (
+            self.config.switch_quantization is switch_quantization
+            and self.config.musical_timeline == musical_timeline
+        ):
+            return
+        self.config = replace(
+            self.config,
+            switch_quantization=switch_quantization,
+            musical_timeline=musical_timeline,
+        )
+        self._quantized_switcher.set_mode(switch_quantization)
+        self._quantized_switcher.reset()
+        self.musical_timeline_tracker.config = musical_timeline
+        self._musical_timeline_state = self.musical_timeline_tracker.update(
+            self._beat_clock_state
+        )
 
     @property
     def music_structure_state(self) -> MusicStructureState:

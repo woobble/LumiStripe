@@ -55,6 +55,11 @@ from .control import (
     CalibrationUpdateRequest,
     ModeRequest,
 )
+from .sequencer import (
+    SequencerDiagnostics,
+    SequencerSettingsRequest,
+    SequencerSettingsResponse,
+)
 from .startup import (
     StartupPlaybackState,
     StartupSettingsRequest,
@@ -109,6 +114,9 @@ __all__ = [
     "ModeRequest",
     "PairingRequest",
     "RuntimeKind",
+    "SequencerDiagnostics",
+    "SequencerSettingsRequest",
+    "SequencerSettingsResponse",
     "SpotifyControlRequest",
     "SpotifyStatusResponse",
     "SpotifyTrackInfo",

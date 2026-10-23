@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { ReactNode } from "react"
+import { toast } from "sonner"
 
 import { useDashboard } from "@/hooks/use-dashboard"
 import { animations, initialState, jsonResponse } from "@/test/fixtures"
@@ -111,5 +112,30 @@ describe("useDashboard", () => {
 
     await act(() => vi.advanceTimersByTimeAsync(1000))
     expect(MockWebSocket.instances).toHaveLength(2)
+  })
+
+  it("reports a rejected sequencer update and releases the command state", async () => {
+    const toastError = vi.spyOn(toast, "error")
+    vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => {
+      const path = String(input)
+      if (path === "/api/animations") return jsonResponse({ items: animations })
+      if (path === "/api/sequencer/settings") {
+        return jsonResponse({ detail: "Sequencer settings could not be saved." }, 422)
+      }
+      return jsonResponse(initialState)
+    }))
+
+    const { result } = renderHook(() => useDashboard(), { wrapper })
+    await waitFor(() => expect(result.current.state?.revision).toBe(1))
+
+    let applied: boolean | undefined
+    await act(async () => {
+      applied = await result.current.setSequencerSettings("phrase", 16)
+    })
+
+    expect(applied).toBe(false)
+    expect(toastError).toHaveBeenCalledWith("Sequencer settings could not be saved.")
+    expect(result.current.pendingCommand).toBeNull()
+    toastError.mockRestore()
   })
 })

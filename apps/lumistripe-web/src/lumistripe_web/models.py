@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal
 
-from lumistripe.playback import PlaybackMode
+from lumistripe.playback import PlaybackMode, SwitchQuantization
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -104,6 +104,38 @@ class PowerBudgetState(BaseModel):
     available_led_watts: float | None = Field(default=None, ge=0.0)
 
 
+class SequencerSettingsRequest(BaseModel):
+    switch_quantization: SwitchQuantization
+    bars_per_phrase: Literal[4, 8, 16]
+
+
+class SequencerSettingsResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    switch_quantization: SwitchQuantization = SwitchQuantization.OFF
+    bars_per_phrase: Literal[4, 8, 16] = 8
+
+
+class SequencerDiagnostics(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    mode: SwitchQuantization = SwitchQuantization.OFF
+    beats_per_bar: int = 4
+    bars_per_phrase: int = 8
+    beat_index: int | None = None
+    beat_in_bar: int | None = None
+    bar_index: int | None = None
+    bar_in_phrase: int | None = None
+    phrase_index: int | None = None
+    beat_in_phrase: int | None = None
+    bpm: float = Field(default=0.0, ge=0.0)
+    beat_clock_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    alignment_estimated: bool = False
+    pending_animation: str | None = None
+    next_switch_in_s: float | None = Field(default=None, ge=0.0)
+    waiting_for_clock: bool = False
+
+
 class StripePlaybackState(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -115,6 +147,9 @@ class StripePlaybackState(BaseModel):
     blackout: bool = False
     music_active: bool = False
     music_recognition_enabled: bool = True
+    sequencer_diagnostics: SequencerDiagnostics = Field(
+        default_factory=SequencerDiagnostics
+    )
 
 
 class DashboardState(BaseModel):
@@ -154,6 +189,9 @@ class DashboardState(BaseModel):
     calibration: CalibrationStatus = CalibrationStatus()
     stripe_topology: StripeTopology = StripeTopology()
     power_budget: PowerBudgetState = PowerBudgetState()
+    sequencer_settings: SequencerSettingsResponse = Field(
+        default_factory=SequencerSettingsResponse
+    )
     stripe_playback: tuple[StripePlaybackState, ...] = ()
     diagnostic_issues: tuple[DiagnosticIssue, ...] = ()
     error: str | None = None

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-from lumistripe import ColorCorrection, PlaybackMode
+from lumistripe import ColorCorrection, PlaybackMode, SwitchQuantization
 from lumistripe_web.settings import (
     AudioTuningProfile,
     CalibrationSettingsStore,
@@ -57,7 +57,7 @@ def test_settings_round_trip_both_profiles_atomically(tmp_path: Path) -> None:
     assert warning is None
     assert profiles["primary"] == ColorCorrection(255, 220, 180)
     assert profiles["secondary"] == ColorCorrection(200, 210, 220)
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 6
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 7
     assert not list(path.parent.glob("*.tmp"))
 
 
@@ -119,7 +119,7 @@ def test_power_budget_round_trip_and_legacy_defaults(tmp_path: Path) -> None:
     assert loaded.stripe_topology == topology
     assert topology.available_led_watts == 185.0
     assert topology.effective_power_budget_watts == 18.5
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 6
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 7
 
     path.write_text(
         json.dumps(
@@ -156,7 +156,7 @@ def test_audio_sync_offsets_persist_per_route_and_migrate_from_v5(
         "bluetooth|AA:BB|bluez_output": 100.0,
         "mic|USB Mic|analog_output": -35.0,
     }
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 6
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 7
 
     path.write_text(
         json.dumps({"version": 5, "selected_audio_device": "USB Mic"}),
@@ -165,6 +165,84 @@ def test_audio_sync_offsets_persist_per_route_and_migrate_from_v5(
     legacy, warning = store.load_all()
     assert warning is None
     assert legacy.audio_sync_offsets_ms == {}
+
+
+def test_version_six_settings_migrate_without_losing_route_offsets(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 6,
+                "color_correction": {
+                    "primary": {"red": 210, "green": 220, "blue": 230}
+                },
+                "audio_sync_offsets_ms": {
+                    "bluetooth|AA:BB|bluez_output": -85.0,
+                    "mic|USB Mic|analog_output": 42.0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings, warning = CalibrationSettingsStore(path).load_all()
+
+    assert warning is None
+    assert settings.switch_quantization is SwitchQuantization.OFF
+    assert settings.bars_per_phrase == 8
+    assert settings.audio_sync_offsets_ms == {
+        "bluetooth|AA:BB|bluez_output": -85.0,
+        "mic|USB Mic|analog_output": 42.0,
+    }
+    assert settings.color_corrections["primary"] == ColorCorrection(210, 220, 230)
+
+
+def test_invalid_sequencer_fields_do_not_discard_other_saved_settings(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 7,
+                "color_correction": {
+                    "primary": {"red": 200, "green": 210, "blue": 220}
+                },
+                "audio_sync_offsets_ms": {"mic|USB Mic|analog_output": -85.0},
+                "switch_quantization": "measure-the-drop",
+                "bars_per_phrase": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings, warning = CalibrationSettingsStore(path).load_all()
+
+    assert settings.switch_quantization is SwitchQuantization.OFF
+    assert settings.bars_per_phrase == 8
+    assert settings.color_corrections["primary"] == ColorCorrection(200, 210, 220)
+    assert settings.audio_sync_offsets_ms == {"mic|USB Mic|analog_output": -85.0}
+    assert warning is not None
+    assert "switch_quantization" in warning
+    assert "bars_per_phrase" in warning
+
+
+def test_sequencer_settings_round_trip_preserves_audio_sync_offsets(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.json"
+    store = CalibrationSettingsStore(path)
+    store.save_audio_sync_offset("mic|USB Mic|analog_output", -85.0)
+
+    store.save_sequencer_settings(SwitchQuantization.PHRASE, 16)
+
+    settings, warning = store.load_all()
+    assert warning is None
+    assert settings.switch_quantization is SwitchQuantization.PHRASE
+    assert settings.bars_per_phrase == 16
+    assert settings.audio_sync_offsets_ms == {"mic|USB Mic|analog_output": -85.0}
 
 
 def test_shared_supply_budget_can_reach_zero_and_combine_with_led_limit() -> None:

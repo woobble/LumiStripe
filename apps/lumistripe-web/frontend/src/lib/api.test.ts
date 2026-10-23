@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import { dashboardApi, parseAudioTelemetry, websocketUrl } from "@/lib/api"
+import { dashboardApi, parseAudioTelemetry, parseDashboardState, websocketUrl } from "@/lib/api"
 import { emptyTelemetry } from "@/components/dashboard/audio-telemetry"
 import { initialState, jsonResponse } from "@/test/fixtures"
 
@@ -24,6 +24,68 @@ describe("dashboardApi", () => {
       path,
       expect.objectContaining({ method, body: JSON.stringify(body) })
     )
+  })
+
+  it("reads and saves sequencer settings", async () => {
+    fetchMock.mockReturnValueOnce(jsonResponse({
+      switch_quantization: "phrase",
+      bars_per_phrase: 16,
+    }))
+    await expect(dashboardApi.getSequencerSettings()).resolves.toEqual({
+      switch_quantization: "phrase",
+      bars_per_phrase: 16,
+    })
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/sequencer/settings", expect.any(Object))
+
+    fetchMock.mockReturnValueOnce(jsonResponse({
+      ...initialState,
+      sequencer_settings: { switch_quantization: "bar", bars_per_phrase: 4 },
+    }))
+    await dashboardApi.setSequencerSettings("bar", 4)
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/sequencer/settings", expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ switch_quantization: "bar", bars_per_phrase: 4 }),
+    }))
+  })
+
+  it("defaults sequencer fields for older websocket payloads and rejects unknown fields", () => {
+    const {
+      sequencer_settings: _settings,
+      ...stateWithoutSequencerSettings
+    } = initialState
+    const legacyState = {
+      ...stateWithoutSequencerSettings,
+      stripe_playback: stateWithoutSequencerSettings.stripe_playback.map(
+        ({ sequencer_diagnostics: _diagnostics, ...playback }) => playback,
+      ),
+    }
+
+    const parsed = parseDashboardState(legacyState)
+    expect(parsed.sequencer_settings).toEqual({
+      switch_quantization: "off",
+      bars_per_phrase: 8,
+    })
+    expect(parsed.stripe_playback[0]?.sequencer_diagnostics).toEqual({
+      mode: "off",
+      beats_per_bar: 4,
+      bars_per_phrase: 8,
+      beat_index: null,
+      beat_in_bar: null,
+      bar_index: null,
+      bar_in_phrase: null,
+      phrase_index: null,
+      beat_in_phrase: null,
+      bpm: 0,
+      beat_clock_confidence: 0,
+      alignment_estimated: false,
+      pending_animation: null,
+      next_switch_in_s: null,
+      waiting_for_clock: false,
+    })
+    expect(() => parseDashboardState({
+      ...legacyState,
+      sequencer_settings: { switch_quantization: "phrase", bars_per_phrase: 8, extra: true },
+    })).toThrow()
   })
 
   it("builds the websocket URL from the current origin", () => {

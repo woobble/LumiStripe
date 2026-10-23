@@ -1555,6 +1555,9 @@
           "runtime": {
             "$ref": "#/components/schemas/RuntimeKind"
           },
+          "sequencer_settings": {
+            "$ref": "#/components/schemas/SequencerSettingsResponse"
+          },
           "solid_color": {
             "default": "#7C3AED",
             "title": "Solid Color",
@@ -1865,6 +1868,180 @@
         ],
         "title": "RuntimeKind",
         "type": "string"
+      },
+      "SequencerDiagnostics": {
+        "properties": {
+          "alignment_estimated": {
+            "default": false,
+            "title": "Alignment Estimated",
+            "type": "boolean"
+          },
+          "bar_in_phrase": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bar In Phrase"
+          },
+          "bar_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bar Index"
+          },
+          "bars_per_phrase": {
+            "default": 8,
+            "title": "Bars Per Phrase",
+            "type": "integer"
+          },
+          "beat_clock_confidence": {
+            "default": 0.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Beat Clock Confidence",
+            "type": "number"
+          },
+          "beat_in_bar": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Beat In Bar"
+          },
+          "beat_in_phrase": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Beat In Phrase"
+          },
+          "beat_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Beat Index"
+          },
+          "beats_per_bar": {
+            "default": 4,
+            "title": "Beats Per Bar",
+            "type": "integer"
+          },
+          "bpm": {
+            "default": 0.0,
+            "minimum": 0.0,
+            "title": "Bpm",
+            "type": "number"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/SwitchQuantization",
+            "default": "off"
+          },
+          "next_switch_in_s": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Switch In S"
+          },
+          "pending_animation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending Animation"
+          },
+          "phrase_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phrase Index"
+          },
+          "waiting_for_clock": {
+            "default": false,
+            "title": "Waiting For Clock",
+            "type": "boolean"
+          }
+        },
+        "title": "SequencerDiagnostics",
+        "type": "object"
+      },
+      "SequencerSettingsRequest": {
+        "properties": {
+          "bars_per_phrase": {
+            "enum": [
+              4,
+              8,
+              16
+            ],
+            "title": "Bars Per Phrase",
+            "type": "integer"
+          },
+          "switch_quantization": {
+            "$ref": "#/components/schemas/SwitchQuantization"
+          }
+        },
+        "required": [
+          "switch_quantization",
+          "bars_per_phrase"
+        ],
+        "title": "SequencerSettingsRequest",
+        "type": "object"
+      },
+      "SequencerSettingsResponse": {
+        "properties": {
+          "bars_per_phrase": {
+            "default": 8,
+            "enum": [
+              4,
+              8,
+              16
+            ],
+            "title": "Bars Per Phrase",
+            "type": "integer"
+          },
+          "switch_quantization": {
+            "$ref": "#/components/schemas/SwitchQuantization",
+            "default": "off"
+          }
+        },
+        "title": "SequencerSettingsResponse",
+        "type": "object"
       },
       "SpotifyControlRequest": {
         "properties": {
@@ -2291,6 +2468,9 @@
             "title": "Music Recognition Enabled",
             "type": "boolean"
           },
+          "sequencer_diagnostics": {
+            "$ref": "#/components/schemas/SequencerDiagnostics"
+          },
           "solid_color": {
             "default": "#7C3AED",
             "title": "Solid Color",
@@ -2461,6 +2641,16 @@
         ],
         "title": "StripeTopologyRequest",
         "type": "object"
+      },
+      "SwitchQuantization": {
+        "enum": [
+          "off",
+          "beat",
+          "bar",
+          "phrase"
+        ],
+        "title": "SwitchQuantization",
+        "type": "string"
       },
       "SystemStats": {
         "description": "Best-effort host resource metrics for the dashboard.",
@@ -4002,6 +4192,60 @@
           }
         },
         "summary": "Set Mode"
+      }
+    },
+    "/api/sequencer/settings": {
+      "get": {
+        "operationId": "get_sequencer_settings_api_sequencer_settings_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SequencerSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Sequencer Settings"
+      },
+      "put": {
+        "operationId": "set_sequencer_settings_api_sequencer_settings_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SequencerSettingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Sequencer Settings"
       }
     },
     "/api/startup": {

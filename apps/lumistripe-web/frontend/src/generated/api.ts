@@ -600,6 +600,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sequencer/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Sequencer Settings */
+        get: operations["get_sequencer_settings_api_sequencer_settings_get"];
+        /** Set Sequencer Settings */
+        put: operations["set_sequencer_settings_api_sequencer_settings_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/startup": {
         parameters: {
             query?: never;
@@ -1447,6 +1465,7 @@ export interface components {
              */
             running: boolean;
             runtime: components["schemas"]["RuntimeKind"];
+            sequencer_settings?: components["schemas"]["SequencerSettingsResponse"];
             /**
              * Solid Color
              * @default #7C3AED
@@ -1568,6 +1587,77 @@ export interface components {
          * @enum {string}
          */
         RuntimeKind: "simulation" | "hardware";
+        /** SequencerDiagnostics */
+        SequencerDiagnostics: {
+            /**
+             * Alignment Estimated
+             * @default false
+             */
+            alignment_estimated: boolean;
+            /** Bar In Phrase */
+            bar_in_phrase?: number | null;
+            /** Bar Index */
+            bar_index?: number | null;
+            /**
+             * Bars Per Phrase
+             * @default 8
+             */
+            bars_per_phrase: number;
+            /**
+             * Beat Clock Confidence
+             * @default 0
+             */
+            beat_clock_confidence: number;
+            /** Beat In Bar */
+            beat_in_bar?: number | null;
+            /** Beat In Phrase */
+            beat_in_phrase?: number | null;
+            /** Beat Index */
+            beat_index?: number | null;
+            /**
+             * Beats Per Bar
+             * @default 4
+             */
+            beats_per_bar: number;
+            /**
+             * Bpm
+             * @default 0
+             */
+            bpm: number;
+            /** @default off */
+            mode: components["schemas"]["SwitchQuantization"];
+            /** Next Switch In S */
+            next_switch_in_s?: number | null;
+            /** Pending Animation */
+            pending_animation?: string | null;
+            /** Phrase Index */
+            phrase_index?: number | null;
+            /**
+             * Waiting For Clock
+             * @default false
+             */
+            waiting_for_clock: boolean;
+        };
+        /** SequencerSettingsRequest */
+        SequencerSettingsRequest: {
+            /**
+             * Bars Per Phrase
+             * @enum {integer}
+             */
+            bars_per_phrase: 4 | 8 | 16;
+            switch_quantization: components["schemas"]["SwitchQuantization"];
+        };
+        /** SequencerSettingsResponse */
+        SequencerSettingsResponse: {
+            /**
+             * Bars Per Phrase
+             * @default 8
+             * @enum {integer}
+             */
+            bars_per_phrase: 4 | 8 | 16;
+            /** @default off */
+            switch_quantization: components["schemas"]["SwitchQuantization"];
+        };
         /** SpotifyControlRequest */
         SpotifyControlRequest: {
             /**
@@ -1785,6 +1875,7 @@ export interface components {
              * @default true
              */
             music_recognition_enabled: boolean;
+            sequencer_diagnostics?: components["schemas"]["SequencerDiagnostics"];
             /**
              * Solid Color
              * @default #7C3AED
@@ -1873,6 +1964,11 @@ export interface components {
              */
             supply_capacity_watts: number;
         };
+        /**
+         * SwitchQuantization
+         * @enum {string}
+         */
+        SwitchQuantization: "off" | "beat" | "bar" | "phrase";
         /**
          * SystemStats
          * @description Best-effort host resource metrics for the dashboard.
@@ -3015,6 +3111,59 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ModeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_sequencer_settings_api_sequencer_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SequencerSettingsResponse"];
+                };
+            };
+        };
+    };
+    set_sequencer_settings_api_sequencer_settings_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SequencerSettingsRequest"];
             };
         };
         responses: {

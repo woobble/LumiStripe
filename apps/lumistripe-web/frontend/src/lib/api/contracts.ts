@@ -94,8 +94,12 @@ export type UpdateStatus = RestSchema<"UpdateStatus">
 export type StripeOutputConfig = RestSchema<"StripeOutputConfig">
 export type StripePlaybackState = RestSchema<"StripePlaybackState">
 export type StripeTopology = RestSchema<"StripeTopology">
+export type SequencerDiagnostics = RestSchema<"SequencerDiagnostics">
+export type SequencerSettingsRequest = RestSchema<"SequencerSettingsRequest">
+export type SequencerSettingsResponse = RestSchema<"SequencerSettingsResponse">
 
 export type PlaybackMode = RestSchema<"ModeRequest">["mode"]
+export type SwitchQuantization = SequencerSettingsRequest["switch_quantization"]
 export type CalibrationPattern = RestSchema<"CalibrationUpdateRequest">["pattern"]
 export type StripeLayout = RestSchema<"StripeTopology">["layout"]
 export type StripeBackend = RestSchema<"StripeOutputConfig">["backend"]

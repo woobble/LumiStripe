@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from lumistripe.controller import ColorCorrection
-from lumistripe.playback import PlaybackMode
+from lumistripe.playback import PlaybackMode, SwitchQuantization
 
 from ..settings import AudioTuningProfile, StripeTopologySettings
 
@@ -130,6 +130,12 @@ class _StartupSettingsCommand:
     restore_last_state: bool
 
 
+@dataclass(frozen=True, slots=True)
+class _SequencerSettingsCommand:
+    switch_quantization: SwitchQuantization
+    bars_per_phrase: int
+
+
 __all__ = [
     "_AudioCalibrationFinishCommand",
     "_AudioCalibrationMusicCommand",
@@ -144,6 +150,7 @@ __all__ = [
     "_CalibrationUpdateCommand",
     "_Command",
     "_ModeCommand",
+    "_SequencerSettingsCommand",
     "_SpotifyCommand",
     "_StartupSettingsCommand",
     "_StripeTestCommand",

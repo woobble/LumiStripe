@@ -20,6 +20,27 @@ class _PendingSwitch:
     boundary_at_s: float
 
 
+@dataclass(frozen=True, slots=True)
+class QuantizedSwitchDiagnostics:
+    """Immutable timeline and pending-switch diagnostics for clients."""
+
+    mode: SwitchQuantization = SwitchQuantization.OFF
+    beats_per_bar: int = 4
+    bars_per_phrase: int = 8
+    beat_index: int | None = None
+    beat_in_bar: int | None = None
+    bar_index: int | None = None
+    bar_in_phrase: int | None = None
+    phrase_index: int | None = None
+    beat_in_phrase: int | None = None
+    bpm: float = 0.0
+    beat_clock_confidence: float = 0.0
+    alignment_estimated: bool = False
+    pending_animation: str | None = None
+    next_switch_in_s: float | None = None
+    waiting_for_clock: bool = False
+
+
 class QuantizedSwitchCoordinator:
     """Defer Dynamic selector candidates to a confident musical boundary."""
 
@@ -43,6 +64,58 @@ class QuantizedSwitchCoordinator:
 
     def reset(self) -> None:
         self._pending = None
+
+    def set_mode(self, mode: SwitchQuantization) -> None:
+        if mode is self.mode:
+            return
+        self._pending = None
+        self.mode = mode
+
+    def diagnostics(
+        self,
+        timeline: MusicalTimelineState,
+        *,
+        now_s: float,
+        sync_offset_s: float,
+        candidate_waiting: bool,
+    ) -> QuantizedSwitchDiagnostics:
+        """Return public state without exposing the pending-switch record."""
+
+        pending = self._pending
+        next_switch_at = (
+            None
+            if pending is None
+            else pending.boundary_at_s + sync_offset_s
+        )
+        position_data = self._position_data(timeline)
+        waiting_for_clock = (
+            self.mode is not SwitchQuantization.OFF
+            and candidate_waiting
+            and position_data is None
+        )
+        return QuantizedSwitchDiagnostics(
+            mode=self.mode,
+            beats_per_bar=timeline.beats_per_bar,
+            bars_per_phrase=timeline.bars_per_phrase,
+            beat_index=timeline.beat_index,
+            beat_in_bar=timeline.beat_in_bar,
+            bar_index=timeline.bar_index,
+            bar_in_phrase=timeline.bar_in_phrase,
+            phrase_index=timeline.phrase_index,
+            beat_in_phrase=timeline.beat_in_phrase,
+            bpm=timeline.bpm,
+            beat_clock_confidence=timeline.confidence,
+            alignment_estimated=timeline.alignment_estimated,
+            pending_animation=(
+                None if pending is None else pending.decision.selected_name
+            ),
+            next_switch_in_s=(
+                None
+                if next_switch_at is None
+                else max(0.0, next_switch_at - now_s)
+            ),
+            waiting_for_clock=waiting_for_clock,
+        )
 
     def update(
         self,
@@ -216,4 +289,4 @@ class QuantizedSwitchCoordinator:
         return min(0.05, subdivision_s / 2.0)
 
 
-__all__ = ["QuantizedSwitchCoordinator"]
+__all__ = ["QuantizedSwitchCoordinator", "QuantizedSwitchDiagnostics"]

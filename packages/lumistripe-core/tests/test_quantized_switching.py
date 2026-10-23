@@ -19,8 +19,8 @@ from lumistripe import (
     Stripe,
     SwitchQuantization,
 )
-from lumistripe.audio.timeline import MusicalTimelineState
-from lumistripe.playback.quantized import QuantizedSwitchCoordinator
+from lumistripe.audio.timeline import MusicalTimelineConfig, MusicalTimelineState
+from lumistripe.playback import QuantizedSwitchCoordinator
 
 
 def _decision(
@@ -232,6 +232,65 @@ def test_transition_at_boundary_defers_to_next_boundary() -> None:
     assert coordinator._pending is not None
     assert coordinator._pending.target_position == 3
     assert coordinator._pending.boundary_at_s == pytest.approx(81.0)
+
+
+def test_public_diagnostics_report_position_pending_time_and_waiting_state() -> None:
+    coordinator = _coordinator(SwitchQuantization.BEAT)
+    state = _timeline(5, next_beat_at=90.5)
+    coordinator.update(_decision(), state, now_s=90.0, sync_offset_s=-0.085)
+
+    diagnostics = coordinator.diagnostics(
+        state,
+        now_s=90.1,
+        sync_offset_s=-0.085,
+        candidate_waiting=True,
+    )
+
+    assert diagnostics.mode is SwitchQuantization.BEAT
+    assert diagnostics.beat_index == 5
+    assert diagnostics.beat_in_bar == 1
+    assert diagnostics.pending_animation == "next"
+    assert diagnostics.next_switch_in_s == pytest.approx(0.315)
+    assert diagnostics.waiting_for_clock is False
+    assert diagnostics.alignment_estimated is True
+
+    uncertain = replace(state, confidence=0.3)
+    coordinator.update(_decision(), uncertain, now_s=90.2, sync_offset_s=-0.085)
+    waiting = coordinator.diagnostics(
+        uncertain,
+        now_s=90.2,
+        sync_offset_s=-0.085,
+        candidate_waiting=True,
+    )
+    assert waiting.pending_animation is None
+    assert waiting.waiting_for_clock is True
+
+
+def test_live_sequencer_config_clears_pending_and_preserves_sync_offset() -> None:
+    engine = PlaybackEngine(
+        AnimationPlayer.party(),
+        PlaybackConfig(
+            mode=PlaybackMode.DYNAMIC,
+            switch_quantization=SwitchQuantization.BEAT,
+        ),
+    )
+    engine.set_sync_offset(-0.085)
+    engine._quantized_switcher.update(
+        _decision(), _timeline(2, next_beat_at=100.5), now_s=100.0,
+        sync_offset_s=engine.sync_offset_s,
+    )
+    assert engine._quantized_switcher.pending_decision is not None
+
+    engine.set_sequencer_config(
+        SwitchQuantization.PHRASE,
+        MusicalTimelineConfig(bars_per_phrase=4),
+    )
+
+    diagnostics = engine.quantized_switch_diagnostics(now_s=100.1)
+    assert engine.config.switch_quantization is SwitchQuantization.PHRASE
+    assert engine.config.musical_timeline.bars_per_phrase == 4
+    assert engine.sync_offset_s == pytest.approx(-0.085)
+    assert diagnostics.pending_animation is None
 
 
 def test_dynamic_selector_propose_and_commit_separate_cooldown_accounting() -> None:

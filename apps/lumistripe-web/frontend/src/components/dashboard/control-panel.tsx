@@ -3,6 +3,7 @@ import { ActivityIcon, ListRestartIcon, Music2Icon, PaletteIcon, PowerIcon, Radi
 import { HexColorPicker } from "react-colorful"
 
 import { AnimationSheet } from "@/components/dashboard/animation-sheet"
+import { SequencerPanel } from "@/components/dashboard/sequencer-panel"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Slider } from "@/components/ui/slider"
@@ -289,6 +290,13 @@ export function ControlPanel({ controller }: { controller: DashboardController }
           )}
         </CardContent>
       </Card>
+      <SequencerPanel
+        state={state}
+        target={target}
+        disabled={!state.running || pendingCommand !== null}
+        saving={pendingCommand === "sequencer"}
+        onApply={controller.setSequencerSettings}
+      />
     </div>
   )
 }

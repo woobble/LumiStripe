@@ -14,6 +14,7 @@ from lumistripe import (
     AudioInputHealth,
     AudioProcessorStats,
     MusicFeatures,
+    SwitchQuantization,
 )
 from lumistripe_web.api import encode_preview_frame
 from lumistripe_web.api.routes import system as system_routes
@@ -21,6 +22,11 @@ from lumistripe_web.app import build_parser, create_app, main
 from lumistripe_web.bluetooth import BluetoothManager, BluetoothStatus
 from lumistripe_web.contracts.system import UpdateStatus
 from lumistripe_web.runtime import LumiStripeRuntime, PreviewFrame, RuntimeSettings
+from lumistripe_web.settings import (
+    CalibrationSettingsStore,
+    StripeOutputSettings,
+    StripeTopologySettings,
+)
 from starlette.websockets import WebSocketDisconnect
 
 
@@ -253,6 +259,91 @@ def test_stripe_management_api_applies_and_targets_independent_outputs(
             ).status_code
             == 200
         )
+
+
+def test_sequencer_settings_api_applies_live_to_independent_outputs_and_persists(
+    tmp_path: Path,
+) -> None:
+    settings_path = tmp_path / "settings.json"
+    store = CalibrationSettingsStore(settings_path)
+    store.save_stripes(
+        StripeTopologySettings(
+            layout="independent",
+            outputs=(
+                StripeOutputSettings(id="left", name="Left", pixels=8),
+                StripeOutputSettings(
+                    id="right",
+                    name="Right",
+                    pixels=8,
+                    spi_device="/dev/spidev1.0",
+                ),
+            ),
+        )
+    )
+    store.save_audio_sync_offset("mic|USB Mic|analog_output", -85.0)
+    app = create_app(RuntimeSettings(pixels=8, settings_file=settings_path))
+
+    with TestClient(app) as client:
+        assert client.get("/api/sequencer/settings").json() == {
+            "switch_quantization": "off",
+            "bars_per_phrase": 8,
+        }
+        assert client.put("/api/mode", json={"mode": "dynamic"}).status_code == 200
+
+        applied = client.put(
+            "/api/sequencer/settings",
+            json={"switch_quantization": "phrase", "bars_per_phrase": 16},
+        )
+
+        assert applied.status_code == 200
+        payload = applied.json()
+        assert all(
+            item["mode"] == "dynamic" for item in payload["stripe_playback"]
+        )
+        assert payload["sequencer_settings"] == {
+            "switch_quantization": "phrase",
+            "bars_per_phrase": 16,
+        }
+        states = {item["stripe_id"]: item for item in payload["stripe_playback"]}
+        assert set(states) == {"left", "right"}
+        assert all(
+            item["sequencer_diagnostics"]["mode"] == "phrase"
+            and item["sequencer_diagnostics"]["bars_per_phrase"] == 16
+            for item in states.values()
+        )
+        assert client.put(
+            "/api/sequencer/settings",
+            json={"switch_quantization": "bar", "bars_per_phrase": 2},
+        ).status_code == 422
+        assert client.put(
+            "/api/sequencer/settings",
+            json={"switch_quantization": "invalid", "bars_per_phrase": 8},
+        ).status_code == 422
+
+    saved, warning = store.load_all()
+    assert warning is None
+    assert saved.switch_quantization is SwitchQuantization.PHRASE
+    assert saved.bars_per_phrase == 16
+    assert saved.audio_sync_offsets_ms == {"mic|USB Mic|analog_output": -85.0}
+
+    restarted = create_app(RuntimeSettings(pixels=8, settings_file=settings_path))
+    with TestClient(restarted) as client:
+        assert client.get("/api/sequencer/settings").json() == {
+            "switch_quantization": "phrase",
+            "bars_per_phrase": 16,
+        }
+
+
+def test_sequencer_settings_api_requires_pairing() -> None:
+    app = create_app(RuntimeSettings(pixels=8), pairing_code="1234")
+    with TestClient(app) as client:
+        assert client.get("/api/sequencer/settings").status_code == 401
+        assert client.put(
+            "/api/sequencer/settings",
+            json={"switch_quantization": "beat", "bars_per_phrase": 8},
+        ).status_code == 401
+        assert client.post("/api/auth/pair", json={"code": "1234"}).status_code == 200
+        assert client.get("/api/sequencer/settings").status_code == 200
 
 
 def test_stripe_power_budget_api_round_trip_and_validation(tmp_path: Path) -> None:

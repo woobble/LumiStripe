@@ -18,10 +18,11 @@ from lumistripe.controller import ColorCorrection
 from lumistripe.playback import (
     MusicActivityConfig,
     PlaybackMode,
+    SwitchQuantization,
 )
 from lumistripe_app_support import build_audio_config
 
-SETTINGS_VERSION = 6
+SETTINGS_VERSION = 7
 PROFILE_NAMES = ("primary", "secondary")
 StripeLayout = Literal["mirrored", "continuous", "independent"]
 StripeBackend = Literal["spi", "gpio"]
@@ -264,6 +265,8 @@ class DashboardSettings:
     audio_sync_offsets_ms: dict[str, float] = field(default_factory=dict)
     stripe_topology: StripeTopologySettings | None = None
     restore_last_state: bool = False
+    switch_quantization: SwitchQuantization = SwitchQuantization.OFF
+    bars_per_phrase: int = 8
     remembered_playback: StartupPlaybackSettings = field(
         default_factory=StartupPlaybackSettings
     )
@@ -294,9 +297,9 @@ class CalibrationSettingsStore:
             if not isinstance(payload, dict):
                 raise TypeError("settings must be an object")
             version = payload.get("version")
-            if version not in {1, 2, 3, 4, 5, SETTINGS_VERSION}:
+            if version not in {1, 2, 3, 4, 5, 6, SETTINGS_VERSION}:
                 raise ValueError(
-                    f"expected settings version 1, 2, 3, 4, 5, or {SETTINGS_VERSION}"
+                    f"expected settings version 1, 2, 3, 4, 5, 6, or {SETTINGS_VERSION}"
                 )
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             return settings, f"Dashboard settings are invalid: {exc}"
@@ -321,7 +324,7 @@ class CalibrationSettingsStore:
                 except (TypeError, ValueError) as exc:
                     warnings.append(str(exc))
 
-        if payload.get("version") in {2, 3, 4, 5, SETTINGS_VERSION}:
+        if payload.get("version") in {2, 3, 4, 5, 6, SETTINGS_VERSION}:
             selected = payload.get("selected_audio_device")
             if selected is not None and not isinstance(selected, str):
                 warnings.append("selected_audio_device must be a string or null")
@@ -359,13 +362,13 @@ class CalibrationSettingsStore:
                     except (TypeError, ValueError) as exc:
                         warnings.append(str(exc))
 
-        if payload.get("version") in {3, 4, 5, SETTINGS_VERSION} and "stripes" in payload:
+        if payload.get("version") in {3, 4, 5, 6, SETTINGS_VERSION} and "stripes" in payload:
             try:
                 settings.stripe_topology = _decode_stripes(payload["stripes"])
             except (TypeError, ValueError) as exc:
                 warnings.append(str(exc))
 
-        if payload.get("version") in {4, 5, SETTINGS_VERSION}:
+        if payload.get("version") in {4, 5, 6, SETTINGS_VERSION}:
             restore = payload.get("restore_last_state", False)
             if not isinstance(restore, bool):
                 warnings.append("restore_last_state must be a boolean")
@@ -387,7 +390,7 @@ class CalibrationSettingsStore:
                 except (TypeError, ValueError) as exc:
                     warnings.append(str(exc))
 
-        if payload.get("version") == SETTINGS_VERSION:
+        if payload.get("version") in {6, SETTINGS_VERSION}:
             encoded_offsets = payload.get("audio_sync_offsets_ms", {})
             if not isinstance(encoded_offsets, dict):
                 warnings.append("audio_sync_offsets_ms must be an object")
@@ -404,6 +407,23 @@ class CalibrationSettingsStore:
                         settings.audio_sync_offsets_ms[route] = offset
                     except (TypeError, ValueError) as exc:
                         warnings.append(str(exc))
+
+        if payload.get("version") == SETTINGS_VERSION:
+            encoded_quantization = payload.get("switch_quantization", "off")
+            try:
+                settings.switch_quantization = SwitchQuantization(encoded_quantization)
+            except (TypeError, ValueError):
+                warnings.append("switch_quantization must be off, beat, bar, or phrase")
+
+            encoded_bars = payload.get("bars_per_phrase", 8)
+            if (
+                isinstance(encoded_bars, bool)
+                or not isinstance(encoded_bars, int)
+                or encoded_bars not in {4, 8, 16}
+            ):
+                warnings.append("bars_per_phrase must be 4, 8, or 16")
+            else:
+                settings.bars_per_phrase = encoded_bars
 
         warning = None
         if warnings:
@@ -447,6 +467,14 @@ class CalibrationSettingsStore:
         settings.remembered_playback = remembered
         self.save_all(settings)
 
+    def save_sequencer_settings(
+        self, switch_quantization: SwitchQuantization, bars_per_phrase: int
+    ) -> None:
+        settings, _ = self.load_all()
+        settings.switch_quantization = switch_quantization
+        settings.bars_per_phrase = bars_per_phrase
+        self.save_all(settings)
+
     def save_all(self, settings: DashboardSettings) -> None:
         payload = {
             "version": SETTINGS_VERSION,
@@ -471,6 +499,8 @@ class CalibrationSettingsStore:
                 for device_name, profile in settings.audio_profiles.items()
             },
             "audio_sync_offsets_ms": dict(settings.audio_sync_offsets_ms),
+            "switch_quantization": settings.switch_quantization.value,
+            "bars_per_phrase": settings.bars_per_phrase,
             "stripes": (
                 None
                 if settings.stripe_topology is None

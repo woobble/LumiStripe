@@ -16,6 +16,7 @@ from .config import (
     SwitchQuantization,
 )
 from .engine import PlaybackEngine, demo_snapshot
+from .quantized import QuantizedSwitchCoordinator, QuantizedSwitchDiagnostics
 from .renderer import PlaybackRenderer
 from .state import PlaybackDecision, RenderPlan, build_render_plan, decide_playback
 
@@ -32,6 +33,8 @@ __all__ = [
     "PlaybackEngine",
     "PlaybackMode",
     "PlaybackRenderer",
+    "QuantizedSwitchCoordinator",
+    "QuantizedSwitchDiagnostics",
     "ReactiveFrameSmoother",
     "RenderPlan",
     "SwitchQuantization",

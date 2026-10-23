@@ -4,6 +4,7 @@ from .audio import router as audio_router
 from .auth import router as auth_router
 from .bluetooth import router as bluetooth_router
 from .control import router as control_router
+from .sequencer import router as sequencer_router
 from .startup import router as startup_router
 from .stripes import router as stripes_router
 from .system import router as system_router
@@ -14,6 +15,7 @@ __all__ = [
     "auth_router",
     "bluetooth_router",
     "control_router",
+    "sequencer_router",
     "startup_router",
     "stripes_router",
     "system_router",

@@ -9,12 +9,13 @@ import {
   type CalibrationPattern,
   type DashboardState,
   type PlaybackMode,
+  type SwitchQuantization,
   type StripeTopology,
 } from "@/lib/api"
 import { useWebSocketStream } from "@/hooks/use-websocket-stream"
 
 export type ConnectionStatus = "connecting" | "connected" | "reconnecting"
-export type CommandName = "mode" | "brightness" | "solidColor" | "animation" | "blackout" | "calibration" | "stripes" | "stripeTest"
+export type CommandName = "mode" | "brightness" | "solidColor" | "animation" | "blackout" | "calibration" | "stripes" | "stripeTest" | "sequencer"
 export const dashboardStateQueryKey = ["dashboard-state"] as const
 export const animationsQueryKey = ["animations"] as const
 
@@ -130,6 +131,8 @@ export function useDashboard() {
       runCommand("animation", () => dashboardApi.selectAnimation(name, stripeId)),
     setBlackout: (enabled: boolean, stripeId?: string) =>
       runCommand("blackout", () => dashboardApi.setBlackout(enabled, stripeId)),
+    setSequencerSettings: (mode: SwitchQuantization, barsPerPhrase: 4 | 8 | 16) =>
+      runCommand("sequencer", () => dashboardApi.setSequencerSettings(mode, barsPerPhrase)),
     updateStripes: (topology: StripeTopology) =>
       runCommand("stripes", () => dashboardApi.updateStripes(topology)),
     testStripe: (stripeId: string, pattern: "identify" | "red" | "green" | "blue" | "white", topology?: StripeTopology) =>

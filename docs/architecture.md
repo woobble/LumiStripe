@@ -47,8 +47,8 @@ The runtime package is organized around this ownership boundary:
 
 The API package follows the same feature boundary:
 
-- `api/routes/`: system, control, stripes, audio/Bluetooth, startup, auth, and
-  WebSocket routes
+- `api/routes/`: system, control, stripes, sequencer, audio/Bluetooth, startup,
+  auth, and WebSocket routes
 - `api/dependencies.py`: runtime lookup and command error mapping
 - `api/protocols/preview.py`: binary preview framing
 - `contracts/`: feature-oriented HTTP model namespaces
@@ -94,3 +94,23 @@ optimized `-march=native` builds are reserved for device-local use. See
 `docs/decisions/0003-native-extensions.md` for the release and CI policy.
 
 These modules are the intended seams for future implementation moves.
+
+## Dynamic animation switch quantization
+
+Dynamic mode can defer automatic base-animation changes to the next confident
+beat, estimated bar, or estimated phrase boundary. `off` remains the default;
+manual animation selection and the other playback modes are unaffected. Bar
+alignment starts at the first observed beat and is an estimate, not detected
+downbeat information. Phrase length is configurable to 4, 8, or 16 bars.
+
+The authenticated `GET` and `PUT /api/sequencer/settings` endpoints expose the
+shared sequencer settings. Updates enter the runtime worker command queue,
+apply to all outputs without restarting playback, discard pending switches
+from the previous grid, and persist in dashboard settings version 7. Version 6
+settings migrate with quantization off and an eight-bar phrase; saved audio
+synchronization offsets remain intact.
+
+Dashboard state reports per-output estimated beat, bar, and phrase positions,
+clock confidence, pending animation, remaining time to its switch, and whether
+the switch is waiting for confidence. These diagnostics are read-only and do
+not imply that the estimated grid has detected musical downbeats.

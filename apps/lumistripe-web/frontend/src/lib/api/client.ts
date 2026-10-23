@@ -9,6 +9,7 @@ import type {
   DashboardState,
   PlaybackMode,
   SpotifyControlAction,
+  SwitchQuantization,
   StripeTopology,
   SystemStats,
   UpdateStatus,
@@ -48,6 +49,10 @@ export type {
   StripeOutputConfig,
   StripePlaybackState,
   StripeTopology,
+  SwitchQuantization,
+  SequencerDiagnostics,
+  SequencerSettingsRequest,
+  SequencerSettingsResponse,
   SpotifyControlAction,
   SpotifyStatusResponse,
   SpotifyTrackInfo,
@@ -57,6 +62,28 @@ export type {
 export const ACCESS_REVOKED_EVENT = "lumistripe:access-revoked"
 
 const playbackModeSchema = z.enum(["solid", "static", "cycling", "dynamic"])
+const switchQuantizationSchema = z.enum(["off", "beat", "bar", "phrase"])
+const sequencerSettingsSchema = z.object({
+  switch_quantization: switchQuantizationSchema,
+  bars_per_phrase: z.union([z.literal(4), z.literal(8), z.literal(16)]),
+}).strict()
+const sequencerDiagnosticsSchema = z.object({
+  mode: switchQuantizationSchema,
+  beats_per_bar: z.number().int(),
+  bars_per_phrase: z.number().int(),
+  beat_index: z.number().int().nullable(),
+  beat_in_bar: z.number().int().nullable(),
+  bar_index: z.number().int().nullable(),
+  bar_in_phrase: z.number().int().nullable(),
+  phrase_index: z.number().int().nullable(),
+  beat_in_phrase: z.number().int().nullable(),
+  bpm: z.number().nonnegative(),
+  beat_clock_confidence: z.number().min(0).max(1),
+  alignment_estimated: z.boolean(),
+  pending_animation: z.string().nullable(),
+  next_switch_in_s: z.number().nonnegative().nullable(),
+  waiting_for_clock: z.boolean(),
+}).strict()
 const stripeOutputSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -92,6 +119,23 @@ const stripePlaybackSchema = z.object({
   blackout: z.boolean(),
   music_active: z.boolean(),
   music_recognition_enabled: z.boolean(),
+  sequencer_diagnostics: sequencerDiagnosticsSchema.optional().default({
+    mode: "off",
+    beats_per_bar: 4,
+    bars_per_phrase: 8,
+    beat_index: null,
+    beat_in_bar: null,
+    bar_index: null,
+    bar_in_phrase: null,
+    phrase_index: null,
+    beat_in_phrase: null,
+    bpm: 0,
+    beat_clock_confidence: 0,
+    alignment_estimated: false,
+    pending_animation: null,
+    next_switch_in_s: null,
+    waiting_for_clock: false,
+  }),
 }).strict()
 const powerOutputSchema = z.object({
   output_id: z.string(),
@@ -178,6 +222,10 @@ const dashboardStateSchema = z.object({
     supply_capacity_watts: null,
     pi_reserve_watts: null,
     available_led_watts: null,
+  }),
+  sequencer_settings: sequencerSettingsSchema.optional().default({
+    switch_quantization: "off",
+    bars_per_phrase: 8,
   }),
   stripe_playback: z.array(stripePlaybackSchema),
   diagnostic_issues: z.array(diagnosticIssueSchema),
@@ -581,6 +629,15 @@ export const dashboardApi = {
       body: JSON.stringify({ save }),
     }, dashboardStateSchema),
   getAudioSettings: () => request("/api/audio/settings", undefined, audioSettingsSchema),
+  getSequencerSettings: () => request("/api/sequencer/settings", undefined, sequencerSettingsSchema),
+  setSequencerSettings: (switchQuantization: SwitchQuantization, barsPerPhrase: 4 | 8 | 16) =>
+    request("/api/sequencer/settings", {
+      method: "PUT",
+      body: JSON.stringify({
+        switch_quantization: switchQuantization,
+        bars_per_phrase: barsPerPhrase,
+      }),
+    }, dashboardStateSchema),
   setAudioSyncOffset: (offsetMs: number) =>
     request("/api/audio/sync-offset", {
       method: "PUT",

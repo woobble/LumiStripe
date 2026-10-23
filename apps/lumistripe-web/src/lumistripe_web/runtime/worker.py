@@ -11,7 +11,7 @@ from concurrent.futures import Future
 from dataclasses import dataclass, replace
 from datetime import datetime
 from importlib import metadata
-from typing import TypedDict, cast
+from typing import Literal, TypedDict, cast
 from uuid import uuid4
 
 import numpy as np
@@ -36,6 +36,7 @@ from lumistripe.animation import AnimationPlayer
 from lumistripe.audio.capture import AudioInput
 from lumistripe.audio.devices import list_input_device_details
 from lumistripe.audio.hardware_gain import HardwareGainController
+from lumistripe.audio.timeline import MusicalTimelineConfig
 from lumistripe.audio.types import (
     AudioFrame,
     AudioInputHealth,
@@ -52,6 +53,8 @@ from lumistripe.playback import (
     PlaybackConfig,
     PlaybackEngine,
     PlaybackMode,
+    QuantizedSwitchDiagnostics,
+    SwitchQuantization,
     demo_snapshot,
 )
 
@@ -84,6 +87,8 @@ from ..models import (
     DiagnosticIssue,
     PowerBudgetState,
     PowerOutputState,
+    SequencerDiagnostics,
+    SequencerSettingsResponse,
     SpotifyStatusResponse,
     SpotifyTrackInfo,
     StartupPlaybackState,
@@ -121,6 +126,7 @@ from .commands import (
     _CalibrationUpdateCommand,
     _Command,
     _ModeCommand,
+    _SequencerSettingsCommand,
     _SpotifyCommand,
     _StartupSettingsCommand,
     _StripeTestCommand,
@@ -309,6 +315,10 @@ class RuntimeWorker:
             loaded_settings.selected_audio_device or self.settings.audio_device
         )
         self._restore_last_state = loaded_settings.restore_last_state
+        self._switch_quantization = loaded_settings.switch_quantization
+        self._bars_per_phrase = cast(
+            Literal[4, 8, 16], loaded_settings.bars_per_phrase
+        )
         self._remembered_playback = loaded_settings.remembered_playback
         self._settings_io_lock = threading.RLock()
         self._startup_persist_lock = threading.Lock()
@@ -322,6 +332,10 @@ class RuntimeWorker:
             self.player,
             PlaybackConfig(
                 mode=PlaybackMode.STATIC,
+                switch_quantization=self._switch_quantization,
+                musical_timeline=MusicalTimelineConfig(
+                    bars_per_phrase=self._bars_per_phrase
+                ),
                 activity=self._audio_profile.activity_config(),
                 dynamic_response=self._audio_profile.dynamic_response,
             ),
@@ -350,6 +364,10 @@ class RuntimeWorker:
             runtime=self.settings.kind,
             mode=PlaybackMode.STATIC,
             animation=self._current_animation(),
+            sequencer_settings=SequencerSettingsResponse(
+                switch_quantization=self._switch_quantization,
+                bars_per_phrase=self._bars_per_phrase,
+            ),
         )
 
         self._raw_controller: Controller | None = None
@@ -466,6 +484,9 @@ class RuntimeWorker:
     def snapshot(self) -> DashboardState:
         with self._snapshot_lock:
             return self._snapshot
+
+    def sequencer_settings(self) -> SequencerSettingsResponse:
+        return self.snapshot().sequencer_settings
 
     def preview_frame(self) -> PreviewFrame:
         with self._preview_lock:
@@ -750,6 +771,17 @@ class RuntimeWorker:
                 animation=remembered.animation,
                 brightness=remembered.brightness,
                 blackout=remembered.blackout,
+            ),
+        )
+
+    def set_sequencer_settings(
+        self, switch_quantization: SwitchQuantization, bars_per_phrase: int
+    ) -> Future[DashboardState]:
+        return cast(
+            Future[DashboardState],
+            self._submit(
+                "sequencer_settings",
+                _SequencerSettingsCommand(switch_quantization, bars_per_phrase),
             ),
         )
 
@@ -1162,6 +1194,10 @@ class RuntimeWorker:
                 PlaybackConfig(
                     mode=self.playback.mode,
                     solid_color=self.playback.solid_color,
+                    switch_quantization=self._switch_quantization,
+                    musical_timeline=MusicalTimelineConfig(
+                        bars_per_phrase=self._bars_per_phrase
+                    ),
                     activity=self._audio_profile.activity_config(),
                     dynamic_response=self._audio_profile.dynamic_response,
                 ),
@@ -1318,6 +1354,15 @@ class RuntimeWorker:
                 sync_offset = _expect(command.value, _AudioSyncOffsetCommand)
                 result = self._set_audio_sync_offset(sync_offset.offset_ms)
                 self._publish(running=True)
+            elif command.name == "sequencer_settings":
+                sequencer_settings = _expect(
+                    command.value, _SequencerSettingsCommand
+                )
+                self._set_sequencer_settings(
+                    sequencer_settings.switch_quantization,
+                    sequencer_settings.bars_per_phrase,
+                )
+                result = self._publish(running=True)
             elif command.name == "audio_sync_calibration":
                 sync_calibration = _expect(
                     command.value, _AudioSyncCalibrationCommand
@@ -2143,6 +2188,48 @@ profile.audio_config(microphone=True),
         self._apply_sync_offset_for_route()
         return self.audio_settings()
 
+    def _set_sequencer_settings(
+        self, switch_quantization: SwitchQuantization, bars_per_phrase: int
+    ) -> SequencerSettingsResponse:
+        if not isinstance(switch_quantization, SwitchQuantization):
+            raise RuntimeCommandError("unsupported animation switch timing")
+        if (
+            isinstance(bars_per_phrase, bool)
+            or not isinstance(bars_per_phrase, int)
+            or bars_per_phrase not in {4, 8, 16}
+        ):
+            raise RuntimeCommandError("bars per phrase must be 4, 8, or 16")
+        bars_per_phrase = cast(Literal[4, 8, 16], bars_per_phrase)
+        if (
+            switch_quantization is self._switch_quantization
+            and bars_per_phrase == self._bars_per_phrase
+        ):
+            return SequencerSettingsResponse(
+                switch_quantization=self._switch_quantization,
+                bars_per_phrase=self._bars_per_phrase,
+            )
+
+        try:
+            with self._settings_io_lock:
+                self._settings_store.save_sequencer_settings(
+                    switch_quantization, bars_per_phrase
+                )
+        except OSError as exc:
+            raise RuntimeCommandError(
+                f"could not save sequencer settings: {exc}"
+            ) from exc
+
+        self._switch_quantization = switch_quantization
+        self._bars_per_phrase = bars_per_phrase
+        timeline = MusicalTimelineConfig(bars_per_phrase=bars_per_phrase)
+        engines = (self.playback, *(engine for _, engine in self._playbacks.values()))
+        for engine in engines:
+            engine.set_sequencer_config(switch_quantization, timeline)
+        return SequencerSettingsResponse(
+            switch_quantization=switch_quantization,
+            bars_per_phrase=bars_per_phrase,
+        )
+
     def _set_audio_sync_calibration(
         self, active: bool
     ) -> AudioSyncCalibrationResponse:
@@ -2938,6 +3025,10 @@ profile.audio_config(microphone=True),
             calibration=self._calibration_status(),
             stripe_topology=self._stripe_topology_state(),
             power_budget=self._power_budget_state,
+            sequencer_settings=SequencerSettingsResponse(
+                switch_quantization=self._switch_quantization,
+                bars_per_phrase=self._bars_per_phrase,
+            ),
             stripe_playback=self._stripe_playback_state(),
             diagnostic_issues=self._diagnostic_issues(
                 running=running,
@@ -3117,9 +3208,31 @@ profile.audio_config(microphone=True),
                     blackout=gate.blackout if gate is not None else False,
                     music_active=playback.music_active,
                     music_recognition_enabled=playback.music_recognition_enabled,
+                    sequencer_diagnostics=self._sequencer_diagnostics(playback),
                 )
             )
         return tuple(states)
+
+    @staticmethod
+    def _sequencer_diagnostics(playback: PlaybackEngine) -> SequencerDiagnostics:
+        diagnostics: QuantizedSwitchDiagnostics = playback.quantized_switch_diagnostics()
+        return SequencerDiagnostics(
+            mode=diagnostics.mode,
+            beats_per_bar=diagnostics.beats_per_bar,
+            bars_per_phrase=diagnostics.bars_per_phrase,
+            beat_index=diagnostics.beat_index,
+            beat_in_bar=diagnostics.beat_in_bar,
+            bar_index=diagnostics.bar_index,
+            bar_in_phrase=diagnostics.bar_in_phrase,
+            phrase_index=diagnostics.phrase_index,
+            beat_in_phrase=diagnostics.beat_in_phrase,
+            bpm=diagnostics.bpm,
+            beat_clock_confidence=diagnostics.beat_clock_confidence,
+            alignment_estimated=diagnostics.alignment_estimated,
+            pending_animation=diagnostics.pending_animation,
+            next_switch_in_s=diagnostics.next_switch_in_s,
+            waiting_for_clock=diagnostics.waiting_for_clock,
+        )
 
     def _last_output_at(self) -> datetime | None:
         values = [
