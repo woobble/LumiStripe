@@ -48,6 +48,61 @@ describe("dashboardApi", () => {
     }))
   })
 
+  it("uses typed sequence library endpoints and preserves server validation", async () => {
+    const library = {
+      sequences: [{
+        id: "show-a",
+        name: "Show A",
+        repeat: true,
+        steps: [{ animation_name: "aurora_wave", duration_bars: 2 }],
+      }],
+      active_sequence_id: "show-a",
+    }
+    fetchMock.mockReturnValueOnce(jsonResponse(library))
+    await expect(dashboardApi.getAnimationSequences()).resolves.toEqual(library)
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/sequencer/sequences", expect.any(Object))
+
+    const definition = {
+      name: "Show A",
+      repeat: true,
+      steps: [{ animation_name: "aurora_wave", duration_bars: 2 as const }],
+    }
+    fetchMock.mockReturnValueOnce(jsonResponse(initialState))
+    await dashboardApi.createAnimationSequence({ id: "show-a", ...definition })
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/sequencer/sequences", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ id: "show-a", ...definition }),
+    }))
+
+    fetchMock.mockReturnValueOnce(jsonResponse(initialState))
+    await dashboardApi.updateAnimationSequence("show/a", definition)
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/sequencer/sequences/show%2Fa", expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify(definition),
+    }))
+
+    fetchMock.mockReturnValueOnce(jsonResponse(initialState))
+    await dashboardApi.deleteAnimationSequence("show-a")
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/sequencer/sequences/show-a", expect.objectContaining({ method: "DELETE" }))
+
+    fetchMock.mockReturnValueOnce(jsonResponse(initialState))
+    await dashboardApi.setActiveAnimationSequence(null)
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/sequencer/active", expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ sequence_id: null }),
+    }))
+
+    fetchMock.mockReturnValueOnce(jsonResponse({ detail: "Unknown animation in sequence." }, 422))
+    await expect(dashboardApi.createAnimationSequence({ id: "bad", ...definition })).rejects.toThrow("Unknown animation in sequence.")
+  })
+
+  it("defaults missing sequence eligibility to false for older animation responses", async () => {
+    fetchMock.mockReturnValueOnce(jsonResponse({ items: [{ name: "old_animation", mood: "calm", dynamic_safe: true }] }))
+    await expect(dashboardApi.getAnimations()).resolves.toEqual([
+      { name: "old_animation", mood: "calm", dynamic_safe: true, sequence_eligible: false },
+    ])
+  })
+
   it("defaults sequencer fields for older websocket payloads and rejects unknown fields", () => {
     const {
       sequencer_settings: _settings,

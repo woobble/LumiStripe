@@ -295,7 +295,21 @@ export function ControlPanel({ controller }: { controller: DashboardController }
         target={target}
         disabled={!state.running || pendingCommand !== null}
         saving={pendingCommand === "sequencer"}
+        sequenceBusy={pendingCommand !== null}
+        sequenceSaving={pendingCommand === "sequence"}
+        animations={animations}
+        animationsLoading={controller.animationsLoading}
+        animationsError={controller.animationsError}
+        sequences={controller.sequences}
+        sequenceLoading={controller.sequenceLibraryLoading}
+        sequenceLoadError={controller.sequenceLibraryError}
+        sequenceActionError={controller.sequenceActionError}
         onApply={controller.setSequencerSettings}
+        onRefreshSequences={controller.refreshSequences}
+        onCreateSequence={controller.createSequence}
+        onUpdateSequence={controller.updateSequence}
+        onDeleteSequence={controller.deleteSequence}
+        onSetActiveSequence={controller.setActiveSequence}
       />
     </div>
   )

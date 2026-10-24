@@ -77,6 +77,12 @@ export interface AudioTelemetry {
   health: string
 }
 export type AudioTuningValues = RestSchema<"AudioTuningValues">
+export type AnimationSequenceContract = RestSchema<"AnimationSequenceContract">
+export type AnimationSequenceStepContract = RestSchema<"AnimationSequenceStepContract">
+export type SequenceActiveRequest = RestSchema<"SequenceActiveRequest">
+export type SequenceCreateRequest = RestSchema<"SequenceCreateRequest">
+export type SequenceDefinitionRequest = RestSchema<"SequenceDefinitionRequest">
+export type SequenceLibraryResponse = RestSchema<"SequenceLibraryResponse">
 export type BluetoothCapabilities = RestSchema<"BluetoothCapabilities">
 export type BluetoothDeviceInfo = RestSchema<"BluetoothDeviceInfo">
 export type BluetoothStatusResponse = RestSchema<"BluetoothStatusResponse">

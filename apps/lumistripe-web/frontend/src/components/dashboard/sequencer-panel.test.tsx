@@ -3,9 +3,26 @@ import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi } from "vitest"
 
 import { SequencerPanel } from "@/components/dashboard/sequencer-panel"
-import { initialState } from "@/test/fixtures"
+import { animations, initialState } from "@/test/fixtures"
 
 describe("SequencerPanel", () => {
+  const libraryProps = {
+    sequenceSaving: false,
+    sequenceBusy: false,
+    animations,
+    animationsLoading: false,
+    animationsError: null,
+    sequences: [],
+    sequenceLoading: false,
+    sequenceLoadError: null,
+    sequenceActionError: null,
+    onRefreshSequences: vi.fn().mockResolvedValue(undefined),
+    onCreateSequence: vi.fn().mockResolvedValue(true),
+    onUpdateSequence: vi.fn().mockResolvedValue(true),
+    onDeleteSequence: vi.fn().mockResolvedValue(true),
+    onSetActiveSequence: vi.fn().mockResolvedValue(true),
+  }
+
   it("applies a preset and phrase length, showing estimated-grid diagnostics", async () => {
     const user = userEvent.setup()
     const onApply = vi.fn().mockResolvedValue(true)
@@ -34,6 +51,7 @@ describe("SequencerPanel", () => {
 
     render(
       <SequencerPanel
+        {...libraryProps}
         state={state}
         target="all"
         disabled={false}
@@ -77,6 +95,7 @@ describe("SequencerPanel", () => {
       stripe_playback: [left, right],
     }
     const props = {
+      ...libraryProps,
       state,
       disabled: false,
       saving: false,
@@ -96,6 +115,7 @@ describe("SequencerPanel", () => {
     const onApply = vi.fn().mockResolvedValue(false)
     render(
       <SequencerPanel
+        {...libraryProps}
         state={initialState}
         target="all"
         disabled={false}

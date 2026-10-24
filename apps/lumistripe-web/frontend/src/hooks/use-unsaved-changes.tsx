@@ -15,15 +15,18 @@ import {
 
 type GuardContextValue = {
   dirty: boolean
-  setDirty: (dirty: boolean) => void
+  description: string
+  setDirty: (dirty: boolean, description?: string) => void
   requestNavigation: (to: string) => boolean
 }
 
+const defaultUnsavedDescription = "Your Setup changes will be discarded if you leave this page."
 const GuardContext = createContext<GuardContextValue | null>(null)
 
 export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
   const navigate = useNavigate()
   const [dirty, setDirty] = useState(false)
+  const [description, setDescription] = useState(defaultUnsavedDescription)
   const [pendingPath, setPendingPath] = useState<string | null>(null)
 
   useEffect(() => {
@@ -42,7 +45,17 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
     return true
   }, [dirty])
 
-  const value = useMemo(() => ({ dirty, setDirty, requestNavigation }), [dirty, requestNavigation])
+  const updateDirty = useCallback((nextDirty: boolean, nextDescription?: string) => {
+    setDirty(nextDirty)
+    if (nextDirty) setDescription(nextDescription ?? defaultUnsavedDescription)
+  }, [])
+
+  const value = useMemo(() => ({
+    dirty,
+    description,
+    setDirty: updateDirty,
+    requestNavigation,
+  }), [description, dirty, requestNavigation, updateDirty])
   return (
     <GuardContext.Provider value={value}>
       {children}
@@ -50,7 +63,7 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Leave without saving?</AlertDialogTitle>
-            <AlertDialogDescription>Your Setup changes will be discarded if you leave this page.</AlertDialogDescription>
+            <AlertDialogDescription>{description}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Stay</AlertDialogCancel>
@@ -62,13 +75,14 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
   )
 }
 
-export function useUnsavedChangesGuard(isDirty: boolean) {
+export function useUnsavedChangesGuard(isDirty: boolean, description?: string) {
   const context = useContext(GuardContext)
+  const setDirty = context?.setDirty
   useEffect(() => {
-    if (!context) return
-    context.setDirty(isDirty)
-    return () => context.setDirty(false)
-  }, [context, isDirty])
+    if (!setDirty) return
+    setDirty(isDirty, description)
+    return () => setDirty(false)
+  }, [description, isDirty, setDirty])
   return {
     dirty: isDirty,
     requestNavigation: context?.requestNavigation ?? (() => false),

@@ -8,7 +8,7 @@ from math import exp
 from random import Random
 
 from ..animation.base import AnimationPlayer
-from ..animation.catalog import animation_catalog
+from ..animation.catalog import animation_catalog, dynamic_sequence_eligible
 from ..audio.beat import BeatClockTracker
 from ..audio.dsp import features_from_frame
 from ..audio.structure import MusicStructureState, MusicStructureTracker
@@ -26,7 +26,6 @@ from ..effects.layers import (
     LayeredRenderer,
 )
 from ..selector import (
-    AnimationRole,
     DynamicSelector,
     DynamicSelectorDiagnostics,
     SelectorDecision,
@@ -176,15 +175,7 @@ class PlaybackEngine:
             definition = definitions.get(step.animation_name)
             if definition is None:
                 raise ValueError(f"unknown animation in sequence: {step.animation_name}")
-            metadata = definition.dynamic_metadata
-            if (
-                not definition.automatic
-                or definition.role is not AnimationRole.BASE
-                or metadata is None
-                or metadata.role is not AnimationRole.BASE
-                or not metadata.dynamic_safe
-                or definition.effect_metadata is not None
-            ):
+            if not dynamic_sequence_eligible(definition):
                 raise ValueError(
                     f"animation is not eligible for Dynamic sequences: {step.animation_name}"
                 )

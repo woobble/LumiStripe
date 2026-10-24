@@ -33,6 +33,7 @@ from lumistripe import (
     estimate_frame_power,
 )
 from lumistripe.animation import AnimationPlayer
+from lumistripe.animation.catalog import dynamic_sequence_eligible
 from lumistripe.audio.capture import AudioInput
 from lumistripe.audio.devices import list_input_device_details
 from lumistripe.audio.hardware_gain import HardwareGainController
@@ -555,6 +556,10 @@ class RuntimeWorker:
                 name=entry.animation.name,
                 mood=entry.animation.metadata.mood,
                 dynamic_safe=entry.animation.metadata.dynamic_safe,
+                sequence_eligible=(
+                    entry.definition is not None
+                    and dynamic_sequence_eligible(entry.definition)
+                ),
             )
             for entry in self.player.animations
         )

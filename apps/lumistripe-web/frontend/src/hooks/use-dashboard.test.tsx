@@ -46,6 +46,7 @@ describe("useDashboard", () => {
       vi.fn((input: string | URL | Request) => {
         const path = String(input)
         if (path === "/api/animations") return jsonResponse({ items: animations })
+        if (path === "/api/sequencer/sequences") return jsonResponse({ sequences: [], active_sequence_id: null })
         return jsonResponse(initialState)
       })
     )
@@ -119,6 +120,7 @@ describe("useDashboard", () => {
     vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => {
       const path = String(input)
       if (path === "/api/animations") return jsonResponse({ items: animations })
+      if (path === "/api/sequencer/sequences") return jsonResponse({ sequences: [], active_sequence_id: null })
       if (path === "/api/sequencer/settings") {
         return jsonResponse({ detail: "Sequencer settings could not be saved." }, 422)
       }
@@ -135,6 +137,58 @@ describe("useDashboard", () => {
 
     expect(applied).toBe(false)
     expect(toastError).toHaveBeenCalledWith("Sequencer settings could not be saved.")
+    expect(result.current.pendingCommand).toBeNull()
+    toastError.mockRestore()
+  })
+
+  it("runs sequence API mutations through the dashboard command state and refreshes the library", async () => {
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path === "/api/animations") return jsonResponse({ items: animations })
+      if (path === "/api/sequencer/sequences" && init?.method === "POST") return jsonResponse(initialState)
+      if (path === "/api/sequencer/sequences") return jsonResponse({ sequences: [], active_sequence_id: null })
+      return jsonResponse(initialState)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const { result } = renderHook(() => useDashboard(), { wrapper })
+    await waitFor(() => expect(result.current.sequenceLibraryLoading).toBe(false))
+
+    let created: boolean | undefined
+    await act(async () => {
+      created = await result.current.createSequence({
+        id: "demo-sequence",
+        name: "Demo",
+        repeat: true,
+        steps: [{ animation_name: "aurora_wave", duration_bars: 1 }],
+      })
+    })
+
+    expect(created).toBe(true)
+    expect(result.current.pendingCommand).toBeNull()
+    expect(fetchMock).toHaveBeenCalledWith("/api/sequencer/sequences", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ id: "demo-sequence", name: "Demo", repeat: true, steps: [{ animation_name: "aurora_wave", duration_bars: 1 }] }),
+    }))
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([path, init]) => String(path) === "/api/sequencer/sequences" && init?.method !== "POST").length).toBeGreaterThan(1))
+  })
+
+  it("keeps sequence mutations explicit on API conflicts", async () => {
+    const toastError = vi.spyOn(toast, "error")
+    vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => {
+      const path = String(input)
+      if (path === "/api/animations") return jsonResponse({ items: animations })
+      if (path === "/api/sequencer/sequences") return jsonResponse({ sequences: [], active_sequence_id: null })
+      if (path === "/api/sequencer/active") return jsonResponse({ detail: "Sequence library is full." }, 409)
+      return jsonResponse(initialState)
+    }))
+    const { result } = renderHook(() => useDashboard(), { wrapper })
+    await waitFor(() => expect(result.current.sequenceLibraryLoading).toBe(false))
+
+    let activated: boolean | undefined
+    await act(async () => { activated = await result.current.setActiveSequence("show-a") })
+    expect(activated).toBe(false)
+    expect(result.current.sequenceActionError).toBe("Sequence library is full.")
+    expect(toastError).toHaveBeenCalledWith("Sequence library is full.")
     expect(result.current.pendingCommand).toBeNull()
     toastError.mockRestore()
   })

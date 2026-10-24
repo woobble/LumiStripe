@@ -235,6 +235,7 @@ class AnimationOption(BaseModel):
     name: str
     mood: str
     dynamic_safe: bool
+    sequence_eligible: bool
 
 
 class AnimationList(BaseModel):

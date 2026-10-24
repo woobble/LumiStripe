@@ -48,12 +48,17 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "sequence_eligible": {
+            "title": "Sequence Eligible",
+            "type": "boolean"
           }
         },
         "required": [
           "name",
           "mood",
-          "dynamic_safe"
+          "dynamic_safe",
+          "sequence_eligible"
         ],
         "title": "AnimationOption",
         "type": "object"

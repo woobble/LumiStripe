@@ -143,6 +143,11 @@ and independent playback engines. Selecting `null` returns Dynamic mode to its
 automatic selector. A completed non-repeating sequence keeps its selection for
 the next active music session.
 
+The animation catalog response includes `sequence_eligible`, derived from the
+same core catalog rule used by playback validation. This is stricter than the
+general `dynamic_safe` flag, which can also be true for utility or effect
+animations that cannot be used as sequence steps.
+
 Dashboard state includes the saved sequence IDs and names, selected ID, and
 per-output progress: whether a sequence step is active, its zero-based step
 index and animation, remaining bars, clock-wait state, and a relative time to

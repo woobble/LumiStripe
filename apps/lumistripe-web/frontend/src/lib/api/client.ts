@@ -10,6 +10,8 @@ import type {
   PlaybackMode,
   SpotifyControlAction,
   SwitchQuantization,
+  SequenceCreateRequest,
+  SequenceDefinitionRequest,
   StripeTopology,
   SystemStats,
   UpdateStatus,
@@ -19,6 +21,8 @@ export type {
   AccessStatus,
   AnimationList,
   AnimationOption,
+  AnimationSequenceContract,
+  AnimationSequenceStepContract,
   AudioCalibrationResult,
   AudioCalibrationSessionResponse,
   AudioDeviceOption,
@@ -44,6 +48,9 @@ export type {
   StartupPlaybackState,
   StartupSettingsResponse,
   SystemStats,
+  SequenceCreateRequest,
+  SequenceDefinitionRequest,
+  SequenceLibraryResponse,
   StripeBackend,
   StripeLayout,
   StripeOutputConfig,
@@ -93,7 +100,7 @@ const sequencePlaybackSchema = z.object({
   waiting_for_clock: z.boolean(),
   next_transition_in_s: z.number().nonnegative().nullable(),
 }).strict()
-const sequenceLibrarySchema = z.object({
+const sequenceLibrarySummarySchema = z.object({
   sequences: z.array(z.object({ id: z.string(), name: z.string() }).strict()),
   active_sequence_id: z.string().nullable(),
 }).strict()
@@ -249,7 +256,7 @@ const dashboardStateSchema = z.object({
     switch_quantization: "off",
     bars_per_phrase: 8,
   }),
-  sequence_library: sequenceLibrarySchema.optional().default({
+  sequence_library: sequenceLibrarySummarySchema.optional().default({
     sequences: [],
     active_sequence_id: null,
   }),
@@ -266,8 +273,23 @@ const animationOptionSchema = z.object({
   name: z.string(),
   mood: z.string(),
   dynamic_safe: z.boolean(),
+  sequence_eligible: z.boolean().optional().default(false),
 }).strict()
 const animationListSchema = z.object({ items: z.array(animationOptionSchema) }).strict()
+const animationSequenceStepSchema = z.object({
+  animation_name: z.string().min(1).max(100),
+  duration_bars: z.union([z.literal(1), z.literal(2), z.literal(4), z.literal(8)]),
+}).strict()
+const animationSequenceSchema = z.object({
+  id: z.string().min(1).max(64),
+  name: z.string().min(1).max(80),
+  repeat: z.boolean(),
+  steps: z.array(animationSequenceStepSchema).min(1).max(32),
+}).strict()
+const animationSequenceLibrarySchema = z.object({
+  sequences: z.array(animationSequenceSchema),
+  active_sequence_id: z.string().nullable().optional(),
+}).strict()
 const accessStatusSchema = z.object({
   required: z.boolean(),
   authenticated: z.boolean(),
@@ -600,6 +622,22 @@ export const dashboardApi = {
   checkForUpdates: () => request("/api/system/update/check", { method: "POST" }, updateStatusSchema),
   installUpdate: () => request("/api/system/update/install", { method: "POST" }, updateStatusSchema),
   getAnimations: async () => (await request("/api/animations", undefined, animationListSchema)).items,
+  getAnimationSequences: () => request("/api/sequencer/sequences", undefined, animationSequenceLibrarySchema),
+  createAnimationSequence: (sequence: SequenceCreateRequest) => request("/api/sequencer/sequences", {
+    method: "POST",
+    body: JSON.stringify(sequence),
+  }, dashboardStateSchema),
+  updateAnimationSequence: (sequenceId: string, sequence: SequenceDefinitionRequest) => request(`/api/sequencer/sequences/${encodeURIComponent(sequenceId)}`, {
+    method: "PUT",
+    body: JSON.stringify(sequence),
+  }, dashboardStateSchema),
+  deleteAnimationSequence: (sequenceId: string) => request(`/api/sequencer/sequences/${encodeURIComponent(sequenceId)}`, {
+    method: "DELETE",
+  }, dashboardStateSchema),
+  setActiveAnimationSequence: (sequenceId: string | null) => request("/api/sequencer/active", {
+    method: "PUT",
+    body: JSON.stringify({ sequence_id: sequenceId }),
+  }, dashboardStateSchema),
   setMode: (mode: PlaybackMode, color?: string, stripeId?: string, musicRecognitionEnabled?: boolean) =>
     request("/api/mode", {
       method: "PUT",

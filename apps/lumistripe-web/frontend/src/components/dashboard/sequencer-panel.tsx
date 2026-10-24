@@ -4,8 +4,13 @@ import { SaveIcon, SparklesIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { SequenceLibrary } from "@/components/dashboard/sequence-library"
 import type {
+  AnimationOption,
+  AnimationSequenceContract,
   DashboardState,
+  SequenceCreateRequest,
+  SequenceDefinitionRequest,
   SequencerDiagnostics,
   SequencerSettingsResponse,
   SwitchQuantization,
@@ -53,7 +58,21 @@ type SequencerPanelProps = {
   target: string
   disabled: boolean
   saving: boolean
+  sequenceBusy: boolean
+  sequenceSaving: boolean
+  animations: AnimationOption[]
+  animationsLoading: boolean
+  animationsError: string | null
+  sequences: AnimationSequenceContract[]
+  sequenceLoading: boolean
+  sequenceLoadError: string | null
+  sequenceActionError: string | null
   onApply: (mode: SwitchQuantization, barsPerPhrase: 4 | 8 | 16) => Promise<boolean>
+  onRefreshSequences: () => Promise<void>
+  onCreateSequence: (sequence: SequenceCreateRequest) => Promise<boolean>
+  onUpdateSequence: (sequenceId: string, sequence: SequenceDefinitionRequest) => Promise<boolean>
+  onDeleteSequence: (sequenceId: string) => Promise<boolean>
+  onSetActiveSequence: (sequenceId: string | null) => Promise<boolean>
 }
 
 export function SequencerPanel({
@@ -61,7 +80,21 @@ export function SequencerPanel({
   target,
   disabled,
   saving,
+  sequenceBusy,
+  sequenceSaving,
+  animations,
+  animationsLoading,
+  animationsError,
+  sequences,
+  sequenceLoading,
+  sequenceLoadError,
+  sequenceActionError,
   onApply,
+  onRefreshSequences,
+  onCreateSequence,
+  onUpdateSequence,
+  onDeleteSequence,
+  onSetActiveSequence,
 }: SequencerPanelProps) {
   const settings = state.sequencer_settings ?? defaultSettings
   const [modeDraft, setModeDraft] = useState<SwitchQuantization | null>(null)
@@ -173,6 +206,27 @@ export function SequencerPanel({
           <SaveIcon aria-hidden="true" />
           {saving ? "Saving…" : "Apply and save settings"}
         </Button>
+
+        <div className="border-t border-white/5 pt-4">
+          <SequenceLibrary
+            state={state}
+            target={target}
+            animations={animations}
+            animationLoading={animationsLoading}
+            animationLoadError={animationsError}
+            sequences={sequences}
+            loading={sequenceLoading}
+            loadError={sequenceLoadError}
+            actionError={sequenceActionError}
+            busy={sequenceBusy}
+            saving={sequenceSaving}
+            onRefresh={onRefreshSequences}
+            onCreate={onCreateSequence}
+            onUpdate={onUpdateSequence}
+            onDelete={onDeleteSequence}
+            onSetActive={onSetActiveSequence}
+          />
+        </div>
 
         <div className="space-y-3 border-t border-white/5 pt-3" aria-label="Sequencer diagnostics">
           {rows.length > 0 ? rows.map((output) => {

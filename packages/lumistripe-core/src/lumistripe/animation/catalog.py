@@ -223,6 +223,20 @@ def animation_catalog(
     )
 
 
+def dynamic_sequence_eligible(definition: AnimationDefinition) -> bool:
+    """Return whether a catalog entry is safe as a Dynamic sequence base."""
+
+    metadata = definition.dynamic_metadata
+    return (
+        definition.automatic
+        and definition.role is AnimationRole.BASE
+        and metadata is not None
+        and metadata.role is AnimationRole.BASE
+        and metadata.dynamic_safe
+        and definition.effect_metadata is None
+    )
+
+
 def validate_animation_catalog(
     definitions: Iterable[AnimationDefinition],
 ) -> tuple[AnimationDefinition, ...]:
@@ -260,6 +274,7 @@ def validate_animation_catalog(
 __all__ = [
     "AnimationDefinition",
     "animation_catalog",
+    "dynamic_sequence_eligible",
     "party_catalog",
     "validate_animation_catalog",
 ]

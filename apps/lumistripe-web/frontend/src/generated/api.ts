@@ -833,6 +833,8 @@ export interface components {
             mood: string;
             /** Name */
             name: string;
+            /** Sequence Eligible */
+            sequence_eligible: boolean;
         };
         /** AnimationRequest */
         AnimationRequest: {

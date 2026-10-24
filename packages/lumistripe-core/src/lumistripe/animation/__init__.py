@@ -10,6 +10,7 @@ from .base import Animation, AnimationPlayer
 from .catalog import (
     AnimationDefinition,
     animation_catalog,
+    dynamic_sequence_eligible,
     party_catalog,
     validate_animation_catalog,
 )
@@ -72,6 +73,7 @@ __all__ = [
     "AnimationPlayer",
     "AnimationRole",
     "animation_catalog",
+    "dynamic_sequence_eligible",
     "party_catalog",
     "validate_animation_catalog",
 ]
