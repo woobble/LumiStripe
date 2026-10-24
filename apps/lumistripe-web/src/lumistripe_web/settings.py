@@ -16,13 +16,16 @@ from lumistripe.audio.config import (
 )
 from lumistripe.controller import ColorCorrection
 from lumistripe.playback import (
+    AnimationSequence,
+    AnimationSequenceStep,
     MusicActivityConfig,
     PlaybackMode,
     SwitchQuantization,
 )
 from lumistripe_app_support import build_audio_config
 
-SETTINGS_VERSION = 7
+SETTINGS_VERSION = 8
+MAX_SAVED_ANIMATION_SEQUENCES = 20
 PROFILE_NAMES = ("primary", "secondary")
 StripeLayout = Literal["mirrored", "continuous", "independent"]
 StripeBackend = Literal["spi", "gpio"]
@@ -267,6 +270,8 @@ class DashboardSettings:
     restore_last_state: bool = False
     switch_quantization: SwitchQuantization = SwitchQuantization.OFF
     bars_per_phrase: int = 8
+    animation_sequences: tuple[AnimationSequence, ...] = ()
+    active_sequence_id: str | None = None
     remembered_playback: StartupPlaybackSettings = field(
         default_factory=StartupPlaybackSettings
     )
@@ -297,9 +302,9 @@ class CalibrationSettingsStore:
             if not isinstance(payload, dict):
                 raise TypeError("settings must be an object")
             version = payload.get("version")
-            if version not in {1, 2, 3, 4, 5, 6, SETTINGS_VERSION}:
+            if version not in {1, 2, 3, 4, 5, 6, 7, SETTINGS_VERSION}:
                 raise ValueError(
-                    f"expected settings version 1, 2, 3, 4, 5, 6, or {SETTINGS_VERSION}"
+                    f"expected settings version 1 through {SETTINGS_VERSION}"
                 )
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             return settings, f"Dashboard settings are invalid: {exc}"
@@ -324,7 +329,7 @@ class CalibrationSettingsStore:
                 except (TypeError, ValueError) as exc:
                     warnings.append(str(exc))
 
-        if payload.get("version") in {2, 3, 4, 5, 6, SETTINGS_VERSION}:
+        if payload.get("version") in {2, 3, 4, 5, 6, 7, SETTINGS_VERSION}:
             selected = payload.get("selected_audio_device")
             if selected is not None and not isinstance(selected, str):
                 warnings.append("selected_audio_device must be a string or null")
@@ -362,13 +367,13 @@ class CalibrationSettingsStore:
                     except (TypeError, ValueError) as exc:
                         warnings.append(str(exc))
 
-        if payload.get("version") in {3, 4, 5, 6, SETTINGS_VERSION} and "stripes" in payload:
+        if payload.get("version") in {3, 4, 5, 6, 7, SETTINGS_VERSION} and "stripes" in payload:
             try:
                 settings.stripe_topology = _decode_stripes(payload["stripes"])
             except (TypeError, ValueError) as exc:
                 warnings.append(str(exc))
 
-        if payload.get("version") in {4, 5, 6, SETTINGS_VERSION}:
+        if payload.get("version") in {4, 5, 6, 7, SETTINGS_VERSION}:
             restore = payload.get("restore_last_state", False)
             if not isinstance(restore, bool):
                 warnings.append("restore_last_state must be a boolean")
@@ -390,7 +395,7 @@ class CalibrationSettingsStore:
                 except (TypeError, ValueError) as exc:
                     warnings.append(str(exc))
 
-        if payload.get("version") in {6, SETTINGS_VERSION}:
+        if payload.get("version") in {6, 7, SETTINGS_VERSION}:
             encoded_offsets = payload.get("audio_sync_offsets_ms", {})
             if not isinstance(encoded_offsets, dict):
                 warnings.append("audio_sync_offsets_ms must be an object")
@@ -408,7 +413,7 @@ class CalibrationSettingsStore:
                     except (TypeError, ValueError) as exc:
                         warnings.append(str(exc))
 
-        if payload.get("version") == SETTINGS_VERSION:
+        if payload.get("version") in {7, SETTINGS_VERSION}:
             encoded_quantization = payload.get("switch_quantization", "off")
             try:
                 settings.switch_quantization = SwitchQuantization(encoded_quantization)
@@ -424,6 +429,11 @@ class CalibrationSettingsStore:
                 warnings.append("bars_per_phrase must be 4, 8, or 16")
             else:
                 settings.bars_per_phrase = encoded_bars
+
+        if payload.get("version") == SETTINGS_VERSION:
+            settings.animation_sequences, settings.active_sequence_id = (
+                _decode_animation_sequences(payload, warnings)
+            )
 
         warning = None
         if warnings:
@@ -475,7 +485,29 @@ class CalibrationSettingsStore:
         settings.bars_per_phrase = bars_per_phrase
         self.save_all(settings)
 
+    def save_animation_sequences(
+        self,
+        sequences: tuple[AnimationSequence, ...],
+        active_sequence_id: str | None,
+    ) -> None:
+        settings, _ = self.load_all()
+        settings.animation_sequences = sequences
+        settings.active_sequence_id = active_sequence_id
+        self.save_all(settings)
+
     def save_all(self, settings: DashboardSettings) -> None:
+        if len(settings.animation_sequences) > MAX_SAVED_ANIMATION_SEQUENCES:
+            raise ValueError(
+                f"at most {MAX_SAVED_ANIMATION_SEQUENCES} animation sequences may be saved"
+            )
+        sequence_ids = [sequence.id for sequence in settings.animation_sequences]
+        if len(sequence_ids) != len(set(sequence_ids)):
+            raise ValueError("animation sequence IDs must be unique")
+        if (
+            settings.active_sequence_id is not None
+            and settings.active_sequence_id not in sequence_ids
+        ):
+            raise ValueError("active_sequence_id must identify a saved sequence")
         payload = {
             "version": SETTINGS_VERSION,
             "color_correction": {
@@ -501,6 +533,22 @@ class CalibrationSettingsStore:
             "audio_sync_offsets_ms": dict(settings.audio_sync_offsets_ms),
             "switch_quantization": settings.switch_quantization.value,
             "bars_per_phrase": settings.bars_per_phrase,
+            "animation_sequences": [
+                {
+                    "id": sequence.id,
+                    "name": sequence.name,
+                    "repeat": sequence.repeat,
+                    "steps": [
+                        {
+                            "animation_name": step.animation_name,
+                            "duration_bars": step.duration_bars,
+                        }
+                        for step in sequence.steps
+                    ],
+                }
+                for sequence in settings.animation_sequences
+            ],
+            "active_sequence_id": settings.active_sequence_id,
             "stripes": (
                 None
                 if settings.stripe_topology is None
@@ -550,6 +598,97 @@ class CalibrationSettingsStore:
         finally:
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)
+
+
+def _decode_animation_sequences(
+    payload: dict[str, Any], warnings: list[str]
+) -> tuple[tuple[AnimationSequence, ...], str | None]:
+    encoded_sequences = payload.get("animation_sequences", [])
+    valid: list[AnimationSequence] = []
+    seen_ids: set[str] = set()
+    if not isinstance(encoded_sequences, list):
+        warnings.append("animation_sequences must be an array")
+    else:
+        for index, encoded in enumerate(encoded_sequences):
+            try:
+                if not isinstance(encoded, dict) or set(encoded) != {
+                    "id",
+                    "name",
+                    "repeat",
+                    "steps",
+                }:
+                    raise ValueError("definition must contain id, name, repeat, and steps")
+                sequence_id = encoded["id"]
+                if not isinstance(sequence_id, str) or not sequence_id.strip():
+                    raise ValueError("id must be a non-empty string")
+                sequence_id = sequence_id.strip()
+                if len(sequence_id) > 64:
+                    raise ValueError("id must be at most 64 characters")
+                if sequence_id.strip() in seen_ids:
+                    raise ValueError(f"duplicate sequence ID {sequence_id!r}")
+                sequence_name = encoded["name"]
+                if (
+                    not isinstance(sequence_name, str)
+                    or not sequence_name.strip()
+                    or len(sequence_name.strip()) > 80
+                ):
+                    raise ValueError("name must contain 1 to 80 characters")
+                if len(valid) >= MAX_SAVED_ANIMATION_SEQUENCES:
+                    raise ValueError(
+                        f"only {MAX_SAVED_ANIMATION_SEQUENCES} saved sequences are allowed"
+                    )
+                steps_data = encoded["steps"]
+                if not isinstance(steps_data, list) or not 1 <= len(steps_data) <= 32:
+                    raise ValueError("steps must contain between 1 and 32 items")
+                steps: list[AnimationSequenceStep] = []
+                for step_index, step in enumerate(steps_data):
+                    if not isinstance(step, dict) or set(step) != {
+                        "animation_name",
+                        "duration_bars",
+                    }:
+                        raise ValueError(
+                            f"step {step_index + 1} must contain animation_name and duration_bars"
+                        )
+                    animation_name = step["animation_name"]
+                    if (
+                        not isinstance(animation_name, str)
+                        or not animation_name.strip()
+                        or len(animation_name.strip()) > 100
+                    ):
+                        raise ValueError(
+                            f"step {step_index + 1} animation_name must contain 1 to 100 characters"
+                        )
+                    steps.append(
+                        AnimationSequenceStep(
+                            animation_name=animation_name,
+                            duration_bars=step["duration_bars"],
+                        )
+                    )
+                sequence = AnimationSequence(
+                    id=sequence_id,
+                    name=sequence_name,
+                    repeat=encoded["repeat"],
+                    steps=tuple(steps),
+                )
+                valid.append(sequence)
+                seen_ids.add(sequence.id)
+            except (KeyError, TypeError, ValueError) as exc:
+                warnings.append(f"animation sequence at index {index} was skipped: {exc}")
+
+    encoded_active_id = payload.get("active_sequence_id")
+    if encoded_active_id is not None and not isinstance(encoded_active_id, str):
+        warnings.append("active_sequence_id must be a string or null")
+        active_sequence_id = None
+    elif encoded_active_id is not None and encoded_active_id.strip() not in {
+        sequence.id for sequence in valid
+    }:
+        warnings.append("active_sequence_id did not identify a valid saved sequence")
+        active_sequence_id = None
+    else:
+        active_sequence_id = (
+            None if encoded_active_id is None else encoded_active_id.strip()
+        )
+    return tuple(valid), active_sequence_id
 
 
 def _decode_stripes(encoded: object) -> StripeTopologySettings | None:

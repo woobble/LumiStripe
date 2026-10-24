@@ -346,6 +346,245 @@ def test_sequencer_settings_api_requires_pairing() -> None:
         assert client.get("/api/sequencer/settings").status_code == 200
 
 
+def test_animation_sequence_api_crud_validation_and_authentication(
+    tmp_path: Path,
+) -> None:
+    app = create_app(
+        RuntimeSettings(pixels=8, settings_file=tmp_path / "settings.json"),
+        pairing_code="1234",
+    )
+    create_body = {
+        "id": "show-a",
+        "name": "Show A",
+        "repeat": True,
+        "steps": [{"animation_name": "rainbow_cycle", "duration_bars": 2}],
+    }
+    with TestClient(app) as client:
+        assert client.get("/api/sequencer/sequences").status_code == 401
+        assert client.post("/api/sequencer/sequences", json=create_body).status_code == 401
+        assert client.post("/api/auth/pair", json={"code": "1234"}).status_code == 200
+        assert client.get("/api/sequencer/sequences").json() == {
+            "sequences": [],
+            "active_sequence_id": None,
+        }
+
+        invalid_animation = {**create_body, "id": "invalid-animation", "steps": [
+            {"animation_name": "not-a-dynamic-animation", "duration_bars": 2}
+        ]}
+        assert client.post(
+            "/api/sequencer/sequences", json=invalid_animation
+        ).status_code == 422
+        invalid_effect = {
+            **create_body,
+            "id": "effect-animation",
+            "steps": [{"animation_name": "bass_drop", "duration_bars": 2}],
+        }
+        assert client.post(
+            "/api/sequencer/sequences", json=invalid_effect
+        ).status_code == 422
+        invalid_duration = {**create_body, "steps": [
+            {"animation_name": "rainbow_cycle", "duration_bars": 3}
+        ]}
+        assert client.post(
+            "/api/sequencer/sequences", json=invalid_duration
+        ).status_code == 422
+
+        created = client.post("/api/sequencer/sequences", json=create_body)
+        assert created.status_code == 200
+        assert created.json()["mode"] == "static"
+        assert created.json()["sequence_library"] == {
+            "sequences": [{"id": "show-a", "name": "Show A"}],
+            "active_sequence_id": None,
+        }
+        assert client.post("/api/sequencer/sequences", json=create_body).status_code == 409
+        assert client.get("/api/sequencer/sequences").json() == {
+            "sequences": [{
+                "id": "show-a",
+                "name": "Show A",
+                "repeat": True,
+                "steps": [{"animation_name": "rainbow_cycle", "duration_bars": 2}],
+            }],
+            "active_sequence_id": None,
+        }
+
+        updated = client.put(
+            "/api/sequencer/sequences/show-a",
+            json={
+                "name": "Updated show",
+                "repeat": False,
+                "steps": [{"animation_name": "pulse", "duration_bars": 4}],
+            },
+        )
+        assert updated.status_code == 200
+        assert updated.json()["sequence_library"]["sequences"] == [
+            {"id": "show-a", "name": "Updated show"}
+        ]
+        assert client.put(
+            "/api/sequencer/sequences/missing",
+            json={
+                "name": "Missing",
+                "repeat": True,
+                "steps": [{"animation_name": "pulse", "duration_bars": 1}],
+            },
+        ).status_code == 404
+        assert client.put(
+            "/api/sequencer/active", json={"sequence_id": "missing"}
+        ).status_code == 404
+        assert client.put("/api/mode", json={"mode": "dynamic"}).status_code == 200
+        selected = client.put(
+            "/api/sequencer/active", json={"sequence_id": "show-a"}
+        )
+        assert selected.status_code == 200
+        assert selected.json()["sequence_library"]["active_sequence_id"] == "show-a"
+        assert selected.json()["stripe_playback"][0]["sequence_playback"][
+            "selected_sequence_id"
+        ] == "show-a"
+        deactivated = client.put("/api/sequencer/active", json={"sequence_id": None})
+        assert deactivated.status_code == 200
+        assert deactivated.json()["sequence_library"]["active_sequence_id"] is None
+        assert deactivated.json()["mode"] == "dynamic"
+        assert client.put(
+            "/api/sequencer/active", json={"sequence_id": "show-a"}
+        ).status_code == 200
+        second_body = {
+            **create_body,
+            "id": "show-b",
+            "name": "Show B",
+            "steps": [{"animation_name": "pulse", "duration_bars": 1}],
+        }
+        assert client.post("/api/sequencer/sequences", json=second_body).status_code == 200
+        switched = client.put(
+            "/api/sequencer/active", json={"sequence_id": "show-b"}
+        )
+        assert switched.status_code == 200
+        assert switched.json()["sequence_library"]["active_sequence_id"] == "show-b"
+        assert client.delete("/api/sequencer/sequences/show-a").status_code == 200
+        deleted = client.delete("/api/sequencer/sequences/show-b")
+        assert deleted.status_code == 200
+        assert deleted.json()["sequence_library"] == {
+            "sequences": [],
+            "active_sequence_id": None,
+        }
+
+        oversized = {
+            **create_body,
+            "id": "too-many-steps",
+            "steps": [
+                {"animation_name": "rainbow_cycle", "duration_bars": 1}
+                for _ in range(33)
+            ],
+        }
+        assert client.post("/api/sequencer/sequences", json=oversized).status_code == 422
+        for index in range(20):
+            saved = client.post(
+                "/api/sequencer/sequences",
+                json={**create_body, "id": f"limit-{index}"},
+            )
+            assert saved.status_code == 200
+        assert client.post(
+            "/api/sequencer/sequences", json={**create_body, "id": "limit-21"}
+        ).status_code == 409
+
+
+def test_animation_sequence_selection_persists_across_restart_and_applies_to_all_outputs(
+    tmp_path: Path,
+) -> None:
+    settings_path = tmp_path / "settings.json"
+    store = CalibrationSettingsStore(settings_path)
+    store.save_stripes(
+        StripeTopologySettings(
+            layout="independent",
+            outputs=(
+                StripeOutputSettings(id="left", name="Left", pixels=8),
+                StripeOutputSettings(
+                    id="right", name="Right", pixels=8, spi_device="/dev/spidev1.0"
+                ),
+            ),
+        )
+    )
+    app = create_app(
+        RuntimeSettings(pixels=8, audio_source="demo", settings_file=settings_path)
+    )
+    body = {
+        "id": "two-step",
+        "name": "Two step",
+        "repeat": True,
+        "steps": [
+            {"animation_name": "rainbow_cycle", "duration_bars": 2},
+            {"animation_name": "pulse", "duration_bars": 2},
+        ],
+    }
+    with TestClient(app) as client:
+        assert client.put("/api/mode", json={"mode": "dynamic"}).status_code == 200
+        assert client.put(
+            "/api/audio/sync-offset", json={"offset_ms": -85.0}
+        ).status_code == 200
+        assert client.post("/api/sequencer/sequences", json=body).status_code == 200
+        selected = client.put(
+            "/api/sequencer/active", json={"sequence_id": "two-step"}
+        )
+        assert selected.status_code == 200
+        states = selected.json()["stripe_playback"]
+        assert {state["stripe_id"] for state in states} == {"left", "right"}
+        assert all(
+            state["sequence_playback"]["selected_sequence_id"] == "two-step"
+            for state in states
+        )
+        runtime = app.state.runtime
+        assert runtime.playback.sync_offset_s == pytest.approx(-0.085)
+        assert all(
+            engine.sync_offset_s == pytest.approx(-0.085)
+            and engine.config.animation_sequence is not None
+            for _, engine in runtime._playbacks.values()
+        )
+
+    restarted = create_app(
+        RuntimeSettings(pixels=8, audio_source="demo", settings_file=settings_path)
+    )
+    with TestClient(restarted) as client:
+        library = client.get("/api/sequencer/sequences")
+        assert library.status_code == 200
+        assert library.json()["active_sequence_id"] == "two-step"
+        assert len(library.json()["sequences"]) == 1
+        assert all(
+            state["sequence_playback"]["selected_sequence_id"] == "two-step"
+            for state in client.get("/api/state").json()["stripe_playback"]
+        )
+    persisted, warning = CalibrationSettingsStore(settings_path).load_all()
+    assert warning is None
+    assert persisted.audio_sync_offsets_ms
+    assert -85.0 in persisted.audio_sync_offsets_ms.values()
+
+
+def test_sequence_save_failure_returns_error_without_changing_active_selection(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    app = create_app(
+        RuntimeSettings(pixels=8, settings_file=tmp_path / "settings.json")
+    )
+    body = {
+        "id": "save-fails",
+        "name": "Save fails",
+        "repeat": True,
+        "steps": [{"animation_name": "rainbow_cycle", "duration_bars": 1}],
+    }
+    with TestClient(app) as client:
+        assert client.post("/api/sequencer/sequences", json=body).status_code == 200
+        runtime = app.state.runtime
+
+        def fail_save(*_args: object, **_kwargs: object) -> None:
+            raise OSError("disk is read-only")
+
+        monkeypatch.setattr(runtime._settings_store, "save_animation_sequences", fail_save)
+        failed = client.put(
+            "/api/sequencer/active", json={"sequence_id": "save-fails"}
+        )
+        assert failed.status_code == 500
+        assert failed.json()["detail"] == "could not save animation sequences: disk is read-only"
+        assert runtime.playback.config.animation_sequence is None
+        assert runtime.snapshot().sequence_library.active_sequence_id is None
+
+
 def test_stripe_power_budget_api_round_trip_and_validation(tmp_path: Path) -> None:
     app = create_app(
         RuntimeSettings(pixels=8, settings_file=tmp_path / "settings.json")

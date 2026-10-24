@@ -136,6 +136,32 @@ class SequencerDiagnostics(BaseModel):
     waiting_for_clock: bool = False
 
 
+class SequenceLibraryEntry(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    name: str
+
+
+class SequenceLibrarySummary(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    sequences: tuple[SequenceLibraryEntry, ...] = ()
+    active_sequence_id: str | None = None
+
+
+class SequencePlaybackDiagnostics(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    selected_sequence_id: str | None = None
+    active: bool = False
+    current_step_index: int | None = None
+    animation_name: str | None = None
+    remaining_bars: int | None = None
+    waiting_for_clock: bool = False
+    next_transition_in_s: float | None = Field(default=None, ge=0.0)
+
+
 class StripePlaybackState(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -149,6 +175,9 @@ class StripePlaybackState(BaseModel):
     music_recognition_enabled: bool = True
     sequencer_diagnostics: SequencerDiagnostics = Field(
         default_factory=SequencerDiagnostics
+    )
+    sequence_playback: SequencePlaybackDiagnostics = Field(
+        default_factory=SequencePlaybackDiagnostics
     )
 
 
@@ -191,6 +220,9 @@ class DashboardState(BaseModel):
     power_budget: PowerBudgetState = PowerBudgetState()
     sequencer_settings: SequencerSettingsResponse = Field(
         default_factory=SequencerSettingsResponse
+    )
+    sequence_library: SequenceLibrarySummary = Field(
+        default_factory=SequenceLibrarySummary
     )
     stripe_playback: tuple[StripePlaybackState, ...] = ()
     diagnostic_issues: tuple[DiagnosticIssue, ...] = ()

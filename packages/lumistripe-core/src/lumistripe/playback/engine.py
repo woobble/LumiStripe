@@ -105,7 +105,7 @@ class PlaybackEngine:
             confidence_threshold=effect_config.clock_confidence_threshold,
             subdivisions_per_beat=effect_config.subdivisions_per_beat,
         )
-        self._validate_animation_sequence(self.config.animation_sequence)
+        self.validate_animation_sequence(self.config.animation_sequence)
         self._sequence_coordinator = AnimationSequenceCoordinator(
             self.config.animation_sequence,
             confidence_threshold=effect_config.clock_confidence_threshold,
@@ -155,11 +155,18 @@ class PlaybackEngine:
     def set_animation_sequence(self, sequence: AnimationSequence | None) -> None:
         """Replace the active Dynamic sequence, cancelling its current timing session."""
 
-        self._validate_animation_sequence(sequence)
+        self.validate_animation_sequence(sequence)
+        if sequence == self._sequence_coordinator.sequence:
+            return
+        # A pending automatic candidate belongs to the previous playback policy.
+        # Do not let it commit after custom sequencing has taken control (or
+        # after control has returned to the automatic selector).
+        self.dynamic_selector.reset()
+        self._quantized_switcher.reset()
         self._sequence_coordinator.set_sequence(sequence)
         self.config = replace(self.config, animation_sequence=sequence)
 
-    def _validate_animation_sequence(
+    def validate_animation_sequence(
         self, sequence: AnimationSequence | None
     ) -> None:
         if sequence is None:

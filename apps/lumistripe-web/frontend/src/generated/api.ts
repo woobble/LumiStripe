@@ -600,6 +600,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sequencer/active": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set Active Animation Sequence */
+        put: operations["set_active_animation_sequence_api_sequencer_active_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sequencer/sequences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Animation Sequences */
+        get: operations["get_animation_sequences_api_sequencer_sequences_get"];
+        put?: never;
+        /** Create Animation Sequence */
+        post: operations["create_animation_sequence_api_sequencer_sequences_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sequencer/sequences/{sequence_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Animation Sequence */
+        put: operations["update_animation_sequence_api_sequencer_sequences__sequence_id__put"];
+        post?: never;
+        /** Delete Animation Sequence */
+        delete: operations["delete_animation_sequence_api_sequencer_sequences__sequence_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/sequencer/settings": {
         parameters: {
             query?: never;
@@ -787,6 +840,27 @@ export interface components {
             name: string;
             /** Stripe Id */
             stripe_id?: string | null;
+        };
+        /** AnimationSequenceContract */
+        AnimationSequenceContract: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Repeat */
+            repeat: boolean;
+            /** Steps */
+            steps: components["schemas"]["AnimationSequenceStepContract"][];
+        };
+        /** AnimationSequenceStepContract */
+        AnimationSequenceStepContract: {
+            /** Animation Name */
+            animation_name: string;
+            /**
+             * Duration Bars
+             * @enum {integer}
+             */
+            duration_bars: 1 | 2 | 4 | 8;
         };
         /** AudioCalibrationFinishRequest */
         AudioCalibrationFinishRequest: {
@@ -1465,6 +1539,7 @@ export interface components {
              */
             running: boolean;
             runtime: components["schemas"]["RuntimeKind"];
+            sequence_library?: components["schemas"]["SequenceLibrarySummary"];
             sequencer_settings?: components["schemas"]["SequencerSettingsResponse"];
             /**
              * Solid Color
@@ -1587,6 +1662,81 @@ export interface components {
          * @enum {string}
          */
         RuntimeKind: "simulation" | "hardware";
+        /** SequenceActiveRequest */
+        SequenceActiveRequest: {
+            /** Sequence Id */
+            sequence_id: string | null;
+        };
+        /** SequenceCreateRequest */
+        SequenceCreateRequest: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Repeat */
+            repeat: boolean;
+            /** Steps */
+            steps: components["schemas"]["AnimationSequenceStepContract"][];
+        };
+        /** SequenceDefinitionRequest */
+        SequenceDefinitionRequest: {
+            /** Name */
+            name: string;
+            /** Repeat */
+            repeat: boolean;
+            /** Steps */
+            steps: components["schemas"]["AnimationSequenceStepContract"][];
+        };
+        /** SequenceLibraryEntry */
+        SequenceLibraryEntry: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+        };
+        /** SequenceLibraryResponse */
+        SequenceLibraryResponse: {
+            /** Active Sequence Id */
+            active_sequence_id?: string | null;
+            /**
+             * Sequences
+             * @default []
+             */
+            sequences: components["schemas"]["AnimationSequenceContract"][];
+        };
+        /** SequenceLibrarySummary */
+        SequenceLibrarySummary: {
+            /** Active Sequence Id */
+            active_sequence_id?: string | null;
+            /**
+             * Sequences
+             * @default []
+             */
+            sequences: components["schemas"]["SequenceLibraryEntry"][];
+        };
+        /** SequencePlaybackDiagnostics */
+        SequencePlaybackDiagnostics: {
+            /**
+             * Active
+             * @default false
+             */
+            active: boolean;
+            /** Animation Name */
+            animation_name?: string | null;
+            /** Current Step Index */
+            current_step_index?: number | null;
+            /** Next Transition In S */
+            next_transition_in_s?: number | null;
+            /** Remaining Bars */
+            remaining_bars?: number | null;
+            /** Selected Sequence Id */
+            selected_sequence_id?: string | null;
+            /**
+             * Waiting For Clock
+             * @default false
+             */
+            waiting_for_clock: boolean;
+        };
         /** SequencerDiagnostics */
         SequencerDiagnostics: {
             /**
@@ -1875,6 +2025,7 @@ export interface components {
              * @default true
              */
             music_recognition_enabled: boolean;
+            sequence_playback?: components["schemas"]["SequencePlaybackDiagnostics"];
             sequencer_diagnostics?: components["schemas"]["SequencerDiagnostics"];
             /**
              * Solid Color
@@ -3113,6 +3264,158 @@ export interface operations {
                 "application/json": components["schemas"]["ModeRequest"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_active_animation_sequence_api_sequencer_active_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SequenceActiveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_animation_sequences_api_sequencer_sequences_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SequenceLibraryResponse"];
+                };
+            };
+        };
+    };
+    create_animation_sequence_api_sequencer_sequences_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SequenceCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_animation_sequence_api_sequencer_sequences__sequence_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sequence_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SequenceDefinitionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_animation_sequence_api_sequencer_sequences__sequence_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sequence_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

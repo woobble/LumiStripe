@@ -107,8 +107,9 @@ downbeat information. Phrase length is configurable to 4, 8, or 16 bars.
 The authenticated `GET` and `PUT /api/sequencer/settings` endpoints expose the
 shared sequencer settings. Updates enter the runtime worker command queue,
 apply to all outputs without restarting playback, discard pending switches
-from the previous grid, and persist in dashboard settings version 7. Version 6
-settings migrate with quantization off and an eight-bar phrase; saved audio
+from the previous grid, and persist in dashboard settings version 8. Version 7
+settings retain their sequencer choices and migrate with an empty sequence
+library; older settings receive the established defaults. Saved audio
 synchronization offsets remain intact.
 
 Dashboard state reports per-output estimated beat, bar, and phrase positions,
@@ -132,3 +133,17 @@ or replaying missed steps. Its immutable `SequencePlaybackState` exposes the
 active step, remaining bars, waiting state, and next scheduled transition.
 Sequence playback remains disabled by default and uses the same animation
 player crossfades and effect rendering path as ordinary Dynamic playback.
+
+The authenticated sequence API uses `GET` and `POST /api/sequencer/sequences`,
+`PUT` and `DELETE /api/sequencer/sequences/{id}`, and
+`PUT /api/sequencer/active`. It stores up to 20 definitions and the optional
+selected ID, but no playback clock state. Mutations go through the runtime
+worker and save atomically before applying the selected sequence to the shared
+and independent playback engines. Selecting `null` returns Dynamic mode to its
+automatic selector. A completed non-repeating sequence keeps its selection for
+the next active music session.
+
+Dashboard state includes the saved sequence IDs and names, selected ID, and
+per-output progress: whether a sequence step is active, its zero-based step
+index and animation, remaining bars, clock-wait state, and a relative time to
+the next transition. Estimated bar alignment remains an estimate.

@@ -8,6 +8,8 @@ import lumistripe_web.runtime as runtime_module
 import numpy as np
 import pytest
 from lumistripe import (
+    AnimationSequence,
+    AnimationSequenceStep,
     AudioFrame,
     AudioInputDevice,
     AudioInputHealth,
@@ -692,6 +694,91 @@ def test_unknown_animation_rejects_command_without_stopping_runtime() -> None:
         with pytest.raises(UnknownAnimationError, match="unknown animation"):
             runtime.select_animation("not-real").result(timeout=1)
         assert runtime.healthy is True
+    finally:
+        runtime.stop()
+
+
+def test_custom_sequence_applies_to_rebuilt_independent_outputs_and_clears_on_deactivation(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.json"
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(pixels=4, settings_file=path, audio_source="demo")
+    )
+    runtime.start()
+    try:
+        runtime.set_mode(PlaybackMode.DYNAMIC).result(timeout=1)
+        runtime.set_audio_sync_offset(-85.0).result(timeout=1)
+        sequence = AnimationSequence(
+            id="demo-sequence",
+            name="Demo sequence",
+            repeat=True,
+            steps=(AnimationSequenceStep("rainbow_cycle", 2),),
+        )
+        runtime.create_animation_sequence(sequence).result(timeout=1)
+        state = runtime.set_active_animation_sequence(sequence.id).result(timeout=1)
+
+        assert state.mode is PlaybackMode.DYNAMIC
+        assert state.sequence_library.active_sequence_id == sequence.id
+        assert runtime.playback.config.animation_sequence == sequence
+
+        topology = StripeTopologySettings(
+            layout="independent",
+            outputs=(
+                StripeOutputSettings(id="left", name="Left", pixels=4),
+                StripeOutputSettings(
+                    id="right", name="Right", pixels=4, spi_device="/dev/spidev1.0"
+                ),
+            ),
+        )
+        rebuilt = runtime.apply_stripe_topology(topology).result(timeout=2)
+        assert {item.stripe_id for item in rebuilt.stripe_playback} == {"left", "right"}
+        assert all(
+            item.sequence_playback.selected_sequence_id == sequence.id
+            for item in rebuilt.stripe_playback
+        )
+        assert all(
+            engine.config.animation_sequence == sequence
+            and engine.sync_offset_s == pytest.approx(-0.085)
+            for _, engine in runtime._playbacks.values()
+        )
+
+        deactivated = runtime.set_active_animation_sequence(None).result(timeout=1)
+        assert deactivated.sequence_library.active_sequence_id is None
+        assert runtime.playback.config.animation_sequence is None
+        assert all(
+            engine.config.animation_sequence is None
+            for _, engine in runtime._playbacks.values()
+        )
+        assert deactivated.mode is PlaybackMode.DYNAMIC
+    finally:
+        runtime.stop()
+
+
+def test_sequence_persistence_failure_keeps_selected_runtime_sequence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = LumiStripeRuntime(RuntimeSettings(pixels=4, settings_file=tmp_path / "settings.json"))
+    runtime.start()
+    sequence = AnimationSequence(
+        id="stable",
+        name="Stable",
+        repeat=True,
+        steps=(AnimationSequenceStep("rainbow_cycle", 1),),
+    )
+    try:
+        runtime.create_animation_sequence(sequence).result(timeout=1)
+
+        def fail_save(*_args: object, **_kwargs: object) -> None:
+            raise OSError("read-only settings file")
+
+        monkeypatch.setattr(runtime._settings_store, "save_animation_sequences", fail_save)
+        with pytest.raises(RuntimeCommandError, match="could not save animation sequences"):
+            runtime.set_active_animation_sequence(sequence.id).result(timeout=1)
+
+        assert runtime.playback.config.animation_sequence is None
+        assert runtime.snapshot().sequence_library.active_sequence_id is None
+        assert runtime.animation_sequences().active_sequence_id is None
     finally:
         runtime.stop()
 

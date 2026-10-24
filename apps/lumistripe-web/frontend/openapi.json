@@ -83,6 +83,71 @@
         "title": "AnimationRequest",
         "type": "object"
       },
+      "AnimationSequenceContract": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "repeat": {
+            "title": "Repeat",
+            "type": "boolean"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/AnimationSequenceStepContract"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "title": "Steps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "repeat",
+          "steps"
+        ],
+        "title": "AnimationSequenceContract",
+        "type": "object"
+      },
+      "AnimationSequenceStepContract": {
+        "additionalProperties": false,
+        "properties": {
+          "animation_name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Animation Name",
+            "type": "string"
+          },
+          "duration_bars": {
+            "enum": [
+              1,
+              2,
+              4,
+              8
+            ],
+            "title": "Duration Bars",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "animation_name",
+          "duration_bars"
+        ],
+        "title": "AnimationSequenceStepContract",
+        "type": "object"
+      },
       "AudioCalibrationFinishRequest": {
         "properties": {
           "apply": {
@@ -1555,6 +1620,9 @@
           "runtime": {
             "$ref": "#/components/schemas/RuntimeKind"
           },
+          "sequence_library": {
+            "$ref": "#/components/schemas/SequenceLibrarySummary"
+          },
           "sequencer_settings": {
             "$ref": "#/components/schemas/SequencerSettingsResponse"
           },
@@ -1868,6 +1936,238 @@
         ],
         "title": "RuntimeKind",
         "type": "string"
+      },
+      "SequenceActiveRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "sequence_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sequence Id"
+          }
+        },
+        "required": [
+          "sequence_id"
+        ],
+        "title": "SequenceActiveRequest",
+        "type": "object"
+      },
+      "SequenceCreateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "repeat": {
+            "title": "Repeat",
+            "type": "boolean"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/AnimationSequenceStepContract"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "title": "Steps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "repeat",
+          "steps",
+          "id"
+        ],
+        "title": "SequenceCreateRequest",
+        "type": "object"
+      },
+      "SequenceDefinitionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "repeat": {
+            "title": "Repeat",
+            "type": "boolean"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/AnimationSequenceStepContract"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "title": "Steps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "repeat",
+          "steps"
+        ],
+        "title": "SequenceDefinitionRequest",
+        "type": "object"
+      },
+      "SequenceLibraryEntry": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "SequenceLibraryEntry",
+        "type": "object"
+      },
+      "SequenceLibraryResponse": {
+        "properties": {
+          "active_sequence_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Sequence Id"
+          },
+          "sequences": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/AnimationSequenceContract"
+            },
+            "title": "Sequences",
+            "type": "array"
+          }
+        },
+        "title": "SequenceLibraryResponse",
+        "type": "object"
+      },
+      "SequenceLibrarySummary": {
+        "properties": {
+          "active_sequence_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Sequence Id"
+          },
+          "sequences": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SequenceLibraryEntry"
+            },
+            "title": "Sequences",
+            "type": "array"
+          }
+        },
+        "title": "SequenceLibrarySummary",
+        "type": "object"
+      },
+      "SequencePlaybackDiagnostics": {
+        "properties": {
+          "active": {
+            "default": false,
+            "title": "Active",
+            "type": "boolean"
+          },
+          "animation_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Animation Name"
+          },
+          "current_step_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Step Index"
+          },
+          "next_transition_in_s": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Transition In S"
+          },
+          "remaining_bars": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remaining Bars"
+          },
+          "selected_sequence_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Sequence Id"
+          },
+          "waiting_for_clock": {
+            "default": false,
+            "title": "Waiting For Clock",
+            "type": "boolean"
+          }
+        },
+        "title": "SequencePlaybackDiagnostics",
+        "type": "object"
       },
       "SequencerDiagnostics": {
         "properties": {
@@ -2467,6 +2767,9 @@
             "default": true,
             "title": "Music Recognition Enabled",
             "type": "boolean"
+          },
+          "sequence_playback": {
+            "$ref": "#/components/schemas/SequencePlaybackDiagnostics"
           },
           "sequencer_diagnostics": {
             "$ref": "#/components/schemas/SequencerDiagnostics"
@@ -4192,6 +4495,188 @@
           }
         },
         "summary": "Set Mode"
+      }
+    },
+    "/api/sequencer/active": {
+      "put": {
+        "operationId": "set_active_animation_sequence_api_sequencer_active_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SequenceActiveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Active Animation Sequence"
+      }
+    },
+    "/api/sequencer/sequences": {
+      "get": {
+        "operationId": "get_animation_sequences_api_sequencer_sequences_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SequenceLibraryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Animation Sequences"
+      },
+      "post": {
+        "operationId": "create_animation_sequence_api_sequencer_sequences_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SequenceCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Animation Sequence"
+      }
+    },
+    "/api/sequencer/sequences/{sequence_id}": {
+      "delete": {
+        "operationId": "delete_animation_sequence_api_sequencer_sequences__sequence_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sequence_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Sequence Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Animation Sequence"
+      },
+      "put": {
+        "operationId": "update_animation_sequence_api_sequencer_sequences__sequence_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sequence_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Sequence Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SequenceDefinitionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Animation Sequence"
       }
     },
     "/api/sequencer/settings": {

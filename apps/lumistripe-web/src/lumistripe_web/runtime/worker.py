@@ -48,6 +48,7 @@ from lumistripe.audio.types import (
 from lumistripe.gpio import GPIOStripe
 from lumistripe.gpio.spi import SPIConfig, SPIStripe
 from lumistripe.playback import (
+    AnimationSequence,
     AudioSource,
     MusicActivityDetector,
     PlaybackConfig,
@@ -66,6 +67,10 @@ from ..bluetooth import (
     BluetoothStatus,
     capture_device_selector,
     spotify_capture_device_selector,
+)
+from ..contracts.sequencer import (
+    AnimationSequenceContract,
+    SequenceLibraryResponse,
 )
 from ..models import (
     AnimationOption,
@@ -87,6 +92,9 @@ from ..models import (
     DiagnosticIssue,
     PowerBudgetState,
     PowerOutputState,
+    SequenceLibraryEntry,
+    SequenceLibrarySummary,
+    SequencePlaybackDiagnostics,
     SequencerDiagnostics,
     SequencerSettingsResponse,
     SpotifyStatusResponse,
@@ -99,6 +107,7 @@ from ..models import (
 )
 from ..models import AudioCalibrationResult as AudioCalibrationResultModel
 from ..settings import (
+    MAX_SAVED_ANIMATION_SEQUENCES,
     AudioTuningProfile,
     CalibrationSettingsStore,
     StartupPlaybackSettings,
@@ -126,6 +135,7 @@ from .commands import (
     _CalibrationUpdateCommand,
     _Command,
     _ModeCommand,
+    _SequenceLibraryCommand,
     _SequencerSettingsCommand,
     _SpotifyCommand,
     _StartupSettingsCommand,
@@ -197,6 +207,22 @@ class RuntimeCommandError(RuntimeError):
 
 
 class UnknownAnimationError(RuntimeCommandError):
+    pass
+
+
+class UnknownSequenceError(RuntimeCommandError):
+    pass
+
+
+class InvalidSequenceError(RuntimeCommandError):
+    pass
+
+
+class SequenceConflictError(RuntimeCommandError):
+    pass
+
+
+class SequencePersistenceError(RuntimeCommandError):
     pass
 
 
@@ -319,6 +345,19 @@ class RuntimeWorker:
         self._bars_per_phrase = cast(
             Literal[4, 8, 16], loaded_settings.bars_per_phrase
         )
+        self._animation_sequences = loaded_settings.animation_sequences
+        self._active_sequence_id = loaded_settings.active_sequence_id
+        self._active_animation_sequence = next(
+            (
+                sequence
+                for sequence in self._animation_sequences
+                if sequence.id == self._active_sequence_id
+            ),
+            None,
+        )
+        self._sequence_library_snapshot = self._sequence_library_response(
+            self._animation_sequences, self._active_sequence_id
+        )
         self._remembered_playback = loaded_settings.remembered_playback
         self._settings_io_lock = threading.RLock()
         self._startup_persist_lock = threading.Lock()
@@ -340,6 +379,19 @@ class RuntimeWorker:
                 dynamic_response=self._audio_profile.dynamic_response,
             ),
         )
+        if self._active_animation_sequence is not None:
+            try:
+                self.playback.set_animation_sequence(self._active_animation_sequence)
+            except ValueError as exc:
+                # Keep the saved definition visible, but an animation that is
+                # no longer Dynamic-eligible must not control playback.
+                self._active_animation_sequence = None
+                warning = f"Saved animation sequence is not available: {exc}"
+                self._settings_warning = (
+                    f"{self._settings_warning}; {warning}"
+                    if self._settings_warning
+                    else warning
+                )
         self._monitor_detector = MusicActivityDetector(
             self._audio_profile.activity_config()
         )
@@ -368,6 +420,7 @@ class RuntimeWorker:
                 switch_quantization=self._switch_quantization,
                 bars_per_phrase=self._bars_per_phrase,
             ),
+            sequence_library=self._sequence_library_summary(),
         )
 
         self._raw_controller: Controller | None = None
@@ -487,6 +540,10 @@ class RuntimeWorker:
 
     def sequencer_settings(self) -> SequencerSettingsResponse:
         return self.snapshot().sequencer_settings
+
+    def animation_sequences(self) -> SequenceLibraryResponse:
+        with self._snapshot_lock:
+            return self._sequence_library_snapshot
 
     def preview_frame(self) -> PreviewFrame:
         with self._preview_lock:
@@ -782,6 +839,50 @@ class RuntimeWorker:
             self._submit(
                 "sequencer_settings",
                 _SequencerSettingsCommand(switch_quantization, bars_per_phrase),
+            ),
+        )
+
+    def create_animation_sequence(
+        self, sequence: AnimationSequence
+    ) -> Future[DashboardState]:
+        return cast(
+            Future[DashboardState],
+            self._submit(
+                "sequence_library",
+                _SequenceLibraryCommand("create", sequence.id, sequence),
+            ),
+        )
+
+    def update_animation_sequence(
+        self, sequence_id: str, sequence: AnimationSequence
+    ) -> Future[DashboardState]:
+        return cast(
+            Future[DashboardState],
+            self._submit(
+                "sequence_library",
+                _SequenceLibraryCommand("update", sequence_id, sequence),
+            ),
+        )
+
+    def delete_animation_sequence(
+        self, sequence_id: str
+    ) -> Future[DashboardState]:
+        return cast(
+            Future[DashboardState],
+            self._submit(
+                "sequence_library",
+                _SequenceLibraryCommand("delete", sequence_id),
+            ),
+        )
+
+    def set_active_animation_sequence(
+        self, sequence_id: str | None
+    ) -> Future[DashboardState]:
+        return cast(
+            Future[DashboardState],
+            self._submit(
+                "sequence_library",
+                _SequenceLibraryCommand("activate", sequence_id),
             ),
         )
 
@@ -1202,9 +1303,13 @@ class RuntimeWorker:
                     dynamic_response=self._audio_profile.dynamic_response,
                 ),
             )
+            if self._active_animation_sequence is not None:
+                engine.set_animation_sequence(self._active_animation_sequence)
             current = self.player.name_at(self.player.current_index())
-            if current and player.index_of(current) is not None:
-                engine.select_animation(current)
+            current_index = None if current is None else player.index_of(current)
+            if current_index is not None:
+                player.set_index(current_index, transition_ms=0)
+            engine.set_sync_offset(self.playback.sync_offset_s)
             self._playbacks[output.id] = (player, engine)
 
     def _frame_loop(self) -> None:
@@ -1362,6 +1467,12 @@ class RuntimeWorker:
                     sequencer_settings.switch_quantization,
                     sequencer_settings.bars_per_phrase,
                 )
+                result = self._publish(running=True)
+            elif command.name == "sequence_library":
+                sequence_command = _expect(
+                    command.value, _SequenceLibraryCommand
+                )
+                self._set_sequence_library(sequence_command)
                 result = self._publish(running=True)
             elif command.name == "audio_sync_calibration":
                 sync_calibration = _expect(
@@ -2230,6 +2341,87 @@ profile.audio_config(microphone=True),
             bars_per_phrase=bars_per_phrase,
         )
 
+    def _set_sequence_library(self, command: _SequenceLibraryCommand) -> None:
+        sequences = list(self._animation_sequences)
+        sequence_id = command.sequence_id
+        selected_id = self._active_sequence_id
+
+        if command.action == "create":
+            sequence = command.sequence
+            if sequence is None or sequence_id is None or sequence.id != sequence_id:
+                raise InvalidSequenceError("create requires a matching sequence ID")
+            if any(item.id == sequence_id for item in sequences):
+                raise SequenceConflictError(f"sequence already exists: {sequence_id}")
+            if len(sequences) >= MAX_SAVED_ANIMATION_SEQUENCES:
+                raise SequenceConflictError(
+                    f"at most {MAX_SAVED_ANIMATION_SEQUENCES} sequences may be saved"
+                )
+            self._validate_sequence_for_outputs(sequence)
+            sequences.append(sequence)
+        elif command.action == "update":
+            sequence = command.sequence
+            if sequence_id is None or sequence is None or sequence.id != sequence_id:
+                raise InvalidSequenceError("update requires a matching sequence ID")
+            index = next(
+                (i for i, item in enumerate(sequences) if item.id == sequence_id),
+                None,
+            )
+            if index is None:
+                raise UnknownSequenceError(f"unknown sequence: {sequence_id}")
+            self._validate_sequence_for_outputs(sequence)
+            sequences[index] = sequence
+        elif command.action == "delete":
+            if sequence_id is None:
+                raise UnknownSequenceError("sequence ID is required")
+            remaining = [item for item in sequences if item.id != sequence_id]
+            if len(remaining) == len(sequences):
+                raise UnknownSequenceError(f"unknown sequence: {sequence_id}")
+            sequences = remaining
+            if selected_id == sequence_id:
+                selected_id = None
+        elif command.action == "activate":
+            if sequence_id is not None and not any(
+                item.id == sequence_id for item in sequences
+            ):
+                raise UnknownSequenceError(f"unknown sequence: {sequence_id}")
+            selected_id = sequence_id
+        else:
+            raise RuntimeCommandError("unknown sequence library operation")
+
+        updated_sequences = tuple(sequences)
+        next_active = next(
+            (item for item in updated_sequences if item.id == selected_id), None
+        )
+        if next_active is not None:
+            self._validate_sequence_for_outputs(next_active)
+
+        try:
+            with self._settings_io_lock:
+                self._settings_store.save_animation_sequences(
+                    updated_sequences, selected_id
+                )
+        except Exception as exc:
+            raise SequencePersistenceError(
+                f"could not save animation sequences: {exc}"
+            ) from exc
+
+        if next_active != self._active_animation_sequence:
+            for engine in self._sequence_engines():
+                engine.set_animation_sequence(next_active)
+        self._animation_sequences = updated_sequences
+        self._active_sequence_id = selected_id
+        self._active_animation_sequence = next_active
+
+    def _sequence_engines(self) -> tuple[PlaybackEngine, ...]:
+        return (self.playback, *(engine for _, engine in self._playbacks.values()))
+
+    def _validate_sequence_for_outputs(self, sequence: AnimationSequence) -> None:
+        try:
+            for engine in self._sequence_engines():
+                engine.validate_animation_sequence(sequence)
+        except (TypeError, ValueError) as exc:
+            raise InvalidSequenceError(str(exc)) from exc
+
     def _set_audio_sync_calibration(
         self, active: bool
     ) -> AudioSyncCalibrationResponse:
@@ -3029,6 +3221,7 @@ profile.audio_config(microphone=True),
                 switch_quantization=self._switch_quantization,
                 bars_per_phrase=self._bars_per_phrase,
             ),
+            sequence_library=self._sequence_library_summary(),
             stripe_playback=self._stripe_playback_state(),
             diagnostic_issues=self._diagnostic_issues(
                 running=running,
@@ -3038,6 +3231,9 @@ profile.audio_config(microphone=True),
         )
         with self._snapshot_lock:
             self._snapshot = state
+            self._sequence_library_snapshot = self._sequence_library_response(
+                self._animation_sequences, self._active_sequence_id
+            )
         return state
 
     def _capture_preview_frame(self) -> None:
@@ -3187,6 +3383,27 @@ profile.audio_config(microphone=True),
             ),
         )
 
+    @staticmethod
+    def _sequence_library_response(
+        sequences: tuple[AnimationSequence, ...], active_sequence_id: str | None
+    ) -> SequenceLibraryResponse:
+        return SequenceLibraryResponse(
+            sequences=tuple(
+                AnimationSequenceContract.from_core(sequence)
+                for sequence in sequences
+            ),
+            active_sequence_id=active_sequence_id,
+        )
+
+    def _sequence_library_summary(self) -> SequenceLibrarySummary:
+        return SequenceLibrarySummary(
+            sequences=tuple(
+                SequenceLibraryEntry(id=sequence.id, name=sequence.name)
+                for sequence in self._animation_sequences
+            ),
+            active_sequence_id=self._active_sequence_id,
+        )
+
     def _stripe_playback_state(self) -> tuple[StripePlaybackState, ...]:
         states: list[StripePlaybackState] = []
         for index, output in enumerate(self._topology.outputs):
@@ -3209,6 +3426,7 @@ profile.audio_config(microphone=True),
                     music_active=playback.music_active,
                     music_recognition_enabled=playback.music_recognition_enabled,
                     sequencer_diagnostics=self._sequencer_diagnostics(playback),
+                    sequence_playback=self._sequence_playback_diagnostics(playback),
                 )
             )
         return tuple(states)
@@ -3232,6 +3450,25 @@ profile.audio_config(microphone=True),
             pending_animation=diagnostics.pending_animation,
             next_switch_in_s=diagnostics.next_switch_in_s,
             waiting_for_clock=diagnostics.waiting_for_clock,
+        )
+
+    def _sequence_playback_diagnostics(
+        self, playback: PlaybackEngine
+    ) -> SequencePlaybackDiagnostics:
+        sequence_state = playback.sequence_playback_state
+        next_transition_in_s = (
+            None
+            if sequence_state.next_transition_at_s is None
+            else max(0.0, sequence_state.next_transition_at_s - time.monotonic())
+        )
+        return SequencePlaybackDiagnostics(
+            selected_sequence_id=self._active_sequence_id,
+            active=sequence_state.active,
+            current_step_index=sequence_state.current_step_index,
+            animation_name=sequence_state.animation_name,
+            remaining_bars=sequence_state.remaining_bars,
+            waiting_for_clock=sequence_state.waiting_for_clock,
+            next_transition_in_s=next_transition_in_s,
         )
 
     def _last_output_at(self) -> datetime | None:

@@ -51,12 +51,17 @@ describe("dashboardApi", () => {
   it("defaults sequencer fields for older websocket payloads and rejects unknown fields", () => {
     const {
       sequencer_settings: _settings,
+      sequence_library: _library,
       ...stateWithoutSequencerSettings
     } = initialState
     const legacyState = {
       ...stateWithoutSequencerSettings,
       stripe_playback: stateWithoutSequencerSettings.stripe_playback.map(
-        ({ sequencer_diagnostics: _diagnostics, ...playback }) => playback,
+        ({
+          sequencer_diagnostics: _diagnostics,
+          sequence_playback: _sequencePlayback,
+          ...playback
+        }) => playback,
       ),
     }
 
@@ -64,6 +69,19 @@ describe("dashboardApi", () => {
     expect(parsed.sequencer_settings).toEqual({
       switch_quantization: "off",
       bars_per_phrase: 8,
+    })
+    expect(parsed.sequence_library).toEqual({
+      sequences: [],
+      active_sequence_id: null,
+    })
+    expect(parsed.stripe_playback[0]?.sequence_playback).toEqual({
+      selected_sequence_id: null,
+      active: false,
+      current_step_index: null,
+      animation_name: null,
+      remaining_bars: null,
+      waiting_for_clock: false,
+      next_transition_in_s: null,
     })
     expect(parsed.stripe_playback[0]?.sequencer_diagnostics).toEqual({
       mode: "off",

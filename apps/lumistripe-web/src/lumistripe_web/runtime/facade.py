@@ -30,11 +30,15 @@ from .worker import (
     WORKER_STARTUP_GRACE_SECONDS,
     WORKER_STOP_GRACE_SECONDS,
     WORKER_WATCHDOG_INTERVAL_SECONDS,
+    InvalidSequenceError,
     PreviewFrame,
     RuntimeCommandError,
     RuntimeUnavailableError,
     RuntimeWorker,
+    SequenceConflictError,
+    SequencePersistenceError,
     UnknownAnimationError,
+    UnknownSequenceError,
 )
 
 _default_audio_factory = default_audio_factory
@@ -152,11 +156,15 @@ __all__ = [
     "WORKER_STARTUP_GRACE_SECONDS",
     "WORKER_STOP_GRACE_SECONDS",
     "WORKER_WATCHDOG_INTERVAL_SECONDS",
+    "InvalidSequenceError",
     "LumiStripeRuntime",
     "PreviewFrame",
     "RuntimeCommandError",
     "RuntimeSettings",
     "RuntimeUnavailableError",
+    "SequenceConflictError",
+    "SequencePersistenceError",
     "UnknownAnimationError",
+    "UnknownSequenceError",
     "_default_controller_factory",
 ]

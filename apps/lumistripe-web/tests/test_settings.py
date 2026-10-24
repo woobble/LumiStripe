@@ -4,7 +4,13 @@ import json
 from pathlib import Path
 
 import pytest
-from lumistripe import ColorCorrection, PlaybackMode, SwitchQuantization
+from lumistripe import (
+    AnimationSequence,
+    AnimationSequenceStep,
+    ColorCorrection,
+    PlaybackMode,
+    SwitchQuantization,
+)
 from lumistripe_web.settings import (
     AudioTuningProfile,
     CalibrationSettingsStore,
@@ -57,7 +63,7 @@ def test_settings_round_trip_both_profiles_atomically(tmp_path: Path) -> None:
     assert warning is None
     assert profiles["primary"] == ColorCorrection(255, 220, 180)
     assert profiles["secondary"] == ColorCorrection(200, 210, 220)
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 7
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 8
     assert not list(path.parent.glob("*.tmp"))
 
 
@@ -119,7 +125,7 @@ def test_power_budget_round_trip_and_legacy_defaults(tmp_path: Path) -> None:
     assert loaded.stripe_topology == topology
     assert topology.available_led_watts == 185.0
     assert topology.effective_power_budget_watts == 18.5
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 7
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 8
 
     path.write_text(
         json.dumps(
@@ -156,7 +162,7 @@ def test_audio_sync_offsets_persist_per_route_and_migrate_from_v5(
         "bluetooth|AA:BB|bluez_output": 100.0,
         "mic|USB Mic|analog_output": -35.0,
     }
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 7
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 8
 
     path.write_text(
         json.dumps({"version": 5, "selected_audio_device": "USB Mic"}),
@@ -243,6 +249,89 @@ def test_sequencer_settings_round_trip_preserves_audio_sync_offsets(
     assert settings.switch_quantization is SwitchQuantization.PHRASE
     assert settings.bars_per_phrase == 16
     assert settings.audio_sync_offsets_ms == {"mic|USB Mic|analog_output": -85.0}
+
+
+def test_animation_sequences_round_trip_and_version_seven_migration(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 7,
+                "switch_quantization": "bar",
+                "bars_per_phrase": 16,
+                "audio_sync_offsets_ms": {"mic|USB|out": -85.0},
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = CalibrationSettingsStore(path)
+    migrated, warning = store.load_all()
+    assert warning is None
+    assert migrated.animation_sequences == ()
+    assert migrated.active_sequence_id is None
+    assert migrated.switch_quantization is SwitchQuantization.BAR
+    assert migrated.bars_per_phrase == 16
+
+    sequence = AnimationSequence(
+        id="summer-set",
+        name="Summer set",
+        repeat=True,
+        steps=(
+            AnimationSequenceStep("aurora_wave", 2),
+            AnimationSequenceStep("rainbow_cycle", 4),
+        ),
+    )
+    store.save_animation_sequences((sequence,), sequence.id)
+    restarted, warning = CalibrationSettingsStore(path).load_all()
+
+    assert warning is None
+    assert restarted.animation_sequences == (sequence,)
+    assert restarted.active_sequence_id == sequence.id
+    assert restarted.audio_sync_offsets_ms == {"mic|USB|out": -85.0}
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 8
+
+
+def test_invalid_saved_sequence_entries_are_skipped_individually(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.json"
+    valid = {
+        "id": "kept",
+        "name": "Kept",
+        "repeat": False,
+        "steps": [{"animation_name": "aurora_wave", "duration_bars": 1}],
+    }
+    duplicate = {**valid, "name": "Duplicate"}
+    path.write_text(
+        json.dumps(
+            {
+                "version": 8,
+                "color_correction": {
+                    "primary": {"red": 200, "green": 210, "blue": 220}
+                },
+                "audio_sync_offsets_ms": {"mic|USB|out": -85.0},
+                "animation_sequences": [
+                    valid,
+                    duplicate,
+                    {**valid, "id": "bad-duration", "steps": [{"animation_name": "aurora_wave", "duration_bars": 3}]},
+                ],
+                "active_sequence_id": "duplicate-not-kept",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings, warning = CalibrationSettingsStore(path).load_all()
+
+    assert tuple(sequence.id for sequence in settings.animation_sequences) == ("kept",)
+    assert settings.active_sequence_id is None
+    assert settings.color_corrections["primary"] == ColorCorrection(200, 210, 220)
+    assert settings.audio_sync_offsets_ms == {"mic|USB|out": -85.0}
+    assert warning is not None
+    assert "duplicate sequence ID" in warning
+    assert "duration_bars" in warning
 
 
 def test_shared_supply_budget_can_reach_zero_and_combine_with_led_limit() -> None:

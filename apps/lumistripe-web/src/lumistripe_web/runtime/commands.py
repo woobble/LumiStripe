@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from lumistripe.controller import ColorCorrection
-from lumistripe.playback import PlaybackMode, SwitchQuantization
+from lumistripe.playback import AnimationSequence, PlaybackMode, SwitchQuantization
 
 from ..settings import AudioTuningProfile, StripeTopologySettings
 
@@ -136,6 +136,13 @@ class _SequencerSettingsCommand:
     bars_per_phrase: int
 
 
+@dataclass(frozen=True, slots=True)
+class _SequenceLibraryCommand:
+    action: Literal["create", "update", "delete", "activate"]
+    sequence_id: str | None = None
+    sequence: AnimationSequence | None = None
+
+
 __all__ = [
     "_AudioCalibrationFinishCommand",
     "_AudioCalibrationMusicCommand",
@@ -150,6 +157,7 @@ __all__ = [
     "_CalibrationUpdateCommand",
     "_Command",
     "_ModeCommand",
+    "_SequenceLibraryCommand",
     "_SequencerSettingsCommand",
     "_SpotifyCommand",
     "_StartupSettingsCommand",

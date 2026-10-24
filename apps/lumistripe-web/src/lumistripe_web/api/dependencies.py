@@ -8,10 +8,14 @@ from concurrent.futures import Future
 from fastapi import HTTPException, Request, status
 
 from ..runtime import (
+    InvalidSequenceError,
     LumiStripeRuntime,
     RuntimeCommandError,
     RuntimeUnavailableError,
+    SequenceConflictError,
+    SequencePersistenceError,
     UnknownAnimationError,
+    UnknownSequenceError,
 )
 
 COMMAND_TIMEOUT_SECONDS = 5.0
@@ -35,6 +39,26 @@ async def await_command[T](future: Future[T]) -> T:
     except UnknownAnimationError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except UnknownSequenceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except InvalidSequenceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+    except SequenceConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except SequencePersistenceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(exc),
         ) from exc
     except RuntimeCommandError as exc:

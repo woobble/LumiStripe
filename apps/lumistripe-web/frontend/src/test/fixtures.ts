@@ -70,6 +70,10 @@ export const initialState: DashboardState = {
     switch_quantization: "off",
     bars_per_phrase: 8,
   },
+  sequence_library: {
+    sequences: [],
+    active_sequence_id: null,
+  },
   stripe_playback: [{
     stripe_id: "primary", mode: "static", solid_color: "#7C3AED",
     animation: "aurora_wave", brightness: 0.72, blackout: false, music_active: false,
@@ -90,6 +94,15 @@ export const initialState: DashboardState = {
       pending_animation: null,
       next_switch_in_s: null,
       waiting_for_clock: false,
+    },
+    sequence_playback: {
+      selected_sequence_id: null,
+      active: false,
+      current_step_index: null,
+      animation_name: null,
+      remaining_bars: null,
+      waiting_for_clock: false,
+      next_transition_in_s: null,
     },
   }],
   diagnostic_issues: [],

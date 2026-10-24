@@ -84,6 +84,19 @@ const sequencerDiagnosticsSchema = z.object({
   next_switch_in_s: z.number().nonnegative().nullable(),
   waiting_for_clock: z.boolean(),
 }).strict()
+const sequencePlaybackSchema = z.object({
+  selected_sequence_id: z.string().nullable(),
+  active: z.boolean(),
+  current_step_index: z.number().int().nullable(),
+  animation_name: z.string().nullable(),
+  remaining_bars: z.number().int().nullable(),
+  waiting_for_clock: z.boolean(),
+  next_transition_in_s: z.number().nonnegative().nullable(),
+}).strict()
+const sequenceLibrarySchema = z.object({
+  sequences: z.array(z.object({ id: z.string(), name: z.string() }).strict()),
+  active_sequence_id: z.string().nullable(),
+}).strict()
 const stripeOutputSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -135,6 +148,15 @@ const stripePlaybackSchema = z.object({
     pending_animation: null,
     next_switch_in_s: null,
     waiting_for_clock: false,
+  }),
+  sequence_playback: sequencePlaybackSchema.optional().default({
+    selected_sequence_id: null,
+    active: false,
+    current_step_index: null,
+    animation_name: null,
+    remaining_bars: null,
+    waiting_for_clock: false,
+    next_transition_in_s: null,
   }),
 }).strict()
 const powerOutputSchema = z.object({
@@ -226,6 +248,10 @@ const dashboardStateSchema = z.object({
   sequencer_settings: sequencerSettingsSchema.optional().default({
     switch_quantization: "off",
     bars_per_phrase: 8,
+  }),
+  sequence_library: sequenceLibrarySchema.optional().default({
+    sequences: [],
+    active_sequence_id: null,
   }),
   stripe_playback: z.array(stripePlaybackSchema),
   diagnostic_issues: z.array(diagnosticIssueSchema),
