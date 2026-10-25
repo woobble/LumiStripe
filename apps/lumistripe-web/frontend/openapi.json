@@ -37,6 +37,14 @@
       },
       "AnimationOption": {
         "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
           "dynamic_safe": {
             "title": "Dynamic Safe",
             "type": "boolean"
@@ -47,6 +55,14 @@
           },
           "name": {
             "title": "Name",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "base",
+              "effect"
+            ],
+            "title": "Role",
             "type": "string"
           },
           "sequence_eligible": {
@@ -64,6 +80,9 @@
         },
         "required": [
           "name",
+          "display_name",
+          "description",
+          "role",
           "mood",
           "dynamic_safe",
           "sequence_eligible"

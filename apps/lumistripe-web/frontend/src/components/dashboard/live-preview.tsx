@@ -1,91 +1,33 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import { ActivityIcon, CircleAlertIcon, EyeOffIcon, RadioIcon } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { usePreviewStream } from "@/hooks/use-preview-stream"
-import { emptyPreviewFrame } from "@/lib/preview"
+import type { PreviewFrame } from "@/lib/preview"
 import type { DashboardState } from "@/lib/api"
-import {
-  CanvasPreviewRenderer,
-  previewLabels,
-  WebGpuPreviewRenderer,
-  webGpuFailureMessage,
-  type PreviewRenderer,
-} from "@/components/dashboard/preview-renderer"
+import { previewLabels } from "@/components/dashboard/preview-renderer"
+import { PreviewCanvas, type PreviewRendererStatus } from "@/components/dashboard/preview-canvas"
+import type { PreviewConnectionStatus } from "@/hooks/use-preview-stream"
 
-type RendererStatus = "initializing" | "webgpu" | "canvas" | "unsupported"
-
-export function LivePreview({ state, onDisable }: { state: DashboardState; onDisable?: () => void }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const rendererRef = useRef<PreviewRenderer | null>(null)
-  const [rendererStatus, setRendererStatus] = useState<RendererStatus>("initializing")
+export function LivePreview({
+  state,
+  frame,
+  connection,
+  onDisable,
+}: {
+  state: DashboardState
+  frame: PreviewFrame | null
+  connection: PreviewConnectionStatus
+  onDisable?: () => void
+}) {
+  const [rendererStatus, setRendererStatus] = useState<PreviewRendererStatus>("initializing")
   const [rendererDetail, setRendererDetail] = useState<string | null>(null)
-  const { frame, connection } = usePreviewStream(state.running)
   const labels = useMemo(() => previewLabels(state.stripe_topology), [state.stripe_topology])
-
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    let disposed = false
-
-    const initialize = async () => {
-      const webgpu = new WebGpuPreviewRenderer(canvas)
-      if (await webgpu.initialize()) {
-        if (disposed) {
-          webgpu.dispose()
-          return
-        }
-        rendererRef.current = webgpu
-        setRendererStatus("webgpu")
-        setRendererDetail(null)
-        return
-      }
-
-      const webgpuDetail = webGpuFailureMessage(webgpu.failureReason)
-      const canvasRenderer = new CanvasPreviewRenderer(canvas)
-      if (!canvasRenderer.initialize()) {
-        if (disposed) return
-        setRendererStatus("unsupported")
-        setRendererDetail(null)
-        return
-      }
-      if (disposed) {
-        canvasRenderer.dispose()
-        return
-      }
-      rendererRef.current = canvasRenderer
-      setRendererStatus("canvas")
-      setRendererDetail(webgpuDetail)
-    }
-
-    void initialize()
-    return () => {
-      disposed = true
-      rendererRef.current?.dispose()
-      rendererRef.current = null
-    }
+  const handleRendererStatus = useCallback((status: PreviewRendererStatus, detail: string | null) => {
+    setRendererStatus(status)
+    setRendererDetail(detail)
   }, [])
-
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const resize = () => rendererRef.current?.resize()
-    const observer = new ResizeObserver(resize)
-    observer.observe(canvas)
-    window.addEventListener("resize", resize)
-    resize()
-    return () => {
-      observer.disconnect()
-      window.removeEventListener("resize", resize)
-    }
-  }, [])
-
-  useEffect(() => {
-    const activeFrame = frame ?? emptyPreviewFrame(state.stripe_topology)
-    rendererRef.current?.render(activeFrame, state.stripe_topology)
-  }, [frame, rendererStatus, state.stripe_topology])
 
   const frameStatus = connection === "connected" && frame
     ? "Live"
@@ -118,11 +60,15 @@ export function LivePreview({ state, onDisable }: { state: DashboardState; onDis
             )}
           </span>
         </CardTitle>
-        <CardDescription>See the latest output frame while you adjust the lights.</CardDescription>
+        <CardDescription>Preview the currently applied LED output.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="relative overflow-hidden rounded-xl border border-white/10 bg-black/40" data-testid="preview-stage">
-          <canvas ref={canvasRef} className="block aspect-[2.2/1] h-auto w-full" aria-label="LED output preview" />
+          <PreviewCanvas
+            frame={frame}
+            topology={state.stripe_topology}
+            onRendererStatus={handleRendererStatus}
+          />
           {labels.length > 1 && (
             <div className="pointer-events-none absolute inset-0" aria-hidden="true">
               {labels.map((label) => (

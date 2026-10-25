@@ -301,6 +301,9 @@ class AnimationOption(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     name: str
+    display_name: str
+    description: str
+    role: Literal["base", "effect"]
     mood: str
     dynamic_safe: bool
     sequence_eligible: bool

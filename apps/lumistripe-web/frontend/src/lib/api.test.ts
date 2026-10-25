@@ -116,10 +116,19 @@ describe("dashboardApi", () => {
     await expect(dashboardApi.createAnimationSequence({ id: "bad", ...definition })).rejects.toThrow("Unknown animation in sequence.")
   })
 
-  it("defaults missing sequence eligibility to false for older animation responses", async () => {
+  it("adds explicit metadata defaults for older animation responses", async () => {
     fetchMock.mockReturnValueOnce(jsonResponse({ items: [{ name: "old_animation", mood: "calm", dynamic_safe: true }] }))
     await expect(dashboardApi.getAnimations()).resolves.toEqual([
-      { name: "old_animation", mood: "calm", dynamic_safe: true, sequence_eligible: false, settings: [] },
+      {
+        name: "old_animation",
+        display_name: "Old Animation",
+        description: "Old Animation lighting pattern.",
+        role: "base",
+        mood: "calm",
+        dynamic_safe: true,
+        sequence_eligible: false,
+        settings: [],
+      },
     ])
   })
 

@@ -880,12 +880,21 @@ export interface components {
         };
         /** AnimationOption */
         AnimationOption: {
+            /** Description */
+            description: string;
+            /** Display Name */
+            display_name: string;
             /** Dynamic Safe */
             dynamic_safe: boolean;
             /** Mood */
             mood: string;
             /** Name */
             name: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "base" | "effect";
             /** Sequence Eligible */
             sequence_eligible: boolean;
             /**

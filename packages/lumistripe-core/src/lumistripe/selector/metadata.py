@@ -13,6 +13,7 @@ class AnimationRole(str, Enum):
 @dataclass(frozen=True, slots=True)
 class AnimationMetadata:
     name: str = ""
+    description: str = ""
     tags: frozenset[str] = field(default_factory=frozenset)
     energy_min: float = 0.0
     energy_max: float = 1.0
@@ -35,6 +36,7 @@ def _meta(
     name: str,
     tags: set[str],
     *,
+    description: str = "",
     energy_min: float = 0.0,
     energy_max: float = 1.0,
     bpm_min: float = 0.0,
@@ -51,6 +53,7 @@ def _meta(
 ) -> AnimationMetadata:
     return AnimationMetadata(
         name=name,
+        description=description,
         tags=frozenset(tags),
         energy_min=energy_min,
         energy_max=energy_max,
@@ -576,6 +579,73 @@ ANIMATION_METADATA.update(
             mood="hard_drop",
             intensity=0.9,
         ),
+    }
+)
+
+# User-facing copy augments the existing metadata records; animation factories
+# and registration remain in the canonical animation catalog.
+_ANIMATION_DESCRIPTIONS = {
+    "rainbow_cycle": "A rainbow flows smoothly from end to end.",
+    "pulse": "A full-strip glow breathes with the beat.",
+    "confetti": "Bright specks burst across the strip like falling confetti.",
+    "comet": "A moving light leaves a fading tail.",
+    "shockwave": "A bass-triggered wave expands outward from the center.",
+    "theater_chase": "Colored lights chase through evenly spaced gaps.",
+    "aurora": "Soft color bands drift slowly like northern lights.",
+    "color_wipe": "A band of color sweeps across the strip.",
+    "fire": "Warm flames flicker with rising sparks.",
+    "peak_mirror": "Audio peaks mirror outward from the center.",
+    "wave": "A smooth wave of color travels along the strip.",
+    "twinkle": "Small lights fade in and out at random positions.",
+    "bouncing_ball": "A bright point bounces between the ends.",
+    "dual_comet": "Two colored comets travel in opposite directions.",
+    "rainbow": "A continuous rainbow cycles across the strip.",
+    "police": "Red and blue blocks flash in a repeating emergency pattern.",
+    "juggle": "Several colored points weave around the strip.",
+    "sinelon": "A colored dot glides through a fading trail.",
+    "strobe": "A full-strip flash pulses at a steady rate.",
+    "bpm": "A full-strip pulse follows detected beat timing.",
+    "beat_wave": "A transparent wave expands in response to beats.",
+    "disco_sparkle": "Audio-driven sparkles scatter across the strip.",
+    "beat_explosion": "A beat sends a burst of light outward.",
+    "comet_storm": "Multiple comets cross the strip in a shifting pattern.",
+    "laser_sweep": "A bright beam sweeps across the strip.",
+    "plasma_rave": "Flowing plasma colors shift with the music.",
+    "firework_burst": "A beat launches a burst of fading sparks.",
+    "lightning_strike": "A sharp flash branches across the strip.",
+    "beat_tunnel": "Concentric pulses rush outward on each beat.",
+    "drop_explosion": "A bass drop triggers a broad expanding burst.",
+    "bass_drop": "Low-frequency energy blooms into a bright burst.",
+    "rave_pulse": "A saturated glow rises and falls with the music.",
+    "neon_storm": "Neon flashes streak through a stormy pattern.",
+    "pixel_explosion": "A beat scatters pixels outward from the center.",
+    "dual_laser": "Two laser beams sweep from opposite ends.",
+    "rainbow_strobe": "Colorful flashes cycle in a rhythmic strobe.",
+    "beat_ripple": "Each beat sends a fading ripple along the strip.",
+    "dance_floor": "Color blocks shift in a rhythmic dance pattern.",
+    "electric_storm": "Electric flashes spark at varied positions.",
+    "glow_rush": "A broad glowing band rushes along the strip.",
+    "hard_beat": "A short overlay flash accents strong beats.",
+    "club_flash": "A translucent flash accents the music.",
+    "color_burst": "A color burst spreads outward over the strip.",
+    "disco_comet": "A bright comet glides through a sparkling tail.",
+    "rave_scanner": "A neon beam scans back and forth.",
+    "red_rave_sweep": "Red light sweeps across dark sections.",
+    "red_rave_chase": "Red blocks race through a repeating chase.",
+    "red_blackout_strobe": "Red flashes punctuate brief blackouts.",
+    "neon_confetti": "Neon particles scatter and fade across the strip.",
+    "strobe_chase": "Bright blocks chase through repeated flashes.",
+    "center_burst": "A transparent burst expands from the strip center on beats.",
+    "mirror_flash": "Audio peaks flash symmetrically from the center.",
+    "spectrum_flash": "Frequency energy drives flashes across the strip.",
+    "drop_wave": "A bass drop releases a broad wave of light.",
+}
+if _ANIMATION_DESCRIPTIONS.keys() != ANIMATION_METADATA.keys():
+    raise RuntimeError("animation descriptions must cover the metadata catalog")
+ANIMATION_METADATA.update(
+    {
+        name: replace(metadata, description=_ANIMATION_DESCRIPTIONS[name])
+        for name, metadata in ANIMATION_METADATA.items()
     }
 )
 

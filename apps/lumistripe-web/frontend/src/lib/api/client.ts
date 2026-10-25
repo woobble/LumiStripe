@@ -307,11 +307,22 @@ const animationSettingOptionSchema = z.object({
 }).strict()
 const animationOptionSchema = z.object({
   name: z.string(),
+  display_name: z.string().optional(),
+  description: z.string().optional(),
+  role: z.enum(["base", "effect"]).optional(),
   mood: z.string(),
   dynamic_safe: z.boolean(),
   sequence_eligible: z.boolean().optional().default(false),
   settings: z.array(animationSettingOptionSchema).optional().default([]),
-}).strict()
+}).strict().transform((animation) => {
+  const name = animation.name.replaceAll("_", " ").replaceAll("-", " ")
+  return {
+    ...animation,
+    display_name: animation.display_name ?? name.replace(/\b\w/g, (letter) => letter.toUpperCase()),
+    description: animation.description ?? `${name.replace(/\b\w/g, (letter) => letter.toUpperCase())} lighting pattern.`,
+    role: animation.role ?? "base" as const,
+  }
+})
 const animationListSchema = z.object({ items: z.array(animationOptionSchema) }).strict()
 const animationSettingsResponseSchema = z.object({
   animation: z.string(),

@@ -11,6 +11,7 @@ import { Slider } from "@/components/ui/slider"
 import { Toggle } from "@/components/ui/toggle"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { usePreviewStream } from "@/hooks/use-preview-stream"
 import type { DashboardController } from "@/hooks/use-dashboard"
 import type { PlaybackMode } from "@/lib/api"
 
@@ -87,6 +88,10 @@ export function ControlPanel({ controller }: { controller: DashboardController }
   const [brightnessDraft, setBrightnessDraft] = useState<number | null>(null)
   const [target, setTarget] = useState("all")
   const [previewEnabled, setPreviewEnabled] = useState(false)
+  const [animationEditorVisible, setAnimationEditorVisible] = useState(false)
+  const { frame: previewFrame, connection: previewConnection } = usePreviewStream(
+    Boolean(previewEnabled && state?.running),
+  )
 
   if (!state) return null
   const disabled = !state.running || pendingCommand !== null
@@ -132,9 +137,14 @@ export function ControlPanel({ controller }: { controller: DashboardController }
 
   return (
     <div className="space-y-4 pb-4">
-      {previewEnabled ? (
+      {previewEnabled && !animationEditorVisible ? (
         <Suspense fallback={<div className="h-64 animate-pulse rounded-2xl border border-white/5 bg-card/80" aria-label="Loading live preview" />}>
-          <LivePreview state={state} onDisable={() => setPreviewEnabled(false)} />
+          <LivePreview
+            state={state}
+            frame={previewFrame}
+            connection={previewConnection}
+            onDisable={() => setPreviewEnabled(false)}
+          />
         </Suspense>
       ) : (
         <Button
@@ -295,7 +305,13 @@ export function ControlPanel({ controller }: { controller: DashboardController }
               onSelect={(name) => controller.selectAnimation(name, targetId)}
               onLoadSettings={controller.getAnimationSettings}
               onSaveSettings={controller.setAnimationSettings}
-              onResetSettings={controller.resetAnimationSettings}
+              previewEnabled={previewEnabled}
+              previewFrame={previewFrame}
+              previewConnection={previewConnection}
+              previewTopology={state.stripe_topology}
+              onEnablePreview={() => setPreviewEnabled(true)}
+              onDisablePreview={() => setPreviewEnabled(false)}
+              onEditorVisibilityChange={setAnimationEditorVisible}
             />
           )}
         </CardContent>

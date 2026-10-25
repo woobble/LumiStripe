@@ -115,9 +115,9 @@ export const initialState: DashboardState = {
 }
 
 export const animations: AnimationOption[] = [
-  { name: "aurora_wave", mood: "ambient", dynamic_safe: true, sequence_eligible: true, settings: [] },
-  { name: "bass_pulse", mood: "bass_heavy", dynamic_safe: true, sequence_eligible: true, settings: [] },
-  { name: "quiet_stars", mood: "calm", dynamic_safe: false, sequence_eligible: false, settings: [] },
+  { name: "aurora_wave", display_name: "Aurora Wave", description: "Soft bands drift across the strip.", role: "base", mood: "ambient", dynamic_safe: true, sequence_eligible: true, settings: [] },
+  { name: "bass_pulse", display_name: "Bass Pulse", description: "A glow moves with the beat.", role: "base", mood: "bass_heavy", dynamic_safe: true, sequence_eligible: true, settings: [] },
+  { name: "quiet_stars", display_name: "Quiet Stars", description: "Small lights fade in and out.", role: "effect", mood: "calm", dynamic_safe: false, sequence_eligible: false, settings: [] },
 ]
 
 export function jsonResponse(body: unknown, status = 200) {

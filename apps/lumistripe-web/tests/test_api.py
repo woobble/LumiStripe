@@ -56,7 +56,13 @@ def test_control_api_round_trip() -> None:
         assert animations.status_code == 200
         options = animations.json()["items"]
         assert len(options) > 40
-        assert {"name", "mood", "dynamic_safe", "sequence_eligible"} <= options[0].keys()
+        assert {
+            "name", "display_name", "description", "role", "mood",
+            "dynamic_safe", "sequence_eligible",
+        } <= options[0].keys()
+        assert all(item["display_name"] and item["description"] for item in options)
+        assert {item["role"] for item in options} == {"base", "effect"}
+        assert any(item["role"] == "effect" for item in options)
         assert any(option["sequence_eligible"] for option in options)
         assert any(option["dynamic_safe"] and not option["sequence_eligible"] for option in options)
 

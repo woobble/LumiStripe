@@ -55,7 +55,7 @@ class Twinkle(Animation):
             (0.001 + density * 0.025 + reactive.drive() * 0.008 + reactive.shimmer() * 0.012)
             * 10_000.0
         )
-        radius = max(1, round(length * particle_size * 0.018))
+        radius = max(0, round(length * particle_size * 0.04))
         for index in range(length):
             seed = (frame * 1103515245 + index * 2654435761) & 0xFFFFFFFF
             if seed % 10_000 < spawn_threshold:

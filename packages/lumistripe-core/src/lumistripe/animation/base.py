@@ -53,13 +53,11 @@ class Animation(ABC):
         sensitivity = float(values.get("sensitivity", 50)) / 100.0
         gain = reactivity * (0.5 + sensitivity)
         beat_sensitivity = float(values.get("beat_sensitivity", 100)) / 100.0
-        beat_gain = reactivity * (0.25 + beat_sensitivity * 0.75)
+        beat_gain = reactivity * beat_sensitivity
         if gain == 1.0 and beat_gain == 1.0:
             return audio
         beat_strength = audio.beat_strength * beat_gain
-        beat = audio.beat and (
-            beat_sensitivity >= 0.999 or beat_strength >= 0.08
-        )
+        beat = audio.beat and beat_gain > 0.0 and beat_strength >= 0.08
         return replace(
             audio,
             rms=min(1.0, audio.rms * gain),

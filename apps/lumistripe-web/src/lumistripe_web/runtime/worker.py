@@ -606,6 +606,17 @@ class RuntimeWorker:
         return tuple(
             AnimationOption(
                 name=entry.animation.name,
+                display_name=(
+                    entry.definition.display_name
+                    if entry.definition is not None
+                    and entry.definition.display_name is not None
+                    else entry.animation.name.replace("_", " ").title()
+                ),
+                description=(
+                    entry.animation.metadata.description
+                    or f"{entry.animation.metadata.mood.replace('_', ' ').capitalize()} lighting effect."
+                ),
+                role=entry.animation.metadata.role.value,
                 mood=entry.animation.metadata.mood,
                 dynamic_safe=entry.animation.metadata.dynamic_safe,
                 sequence_eligible=(

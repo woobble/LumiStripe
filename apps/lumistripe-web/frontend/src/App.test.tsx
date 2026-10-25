@@ -364,6 +364,11 @@ describe("App", () => {
     expect(await screen.findByTestId("live-preview")).toBeInTheDocument()
     expect(MockWebSocket.instances.some((socket) => socket.url.endsWith("/ws/preview"))).toBe(true)
 
+    await user.click(screen.getByRole("button", { name: "Animation Aurora Wave. Change" }))
+    expect(await screen.findByRole("heading", { name: "Choose animation" })).toBeInTheDocument()
+    expect(MockWebSocket.instances.filter((socket) => socket.url.endsWith("/ws/preview"))).toHaveLength(1)
+    await user.keyboard("{Escape}")
+
     await user.click(screen.getByRole("button", { name: "Hide live preview" }))
     await waitFor(() => expect(screen.queryByTestId("live-preview")).not.toBeInTheDocument())
   })
