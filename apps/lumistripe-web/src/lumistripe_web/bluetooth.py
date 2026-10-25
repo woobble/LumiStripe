@@ -74,6 +74,7 @@ class BluetoothManager:
         self,
         *,
         enabled: bool = True,
+        spotify_audio_routing_enabled: bool | None = None,
         poll_interval: float = 1.0,
         max_inputs: int = 1,
         max_outputs: int = 1,
@@ -82,6 +83,11 @@ class BluetoothManager:
         command_exists: Callable[[str], bool] | None = None,
     ) -> None:
         self.enabled = enabled
+        self.spotify_audio_routing_enabled = (
+            enabled
+            if spotify_audio_routing_enabled is None
+            else spotify_audio_routing_enabled
+        )
         self._poll_interval = max(0.25, poll_interval)
         if max_inputs < 1 or max_outputs < 1:
             raise ValueError("Bluetooth connection limits must be at least one")
@@ -256,20 +262,24 @@ class BluetoothManager:
 
     def ensure_spotify_route(self) -> None:
         """Create the Spotify monitor-to-default-sink loopback when needed."""
-        if not self.enabled:
-            raise BluetoothCommandError("Spotify audio routing requires the hardware PipeWire session")
-        status = self.refresh()
-        default_sink = status.default_sink
+        if not self.spotify_audio_routing_enabled:
+            raise BluetoothCommandError("Spotify audio routing is disabled")
+        if self.enabled:
+            default_sink = self.refresh().default_sink
+        else:
+            default_sink = _parse_info_value(self._pipewire.info(), "Default Sink")
         if not default_sink:
             raise BluetoothCommandError("no default PipeWire output is available for Spotify")
         self._ensure_spotify_route(default_sink, create=True)
 
     def refresh_spotify_route(self) -> None:
         """Recreate the Spotify loopback after a remote-device handoff."""
-        if not self.enabled:
-            raise BluetoothCommandError("Spotify audio routing requires the hardware PipeWire session")
-        status = self.refresh()
-        default_sink = status.default_sink
+        if not self.spotify_audio_routing_enabled:
+            raise BluetoothCommandError("Spotify audio routing is disabled")
+        if self.enabled:
+            default_sink = self.refresh().default_sink
+        else:
+            default_sink = _parse_info_value(self._pipewire.info(), "Default Sink")
         if not default_sink:
             raise BluetoothCommandError("no default PipeWire output is available for Spotify")
         self._ensure_spotify_route(default_sink, create=True, force=True)

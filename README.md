@@ -83,6 +83,10 @@ See [`deploy/README.md`](deploy/README.md) for hardware wiring, output-sink
 selection, installation, uninstallation, certificate trust, troubleshooting,
 and manual recovery commands.
 
+For local Linux development without LED hardware, a microphone, or Bluetooth,
+use the simulated Docker stack with Spotify Connect. Setup and commands are in
+[`deploy/README.md`](deploy/README.md#local-docker-development-with-spotify-connect).
+
 ## Quick Start
 
 ```bash

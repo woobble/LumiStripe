@@ -13,10 +13,36 @@ if [ -z "$api_key" ]; then
   exit 1
 fi
 
-exec /usr/local/bin/soloist \
+spotify_sink_module=""
+if [ "${LUMI_SPOTIFY_CREATE_SINK:-0}" = "1" ]; then
+  if ! pactl list short sinks | awk '$2 == "lumistripe_spotify" { found = 1 } END { exit !found }'; then
+    spotify_sink_module=$(pactl load-module module-null-sink sink_name=lumistripe_spotify)
+  fi
+fi
+
+set -- /usr/local/bin/soloist \
   --device-name "${LUMI_SPOTIFY_DEVICE_NAME:-LumiStripe}" \
   --api-key "$api_key" \
   --ws "${LUMI_SPOTIFY_WS:-127.0.0.1:9090}" \
   --pipewire-device "${LUMI_SPOTIFY_PIPEWIRE_DEVICE:-lumistripe_spotify}" \
   --data-dir "${LUMI_SPOTIFY_DATA_DIR:-/var/lib/lumistripe/soloist}" \
   --cache-dir "${LUMI_SPOTIFY_CACHE_DIR:-/var/lib/lumistripe/soloist-cache}"
+
+if [ -z "$spotify_sink_module" ]; then
+  exec "$@"
+fi
+
+cleanup() {
+  trap - EXIT INT TERM
+  if [ -n "${soloist_pid:-}" ]; then
+    kill "$soloist_pid" 2>/dev/null || true
+    wait "$soloist_pid" 2>/dev/null || true
+  fi
+  pactl unload-module "$spotify_sink_module" >/dev/null 2>&1 || true
+}
+
+trap cleanup EXIT
+trap 'exit 0' INT TERM
+"$@" &
+soloist_pid=$!
+wait "$soloist_pid"

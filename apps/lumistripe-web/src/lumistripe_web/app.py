@@ -123,6 +123,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="auto",
         help="Dynamic-mode audio source (auto prefers Bluetooth, then mic, on hardware)",
     )
+    parser.add_argument(
+        "--enable-spotify",
+        action="store_true",
+        help="Enable Spotify Connect and Spotify audio routing in simulation mode",
+    )
     parser.add_argument("--audio-device")
     parser.add_argument(
         "--settings-file",
@@ -171,6 +176,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         clock_pin=args.clock_pin,
         audio_source=args.audio_source,
         audio_device=args.audio_device,
+        spotify_enabled=args.enable_spotify,
         settings_file=args.settings_file,
         ignore_saved_stripes=args.ignore_saved_stripes,
     )

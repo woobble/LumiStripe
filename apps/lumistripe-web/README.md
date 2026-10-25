@@ -83,6 +83,11 @@ source prefers a connected Bluetooth phone and falls back to the selected
 microphone. Override that policy with `--audio-source off|demo|mic|bluetooth`
 and optionally select a microphone with `--audio-device PATTERN`.
 
+Spotify Connect can also run with simulated output and no Bluetooth adapter.
+Enable it with `--enable-spotify --audio-source spotify`; a PipeWire/PulseAudio
+session must expose the `lumistripe_spotify` sink and monitor. The local Docker
+workflow creates that sink and is documented in [`deploy/README.md`](../../deploy/README.md#local-docker-development-with-spotify-connect).
+
 For phone music over Bluetooth, set up BlueZ and PipeWire/WirePlumber using
 [`deploy/README.md`](../../deploy/README.md). The Pi remains the Bluetooth
 A2DP receiver, sends the incoming stream to its configured speaker output, and

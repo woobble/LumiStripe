@@ -38,6 +38,7 @@ class RuntimeSettings:
     audio_device: str | None = None
     settings_file: Path = field(default_factory=default_settings_path)
     ignore_saved_stripes: bool = False
+    spotify_enabled: bool = False
 
     def __post_init__(self) -> None:
         if self.pixels <= 0:

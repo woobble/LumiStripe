@@ -271,5 +271,6 @@ apps/lumistripe-web/src/lumistripe_web/static
 graphify-out/
 AGENTS.md
 .codex/
+.docker-dev/
 
 # End of https://www.toptal.com/developers/gitignore/api/linux,macos,python,windows,visualstudiocode

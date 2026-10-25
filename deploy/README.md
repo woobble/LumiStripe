@@ -147,6 +147,56 @@ packages. By default it also removes the Docker-specific LumiStripe state and
 Spotify session; use `--keep-data` to retain `/var/lib/lumistripe-docker` for
 a later reinstall.
 
+## Local Docker development with Spotify Connect
+
+The local development stack runs the production image with simulated LED
+output. It uses Spotify Connect as its audio source and plays Spotify through
+the host speakers. It does not start Bluetooth, mount GPIO/SPI devices, or
+require a microphone. This profile targets Linux hosts with Docker Compose and
+a PipeWire PulseAudio-compatible server in the active desktop session.
+
+Create a local Spotify Soloist API key file and export the current user IDs:
+
+```bash
+mkdir -p .docker-dev/data
+umask 077
+printf 'Spotify Soloist API key: '
+read -r -s SPOTIFY_API_KEY
+printf '\n'
+printf '%s' "$SPOTIFY_API_KEY" > .docker-dev/spotify-api-key
+unset SPOTIFY_API_KEY
+export LUMI_DEV_UID="$(id -u)"
+export LUMI_DEV_GID="$(id -g)"
+```
+
+Start the local stack from the repository root:
+
+```bash
+docker compose --project-name lumistripe-dev \
+  -f deploy/docker-compose.dev.yml up --build
+```
+
+Open `http://127.0.0.1:8000/`. In Spotify on a phone or computer, select the
+**LumiStripe** Connect device. The web runtime captures the Spotify monitor
+while Soloist routes it to the host's default speaker output. LumiStripe
+settings and Soloist session/cache data persist under `.docker-dev/data/`;
+the local API key and all development state are ignored by Git.
+
+Stop the stack with `Ctrl+C` or:
+
+```bash
+docker compose --project-name lumistripe-dev \
+  -f deploy/docker-compose.dev.yml down
+```
+
+The Compose file uses host networking so the web runtime can connect to
+Soloist's local WebSocket on `127.0.0.1:9090`. It binds the dashboard to
+`127.0.0.1:8000` and mounts the active desktop audio runtime directory into the
+two containers. If Docker cannot access the host audio socket, confirm that
+`XDG_RUNTIME_DIR` points to the logged-in desktop session and that
+`$XDG_RUNTIME_DIR/pulse/native` exists. The Spotify container creates a
+temporary `lumistripe_spotify` virtual sink and removes it when the stack stops.
+
 The default Compose mapping expects the LED output at
 `/dev/spidev0.0` and the GPIO chip at `/dev/gpiochip0`. Set
 `LUMI_SPI_DEVICE` and `LUMI_GPIO_CHIP` when the host paths differ. The

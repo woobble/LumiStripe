@@ -1,0 +1,67 @@
+services:
+  lumistripe-web:
+    image: lumistripe:dev
+    build:
+      context: ..
+      dockerfile: deploy/docker/Dockerfile
+    network_mode: host
+    restart: unless-stopped
+    user: "${LUMI_DEV_UID:?Set LUMI_DEV_UID to the current user ID}:${LUMI_DEV_GID:?Set LUMI_DEV_GID to the current group ID}"
+    depends_on:
+      lumistripe-spotify:
+        condition: service_healthy
+    environment:
+      HOME: /var/lib/lumistripe/home
+      XDG_RUNTIME_DIR: /run/host-audio
+      PULSE_SERVER: unix:/run/host-audio/pulse/native
+    volumes:
+      - ../.docker-dev/data:/var/lib/lumistripe
+      - "${XDG_RUNTIME_DIR:?Run Docker Compose from a Linux desktop audio session}:/run/host-audio"
+    command:
+      - /opt/lumistripe/.venv/bin/lumistripe-web
+      - --host
+      - 127.0.0.1
+      - --port
+      - "8000"
+      - --enable-spotify
+      - --audio-source
+      - spotify
+      - --settings-file
+      - /var/lib/lumistripe/settings.json
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:8000/api/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  lumistripe-spotify:
+    image: lumistripe:dev
+    network_mode: host
+    restart: unless-stopped
+    user: "${LUMI_DEV_UID:?Set LUMI_DEV_UID to the current user ID}:${LUMI_DEV_GID:?Set LUMI_DEV_GID to the current group ID}"
+    environment:
+      HOME: /var/lib/lumistripe/home
+      XDG_RUNTIME_DIR: /run/host-audio
+      PULSE_SERVER: unix:/run/host-audio/pulse/native
+      LUMI_SPOTIFY_CREATE_SINK: "1"
+      LUMI_SPOTIFY_API_KEY_FILE: /run/secrets/spotify_api_key
+      LUMI_SPOTIFY_DATA_DIR: /var/lib/lumistripe/soloist
+      LUMI_SPOTIFY_CACHE_DIR: /var/lib/lumistripe/soloist-cache
+    volumes:
+      - ../.docker-dev/data:/var/lib/lumistripe
+      - "${XDG_RUNTIME_DIR:?Run Docker Compose from a Linux desktop audio session}:/run/host-audio"
+    secrets:
+      - spotify_api_key
+    command: ["/usr/local/bin/lumistripe-spotify-entrypoint"]
+    healthcheck:
+      test:
+        ["CMD-SHELL", "python -c 'import socket; s=socket.create_connection((\"127.0.0.1\", 9090), 1); s.close()'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+secrets:
+  spotify_api_key:
+    file: "${LUMI_SPOTIFY_API_KEY_FILE:-../.docker-dev/spotify-api-key}"

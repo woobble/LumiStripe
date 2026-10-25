@@ -325,8 +325,14 @@ class RuntimeWorker:
             controller_factory is _default_controller_factory
         )
         self._audio_factory = audio_factory
-        self._bluetooth = bluetooth_manager or BluetoothManager(enabled=self.settings.hardware)
-        self._spotify = spotify_manager or SpotifyClient(enabled=self.settings.hardware)
+        self._bluetooth = bluetooth_manager or BluetoothManager(
+            enabled=self.settings.hardware,
+            spotify_audio_routing_enabled=(
+                self.settings.hardware or self.settings.spotify_enabled
+            ),
+        )
+        spotify_available = self.settings.hardware or self.settings.spotify_enabled
+        self._spotify = spotify_manager or SpotifyClient(enabled=spotify_available)
         self._settings_store = CalibrationSettingsStore(self.settings.settings_file)
         loaded_settings, self._settings_warning = self._settings_store.load_all()
         self._saved_corrections = loaded_settings.color_corrections
@@ -593,6 +599,7 @@ class RuntimeWorker:
                         ),
                     )
                 )
+            if self.settings.hardware or self.settings.spotify_enabled:
                 options_list.append(
                     AudioDeviceOption(
                         selector="spotify",
