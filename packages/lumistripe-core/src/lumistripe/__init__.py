@@ -30,6 +30,7 @@ from .controller import (
     NullController,
     ReversedController,
     ScaledMultiController,
+    ZoneMappingController,
 )
 from .playback import (
     AnimationSequence,
@@ -240,6 +241,7 @@ __all__ = [
     "SubStripe",
     "SwitchQuantization",
     "TransitionEffect",
+    "ZoneMappingController",
     "apply_brightness_rgb",
     "apply_power_budget",
     "build_render_plan",

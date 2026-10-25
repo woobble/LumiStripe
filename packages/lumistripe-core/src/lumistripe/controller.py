@@ -450,6 +450,111 @@ class ScaledMultiController(Controller):
             controller.force_flush() if force else controller.flush()
 
 
+class ZoneMappingController(Controller):
+    """Render one logical zone and map it across a physical controller."""
+
+    def __init__(
+        self,
+        inner: Controller,
+        zone_count: int = 1,
+        zone_pattern: str = "repeat",
+    ) -> None:
+        if not isinstance(zone_count, int) or isinstance(zone_count, bool):
+            raise TypeError("zone count must be an integer")
+        if not 1 <= zone_count <= inner.length:
+            raise ValueError("zone count must be between one and the physical length")
+        if zone_pattern not in {"repeat", "alternate"}:
+            raise ValueError("zone pattern must be repeat or alternate")
+
+        self._inner = inner
+        self._zone_count = zone_count
+        self._zone_pattern = zone_pattern
+        base_length, remainder = divmod(inner.length, zone_count)
+        self._zone_lengths = tuple(
+            base_length + (1 if index < remainder else 0)
+            for index in range(zone_count)
+        )
+        self._length = max(self._zone_lengths)
+        self._pixels = new_pixel_buffer(self._length)
+        self._expanded = new_pixel_buffer(inner.length)
+        self._zone_indices = tuple(
+            np.rint(np.linspace(0, self._length - 1, zone_length)).astype(np.intp)
+            for zone_length in self._zone_lengths
+        )
+
+    @property
+    def zone_count(self) -> int:
+        return self._zone_count
+
+    @property
+    def zone_pattern(self) -> str:
+        return self._zone_pattern
+
+    @property
+    def physical_length(self) -> int:
+        return self._inner.length
+
+    @property
+    def length(self) -> int:
+        return self._length
+
+    def pixels(self) -> PixelBuffer:
+        return self._pixels
+
+    def pixel(self, index: int) -> Color:
+        self._check_index(index)
+        red, green, blue, alpha = self._pixels[index]
+        return Rgba(int(red), int(green), int(blue), float(alpha) / 255.0)
+
+    def set_pixel(self, index: int, color: Color) -> None:
+        self._check_index(index)
+        self._pixels[index] = color.as_rgba_array()
+
+    def set_pixels(self, colors: Sequence[Color] | npt.ArrayLike) -> None:
+        normalized = as_pixel_buffer(colors)
+        if normalized.shape[0] > self.length:
+            raise ValueError("too many pixels for zone-mapping controller")
+        self._pixels[: normalized.shape[0]] = normalized
+
+    def fill(self, color: Color) -> None:
+        self._pixels[:] = color.as_rgba_array()
+
+    def clear(self) -> None:
+        clear_pixels(self._pixels)
+
+    def output_pixels(self) -> PixelBuffer:
+        """Expand the logical canvas into the reusable physical output buffer."""
+        offset = 0
+        for index, (zone_length, sample_indices) in enumerate(
+            zip(self._zone_lengths, self._zone_indices, strict=True)
+        ):
+            end = offset + zone_length
+            target = self._expanded[offset:end]
+            samples = sample_indices[::-1] if (
+                self._zone_pattern == "alternate" and index % 2 == 1
+            ) else sample_indices
+            np.take(self._pixels, samples, axis=0, out=target)
+            offset = end
+        return self._expanded
+
+    def flush(self) -> None:
+        self._inner.set_pixels(self.output_pixels())
+        self._inner.flush()
+
+    def force_flush(self) -> None:
+        self._inner.set_pixels(self.output_pixels())
+        self._inner.force_flush()
+
+    def close(self) -> None:
+        self._inner.close()
+
+    def _check_index(self, index: int) -> None:
+        if not 0 <= index < self.length:
+            raise IndexError(
+                f"pixel index {index} out of bounds for length {self.length}"
+            )
+
+
 class MultiController(Controller):
     def __init__(self, controllers: Sequence[Controller]) -> None:
         if not controllers:

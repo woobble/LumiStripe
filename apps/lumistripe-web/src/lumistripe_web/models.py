@@ -50,6 +50,8 @@ class StripeOutputConfig(BaseModel):
     pixels: int = Field(ge=1, le=4096)
     backend: Literal["spi", "gpio"] = "spi"
     reversed: bool = False
+    zone_count: int = Field(default=1, ge=1, le=4096, strict=True)
+    zone_pattern: Literal["repeat", "alternate"] = "repeat"
     spi_device: str = Field(default="/dev/spidev0.0", min_length=1)
     spi_speed_hz: int = Field(default=1_000_000, gt=0, le=32_000_000)
     chip: str = Field(default="/dev/gpiochip0", min_length=1)
@@ -60,6 +62,12 @@ class StripeOutputConfig(BaseModel):
     power_limit_watts: float | None = Field(default=None, gt=0.0)
     last_output_at: datetime | None = None
     error: str | None = None
+
+    @model_validator(mode="after")
+    def validate_zones(self) -> StripeOutputConfig:
+        if self.zone_count > self.pixels:
+            raise ValueError("zone count cannot exceed the stripe pixel count")
+        return self
 
 
 class StripeTopology(BaseModel):

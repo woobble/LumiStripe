@@ -126,4 +126,31 @@ describe("StripeManagementPanel", () => {
       pi_reserve_watts: 18,
     })))
   })
+
+  it("shows zone LED ranges and saves count and alternate direction", async () => {
+    const user = userEvent.setup()
+    const updateStripes = vi.fn().mockResolvedValue(true)
+    const controller = {
+      state: initialState,
+      pendingCommand: null,
+      updateStripes,
+      testStripe: vi.fn().mockResolvedValue(true),
+    } as unknown as DashboardController
+
+    render(
+      <MemoryRouter>
+        <StripeManagementPanel controller={controller} />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByText("Zone 1: LEDs 1–41")).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText("Zones per stripe"), { target: { value: "4" } })
+    expect(screen.getByText("Zone 1: LEDs 1–11")).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Alternate" }))
+    await user.click(screen.getByRole("button", { name: "Save & apply" }))
+
+    await waitFor(() => expect(updateStripes).toHaveBeenCalledWith(expect.objectContaining({
+      outputs: [expect.objectContaining({ zone_count: 4, zone_pattern: "alternate" })],
+    })))
+  })
 })

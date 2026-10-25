@@ -96,6 +96,22 @@ optimized `-march=native` builds are reserved for device-local use. See
 
 These modules are the intended seams for future implementation moves.
 
+## Physical stripe zones
+
+Each stripe output can map one logical animation canvas across multiple
+physical zones. `ZoneMappingController` owns that logical canvas and expands it
+into the output's physical frame; repeat keeps each zone oriented the same way,
+while alternate reverses every second zone. Uneven divisions give remainder
+pixels to the earliest zones, and shorter zones resample the full logical
+pattern.
+
+The worker composes these controllers with the existing layouts: Mirrored
+scales one shared logical frame for each output, Continuous spans the combined
+logical outputs before each output expands its segment, and Independent renders
+through each output's existing player. The power limiter and live preview read
+expanded physical frames. Calibration and stripe identification continue to
+target physical output controllers.
+
 ## Dynamic animation switch quantization
 
 Dynamic mode can defer automatic base-animation changes to the next confident

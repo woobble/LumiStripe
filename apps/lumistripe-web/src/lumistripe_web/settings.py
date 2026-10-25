@@ -32,6 +32,7 @@ MAX_SAVED_ANIMATION_SEQUENCES = 20
 PROFILE_NAMES = ("primary", "secondary")
 StripeLayout = Literal["mirrored", "continuous", "independent"]
 StripeBackend = Literal["spi", "gpio"]
+StripeZonePattern = Literal["repeat", "alternate"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +84,8 @@ class StripeOutputSettings:
     pixels: int
     backend: StripeBackend = "spi"
     reversed: bool = False
+    zone_count: int = 1
+    zone_pattern: StripeZonePattern = "repeat"
     spi_device: str = "/dev/spidev0.0"
     spi_speed_hz: int = 1_000_000
     chip: str = "/dev/gpiochip0"
@@ -96,16 +99,29 @@ class StripeOutputSettings:
         for name in ("id", "name", "spi_device", "chip"):
             if not isinstance(getattr(self, name), str):
                 raise TypeError(f"stripe {name} must be a string")
-        for name in ("pixels", "spi_speed_hz", "data_pin", "clock_pin"):
+        for name in (
+            "pixels",
+            "spi_speed_hz",
+            "data_pin",
+            "clock_pin",
+            "zone_count",
+        ):
             value = getattr(self, name)
             if not isinstance(value, int) or isinstance(value, bool):
                 raise TypeError(f"stripe {name} must be an integer")
         if not isinstance(self.reversed, bool):
             raise TypeError("stripe reversed must be a boolean")
+        if not isinstance(self.zone_pattern, str) or self.zone_pattern not in {
+            "repeat",
+            "alternate",
+        }:
+            raise ValueError("stripe zone pattern must be repeat or alternate")
         if not self.id.strip() or not self.name.strip():
             raise ValueError("stripe id and name must not be empty")
         if not 1 <= self.pixels <= 4096:
             raise ValueError("stripe pixels must be between 1 and 4096")
+        if not 1 <= self.zone_count <= self.pixels:
+            raise ValueError("stripe zone count must be between one and its pixel count")
         if not isinstance(self.backend, str) or self.backend not in {"spi", "gpio"}:
             raise ValueError("stripe backend must be spi or gpio")
         if self.spi_speed_hz <= 0:

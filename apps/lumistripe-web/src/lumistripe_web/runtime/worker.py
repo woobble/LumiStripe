@@ -29,6 +29,7 @@ from lumistripe import (
     Rgb,
     ScaledMultiController,
     Stripe,
+    ZoneMappingController,
     apply_power_budget,
     estimate_frame_power,
 )
@@ -475,6 +476,7 @@ class RuntimeWorker:
         self._raw_controller: Controller | None = None
         self._controller: OutputGateController | None = None
         self._output_gates: tuple[OutputGateController, ...] = ()
+        self._output_renderers: tuple[ZoneMappingController, ...] = ()
         self._playbacks: dict[str, tuple[AnimationPlayer, PlaybackEngine]] = {}
         self._animation_settings_snapshot = self._build_animation_settings_snapshot()
         self._correction_controllers: tuple[ColorCorrectionController, ...] = ()
@@ -1290,6 +1292,7 @@ class RuntimeWorker:
                         OutputGateController(controller)
                         for controller in self._correction_controllers
                     )
+                    self._output_renderers = ()
                     self._sync_independent_playbacks()
             self._started_at_s = time.monotonic()
             self._fps_window_started_s = self._started_at_s
@@ -1370,6 +1373,7 @@ class RuntimeWorker:
         physical: list[Controller] = []
         corrected: list[ColorCorrectionController] = []
         gates: list[OutputGateController] = []
+        renderers: list[ZoneMappingController] = []
         try:
             for index, output in enumerate(topology.outputs):
                 if not self.settings.hardware:
@@ -1402,21 +1406,32 @@ class RuntimeWorker:
                 )
                 corrected.append(correction)
                 gates.append(OutputGateController(correction))
+                renderers.append(
+                    ZoneMappingController(
+                        gates[-1], output.zone_count, output.zone_pattern
+                    )
+                )
 
             if not gates:
                 raw: Controller = NullController()
                 shared = OutputGateController(raw)
             elif topology.layout == "continuous":
-                raw = CompositeController(gates)
+                raw = CompositeController(renderers)
                 shared = OutputGateController(raw)
             elif topology.layout == "mirrored":
-                raw = ScaledMultiController(gates)
+                raw = ScaledMultiController(renderers)
                 shared = OutputGateController(raw)
             else:
                 # Independent outputs are stepped individually; this aggregate owns cleanup.
-                raw = CompositeController(gates)
+                raw = CompositeController(renderers)
                 shared = OutputGateController(raw)
-            return _BuiltTopology(raw, shared, tuple(gates), tuple(corrected))
+            return _BuiltTopology(
+                raw,
+                shared,
+                tuple(gates),
+                tuple(corrected),
+                tuple(renderers),
+            )
         except Exception:
             for child in physical:
                 try:
@@ -1429,6 +1444,7 @@ class RuntimeWorker:
         self._raw_controller = built.raw
         self._controller = built.shared
         self._output_gates = built.outputs
+        self._output_renderers = built.renderers
         self._correction_controllers = built.corrections
         self._sync_independent_playbacks()
 
@@ -3209,12 +3225,17 @@ profile.audio_config(microphone=True),
 
         self._tick_audio_calibration()
         if self._topology.layout == "independent" and self._output_gates:
+            targets: tuple[Controller, ...] = (
+                self._output_renderers
+                if len(self._output_renderers) == len(self._output_gates)
+                else self._output_gates
+            )
             delays = [
                 self._playbacks[output.id][1].step(
-                    gate, snapshot=snapshot, flush=False
+                    target, snapshot=snapshot, flush=False
                 )
-                for output, gate in zip(
-                    self._topology.outputs, self._output_gates, strict=True
+                for output, target in zip(
+                    self._topology.outputs, targets, strict=True
                 )
             ]
             delay = min(delays)
@@ -3244,12 +3265,26 @@ profile.audio_config(microphone=True),
             and self._controller.blackout
         )
         raw = self._raw_controller
-        original_frames = [gate.pixels().copy() for gate in gates]
-        if self._topology.layout == "mirrored" and isinstance(raw, ScaledMultiController):
-            mapped_frames = raw.output_pixels()
-            for gate, frame in zip(gates, mapped_frames, strict=True):
+        if len(self._output_renderers) == len(gates):
+            if self._topology.layout == "mirrored" and isinstance(
+                raw, ScaledMultiController
+            ):
+                mapped_frames = raw.output_pixels()
+                for renderer, frame in zip(
+                    self._output_renderers, mapped_frames, strict=True
+                ):
+                    renderer.set_pixels(frame)
+            for gate, renderer in zip(
+                gates, self._output_renderers, strict=True
+            ):
+                gate.set_pixels(renderer.output_pixels())
+        elif self._topology.layout == "mirrored" and isinstance(
+            raw, ScaledMultiController
+        ):
+            for gate, frame in zip(gates, raw.output_pixels(), strict=True):
                 gate.set_pixels(frame)
-            original_frames = [gate.pixels().copy() for gate in gates]
+
+        original_frames = [gate.pixels().copy() for gate in gates]
 
         estimates: list[OutputPowerEstimate] = []
         corrected_frames: list[np.ndarray] = []
@@ -3754,6 +3789,8 @@ profile.audio_config(microphone=True),
                     voltage_v=output.voltage_v,
                     full_white_current_a=output.full_white_current_a,
                     power_limit_watts=output.power_limit_watts,
+                    zone_count=output.zone_count,
+                    zone_pattern=output.zone_pattern,
                     last_output_at=(
                         self._output_gates[index].last_successful_update_at
                         if index < len(self._output_gates)

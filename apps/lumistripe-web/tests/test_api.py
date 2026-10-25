@@ -247,6 +247,8 @@ def test_stripe_management_api_applies_and_targets_independent_outputs(
                 "data_pin": 20,
                 "clock_pin": 21,
                 "reversed": True,
+                "zone_count": 4,
+                "zone_pattern": "alternate",
             },
         ],
     }
@@ -255,6 +257,8 @@ def test_stripe_management_api_applies_and_targets_independent_outputs(
         assert applied.status_code == 200
         assert applied.json()["stripe_topology"]["layout"] == "independent"
         assert client.get("/api/stripes").json()["outputs"][1]["pixels"] == 80
+        assert client.get("/api/stripes").json()["outputs"][1]["zone_count"] == 4
+        assert client.get("/api/stripes").json()["outputs"][1]["zone_pattern"] == "alternate"
 
         targeted = client.put(
             "/api/brightness", json={"brightness": 0.2, "stripe_id": "right"}
@@ -825,11 +829,35 @@ def test_stripe_power_budget_api_round_trip_and_validation(tmp_path: Path) -> No
         assert state["stripe_topology"]["supply_capacity_watts"] == 200.0
         assert state["stripe_topology"]["pi_reserve_watts"] == 15.0
         assert state["stripe_topology"]["outputs"][0]["voltage_v"] == 5.1
+        assert state["stripe_topology"]["outputs"][0]["zone_count"] == 1
+        assert state["stripe_topology"]["outputs"][0]["zone_pattern"] == "repeat"
         assert state["power_budget"]["enabled"] is True
         assert state["power_budget"]["budget_watts"] == 24.0
         assert state["power_budget"]["available_led_watts"] == 185.0
         assert state["power_budget"]["supply_capacity_watts"] == 200.0
         assert client.get("/api/stripes").json()["outputs"][0]["power_limit_watts"] == 18.0
+
+        invalid_zones = client.put(
+            "/api/stripes",
+            json={
+                "layout": "mirrored",
+                "outputs": [
+                    {"id": "small", "name": "Small", "pixels": 2, "zone_count": 3}
+                ],
+            },
+        )
+        assert invalid_zones.status_code == 422
+
+        invalid_zone_pattern = client.put(
+            "/api/stripes",
+            json={
+                "layout": "mirrored",
+                "outputs": [
+                    {"id": "small", "name": "Small", "pixels": 2, "zone_pattern": "shift"}
+                ],
+            },
+        )
+        assert invalid_zone_pattern.status_code == 422
 
         invalid = client.put(
             "/api/stripes",

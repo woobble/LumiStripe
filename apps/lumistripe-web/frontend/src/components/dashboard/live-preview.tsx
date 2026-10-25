@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import type { PreviewFrame } from "@/lib/preview"
 import type { DashboardState } from "@/lib/api"
-import { previewLabels } from "@/components/dashboard/preview-renderer"
+import { previewLabels, previewZoneBoundaries } from "@/components/dashboard/preview-renderer"
 import { PreviewCanvas, type PreviewRendererStatus } from "@/components/dashboard/preview-canvas"
 import type { PreviewConnectionStatus } from "@/hooks/use-preview-stream"
 
@@ -24,6 +24,7 @@ export function LivePreview({
   const [rendererStatus, setRendererStatus] = useState<PreviewRendererStatus>("initializing")
   const [rendererDetail, setRendererDetail] = useState<string | null>(null)
   const labels = useMemo(() => previewLabels(state.stripe_topology), [state.stripe_topology])
+  const zoneBoundaries = useMemo(() => previewZoneBoundaries(state.stripe_topology), [state.stripe_topology])
   const handleRendererStatus = useCallback((status: PreviewRendererStatus, detail: string | null) => {
     setRendererStatus(status)
     setRendererDetail(detail)
@@ -69,9 +70,9 @@ export function LivePreview({
             topology={state.stripe_topology}
             onRendererStatus={handleRendererStatus}
           />
-          {labels.length > 1 && (
+          {(labels.length > 1 || zoneBoundaries.length > 0) && (
             <div className="pointer-events-none absolute inset-0" aria-hidden="true">
-              {labels.map((label) => (
+              {labels.length > 1 && labels.map((label) => (
                 <span
                   key={label.id}
                   className="absolute max-w-[45%] truncate rounded bg-black/50 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[0.12em] text-white/55"
@@ -79,6 +80,14 @@ export function LivePreview({
                 >
                   {label.name}
                 </span>
+              ))}
+              {zoneBoundaries.map((boundary) => (
+                <span
+                  key={boundary.id}
+                  className="absolute -translate-x-1/2 border-l border-dashed border-white/75 shadow-[0_0_3px_rgba(0,0,0,0.9)]"
+                  data-testid="zone-boundary"
+                  style={{ left: boundary.left, top: boundary.top, height: boundary.height }}
+                />
               ))}
             </div>
           )}

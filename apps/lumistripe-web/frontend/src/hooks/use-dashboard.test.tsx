@@ -82,7 +82,13 @@ describe("useDashboard", () => {
     } = legacyState.stripe_topology
     act(() => MockWebSocket.instances[0].emit({
       ...legacyState,
-      stripe_topology: legacyTopology,
+      stripe_topology: {
+        ...legacyTopology,
+        outputs: legacyState.stripe_topology.outputs.map((output) => {
+          const { zone_count: _zoneCount, zone_pattern: _zonePattern, ...legacyOutput } = output
+          return legacyOutput
+        }),
+      },
       revision: 2,
     }))
 
@@ -101,6 +107,8 @@ describe("useDashboard", () => {
     expect(result.current.state?.stripe_topology.shared_supply_enabled).toBe(false)
     expect(result.current.state?.stripe_topology.supply_capacity_watts).toBe(200)
     expect(result.current.state?.stripe_topology.pi_reserve_watts).toBe(15)
+    expect(result.current.state?.stripe_topology.outputs[0]?.zone_count).toBe(1)
+    expect(result.current.state?.stripe_topology.outputs[0]?.zone_pattern).toBe("repeat")
   })
 
   it("marks a dropped socket as reconnecting and opens a replacement", async () => {

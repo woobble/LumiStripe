@@ -3002,6 +3002,22 @@
             "exclusiveMinimum": 0.0,
             "title": "Voltage V",
             "type": "number"
+          },
+          "zone_count": {
+            "default": 1,
+            "maximum": 4096.0,
+            "minimum": 1.0,
+            "title": "Zone Count",
+            "type": "integer"
+          },
+          "zone_pattern": {
+            "default": "repeat",
+            "enum": [
+              "repeat",
+              "alternate"
+            ],
+            "title": "Zone Pattern",
+            "type": "string"
           }
         },
         "required": [

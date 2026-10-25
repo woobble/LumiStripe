@@ -23,7 +23,19 @@ from lumistripe_web.settings import (
 )
 
 
-@pytest.mark.parametrize("field,value", [("id", None), ("name", 3), ("backend", []), ("pixels", True)])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("id", None),
+        ("name", 3),
+        ("backend", []),
+        ("pixels", True),
+        ("zone_count", 0),
+        ("zone_count", True),
+        ("zone_count", 81),
+        ("zone_pattern", "shift"),
+    ],
+)
 def test_malformed_stripe_settings_preserve_other_settings(tmp_path: Path, field: str, value: object) -> None:
     path = tmp_path / "settings.json"
     path.write_text(json.dumps({"version": 5, "selected_audio_device": "USB Mic", "stripes": {"outputs": [{field: value}]}}))
@@ -119,6 +131,8 @@ def test_power_budget_round_trip_and_legacy_defaults(tmp_path: Path) -> None:
                 voltage_v=5.1,
                 full_white_current_a=0.055,
                 power_limit_watts=12.0,
+                zone_count=4,
+                zone_pattern="alternate",
             ),
         ),
     )
@@ -126,6 +140,8 @@ def test_power_budget_round_trip_and_legacy_defaults(tmp_path: Path) -> None:
     loaded, warning = store.load_all()
     assert warning is None
     assert loaded.stripe_topology == topology
+    assert loaded.stripe_topology.outputs[0].zone_count == 4
+    assert loaded.stripe_topology.outputs[0].zone_pattern == "alternate"
     assert topology.available_led_watts == 185.0
     assert topology.effective_power_budget_watts == 18.5
     assert json.loads(path.read_text(encoding="utf-8"))["version"] == 11

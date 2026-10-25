@@ -30,4 +30,27 @@ describe("LivePreview", () => {
     await waitFor(() => expect(screen.getByText("Live")).toBeInTheDocument())
     expect(screen.getByText("Primary · 41px")).toBeInTheDocument()
   })
+
+  it("marks zone boundaries over the physical output preview", async () => {
+    const state = {
+      ...initialState,
+      stripe_topology: {
+        ...initialState.stripe_topology,
+        outputs: initialState.stripe_topology.outputs.map((output) => ({
+          ...output,
+          zone_count: 4,
+        })),
+      },
+    }
+    const { container } = render(
+      <LivePreview
+        state={state}
+        frame={{ sequence: 1, outputs: [new Uint8Array(41 * 4)] }}
+        connection="connected"
+      />,
+    )
+
+    await waitFor(() => expect(screen.getByText("Canvas fallback")).toBeInTheDocument())
+    expect(container.querySelectorAll('[data-testid="zone-boundary"]')).toHaveLength(3)
+  })
 })

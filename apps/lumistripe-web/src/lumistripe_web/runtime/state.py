@@ -7,7 +7,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, TypedDict
 
-from lumistripe import ColorCorrectionController, Controller, PixelBuffer
+from lumistripe import (
+    ColorCorrectionController,
+    Controller,
+    PixelBuffer,
+    ZoneMappingController,
+)
 from lumistripe.audio.capture import AudioInput
 from lumistripe.audio.config import AudioConfig
 from lumistripe.audio.types import AudioFrame, AudioProcessorStats, MusicFeatures
@@ -88,6 +93,7 @@ class _BuiltTopology:
     shared: OutputGateController
     outputs: tuple[OutputGateController, ...]
     corrections: tuple[ColorCorrectionController, ...]
+    renderers: tuple[ZoneMappingController, ...]
 
 
 @dataclass(slots=True)

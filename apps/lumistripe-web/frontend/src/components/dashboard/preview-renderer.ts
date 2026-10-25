@@ -259,6 +259,27 @@ export function previewLabels(topology: StripeTopology) {
   }))
 }
 
+export function previewZoneBoundaries(topology: StripeTopology) {
+  const layout = buildPreviewLayout(topology)
+  return layout.strips.flatMap((strip) => {
+    const output = topology.outputs[strip.outputIndex]
+    if (!output) return []
+    const zoneCount = Math.max(1, Math.min(output.zone_count ?? 1, output.pixels))
+    const baseLength = Math.floor(output.pixels / zoneCount)
+    const remainder = output.pixels % zoneCount
+    let consumedPixels = 0
+    return Array.from({ length: zoneCount - 1 }, (_, index) => {
+      consumedPixels += baseLength + (index < remainder ? 1 : 0)
+      return {
+        id: `${output.id}-zone-boundary-${index + 1}`,
+        left: `${(strip.x + strip.width * consumedPixels / output.pixels) * 100}%`,
+        top: `${(strip.y + strip.height * 0.18) * 100}%`,
+        height: `${strip.height * 0.64 * 100}%`,
+      }
+    })
+  })
+}
+
 const SHADER = /* wgsl */ `
 struct Instance {
   x: f32,

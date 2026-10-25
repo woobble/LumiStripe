@@ -2126,6 +2126,17 @@ export interface components {
              * @default 5
              */
             voltage_v: number;
+            /**
+             * Zone Count
+             * @default 1
+             */
+            zone_count: number;
+            /**
+             * Zone Pattern
+             * @default repeat
+             * @enum {string}
+             */
+            zone_pattern: "repeat" | "alternate";
         };
         /** StripePlaybackState */
         StripePlaybackState: {

@@ -44,6 +44,7 @@ export const initialState: DashboardState = {
     layout: "mirrored",
     outputs: [{
       id: "primary", name: "Primary", pixels: 41, backend: "spi", reversed: false,
+      zone_count: 1, zone_pattern: "repeat",
       spi_device: "/dev/spidev0.0", spi_speed_hz: 1_000_000,
       chip: "/dev/gpiochip0", data_pin: 10, clock_pin: 11,
       voltage_v: 5, full_white_current_a: 0.06, power_limit_watts: null,

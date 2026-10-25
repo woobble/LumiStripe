@@ -12,6 +12,7 @@ from lumistripe import (
     Rgba,
     ScaledMultiController,
     Stripe,
+    ZoneMappingController,
 )
 
 
@@ -384,3 +385,82 @@ def test_null_controller_keeps_runtime_frame_without_output() -> None:
     controller.flush()
 
     assert controller.pixel(0).to_rgba() == (3, 4, 5, 1.0)
+
+
+def test_zone_mapping_preserves_one_zone_controller_behavior() -> None:
+    inner = TrackingStripe(3)
+    controller = ZoneMappingController(inner)
+    frame = np.array(
+        [[10, 0, 0, 255], [20, 0, 0, 255], [30, 0, 0, 255]],
+        dtype=np.uint8,
+    )
+
+    controller.set_pixels(frame)
+    controller.flush()
+
+    assert controller.length == inner.length == 3
+    np.testing.assert_array_equal(controller.pixels(), frame)
+    np.testing.assert_array_equal(inner.pixels(), frame)
+    assert inner.flush_count == 1
+
+
+def test_zone_mapping_repeats_logical_frame_into_equal_zones() -> None:
+    inner = Stripe(8)
+    controller = ZoneMappingController(inner, zone_count=4)
+    controller.set_pixels(
+        np.array([[10, 0, 0, 255], [20, 0, 0, 255]], dtype=np.uint8)
+    )
+
+    controller.flush()
+
+    np.testing.assert_array_equal(
+        inner.pixels()[:, 0], [10, 20, 10, 20, 10, 20, 10, 20]
+    )
+
+
+def test_zone_mapping_alternates_orientation_on_every_second_zone() -> None:
+    inner = Stripe(8)
+    controller = ZoneMappingController(inner, zone_count=4, zone_pattern="alternate")
+    controller.set_pixels(
+        np.array([[10, 0, 0, 255], [20, 0, 0, 255]], dtype=np.uint8)
+    )
+
+    controller.flush()
+
+    np.testing.assert_array_equal(
+        inner.pixels()[:, 0], [10, 20, 20, 10, 10, 20, 20, 10]
+    )
+
+
+def test_zone_mapping_distributes_remainder_and_resamples_shorter_zones() -> None:
+    inner = Stripe(10)
+    controller = ZoneMappingController(inner, zone_count=3)
+    controller.set_pixels(
+        np.array(
+            [[10, 0, 0, 255], [20, 0, 0, 255], [30, 0, 0, 255], [40, 0, 0, 255]],
+            dtype=np.uint8,
+        )
+    )
+
+    controller.flush()
+
+    # The first zone receives the remainder; shorter zones sample the full pattern.
+    np.testing.assert_array_equal(
+        inner.pixels()[:, 0], [10, 20, 30, 40, 10, 30, 40, 10, 30, 40]
+    )
+
+
+@pytest.mark.parametrize(
+    ("zone_count", "zone_pattern", "error"),
+    [
+        (0, "repeat", ValueError),
+        (4, "repeat", ValueError),
+        (True, "repeat", TypeError),
+        (2, "shift", ValueError),
+    ],
+)
+def test_zone_mapping_rejects_invalid_configuration(
+    zone_count: int, zone_pattern: str, error: type[Exception]
+) -> None:
+    with pytest.raises(error):
+        ZoneMappingController(Stripe(3), zone_count, zone_pattern)

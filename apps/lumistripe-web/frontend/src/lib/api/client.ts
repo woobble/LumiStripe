@@ -124,6 +124,8 @@ const stripeOutputSchema = z.object({
   pixels: z.number(),
   backend: z.enum(["spi", "gpio"]),
   reversed: z.boolean(),
+  zone_count: z.number().int().min(1).max(4096).default(1),
+  zone_pattern: z.enum(["repeat", "alternate"]).default("repeat"),
   spi_device: z.string(),
   spi_speed_hz: z.number(),
   chip: z.string(),
@@ -134,7 +136,11 @@ const stripeOutputSchema = z.object({
   power_limit_watts: z.number().nullable().optional(),
   last_output_at: z.string().nullable().optional(),
   error: z.string().nullable().optional(),
-}).strict()
+}).strict().superRefine((output, context) => {
+  if (output.zone_count > output.pixels) {
+    context.addIssue({ code: "custom", path: ["zone_count"], message: "Zone count cannot exceed the stripe pixel count." })
+  }
+})
 const stripeTopologySchema = z.object({
   layout: z.enum(["mirrored", "continuous", "independent"]),
   outputs: z.array(stripeOutputSchema),

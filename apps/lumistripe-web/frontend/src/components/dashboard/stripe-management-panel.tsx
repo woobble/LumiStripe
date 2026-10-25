@@ -42,10 +42,15 @@ const stripeTopologySchema = z.object({
     id: z.string().min(1),
     name: z.string().trim().min(1, "Every stripe needs a name.").max(40),
     pixels: z.number().int().min(1).max(4096),
+    zone_count: z.number().int().min(1).max(4096),
+    zone_pattern: z.enum(["repeat", "alternate"]),
     voltage_v: z.number().positive("Voltage must be greater than zero."),
     full_white_current_a: z.number().positive("Current must be greater than zero."),
     power_limit_watts: z.number().positive("Limit must be greater than zero.").nullable(),
-  }).passthrough()).min(1).max(2),
+  }).passthrough().refine((output) => output.zone_count <= output.pixels, {
+    path: ["zone_count"],
+    message: "Zones cannot exceed the stripe pixel count.",
+  })).min(1).max(2),
 }).refine((value) => !value.power_budget_enabled || value.power_budget_watts !== null, {
   path: ["power_budget_watts"],
   message: "Set a positive wagon power limit when the budget is enabled.",
@@ -59,7 +64,11 @@ function copyTopology(topology: StripeTopology): StripeTopology {
     shared_supply_enabled: topology.shared_supply_enabled,
     supply_capacity_watts: topology.supply_capacity_watts,
     pi_reserve_watts: topology.pi_reserve_watts,
-    outputs: topology.outputs.map((output) => ({ ...output })),
+    outputs: topology.outputs.map((output) => ({
+      ...output,
+      zone_count: output.zone_count ?? 1,
+      zone_pattern: output.zone_pattern ?? "repeat",
+    })),
   }
 }
 
@@ -76,6 +85,8 @@ function newStripe(existing: StripeOutputConfig[]): StripeOutputConfig {
     pixels: existing[0]?.pixels ?? 41,
     backend: "spi",
     reversed: false,
+    zone_count: 1,
+    zone_pattern: "repeat",
     spi_device: existing.length === 0 ? "/dev/spidev0.0" : "/dev/spidev1.0",
     spi_speed_hz: 1_000_000,
     chip: "/dev/gpiochip0",
@@ -85,6 +96,19 @@ function newStripe(existing: StripeOutputConfig[]): StripeOutputConfig {
     full_white_current_a: existing[0]?.full_white_current_a ?? 0.06,
     power_limit_watts: null,
   }
+}
+
+function zoneRanges(pixels: number, requestedCount: number) {
+  const count = Math.max(1, Math.min(Math.trunc(requestedCount) || 1, pixels))
+  const baseLength = Math.floor(pixels / count)
+  const remainder = pixels % count
+  let firstPixel = 1
+  return Array.from({ length: count }, (_, index) => {
+    const length = baseLength + (index < remainder ? 1 : 0)
+    const range = { index: index + 1, firstPixel, lastPixel: firstPixel + length - 1 }
+    firstPixel += length
+    return range
+  })
 }
 
 export function StripeManagementPanel({ controller }: { controller: DashboardController }) {
@@ -245,7 +269,58 @@ export function StripeManagementPanel({ controller }: { controller: DashboardCon
           </CardHeader>
           <CardContent className="space-y-4">
             <Field label="Name"><Input value={output.name} maxLength={40} aria-invalid={errors.outputs?.[index]?.name ? true : undefined} onChange={(event) => updateOutput(index, { name: event.target.value })} />{errors.outputs?.[index]?.name && <InlineError message={errors.outputs[index]?.name?.message} />}</Field>
-            <Field label="Pixel count"><Input type="number" min={1} max={4096} inputMode="numeric" value={output.pixels} aria-invalid={errors.outputs?.[index]?.pixels ? true : undefined} onChange={(event) => updateOutput(index, { pixels: Number(event.target.value) })} />{errors.outputs?.[index]?.pixels && <InlineError message={errors.outputs[index]?.pixels?.message} />}</Field>
+            <Field label="Pixel count"><Input type="number" min={1} max={4096} inputMode="numeric" value={output.pixels} aria-invalid={errors.outputs?.[index]?.pixels ? true : undefined} onChange={(event) => {
+              const pixels = Number(event.target.value)
+              updateOutput(index, {
+                pixels,
+                ...(pixels >= 1 ? { zone_count: Math.min(output.zone_count ?? 1, pixels) } : {}),
+              })
+            }} />{errors.outputs?.[index]?.pixels && <InlineError message={errors.outputs[index]?.pixels?.message} />}</Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Zones per stripe">
+                <Input
+                  type="number"
+                  min={1}
+                  max={output.pixels}
+                  inputMode="numeric"
+                  value={output.zone_count ?? 1}
+                  aria-invalid={errors.outputs?.[index]?.zone_count ? true : undefined}
+                  onChange={(event) => updateOutput(index, { zone_count: Number(event.target.value) })}
+                />
+                <InlineError message={errors.outputs?.[index]?.zone_count?.message} />
+              </Field>
+              <Field label="Zone direction">
+                <ToggleGroup
+                  aria-label={`Zone direction for ${output.name}`}
+                  value={[output.zone_pattern ?? "repeat"]}
+                  onValueChange={(values) => {
+                    const value = values[0]
+                    if (value === "repeat" || value === "alternate") updateOutput(index, { zone_pattern: value })
+                  }}
+                  className="grid h-10 grid-cols-2 gap-1 rounded-lg bg-black/20 p-1"
+                  variant="outline"
+                >
+                  <ToggleGroupItem value="repeat" className="h-full px-2 text-xs">Repeat</ToggleGroupItem>
+                  <ToggleGroupItem value="alternate" className="h-full px-2 text-xs">Alternate</ToggleGroupItem>
+                </ToggleGroup>
+              </Field>
+            </div>
+            {(() => {
+              const ranges = zoneRanges(output.pixels, output.zone_count ?? 1)
+              return <div className="space-y-2 rounded-lg border border-white/10 bg-black/20 p-3">
+                <div className="grid h-9 gap-px overflow-hidden rounded" style={{ gridTemplateColumns: `repeat(${ranges.length}, minmax(0, 1fr))` }} role="img" aria-label={`${ranges.length} animation zones across ${output.pixels} LEDs`}>
+                  {ranges.map((range) => <span key={range.index} className="flex min-w-0 items-center justify-center border-r border-white/50 bg-violet-400/20 text-[9px] text-violet-100 last:border-r-0" title={`Zone ${range.index}: LEDs ${range.firstPixel}–${range.lastPixel}`}>
+                    {ranges.length <= 12 ? `Z${range.index}` : ""}
+                  </span>)}
+                </div>
+                <details className="text-xs text-muted-foreground">
+                  <summary className="cursor-pointer">Show LED ranges for {ranges.length} zones</summary>
+                  <ol className="mt-2 grid max-h-36 grid-cols-2 gap-x-4 gap-y-1 overflow-y-auto sm:grid-cols-3">
+                    {ranges.map((range) => <li key={range.index}>Zone {range.index}: LEDs {range.firstPixel}–{range.lastPixel}</li>)}
+                  </ol>
+                </details>
+              </div>
+            })()}
             <div className="grid grid-cols-2 gap-3">
               <Field label="Voltage (V)"><Input type="number" min={0.1} step={0.1} inputMode="decimal" value={output.voltage_v} aria-invalid={errors.outputs?.[index]?.voltage_v ? true : undefined} onChange={(event) => updateOutput(index, { voltage_v: Number(event.target.value) })} />{errors.outputs?.[index]?.voltage_v && <InlineError message={errors.outputs[index]?.voltage_v?.message} />}</Field>
               <Field label="Full-white current / pixel (mA)"><Input type="number" min={0.1} step={0.1} inputMode="decimal" value={output.full_white_current_a * 1000} aria-invalid={errors.outputs?.[index]?.full_white_current_a ? true : undefined} onChange={(event) => updateOutput(index, { full_white_current_a: Number(event.target.value) / 1000 })} />{errors.outputs?.[index]?.full_white_current_a && <InlineError message={errors.outputs[index]?.full_white_current_a?.message} />}</Field>

@@ -31,7 +31,12 @@ from lumistripe_web.runtime import (
     UnknownAnimationError,
     _default_controller_factory,
 )
-from lumistripe_web.runtime.worker import _frame_deadline_missed, _FrameTimingWindow
+from lumistripe_web.runtime.state import _CalibrationSession
+from lumistripe_web.runtime.worker import (
+    RuntimeWorker,
+    _frame_deadline_missed,
+    _FrameTimingWindow,
+)
 from lumistripe_web.settings import (
     AudioTuningProfile,
     CalibrationSettingsStore,
@@ -225,6 +230,212 @@ def test_power_budget_scales_rendered_frame_without_changing_requested_brightnes
         assert runtime.preview_frame().outputs[0][3] == 127
     finally:
         runtime.stop()
+
+
+@pytest.mark.parametrize("layout", ["mirrored", "continuous", "independent"])
+def test_zone_mapping_expands_physical_frames_for_every_layout(
+    tmp_path: Path, layout: str
+) -> None:
+    topology = StripeTopologySettings(
+        layout=layout,  # type: ignore[arg-type]
+        outputs=(
+            StripeOutputSettings(
+                id="left",
+                name="Left",
+                pixels=8,
+                zone_count=4,
+                zone_pattern="alternate",
+            ),
+            StripeOutputSettings(
+                id="right",
+                name="Right",
+                pixels=6,
+                spi_device="/dev/spidev1.0",
+                zone_count=3,
+            ),
+        ),
+    )
+    worker = RuntimeWorker(RuntimeSettings(settings_file=tmp_path / "settings.json"))
+    worker._topology = topology
+    worker._install_topology(worker._build_topology(topology))
+    try:
+        if layout == "continuous":
+            worker._raw_controller.set_pixels(
+                np.array(
+                    [[10, 0, 0, 255], [20, 0, 0, 255], [30, 0, 0, 255], [40, 0, 0, 255]],
+                    dtype=np.uint8,
+                )
+            )
+            expected_left = [10, 20, 20, 10, 10, 20, 20, 10]
+            expected_right = [30, 40, 30, 40, 30, 40]
+        elif layout == "mirrored":
+            worker._raw_controller.set_pixels(
+                np.array([[10, 0, 0, 255], [20, 0, 0, 255]], dtype=np.uint8)
+            )
+            expected_left = [10, 20, 20, 10, 10, 20, 20, 10]
+            expected_right = [10, 20, 10, 20, 10, 20]
+        else:
+            for renderer, values in zip(
+                worker._output_renderers,
+                ([10, 20], [30, 40]),
+                strict=True,
+            ):
+                renderer.set_pixels(
+                    np.array([[value, 0, 0, 255] for value in values], dtype=np.uint8)
+                )
+            expected_left = [10, 20, 20, 10, 10, 20, 20, 10]
+            expected_right = [30, 40, 30, 40, 30, 40]
+
+        worker._flush_power_limited_outputs()
+        worker._capture_preview_frame()
+
+        for index, expected in enumerate((expected_left, expected_right)):
+            assert worker._output_gates[index].length == len(expected)
+            np.testing.assert_array_equal(
+                worker._output_gates[index].pixels()[:, 0], expected
+            )
+            preview = worker.preview_frame().outputs[index]
+            assert len(preview) == len(expected) * 4
+            np.testing.assert_array_equal(
+                np.frombuffer(preview, dtype=np.uint8).reshape(-1, 4)[:, 0], expected
+            )
+    finally:
+        worker._cleanup()
+
+
+def test_zone_mapping_power_limit_and_blackout_use_expanded_physical_frame(
+    tmp_path: Path,
+) -> None:
+    topology = StripeTopologySettings(
+        outputs=(
+            StripeOutputSettings(
+                id="left",
+                name="Left",
+                pixels=8,
+                zone_count=4,
+            ),
+        ),
+        power_budget_enabled=True,
+        power_budget_watts=0.6,
+    )
+    worker = RuntimeWorker(RuntimeSettings(settings_file=tmp_path / "settings.json"))
+    worker._topology = topology
+    worker._install_topology(worker._build_topology(topology))
+    try:
+        worker._raw_controller.fill(Rgb(255, 255, 255))
+        worker._flush_power_limited_outputs()
+        worker._capture_preview_frame()
+
+        assert worker._power_budget_state.estimated_watts == pytest.approx(2.4)
+        assert worker._power_budget_state.applied_scale == pytest.approx(0.25)
+        physical = worker._output_gates[0].pixels()
+        assert physical.shape == (8, 4)
+        np.testing.assert_array_equal(physical[:, 3], np.full(8, 255, dtype=np.uint8))
+        preview = np.frombuffer(
+            worker.preview_frame().outputs[0], dtype=np.uint8
+        ).reshape(-1, 4)
+        assert preview.shape == (8, 4)
+        np.testing.assert_array_equal(preview[:, :3], np.full((8, 3), 255))
+        np.testing.assert_array_equal(preview[:, 3], np.full(8, 63, dtype=np.uint8))
+
+        assert worker._controller is not None
+        worker._controller.set_blackout(True)
+        worker._flush_power_limited_outputs()
+        worker._capture_preview_frame()
+        assert worker.preview_frame().outputs[0] == bytes(8 * 4)
+    finally:
+        worker._cleanup()
+
+
+def test_zone_mapping_wraps_static_and_dynamic_animation_frames(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.json"
+    CalibrationSettingsStore(path).save_stripes(
+        StripeTopologySettings(
+            outputs=(
+                StripeOutputSettings(
+                    id="zoned",
+                    name="Zoned",
+                    pixels=40,
+                    zone_count=4,
+                    zone_pattern="alternate",
+                ),
+            ),
+        )
+    )
+    runtime = LumiStripeRuntime(RuntimeSettings(pixels=40, settings_file=path))
+    runtime.start()
+    try:
+        runtime.select_animation("comet").result(timeout=1)
+
+        def current_zones(after_sequence: int) -> np.ndarray:
+            deadline = time.monotonic() + 2
+            frame = runtime.preview_frame()
+            while frame.sequence <= after_sequence:
+                assert time.monotonic() < deadline
+                time.sleep(0.01)
+                frame = runtime.preview_frame()
+            return np.frombuffer(frame.outputs[0], dtype=np.uint8).reshape(4, 10, 4)
+
+        static_zones = current_zones(0)
+        np.testing.assert_array_equal(static_zones[0], static_zones[2])
+        np.testing.assert_array_equal(static_zones[1], static_zones[3])
+        np.testing.assert_array_equal(static_zones[1], static_zones[0][::-1])
+
+        previous_sequence = runtime.preview_frame().sequence
+        runtime.set_mode(PlaybackMode.DYNAMIC).result(timeout=1)
+        dynamic_zones = current_zones(previous_sequence)
+        np.testing.assert_array_equal(dynamic_zones[0], dynamic_zones[2])
+        np.testing.assert_array_equal(dynamic_zones[1], dynamic_zones[3])
+        np.testing.assert_array_equal(dynamic_zones[1], dynamic_zones[0][::-1])
+    finally:
+        runtime.stop()
+
+
+def test_zone_mapping_keeps_calibration_and_identification_physical(
+    tmp_path: Path,
+) -> None:
+    topology = StripeTopologySettings(
+        outputs=(
+            StripeOutputSettings(
+                id="zoned",
+                name="Zoned",
+                pixels=8,
+                zone_count=4,
+            ),
+        ),
+    )
+    worker = RuntimeWorker(RuntimeSettings(settings_file=tmp_path / "settings.json"))
+    worker._topology = topology
+    worker._install_topology(worker._build_topology(topology))
+    try:
+        worker._test_stripe("zoned", "identify", None)
+
+        physical = worker._correction_controllers[0].pixels()
+        assert physical.shape == (8, 4)
+        assert np.count_nonzero(np.any(physical[:, :3] > 0, axis=1)) == 1
+        assert worker._output_renderers[0].length == 2
+
+        correction = worker._correction_controllers[0]
+        worker._calibration = _CalibrationSession(
+            session_id="calibration",
+            output_index=0,
+            pattern="red",
+            original_corrections=(correction.correction,),
+            original_frames=(correction.pixels().copy(),),
+            original_blackout=False,
+            last_activity_at=time.monotonic(),
+        )
+        worker._render_calibration_pattern()
+
+        assert correction.pixels().shape == (8, 4)
+        np.testing.assert_array_equal(
+            correction.pixels(),
+            np.tile(np.array([[255, 0, 0, 255]], dtype=np.uint8), (8, 1)),
+        )
+    finally:
+        worker._cleanup()
 
 
 @pytest.mark.parametrize(
