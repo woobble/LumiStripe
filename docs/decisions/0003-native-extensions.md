@@ -2,7 +2,7 @@
 
 `lumistripe-core` remains one distribution, but native extensions are opt-in
 profiles. The default `LUMISTRIPE_BUILD_EXTENSIONS=none` build is pure Python;
-`audio`, `gpio`, `spi`, and `all` select the corresponding extension set.
+`audio`, `gpio`, `spi`, `render`, and `all` select the corresponding extension set.
 Optional runtime dependencies remain package extras, while the build profile
 controls whether the C extension is compiled.
 
@@ -14,7 +14,7 @@ The source tree keeps a development symlink to the KISS FFT submodule. The
 custom sdist command copies the required sources into the release tree, which
 makes clean sdist builds independent of that symlink.
 
-CI builds the pure, audio, and all profiles on x86. The repository also has a
+CI builds the pure, audio, render, and all profiles on x86. The repository also has a
 persistent Raspberry Pi 5 arm64 runner with the custom GitHub Actions label
 `rpi5`. The ARM64 job builds the `all` profile, runs the complete core test
 suite, and verifies that the wheel contains native extensions and that the

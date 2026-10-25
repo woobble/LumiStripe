@@ -12,6 +12,7 @@ from ..audio.structure import MusicStructurePhase, MusicStructureState
 from ..audio.types import AudioFrame, AudioSnapshot, BeatClockState, BeatEvent
 from ..color import Rgba
 from ..controller import Controller
+from ..render import composite_screen_rgba_into
 from ..stripe import Stripe
 from .base import Effect
 
@@ -851,6 +852,7 @@ class LayeredRenderer:
     scheduler: EffectScheduler = field(default_factory=EffectScheduler)
     _base_buffer: Stripe | None = None
     _effect_buffers: list[Stripe] = field(default_factory=list)
+    _output_buffer: np.ndarray | None = None
 
     @property
     def active_effect_names(self) -> tuple[str, ...]:
@@ -863,6 +865,7 @@ class LayeredRenderer:
         self.scheduler.reset()
         self._base_buffer = None
         self._effect_buffers.clear()
+        self._output_buffer = None
 
     def render(
         self,
@@ -879,6 +882,7 @@ class LayeredRenderer:
             self._base_buffer = Stripe(controller.length)
             self._base_buffer.set_pixels(controller.pixels())
             self._effect_buffers.clear()
+            self._output_buffer = np.empty((controller.length, 4), dtype=np.uint8)
             self.scheduler.clear_active()
 
         transitioning = player.transition_active
@@ -936,31 +940,40 @@ class LayeredRenderer:
             + (1.0 - self.scheduler.quiet_floor) * snapshot.musical_impact
         )
         base_intensity *= modifiers.output_scale
-        composed = _visible_rgb(self._base_buffer.pixels()) * base_intensity
         budget = self.scheduler.config.max_overlay_strength
         used = 0.0
-        for pixels, requested_strength in layers:
+        first_pixels: np.ndarray | None = None
+        first_strength = 0.0
+        second_pixels: np.ndarray | None = None
+        second_strength = 0.0
+        for index, (pixels, requested_strength) in enumerate(layers):
             strength = min(requested_strength, max(budget - used, 0.0))
             if strength <= 0.0:
                 break
-            overlay = _visible_rgb(pixels) * strength
-            composed = 1.0 - (1.0 - composed) * (1.0 - overlay)
             used += strength
-
-        output = np.empty((controller.length, 4), dtype=np.uint8)
-        output[:, :3] = np.clip(composed * 255.0, 0.0, 255.0).astype(np.uint8)
-        output[:, 3] = 255
-        controller.set_pixels(output)
+            if index == 0:
+                first_pixels = pixels
+                first_strength = strength
+            else:
+                second_pixels = pixels
+                second_strength = strength
+        if self._output_buffer is None:
+            self._output_buffer = np.empty((controller.length, 4), dtype=np.uint8)
+        composite_screen_rgba_into(
+            self._base_buffer.pixels(),
+            self._output_buffer,
+            base_intensity,
+            first_pixels,
+            first_strength,
+            second_pixels,
+            second_strength,
+        )
+        controller.set_pixels(self._output_buffer)
         if player.transition_active:
             player.apply_transition(controller, now_s=now_s)
         if flush:
             controller.flush()
         return delay
-
-
-def _visible_rgb(pixels: np.ndarray) -> np.ndarray:
-    normalized = pixels.astype(np.float32) / 255.0
-    return normalized[:, :3] * normalized[:, 3:4]
 
 
 _TRANSPARENT = Rgba(0, 0, 0, 0.0)

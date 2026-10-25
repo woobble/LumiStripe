@@ -24,14 +24,11 @@ from lumistripe import (
     Controller,
     MultiController,
     NullController,
-    OutputPowerEstimate,
     ReversedController,
     Rgb,
     ScaledMultiController,
     Stripe,
     ZoneMappingController,
-    apply_power_budget,
-    estimate_frame_power,
 )
 from lumistripe.animation import AnimationPlayer
 from lumistripe.animation.catalog import (
@@ -99,8 +96,6 @@ from ..models import (
     ColorCorrectionProfile,
     DashboardState,
     DiagnosticIssue,
-    PowerBudgetState,
-    PowerOutputState,
     SequenceLibraryEntry,
     SequenceLibrarySummary,
     SequencePlaybackDiagnostics,
@@ -132,6 +127,11 @@ from ..spotify import (
 )
 from .audio import default_audio_factory
 from .audio_service import complete_audio_calibration, complete_microphone_calibration
+from .cadence import (
+    AUDIO_TELEMETRY_INTERVAL_SECONDS,
+    DASHBOARD_STATE_INTERVAL_SECONDS,
+    PREVIEW_FRAME_INTERVAL_SECONDS,
+)
 from .calibration_service import calibration_color
 from .commands import (
     _AnimationSettingsCommand,
@@ -157,7 +157,13 @@ from .commands import (
     _TargetCommand,
     _TransitionSettingsCommand,
 )
-from .outputs import OutputGateController
+from .outputs import (
+    OutputGateController,
+    _OutputFrameBuffers,
+    allocate_output_frame_buffers,
+    flush_power_limited_outputs,
+    power_budget_state_for,
+)
 from .playback_service import PlaybackPolicy, PlaybackPolicyError
 from .state import (
     CalibrationPattern,
@@ -182,6 +188,7 @@ from .topology import (
 # into focused runtime modules.
 _default_audio_factory = default_audio_factory
 _topology_from_runtime = topology_from_runtime
+_power_budget_state_for = power_budget_state_for
 
 
 def _default_controller_factory(settings: RuntimeSettings) -> Controller:
@@ -250,33 +257,6 @@ class AnimationSettingsPersistenceError(RuntimeCommandError):
 
 class RuntimeUnavailableError(RuntimeError):
     pass
-
-
-def _power_budget_state_for(
-    topology: StripeTopologySettings,
-    *,
-    estimated_watts: float = 0.0,
-    applied_scale: float = 1.0,
-    limiting_output_id: str | None = None,
-    outputs: tuple[PowerOutputState, ...] = (),
-) -> PowerBudgetState:
-    shared_supply_enabled = topology.shared_supply_enabled
-    return PowerBudgetState(
-        enabled=topology.power_limiting_enabled,
-        budget_watts=topology.effective_power_budget_watts,
-        estimated_watts=estimated_watts,
-        applied_scale=applied_scale,
-        limiting_output_id=limiting_output_id,
-        outputs=outputs,
-        shared_supply_enabled=shared_supply_enabled,
-        supply_capacity_watts=(
-            topology.supply_capacity_watts if shared_supply_enabled else None
-        ),
-        pi_reserve_watts=topology.pi_reserve_watts if shared_supply_enabled else None,
-        available_led_watts=(
-            topology.available_led_watts if shared_supply_enabled else None
-        ),
-    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -452,7 +432,11 @@ class RuntimeWorker:
         self._revision = 0
         self._preview_sequence = 0
         self._preview_outputs: tuple[bytes, ...] = ()
-        self._power_preview_override: tuple[bytes, ...] | None = None
+        self._pending_preview_frames: tuple[np.ndarray | None, ...] | None = None
+        self._output_frame_buffers: tuple[_OutputFrameBuffers, ...] = ()
+        self._last_dashboard_publication_at_s: float | None = None
+        self._last_audio_telemetry_publication_at_s: float | None = None
+        self._last_preview_publication_at_s: float | None = None
         self._power_budget_state = _power_budget_state_for(self._topology)
         self._snapshot = DashboardState(
             runtime=self.settings.kind,
@@ -1293,6 +1277,9 @@ class RuntimeWorker:
                         for controller in self._correction_controllers
                     )
                     self._output_renderers = ()
+                    self._output_frame_buffers = allocate_output_frame_buffers(
+                        self._output_gates, self._output_renderers
+                    )
                     self._sync_independent_playbacks()
             self._started_at_s = time.monotonic()
             self._fps_window_started_s = self._started_at_s
@@ -1446,6 +1433,9 @@ class RuntimeWorker:
         self._output_gates = built.outputs
         self._output_renderers = built.renderers
         self._correction_controllers = built.corrections
+        self._output_frame_buffers = allocate_output_frame_buffers(
+            built.outputs, built.renderers
+        )
         self._sync_independent_playbacks()
 
     def _sync_independent_playbacks(self) -> None:
@@ -1827,7 +1817,7 @@ class RuntimeWorker:
             self._playbacks.clear()
         self._topology = topology
         self._power_budget_state = _power_budget_state_for(topology)
-        self._power_preview_override = None
+        self._pending_preview_frames = None
         self._install_topology(built)
         try:
             with self._settings_io_lock:
@@ -1935,7 +1925,7 @@ class RuntimeWorker:
             raise RuntimeCommandError(f"temporary configuration failed: {exc}") from exc
         self._topology = topology
         self._power_budget_state = _power_budget_state_for(topology)
-        self._power_preview_override = None
+        self._pending_preview_frames = None
         self._install_topology(built)
 
     def _initialize_audio_monitor(self) -> None:
@@ -3112,6 +3102,7 @@ profile.audio_config(microphone=True),
                 controller.set_correction(correction)
 
         self._calibration = None
+        self._pending_preview_frames = None
         assert self._controller is not None
         if session.original_blackout:
             self._controller.set_blackout(True)
@@ -3137,6 +3128,7 @@ profile.audio_config(microphone=True),
         session = self._calibration
         if session is None:
             return
+        self._pending_preview_frames = None
         pattern = calibration_color(session.pattern)
         for index, controller in enumerate(self._correction_controllers):
             if index == session.output_index:
@@ -3218,9 +3210,8 @@ profile.audio_config(microphone=True),
                 self._stop_audio_sync_calibration()
             else:
                 self._render_sync_calibration_flash(now)
-                self._update_audio_telemetry()
                 self._record_frame()
-                self._publish(running=True)
+                self._publish_frame_updates()
                 return MIN_FRAME_SECONDS
 
         self._tick_audio_calibration()
@@ -3244,134 +3235,30 @@ profile.audio_config(microphone=True),
                 self._controller, snapshot=snapshot, flush=False
             )
         self._flush_power_limited_outputs()
-        self._update_audio_telemetry()
         self._record_frame()
-        self._publish(running=True)
+        self._publish_frame_updates()
         return max(delay, MIN_FRAME_SECONDS)
 
     def _flush_power_limited_outputs(self) -> None:
-        """Estimate the rendered frame, apply one cap, and flush each output once."""
-        gates = self._output_gates
-        if not gates:
-            assert self._controller is not None
-            self._controller.flush()
-            self._power_budget_state = _power_budget_state_for(self._topology)
-            self._power_preview_override = None
-            return
-
-        shared_blackout = (
-            self._topology.layout != "independent"
-            and self._controller is not None
-            and self._controller.blackout
-        )
-        raw = self._raw_controller
-        if len(self._output_renderers) == len(gates):
-            if self._topology.layout == "mirrored" and isinstance(
-                raw, ScaledMultiController
-            ):
-                mapped_frames = raw.output_pixels()
-                for renderer, frame in zip(
-                    self._output_renderers, mapped_frames, strict=True
-                ):
-                    renderer.set_pixels(frame)
-            for gate, renderer in zip(
-                gates, self._output_renderers, strict=True
-            ):
-                gate.set_pixels(renderer.output_pixels())
-        elif self._topology.layout == "mirrored" and isinstance(
-            raw, ScaledMultiController
-        ):
-            for gate, frame in zip(gates, raw.output_pixels(), strict=True):
-                gate.set_pixels(frame)
-
-        original_frames = [gate.pixels().copy() for gate in gates]
-
-        estimates: list[OutputPowerEstimate] = []
-        corrected_frames: list[np.ndarray] = []
-        for index, (output, gate) in enumerate(
-            zip(self._topology.outputs, gates, strict=True)
-        ):
-            frame = gate.pixels().copy()
-            corrected = frame.copy()
-            if index < len(self._correction_controllers):
-                correction = self._correction_controllers[index].correction
-                channels = np.array(
-                    (correction.red, correction.green, correction.blue),
-                    dtype=np.uint16,
-                )
-                corrected[:, :3] = (
-                    corrected[:, :3].astype(np.uint16) * channels // 255
-                ).astype(np.uint8)
-            corrected_frames.append(corrected)
-            watts = 0.0
-            if not shared_blackout and not gate.blackout:
-                watts = estimate_frame_power(
-                    corrected,
-                    voltage_v=output.voltage_v,
-                    full_white_current_a=output.full_white_current_a,
-                )
-            estimates.append(
-                OutputPowerEstimate(
-                    output_id=output.id,
-                    watts=watts,
-                    limit_watts=output.power_limit_watts,
-                )
+        self._power_budget_state, self._pending_preview_frames = (
+            flush_power_limited_outputs(
+                self._topology,
+                self._controller,
+                self._raw_controller,
+                self._output_gates,
+                self._output_renderers,
+                self._correction_controllers,
+                self._output_frame_buffers,
             )
-
-        result = apply_power_budget(
-            estimates,
-            enabled=self._topology.power_limiting_enabled and not shared_blackout,
-            budget_watts=self._topology.effective_power_budget_watts,
         )
-        self._power_budget_state = _power_budget_state_for(
-            self._topology,
-            estimated_watts=result.estimated_watts,
-            applied_scale=result.applied_scale,
-            limiting_output_id=result.limiting_output_id,
-            outputs=tuple(
-                PowerOutputState(
-                    output_id=estimate.output_id,
-                    estimated_watts=estimate.watts,
-                    limit_watts=estimate.limit_watts,
-                    applied_scale=result.applied_scale,
-                )
-                for estimate in result.outputs
-            ),
-        )
-
-        scaled_frames: list[np.ndarray] = []
-        try:
-            for index, (gate, frame) in enumerate(zip(gates, original_frames, strict=True)):
-                scaled = frame.copy()
-                if not shared_blackout and not gate.blackout:
-                    scaled[:, 3] = np.floor(
-                        scaled[:, 3].astype(np.float64) * result.applied_scale
-                    ).astype(np.uint8)
-                    gate.set_pixels(scaled)
-                    gate.flush()
-                    physical = corrected_frames[index].copy()
-                    physical[:, 3] = scaled[:, 3]
-                    scaled_frames.append(physical)
-                else:
-                    scaled_frames.append(np.zeros_like(frame))
-        finally:
-            for gate, frame in zip(gates, original_frames, strict=True):
-                gate.set_pixels(frame)
-
-        if shared_blackout:
-            self._power_preview_override = tuple(
-                bytes(output.pixels * 4) for output in self._topology.outputs
-            )
-        else:
-            self._power_preview_override = tuple(
-                self._preview_bytes(frame, index)
-                for index, frame in enumerate(scaled_frames)
-            )
 
     def _preview_bytes(self, pixels: np.ndarray, index: int) -> bytes:
-        frame = pixels.copy()
-        if index < len(self._topology.outputs) and self._topology.outputs[index].reversed:
-            frame = frame[::-1]
+        frame = (
+            pixels[::-1]
+            if index < len(self._topology.outputs)
+            and self._topology.outputs[index].reversed
+            else pixels
+        )
         return frame.tobytes()
 
     def _update_audio_telemetry(self) -> None:
@@ -3558,6 +3445,7 @@ profile.audio_config(microphone=True),
         )
         with self._snapshot_lock:
             self._audio_telemetry = telemetry
+        self._last_audio_telemetry_publication_at_s = time.monotonic()
 
     def _worker_heartbeat_age(self) -> float | None:
         with self._worker_state_lock:
@@ -3570,13 +3458,30 @@ profile.audio_config(microphone=True),
         with self._command_lock:
             return self._commands.qsize()
 
+    def _publish_frame_updates(self) -> None:
+        """Publish frame-derived state at the cadence consumed by each client."""
+        now = time.monotonic()
+        last_audio = self._last_audio_telemetry_publication_at_s
+        if last_audio is None or now - last_audio >= AUDIO_TELEMETRY_INTERVAL_SECONDS:
+            self._update_audio_telemetry()
+
+        last_preview = self._last_preview_publication_at_s
+        if last_preview is None or now - last_preview >= PREVIEW_FRAME_INTERVAL_SECONDS:
+            self._capture_preview_frame(use_pending=True)
+
+        last_dashboard = self._last_dashboard_publication_at_s
+        if last_dashboard is None or now - last_dashboard >= DASHBOARD_STATE_INTERVAL_SECONDS:
+            self._publish(running=True, capture_preview=False)
+
     def _publish(
         self,
         *,
         running: bool,
         error: str | None = None,
+        capture_preview: bool = True,
     ) -> DashboardState:
-        self._capture_preview_frame()
+        if capture_preview:
+            self._capture_preview_frame()
         if self._audio_calibration is not None:
             self._publish_audio_calibration(self._audio_calibration.session_id)
         else:
@@ -3650,21 +3555,36 @@ profile.audio_config(microphone=True),
             self._animation_settings_snapshot = (
                 self._build_animation_settings_snapshot()
             )
+        self._last_dashboard_publication_at_s = time.monotonic()
         return state
 
-    def _capture_preview_frame(self) -> None:
+    def _capture_preview_frame(self, *, use_pending: bool = True) -> None:
         """Copy output pixels before publishing a frame to WebSocket clients.
 
         The animation thread owns the live NumPy buffers. Keeping immutable byte
         copies here lets the async API serve a frame without racing a render or
         holding the runtime thread while a network client is slow.
         """
-        if self._power_preview_override is not None:
-            override = self._power_preview_override
-            self._power_preview_override = None
+        pending = self._pending_preview_frames if use_pending else None
+        if pending is not None:
+            shared_blackout = (
+                self._topology.layout != "independent"
+                and self._controller is not None
+                and self._controller.blackout
+            )
+            pending_outputs: list[bytes] = []
+            for index, pixels in enumerate(pending):
+                gate_blackout = index < len(self._output_gates) and self._output_gates[index].blackout
+                if shared_blackout or gate_blackout or pixels is None:
+                    length = self._output_gates[index].length
+                    pending_outputs.append(bytes(length * 4))
+                else:
+                    pending_outputs.append(self._preview_bytes(pixels, index))
             with self._preview_lock:
                 self._preview_sequence += 1
-                self._preview_outputs = override
+                self._preview_outputs = tuple(pending_outputs)
+            self._pending_preview_frames = None
+            self._last_preview_publication_at_s = time.monotonic()
             return
         outputs: list[bytes] = []
         gates = self._output_gates
@@ -3698,6 +3618,7 @@ profile.audio_config(microphone=True),
         with self._preview_lock:
             self._preview_sequence += 1
             self._preview_outputs = tuple(outputs)
+        self._last_preview_publication_at_s = time.monotonic()
 
     def _output_backend_label(self) -> str:
         if not self.settings.hardware:

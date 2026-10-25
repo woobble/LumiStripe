@@ -62,6 +62,26 @@ class GreenEffect(Effect):
         controller.fill(Rgba(0, 255, 0, 1.0))
 
 
+@dataclass(slots=True)
+class BlueEffect(Effect):
+    @property
+    def name(self) -> str:
+        return "blue_effect"
+
+    def tick(self, frame: int, controller: Controller) -> None:
+        controller.fill(Rgba(0, 0, 255, 1.0))
+
+
+@dataclass(slots=True)
+class Black(Animation):
+    @property
+    def name(self) -> str:
+        return "black"
+
+    def tick(self, frame: int, controller: Controller) -> None:
+        controller.fill(Rgb(0, 0, 0))
+
+
 def _event_snapshot() -> AudioSnapshot:
     frame = AudioFrame(
         rms=0.8,
@@ -702,6 +722,57 @@ def test_layered_renderer_composes_base_and_two_effects() -> None:
     assert len(renderer.active_effect_names) == 2
     assert stripe.pixels()[:, :3].max() > 0
     np.testing.assert_array_equal(stripe.pixels()[:, 3], np.full(42, 255))
+
+
+def test_layered_renderer_reuses_composition_output_until_length_changes() -> None:
+    player = AnimationPlayer()
+    player.add(Red(), 50, 10)
+    renderer = LayeredRenderer(EffectScheduler(EffectSchedulerConfig(seed=2)))
+    stripe = Stripe(4)
+    snapshot = AudioSnapshot.from_parts(AudioFrame(fresh=True), MusicFeatures())
+
+    renderer.render(player, stripe, snapshot, now_s=1.0, flush=False)
+    output = renderer._output_buffer
+    renderer.render(player, stripe, snapshot, now_s=1.01, flush=False)
+
+    assert renderer._output_buffer is output
+    assert output is not None
+    assert output.shape == (4, 4)
+    renderer.render(player, Stripe(8), snapshot, now_s=1.02, flush=False)
+    assert renderer._output_buffer is not output
+    assert renderer._output_buffer is not None
+    assert renderer._output_buffer.shape == (8, 4)
+
+
+def test_layered_renderer_preserves_overlay_order_and_strength_budget() -> None:
+    player = AnimationPlayer(transition_ms=0)
+    player.add(Black(), 50, 10)
+    renderer = LayeredRenderer(
+        EffectScheduler(EffectSchedulerConfig(seed=2, max_overlay_strength=0.75))
+    )
+    snapshot = AudioSnapshot.from_parts(AudioFrame(), MusicFeatures(musical_impact=1.0))
+    stripe = Stripe(1)
+    renderer.render(player, stripe, snapshot, now_s=0.0, flush=False)
+    renderer.scheduler.active.extend(
+        (
+            ActiveEffect(
+                EffectDefinition("green", EffectCategory.RHYTHMIC, 10.0, 0.5),
+                GreenEffect(),
+                0.0,
+                snapshot.frame,
+            ),
+            ActiveEffect(
+                EffectDefinition("blue", EffectCategory.ACCENT, 10.0, 0.5),
+                BlueEffect(),
+                0.0,
+                snapshot.frame,
+            ),
+        )
+    )
+
+    renderer.render(player, stripe, snapshot, now_s=1.0, flush=False)
+
+    np.testing.assert_array_equal(stripe.pixels()[0], [0, 127, 63, 255])
 
 
 def test_layered_renderer_keeps_quiet_base_but_reserves_full_brightness_for_peaks() -> None:

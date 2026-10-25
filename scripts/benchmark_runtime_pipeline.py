@@ -17,12 +17,14 @@ import resource
 import tempfile
 import time
 import tracemalloc
-from collections.abc import Callable
+from collections import deque
+from collections.abc import Callable, Iterable
 from math import ceil
 from pathlib import Path
 from typing import Any
 
 from lumistripe.playback import PlaybackMode
+from lumistripe.render import kernels as render_kernels
 from lumistripe_web.runtime import LumiStripeRuntime, RuntimeSettings
 from lumistripe_web.settings import (
     CalibrationSettingsStore,
@@ -37,10 +39,11 @@ _STAGES = (
     "_update_audio_telemetry",
     "_capture_preview_frame",
     "_publish",
+    "_publish_frame_updates",
 )
 
 
-def percentile(values: list[float], quantile: float) -> float:
+def percentile(values: Iterable[float], quantile: float) -> float:
     """Return a nearest-rank percentile from non-empty samples."""
 
     if not values:
@@ -50,7 +53,7 @@ def percentile(values: list[float], quantile: float) -> float:
     return ordered[index]
 
 
-def summarize(values: list[float]) -> dict[str, float]:
+def summarize(values: Iterable[float]) -> dict[str, float]:
     return {
         "p50": percentile(values, 0.50),
         "p95": percentile(values, 0.95),
@@ -124,8 +127,15 @@ def _topology(
     )
 
 
-def _install_timers(runtime: LumiStripeRuntime) -> dict[str, list[float]]:
-    timings: dict[str, list[float]] = {stage: [] for stage in _STAGES}
+def _install_timers(
+    runtime: LumiStripeRuntime,
+    *,
+    sample_limit: int | None = None,
+) -> tuple[dict[str, deque[float]], dict[str, int]]:
+    timings = {
+        stage: deque[float](maxlen=sample_limit) for stage in _STAGES
+    }
+    counts = dict.fromkeys(_STAGES, 0)
     for stage in _STAGES:
         original = getattr(runtime, stage)
 
@@ -140,9 +150,10 @@ def _install_timers(runtime: LumiStripeRuntime) -> dict[str, list[float]]:
                 return _original(*args, **kwargs)
             finally:
                 timings[_stage].append((time.perf_counter_ns() - started) / 1_000_000.0)
+                counts[_stage] += 1
 
         setattr(runtime, stage, timed)
-    return timings
+    return timings, counts
 
 
 def _run_case(
@@ -195,7 +206,10 @@ def _run_case(
                     settings_file=settings_file,
                 )
             )
-            timings = _install_timers(runtime)
+            timings, timing_counts = _install_timers(
+                runtime,
+                sample_limit=512 if duration_s >= 10.0 else None,
+            )
             runtime.start()
             if mode == "dynamic":
                 runtime.set_mode(PlaybackMode.DYNAMIC).result(timeout=5.0)
@@ -203,6 +217,7 @@ def _run_case(
 
             for samples in timings.values():
                 samples.clear()
+            timing_counts.update(dict.fromkeys(_STAGES, 0))
             with runtime._worker_state_lock:
                 missed_before = runtime._missed_frame_count
             if trace_allocations:
@@ -211,13 +226,28 @@ def _run_case(
 
             cpu_before = time.process_time()
             started = time.monotonic()
-            time.sleep(duration_s)
+            rss_samples: list[float] = []
+            if duration_s >= 10.0:
+                initial_sample = _rss_mb()
+                if initial_sample is not None:
+                    rss_samples.append(initial_sample)
+                deadline = started + duration_s
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0.0:
+                        break
+                    time.sleep(min(1.0, remaining))
+                    sample = _rss_mb()
+                    if sample is not None:
+                        rss_samples.append(sample)
+            else:
+                time.sleep(duration_s)
             elapsed = time.monotonic() - started
             cpu_seconds = time.process_time() - cpu_before
             with runtime._worker_state_lock:
                 missed_after = runtime._missed_frame_count
                 expected_interval_s = runtime._last_step_expected_delay_s
-            step_samples = timings["_step"]
+            measured_frames = timing_counts["_step"]
             preview = runtime.preview_frame()
             metrics: dict[str, object] = {
                 "led_count": led_count,
@@ -228,16 +258,24 @@ def _run_case(
                 "power_budget_watts": power_budget_watts if power_limit else None,
                 "hardware_output_enabled": hardware,
                 "duration_seconds": elapsed,
-                "frames": len(step_samples),
-                "effective_fps": len(step_samples) / max(elapsed, 1e-9),
+                "frames": measured_frames,
+                "effective_fps": measured_frames / max(elapsed, 1e-9),
                 "expected_interval_ms": expected_interval_s * 1000.0,
                 "missed_deadlines": missed_after - missed_before,
                 "missed_deadline_rate": (missed_after - missed_before)
-                / max(len(step_samples), 1),
+                / max(measured_frames, 1),
                 "cpu_utilization_percent": cpu_seconds / max(elapsed, 1e-9) * 100.0,
                 "rss_start_mb": start_rss,
                 "rss_end_mb": _rss_mb(),
+                "rss_samples_mb": rss_samples,
                 "preview_sequence": preview.sequence,
+                "applied_power_scale": runtime._power_budget_state.applied_scale,
+                "stage_sample_counts": {
+                    stage: timing_counts[stage] for stage in timings
+                },
+                "timing_samples_retained": {
+                    stage: len(samples) for stage, samples in timings.items()
+                },
                 "timings_ms": {
                     stage: summarize(samples) for stage, samples in timings.items()
                 },
@@ -274,6 +312,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup", type=float, default=1.0)
     parser.add_argument("--duration", type=float, default=3.0)
     parser.add_argument("--trace-allocations", action="store_true")
+    parser.add_argument(
+        "--disable-native-render",
+        action="store_true",
+        help="force NumPy rendering kernels for native-versus-fallback comparisons",
+    )
     parser.add_argument(
         "--hardware",
         action="store_true",
@@ -318,6 +361,8 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
+    if args.disable_native_render:
+        render_kernels._native_module = None
     cases = [
         _run_case(
             led_count=led_count,
@@ -353,6 +398,7 @@ def main() -> int:
             "hardware_output_enabled": args.hardware,
             "audio_type": args.audio_source
             or "off for static and synthetic demo for dynamic cases",
+            "render_native_enabled": render_kernels._native_module is not None,
             "allocation_tracing": args.trace_allocations,
         },
         "case_count": len(cases),

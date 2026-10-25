@@ -42,7 +42,8 @@ The runtime package is organized around this ownership boundary:
 - `runtime/state.py`: settings, snapshots, sessions, and factory protocols
 - `runtime/audio.py`: audio input construction
 - `runtime/topology.py`: controller and persisted topology construction
-- `runtime/outputs.py`: output gates and frame ownership
+- `runtime/outputs.py`: output gates, power-limited frame processing, and reusable buffers
+- `runtime/cadence.py`: shared dashboard, audio, and preview publication rates
 - `runtime/__init__.py`: façade, worker loop, and orchestration
 
 The API package follows the same feature boundary:
@@ -89,7 +90,7 @@ new integrations should use narrower modules:
 - `lumistripe.effects.definitions`, `.scheduler`, and `.renderer`
 - `lumistripe.output`
 
-The core package is pure Python by default. Native audio, GPIO, and SPI
+The core package is pure Python by default. Native audio, GPIO, SPI, and render
 extensions are selected explicitly with `LUMISTRIPE_BUILD_EXTENSIONS`, and
 optimized `-march=native` builds are reserved for device-local use. See
 `docs/decisions/0003-native-extensions.md` for the release and CI policy.

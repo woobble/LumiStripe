@@ -3,7 +3,7 @@
 `lumistripe` provides an in-memory `Stripe` controller for testing and
 animation work, a hardware-backed `SPIStripe`, and the legacy `GPIOStripe`.
 
-The default distribution is pure Python. Native audio, GPIO, and SPI
+The default distribution is pure Python. Native audio, GPIO, SPI, and render
 extensions are opt-in build profiles so a wheel built on a workstation does
 not accidentally contain machine-specific hardware code:
 
@@ -15,6 +15,7 @@ uv build --package lumistripe-core
 LUMISTRIPE_BUILD_EXTENSIONS=audio uv build --package lumistripe-core
 LUMISTRIPE_BUILD_EXTENSIONS=gpio uv build --package lumistripe-core
 LUMISTRIPE_BUILD_EXTENSIONS=spi uv build --package lumistripe-core
+LUMISTRIPE_BUILD_EXTENSIONS=render uv build --package lumistripe-core
 LUMISTRIPE_BUILD_EXTENSIONS=all uv build --package lumistripe-core
 ```
 

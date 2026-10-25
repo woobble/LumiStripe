@@ -379,6 +379,28 @@ def test_scaled_multi_controller_maps_endpoints_across_unequal_lengths() -> None
     np.testing.assert_array_equal(short.pixels()[:, 0], [0, 2, 4])
 
 
+def test_scaled_multi_controller_maps_into_reusable_destinations() -> None:
+    controller = ScaledMultiController([Stripe(3), Stripe(5)])
+    frame = np.array([[index, 0, 0, 255] for index in range(5)], dtype=np.uint8)
+    destinations = (
+        np.empty((3, 4), dtype=np.uint8),
+        np.empty((5, 4), dtype=np.uint8),
+    )
+    controller.set_pixels(frame)
+
+    mapped = controller.output_pixels_into(destinations)
+    assert mapped[0] is destinations[0]
+    assert mapped[1] is destinations[1]
+    np.testing.assert_array_equal(mapped[0][:, 0], [0, 2, 4])
+    np.testing.assert_array_equal(mapped[1], frame)
+
+    controller.set_pixels(frame + np.array([10, 0, 0, 0], dtype=np.uint8))
+    controller.output_pixels_into(destinations)
+    np.testing.assert_array_equal(destinations[0][:, 0], [10, 12, 14])
+    with pytest.raises(ValueError, match="destination count"):
+        controller.output_pixels_into(destinations[:1])
+
+
 def test_null_controller_keeps_runtime_frame_without_output() -> None:
     controller = NullController()
     controller.fill(Rgb(3, 4, 5))

@@ -9,11 +9,16 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, WebSocketExceptio
 from ...auth import SESSION_COOKIE, PairingAuth
 from ...contracts.audio import AudioTelemetry
 from ...runtime import LumiStripeRuntime
+from ...runtime.cadence import (
+    AUDIO_TELEMETRY_INTERVAL_SECONDS,
+    DASHBOARD_STATE_INTERVAL_SECONDS,
+    PREVIEW_FRAME_INTERVAL_SECONDS,
+)
 from ..protocols.preview import encode_preview_frame
 
-WEBSOCKET_INTERVAL_SECONDS = 0.25
-AUDIO_WEBSOCKET_INTERVAL_SECONDS = 1.0 / 15.0
-PREVIEW_WEBSOCKET_INTERVAL_SECONDS = 1.0 / 30.0
+WEBSOCKET_INTERVAL_SECONDS = DASHBOARD_STATE_INTERVAL_SECONDS
+AUDIO_WEBSOCKET_INTERVAL_SECONDS = AUDIO_TELEMETRY_INTERVAL_SECONDS
+PREVIEW_WEBSOCKET_INTERVAL_SECONDS = PREVIEW_FRAME_INTERVAL_SECONDS
 
 router = APIRouter()
 

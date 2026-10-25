@@ -152,7 +152,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        profile: [none, audio, all]
+        profile: [none, audio, render, all]
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -188,12 +188,41 @@ jobs:
           profile = os.environ["PROFILE"]
           wheel = next(Path("dist", profile).glob("*.whl"))
           with ZipFile(wheel) as archive:
-              has_native = any(name.endswith(".so") for name in archive.namelist())
-          expected = profile != "none"
-          if has_native != expected:
+              actual = {
+                  f"{Path(name).parent.as_posix()}/{Path(name).name.split('.')[0]}"
+                  for name in archive.namelist()
+                  if name.endswith(".so")
+              }
+          expected = {
+              "none": set(),
+              "audio": {"lumistripe/audio/_audio"},
+              "gpio": {"lumistripe/gpio/_gpiomem"},
+              "spi": {"lumistripe/gpio/_sm16716"},
+              "render": {"lumistripe/render/_native"},
+              "all": {
+                  "lumistripe/audio/_audio",
+                  "lumistripe/gpio/_gpiomem",
+                  "lumistripe/gpio/_sm16716",
+                  "lumistripe/render/_native",
+              },
+          }[profile]
+          if actual != expected:
               raise SystemExit(
-                  f"profile {profile!r}: native extension presence {has_native}, expected {expected}"
+                  f"profile {profile!r}: extensions {sorted(actual)}, expected {sorted(expected)}"
               )
+          PY
+
+      - name: Verify render source is included in the source distribution
+        if: matrix.profile == 'render' || matrix.profile == 'all'
+        run: |
+          python - <<'PY'
+          import tarfile
+          from pathlib import Path
+
+          archive = next(Path("dist", "${{ matrix.profile }}").glob("*.tar.gz"))
+          with tarfile.open(archive, "r:gz") as source:
+              if not any(name.endswith("/src/lumistripe/render/_native.c") for name in source.getnames()):
+                  raise SystemExit("render extension source is missing from the sdist")
           PY
 
   raspberry-pi:

@@ -15,7 +15,7 @@ requested_extensions = {
     for item in os.environ.get("LUMISTRIPE_BUILD_EXTENSIONS", "none").split(",")
     if item.strip()
 }
-valid_extensions = {"none", "audio", "gpio", "spi", "all"}
+valid_extensions = {"none", "audio", "gpio", "spi", "render", "all"}
 unknown_extensions = requested_extensions - valid_extensions
 if unknown_extensions:
     raise RuntimeError(
@@ -58,6 +58,14 @@ ext_sm16716 = Extension(
     extra_link_args=native_link_flags,
 )
 
+ext_render = Extension(
+    "lumistripe.render._native",
+    sources=["src/lumistripe/render/_native.c"],
+    include_dirs=[numpy.get_include()],
+    extra_compile_args=native_compile_flags,
+    extra_link_args=native_link_flags,
+)
+
 kissfft_root = KISSFFT_PACKAGE if (KISSFFT_PACKAGE / "kiss_fft.c").exists() else KISSFFT_SOURCE
 
 
@@ -86,6 +94,8 @@ if build_all_extensions or "spi" in requested_extensions:
     extensions.append(ext_sm16716)
 if build_all_extensions or "audio" in requested_extensions:
     extensions.append(ext_audio)
+if build_all_extensions or "render" in requested_extensions:
+    extensions.append(ext_render)
 
 
 class SourceDistribution(_sdist):

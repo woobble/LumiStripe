@@ -399,6 +399,9 @@ class ScaledMultiController(Controller):
             else np.array([0], dtype=np.intp)
             for controller in controllers
         )
+        self._output_buffers = tuple(
+            np.empty((indices.size, 4), dtype=np.uint8) for indices in self._indices
+        )
 
     @property
     def controllers(self) -> tuple[Controller, ...]:
@@ -407,6 +410,18 @@ class ScaledMultiController(Controller):
     def output_pixels(self) -> tuple[PixelBuffer, ...]:
         """Return the mapped frame for each physical child without flushing."""
         return tuple(self._pixels[indices] for indices in self._indices)
+
+    def output_pixels_into(self, destinations: Sequence[PixelBuffer]) -> tuple[PixelBuffer, ...]:
+        """Map the frame into caller-owned output buffers without allocating."""
+        if len(destinations) != len(self._indices):
+            raise ValueError("destination count must match the number of child controllers")
+        for indices, destination in zip(self._indices, destinations, strict=True):
+            if destination.dtype != np.uint8 or destination.shape != (indices.size, 4):
+                raise ValueError("each destination must be a uint8 array matching its output length")
+            if not destination.flags.c_contiguous or not destination.flags.writeable:
+                raise ValueError("destinations must be writable and C-contiguous")
+            np.take(self._pixels, indices, axis=0, out=destination)
+        return tuple(destinations)
 
     @property
     def length(self) -> int:
@@ -445,8 +460,11 @@ class ScaledMultiController(Controller):
             controller.close()
 
     def _copy_and_flush(self, force: bool) -> None:
-        for controller, indices in zip(self._controllers, self._indices, strict=True):
-            controller.set_pixels(self._pixels[indices])
+        for controller, indices, output in zip(
+            self._controllers, self._indices, self._output_buffers, strict=True
+        ):
+            np.take(self._pixels, indices, axis=0, out=output)
+            controller.set_pixels(output)
             controller.force_flush() if force else controller.flush()
 
 

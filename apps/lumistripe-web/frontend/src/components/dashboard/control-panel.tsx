@@ -1,4 +1,5 @@
 import { lazy, memo, Suspense, useState } from "react"
+import type { ComponentProps } from "react"
 import { ActivityIcon, ListRestartIcon, Music2Icon, PaletteIcon, PowerIcon, RadioIcon, SunMediumIcon } from "lucide-react"
 import { HexColorPicker } from "react-colorful"
 
@@ -11,9 +12,10 @@ import { Slider } from "@/components/ui/slider"
 import { Toggle } from "@/components/ui/toggle"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { usePreviewStream } from "@/hooks/use-preview-stream"
+import { PreviewStreamProvider } from "@/hooks/preview-stream-provider"
+import { usePreviewStreamContext } from "@/hooks/preview-stream-context"
 import type { DashboardController } from "@/hooks/use-dashboard"
-import type { PlaybackMode } from "@/lib/api"
+import type { DashboardState, PlaybackMode } from "@/lib/api"
 
 const LivePreview = lazy(async () => {
   const module = await import("@/components/dashboard/live-preview")
@@ -26,6 +28,40 @@ const modes: Array<{ value: PlaybackMode; label: string; icon: typeof RadioIcon 
   { value: "cycling", label: "Cycle", icon: ListRestartIcon },
   { value: "dynamic", label: "Music", icon: Music2Icon },
 ]
+
+function StreamedLivePreview({
+  state,
+  onDisable,
+}: {
+  state: DashboardState
+  onDisable: () => void
+}) {
+  const { frame, connection } = usePreviewStreamContext()
+  return (
+    <LivePreview
+      state={state}
+      frame={frame}
+      connection={connection}
+      onDisable={onDisable}
+    />
+  )
+}
+
+type StreamedAnimationSheetProps = Omit<
+  ComponentProps<typeof AnimationSheet>,
+  "previewFrame" | "previewConnection"
+>
+
+function StreamedAnimationSheet(props: StreamedAnimationSheetProps) {
+  const { frame, connection } = usePreviewStreamContext()
+  return (
+    <AnimationSheet
+      {...props}
+      previewFrame={frame}
+      previewConnection={connection}
+    />
+  )
+}
 
 const solidPresets = ["#EF4444", "#F59E0B", "#22C55E", "#06B6D4", "#3B82F6", "#8B5CF6"]
 
@@ -89,9 +125,6 @@ export function ControlPanel({ controller }: { controller: DashboardController }
   const [target, setTarget] = useState("all")
   const [previewEnabled, setPreviewEnabled] = useState(false)
   const [animationEditorVisible, setAnimationEditorVisible] = useState(false)
-  const { frame: previewFrame, connection: previewConnection } = usePreviewStream(
-    Boolean(previewEnabled && state?.running),
-  )
 
   if (!state) return null
   const disabled = !state.running || pendingCommand !== null
@@ -136,13 +169,12 @@ export function ControlPanel({ controller }: { controller: DashboardController }
   }
 
   return (
+    <PreviewStreamProvider enabled={Boolean(previewEnabled && state.running)}>
     <div className="space-y-4 pb-4">
       {previewEnabled && !animationEditorVisible ? (
         <Suspense fallback={<div className="h-64 animate-pulse rounded-2xl border border-white/5 bg-card/80" aria-label="Loading live preview" />}>
-          <LivePreview
+          <StreamedLivePreview
             state={state}
-            frame={previewFrame}
-            connection={previewConnection}
             onDisable={() => setPreviewEnabled(false)}
           />
         </Suspense>
@@ -292,7 +324,7 @@ export function ControlPanel({ controller }: { controller: DashboardController }
               disabled={disabled || pendingCommand === "solidColor"}
             />
           ) : (
-            <AnimationSheet
+            <StreamedAnimationSheet
               animations={animations}
               current={animation}
               disabled={disabled || pendingCommand === "animation"}
@@ -306,8 +338,6 @@ export function ControlPanel({ controller }: { controller: DashboardController }
               onLoadSettings={controller.getAnimationSettings}
               onSaveSettings={controller.setAnimationSettings}
               previewEnabled={previewEnabled}
-              previewFrame={previewFrame}
-              previewConnection={previewConnection}
               previewTopology={state.stripe_topology}
               onEnablePreview={() => setPreviewEnabled(true)}
               onDisablePreview={() => setPreviewEnabled(false)}
@@ -342,5 +372,6 @@ export function ControlPanel({ controller }: { controller: DashboardController }
         onSetActiveSequence={controller.setActiveSequence}
       />
     </div>
+    </PreviewStreamProvider>
   )
 }

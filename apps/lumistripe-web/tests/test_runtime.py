@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 import lumistripe_web.runtime as runtime_module
+import lumistripe_web.runtime.worker as worker_implementation
 import numpy as np
 import pytest
 from lumistripe import (
@@ -30,6 +31,11 @@ from lumistripe_web.runtime import (
     RuntimeSettings,
     UnknownAnimationError,
     _default_controller_factory,
+)
+from lumistripe_web.runtime.cadence import (
+    AUDIO_TELEMETRY_INTERVAL_SECONDS,
+    DASHBOARD_STATE_INTERVAL_SECONDS,
+    PREVIEW_FRAME_INTERVAL_SECONDS,
 )
 from lumistripe_web.runtime.state import _CalibrationSession
 from lumistripe_web.runtime.worker import (
@@ -201,6 +207,52 @@ def test_renderer_deadline_diagnostic_uses_recent_miss_rate() -> None:
     )
     assert "6 of the last 42 frames" in issue.message
     assert "947 misses have been recorded since startup" in issue.message
+
+
+def test_frame_publications_follow_client_cadences(monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime = RuntimeWorker(RuntimeSettings(pixels=2))
+    now = [0.0]
+    events: list[str] = []
+    runtime._last_audio_telemetry_publication_at_s = 0.0
+    runtime._last_dashboard_publication_at_s = 0.0
+    runtime._last_preview_publication_at_s = 0.0
+    monkeypatch.setattr(worker_implementation.time, "monotonic", lambda: now[0])
+
+    def publish_telemetry() -> None:
+        events.append("audio")
+        runtime._last_audio_telemetry_publication_at_s = now[0]
+
+    def capture_preview(*, use_pending: bool = False) -> None:
+        assert use_pending
+        events.append("preview")
+        runtime._last_preview_publication_at_s = now[0]
+
+    def publish_state(**kwargs: object) -> None:
+        assert kwargs == {"running": True, "capture_preview": False}
+        events.append("state")
+        runtime._last_dashboard_publication_at_s = now[0]
+
+    monkeypatch.setattr(runtime, "_update_audio_telemetry", publish_telemetry)
+    monkeypatch.setattr(runtime, "_capture_preview_frame", capture_preview)
+    monkeypatch.setattr(runtime, "_publish", publish_state)
+
+    now[0] = 0.01
+    runtime._publish_frame_updates()
+    assert events == []
+
+    now[0] = DASHBOARD_STATE_INTERVAL_SECONDS
+    runtime._publish_frame_updates()
+    assert events == ["audio", "preview", "state"]
+
+    events.clear()
+    now[0] += PREVIEW_FRAME_INTERVAL_SECONDS + 0.001
+    runtime._publish_frame_updates()
+    assert events == ["preview"]
+
+    events.clear()
+    now[0] = DASHBOARD_STATE_INTERVAL_SECONDS + AUDIO_TELEMETRY_INTERVAL_SECONDS + 0.002
+    runtime._publish_frame_updates()
+    assert events == ["audio", "preview"]
 
 
 def test_power_budget_scales_rendered_frame_without_changing_requested_brightness(
@@ -559,12 +611,12 @@ def test_preview_frame_applies_correction_reversal_and_blackout(tmp_path: Path) 
             np.array([[10, 20, 30, 255], [100, 110, 120, 255]], dtype=np.uint8)
         )
         correction.force_flush()
-        runtime._capture_preview_frame()
+        runtime._capture_preview_frame(use_pending=False)
 
         assert runtime.preview_frame().outputs[0] == bytes((50, 110, 120, 255, 5, 20, 30, 255))
 
         runtime._output_gates[0].set_blackout(True)
-        runtime._capture_preview_frame()
+        runtime._capture_preview_frame(use_pending=False)
         assert runtime.preview_frame().outputs[0] == bytes(8)
     finally:
         runtime.stop()
