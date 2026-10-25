@@ -22,13 +22,15 @@ export function AudioOutputControls({
   status,
   busy,
   onAction,
+  variant = "setup",
 }: {
   status: BluetoothStatusResponse | null
   busy: boolean
   onAction: (action: BluetoothAction, operation: () => Promise<BluetoothStatusResponse>) => Promise<BluetoothStatusResponse | null>
+  variant?: "setup" | "compact"
 }) {
   const selector = status?.default_sink ?? status?.output_devices[0]?.selector ?? ""
-  return <AudioOutputControlsForSelector key={selector} status={status} busy={busy} onAction={onAction} selector={selector} />
+  return <AudioOutputControlsForSelector key={selector} status={status} busy={busy} onAction={onAction} selector={selector} variant={variant} />
 }
 
 function AudioOutputControlsForSelector({
@@ -36,21 +38,33 @@ function AudioOutputControlsForSelector({
   busy,
   onAction,
   selector,
+  variant,
 }: {
   status: BluetoothStatusResponse | null
   busy: boolean
   onAction: (action: BluetoothAction, operation: () => Promise<BluetoothStatusResponse>) => Promise<BluetoothStatusResponse | null>
   selector: string
+  variant: "setup" | "compact"
 }) {
   const [volumeDraft, setVolumeDraft] = useState<number | null>(null)
   const selectedOutput = status?.output_devices.find((device) => device.selector === selector)
   const confirmedVolume = selectedOutput?.volume ?? status?.output_volume ?? null
   const volume = volumeDraft ?? confirmedVolume ?? 0
+  const isDefaultOutput = selectedOutput !== undefined && status?.default_sink === selectedOutput.selector
+  const outputConnection = !selectedOutput
+    ? "Unavailable"
+    : !selectedOutput.connected
+      ? "Disconnected"
+      : isDefaultOutput && !status?.output_ready
+        ? "Unavailable"
+        : isDefaultOutput
+          ? "Connected"
+          : "Available"
 
   const run = async (action: BluetoothAction, operation: () => Promise<BluetoothStatusResponse>) => {
     try {
       const next = await onAction(action, operation)
-      setVolumeDraft(next?.output_volume ?? confirmedVolume)
+      setVolumeDraft(next ? null : confirmedVolume)
     } catch {
       setVolumeDraft(confirmedVolume)
     }
@@ -62,16 +76,18 @@ function AudioOutputControlsForSelector({
         <div className="flex items-start justify-between gap-3">
           <div>
             <CardTitle className="flex items-center gap-2"><Volume2Icon className="size-4 text-emerald-300" />Audio output</CardTitle>
-            <CardDescription>Choose where the Pi sends music from Bluetooth inputs and other local audio.</CardDescription>
+            <CardDescription>{variant === "setup" ? "Choose where the Pi sends music from Bluetooth inputs and other local audio." : selectedOutput?.name ?? "No selected PipeWire output"}</CardDescription>
           </div>
-          <Badge variant={selectedOutput ? "default" : "outline"}>{selectedOutput?.name ?? "Unavailable"}</Badge>
+          <Badge variant={outputConnection === "Connected" ? "default" : "outline"}>{outputConnection}</Badge>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <Select value={selector} onValueChange={(value) => { if (value) void run("select-output", () => dashboardApi.setAudioOutput(value)) }} disabled={!status?.output_devices.length || busy || !supports(status, "output_select")}>
-          <SelectTrigger aria-label="Audio output device" className="h-11 rounded-xl"><SelectValue>{selectedOutput?.name ?? "Select audio output"}</SelectValue></SelectTrigger>
-          <SelectContent>{status?.output_devices.map((device) => <SelectItem key={device.selector} value={device.selector}>{device.name}{device.bluetooth ? " · Bluetooth" : ""}</SelectItem>)}</SelectContent>
-        </Select>
+        {variant === "setup" && (
+          <Select value={selector} onValueChange={(value) => { if (value) void run("select-output", () => dashboardApi.setAudioOutput(value)) }} disabled={!status?.output_devices.length || busy || !supports(status, "output_select")}>
+            <SelectTrigger aria-label="Audio output device" className="h-11 rounded-xl"><SelectValue>{selectedOutput?.name ?? "Select audio output"}</SelectValue></SelectTrigger>
+            <SelectContent>{status?.output_devices.map((device) => <SelectItem key={device.selector} value={device.selector}>{device.name}{device.bluetooth ? " · Bluetooth" : ""}</SelectItem>)}</SelectContent>
+          </Select>
+        )}
         {selectedOutput ? (
           <div className="space-y-4 rounded-xl border border-white/5 bg-white/[0.03] p-3">
             <div className="flex items-center justify-between gap-3">
@@ -91,7 +107,7 @@ function AudioOutputControlsForSelector({
             </div>
           </div>
         ) : <p className="text-sm text-muted-foreground">No PipeWire output devices were found.</p>}
-        <p className="text-xs text-muted-foreground">The output volume is the Pi’s software level. The connected speaker may have a separate hardware volume.</p>
+        {variant === "setup" && <p className="text-xs text-muted-foreground">The output volume is the Pi’s software level. The connected speaker may have a separate hardware volume.</p>}
       </CardContent>
     </Card>
   )

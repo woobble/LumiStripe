@@ -194,6 +194,110 @@ function structurePhaseLabel(phase: AudioTelemetry["music_structure_phase"]) {
   return phase.charAt(0).toUpperCase() + phase.slice(1)
 }
 
+export function AudioControlVisualization({
+  telemetry,
+  fresh,
+  silent = false,
+}: {
+  telemetry: AudioTelemetry
+  fresh: boolean
+  silent?: boolean
+}) {
+  return (
+    <Card className="border-white/5 bg-card/80">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2"><WavesIcon className="size-4 text-cyan-300" />Live audio analysis</CardTitle>
+        <CardDescription>Signal levels, estimated beat timing, and frequency energy.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <SignalMeter label="Input" value={telemetry.input_level} fresh={fresh} color="from-cyan-400 to-emerald-300" />
+          <SignalMeter label="Processed" value={telemetry.processed_level} fresh={fresh} color="from-violet-500 to-fuchsia-300" />
+        </div>
+        {silent && <p className="rounded-lg border border-amber-300/15 bg-amber-400/5 p-2.5 text-sm text-amber-100">No measurable audio signal. Check the selected input and its capture level.</p>}
+        {fresh && telemetry.clipping_fraction > 0 && <p role="alert" className="rounded-lg border border-amber-300/15 bg-amber-400/5 p-2.5 text-sm text-amber-100">Input is clipping. Lower capture gain, then repeat microphone calibration.</p>}
+        <div className="grid grid-cols-3 gap-2">
+          <div className={`rounded-xl p-3 text-center transition-colors ${fresh && telemetry.beat ? "bg-fuchsia-400/20 text-fuchsia-100" : "bg-white/[0.035]"}`}>
+            <AudioLinesIcon className={`mx-auto mb-1 size-4 ${fresh && telemetry.beat ? "animate-pulse" : ""}`} aria-hidden="true" />
+            <p className="text-sm font-semibold">{fresh && telemetry.beat ? "Beat" : "Listening"}</p>
+            <p className="text-[11px] text-muted-foreground">{fresh ? `${percent(telemetry.beat_strength)}% strength` : "Signal status"}</p>
+          </div>
+          <div className="rounded-xl bg-white/[0.035] p-3 text-center">
+            <WavesIcon className="mx-auto mb-1 size-4 text-cyan-200" aria-hidden="true" />
+            <p className="text-sm font-semibold tabular-nums">{fresh && telemetry.bpm > 0 ? `${telemetry.bpm.toFixed(0)} BPM` : "— BPM"}</p>
+            <p className="text-[11px] text-muted-foreground">Estimated tempo</p>
+          </div>
+          <div className="rounded-xl bg-white/[0.035] p-3 text-center">
+            <ActivityIcon className="mx-auto mb-1 size-4 text-fuchsia-200" aria-hidden="true" />
+            <p className="text-sm font-semibold tabular-nums">{fresh ? `${percent(telemetry.bpm_confidence)}%` : "—"}</p>
+            <p className="text-[11px] text-muted-foreground">Beat confidence</p>
+          </div>
+        </div>
+        <div>
+          <div className="mb-2 flex items-center justify-between gap-2 text-xs">
+            <span className="font-medium">Frequency bands</span>
+            <span className="text-muted-foreground">Relative energy</span>
+          </div>
+          <div className="grid h-20 grid-cols-8 items-end gap-1.5" role="img" aria-label="Audio frequency bands">
+            {telemetry.bands.map((value, index) => (
+              <div key={bandLabels[index] ?? index} className="flex h-full min-w-0 flex-col justify-end gap-1">
+                <div className="relative flex-1 overflow-hidden rounded-sm bg-white/5" title={`${bandLabels[index] ?? "Audio"} Hz`}>
+                  <div className={`absolute inset-x-0 bottom-0 rounded-sm bg-gradient-to-t from-violet-500 to-cyan-300 transition-[height] duration-100 ${fresh ? "opacity-100" : "opacity-35"}`} style={{ height: `${fresh ? Math.max(2, percent(value)) : 2}%` }} />
+                </div>
+                <span className="truncate text-center text-[8px] leading-none text-muted-foreground">{bandLabels[index]?.split("-")[0] ?? index}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground">Estimated next beat: {fresh && telemetry.next_beat_in_ms !== null ? `about ${Math.round(telemetry.next_beat_in_ms)} ms` : "unavailable"}</p>
+      </CardContent>
+    </Card>
+  )
+}
+
+function SignalMeter({ label, value, fresh, color }: { label: string; value: number; fresh: boolean; color: string }) {
+  return (
+    <div className="rounded-xl border border-white/5 bg-white/[0.025] p-3">
+      <div className="mb-2 flex items-end justify-between gap-2">
+        <span className="text-sm text-muted-foreground">{label}</span>
+        <span className="text-2xl font-semibold tabular-nums">{fresh ? `${percent(value)}%` : "—"}</span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-white/5">
+        <div className={`h-full rounded-full bg-gradient-to-r ${color} transition-[width] duration-100`} style={{ width: `${fresh ? percent(value) : 0}%` }} />
+      </div>
+    </div>
+  )
+}
+
+export function AudioMusicStructureSummary({ telemetry, fresh }: { telemetry: AudioTelemetry; fresh: boolean }) {
+  const available = fresh && telemetry.music_structure_active && telemetry.music_structure_fresh
+  return (
+    <Card className="border-white/5 bg-card/80">
+      <CardHeader className="flex-row items-center justify-between gap-3 space-y-0 pb-3">
+        <div>
+          <CardTitle className="flex items-center gap-2"><ActivityIcon className="size-4 text-fuchsia-300" />Music structure</CardTitle>
+          <CardDescription>Live estimate of the current musical section.</CardDescription>
+        </div>
+        <Badge variant={available ? "default" : "outline"}>{available ? "Recent estimate" : telemetry.music_structure_active ? "Estimate held" : "Waiting"}</Badge>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {telemetry.music_structure_active ? (
+          <>
+            <div className="flex items-end justify-between gap-3">
+              <p className="text-2xl font-semibold">Estimated {structurePhaseLabel(telemetry.music_structure_phase).toLowerCase()}</p>
+              <p className="text-sm tabular-nums text-muted-foreground">{percent(telemetry.music_structure_confidence)}% confidence</p>
+            </div>
+            <div>
+              <div className="mb-1 flex justify-between text-xs"><span>Estimated build-up</span><span className="tabular-nums text-muted-foreground">{percent(telemetry.music_structure_buildup_progress)}%</span></div>
+              <div className="h-2 overflow-hidden rounded-full bg-white/5"><div className="h-full rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-300 transition-[width] duration-150" style={{ width: `${percent(telemetry.music_structure_buildup_progress)}%` }} /></div>
+            </div>
+          </>
+        ) : <p className="text-sm text-muted-foreground">Music structure estimates are available during Dynamic playback.</p>}
+      </CardContent>
+    </Card>
+  )
+}
+
 function dropAccentMessage(telemetry: AudioTelemetry) {
   if (telemetry.drop_accent_status === "pending") return "Scheduled for the next confident beat"
   if (telemetry.drop_accent_status === "activated") return "Accent activated"

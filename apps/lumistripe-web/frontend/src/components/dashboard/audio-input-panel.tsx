@@ -6,7 +6,7 @@ import { LiveAudioSourceStatus } from "@/components/dashboard/audio-source-statu
 import { AudioSyncControls } from "@/components/dashboard/audio-sync-controls"
 import { BluetoothDevicePanel } from "@/components/dashboard/bluetooth-device-panel"
 import { MicrophoneInputControls } from "@/components/dashboard/microphone-input-controls"
-import { SpotifyControls } from "@/components/dashboard/spotify-controls"
+import { SpotifySetupStatus } from "@/components/dashboard/spotify-controls"
 import { useBluetooth, type BluetoothAction } from "@/hooks/use-bluetooth"
 import { dashboardApi, type AudioSettingsResponse, type BluetoothStatusResponse } from "@/lib/api"
 import { Button } from "@/components/ui/button"
@@ -168,7 +168,7 @@ function AudioInputPanelView({
             audioMonitoring={audioMonitoring}
           />
           <AudioSourceControls settings={settings} onSave={saveSource} />
-          <SpotifyControls initialStatus={settings.spotify} />
+          <SpotifySetupStatus status={settings.spotify} />
           <AudioOutputControls status={bluetooth} busy={bluetoothBusy} onAction={runOutputAction} />
           <AudioSyncControls
             key={settings.sync_route}
