@@ -644,7 +644,7 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { name: "Leave without saving?" })).toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: "Stay" }))
     expect(screen.getByText("+125 ms")).toBeInTheDocument()
-    await user.click(screen.getByRole("button", { name: "Save offset" }))
+    await user.click(screen.getByRole("button", { name: "Save route offset" }))
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       "/api/audio/sync-offset",
@@ -777,7 +777,7 @@ describe("App", () => {
     expect(await screen.findByText("-85 ms")).toBeInTheDocument()
     const offset = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="range"]'))[0]
     fireEvent.change(offset!, { target: { value: "55" } })
-    await user.click(screen.getByRole("button", { name: "Save offset" }))
+    await user.click(screen.getByRole("button", { name: "Save route offset" }))
     await waitFor(() => expect(screen.getByText("+55 ms")).toBeInTheDocument())
 
     await user.click(within(audioNav).getByRole("link", { name: "Sources" }))
@@ -1430,7 +1430,7 @@ describe("App", () => {
     await user.click(within(audioNav).getByRole("link", { name: "Tuning" }))
     expect(await screen.findByRole("heading", { name: "Audio tuning" })).toBeInTheDocument()
     expect(screen.getByText("USB Mic")).toBeInTheDocument()
-    expect(screen.getByRole("group", { name: "Calm ↔ Dramatic" })).toBeInTheDocument()
+    expect(screen.getByRole("group", { name: "Musical response" })).toBeInTheDocument()
     expect(screen.getByText("0.650")).toBeInTheDocument()
 
     const audioSocket = await waitFor(() => {
@@ -1461,6 +1461,7 @@ describe("App", () => {
       health: "healthy",
     }))
     expect(screen.getByText("42%")).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Advanced DSP settings and diagnostics" }))
     expect(screen.getByText("128 BPM")).toBeInTheDocument()
     expect(screen.getByText("92%")).toBeInTheDocument()
     expect(screen.getByText("music")).toBeInTheDocument()

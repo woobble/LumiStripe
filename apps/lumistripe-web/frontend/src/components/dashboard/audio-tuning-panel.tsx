@@ -1,9 +1,10 @@
-import { memo, useCallback, useEffect, useState } from "react"
+import { memo, useCallback, useEffect, useRef, useState } from "react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
 import { Link } from "react-router"
 import {
+  ChevronDownIcon,
   MicIcon,
   RotateCcwIcon,
   SaveIcon,
@@ -20,11 +21,10 @@ import { Slider } from "@/components/ui/slider"
 import {
   dashboardApi,
   type AudioSettingsResponse,
-  type AudioTuningValues,
 } from "@/lib/api"
 import { useUnsavedChangesGuard } from "@/hooks/use-unsaved-changes"
 
-type SliderKey = Exclude<keyof AudioTuningValues, "noise_floor">
+type SliderKey = keyof AudioTuningFormValues
 
 const audioTuningSchema = z.object({
   noise_floor: z.number().min(0).max(1),
@@ -51,6 +51,7 @@ function TuningSlider({
   step,
   onChange,
   error,
+  disabled = false,
 }: {
   label: string
   description: string
@@ -60,6 +61,7 @@ function TuningSlider({
   step: number
   onChange: (value: number) => void
   error?: string
+  disabled?: boolean
 }) {
   return (
     <div className="space-y-2.5 rounded-xl bg-white/[0.035] p-3">
@@ -77,6 +79,7 @@ function TuningSlider({
         step={step}
         value={[value]}
         onValueChange={(next) => onChange(firstValue(next))}
+        disabled={disabled}
         className="py-2 [&_[data-slot=slider-track]]:h-2 [&_[data-slot=slider-thumb]]:size-5"
       />
       {error && <p role="alert" className="text-xs text-red-300">{error}</p>}
@@ -89,6 +92,10 @@ function AudioTuningPanelView() {
   const [selectedDevice, setSelectedDevice] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [calibrating, setCalibrating] = useState(false)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const loadRequest = useRef(0)
+  const dirtyRef = useRef(false)
   const form = useForm<AudioTuningFormValues>({ resolver: zodResolver(audioTuningSchema), defaultValues: {
     noise_floor: 0.015, input_noise_floor: 0.003,
     target_level: 0.36, dynamic_response: 0.65, rms_attack: 0.45, rms_release: 0.12, band_attack: 0.4, band_release: 0.1, beat_release: 0.18,
@@ -98,24 +105,31 @@ function AudioTuningPanelView() {
   const { watch, reset: formReset, setValue, handleSubmit, formState: { isDirty, errors } } = form
   const draft = watch()
   useUnsavedChangesGuard(isDirty)
+  useEffect(() => { dirtyRef.current = isDirty }, [isDirty])
 
   const load = useCallback(async () => {
+    const request = ++loadRequest.current
     setLoading(true)
     try {
       const next = await dashboardApi.getAudioSettings()
+      if (request !== loadRequest.current) return
       setResponse(next)
-      const selector = next.active_device ?? null
-      setSelectedDevice(selector)
-      formReset(next.settings)
+      if (!dirtyRef.current) {
+        setSelectedDevice(next.active_device ?? null)
+        formReset(next.settings)
+      }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not load audio settings.")
+      if (request === loadRequest.current) toast.error(error instanceof Error ? error.message : "Could not load audio settings.")
     } finally {
-      setLoading(false)
+      if (request === loadRequest.current) setLoading(false)
     }
-  }, [])
+  }, [formReset])
 
-  useEffect(() => { void load() }, [load])
-  const { telemetry, history } = useAudioTelemetry()
+  useEffect(() => {
+    void load()
+    return () => { loadRequest.current += 1 }
+  }, [load])
+  const { telemetry, history, connection } = useAudioTelemetry()
 
   const change = (key: SliderKey, value: number) => setValue(key, value, { shouldDirty: true, shouldValidate: true })
 
@@ -155,8 +169,8 @@ function AudioTuningPanelView() {
   if (!response) {
     return <Card><CardHeader><CardTitle>Audio tuning unavailable</CardTitle><CardDescription>Could not load microphone settings.</CardDescription></CardHeader><CardContent><Button onClick={() => void load()}>Try again</Button></CardContent></Card>
   }
-  const activeDeviceName = response.active_device_name
-    ?? response.devices.find((item) => item.selector === selectedDevice)?.name
+  const activeDeviceName = response.devices.find((item) => item.selector === selectedDevice)?.name
+    ?? response.active_device_name
 
   const thresholds = [
     ["Energy", telemetry.gate_energy, draft.energy_threshold],
@@ -180,23 +194,51 @@ function AudioTuningPanelView() {
         {response.error && <CardContent><p className="rounded-xl bg-red-500/10 p-3 text-sm text-red-200">{response.error}</p></CardContent>}
       </Card>
 
-      <AudioTelemetryCards telemetry={telemetry} thresholds={thresholds} />
-      <AudioHistoryChart history={history} />
-      <AudioCalibrationWizard device={selectedDevice} microphone={response.active_source === "mic"} onApplied={() => void load()} />
+      <Card className="border-white/5 bg-card/80">
+        <CardHeader className="pb-3"><CardTitle className="flex items-center justify-between gap-3 text-base"><span>Live input level</span><span role="status" aria-live="polite" className="text-xs font-medium text-muted-foreground">{telemetry.fresh ? "Live" : connection === "connecting" ? "Connecting" : connection === "reconnecting" ? "Reconnecting" : "Stale"}</span></CardTitle><CardDescription>Compact view of the active input signal.</CardDescription></CardHeader>
+        <CardContent className="space-y-2">
+          <div className="flex items-end justify-between gap-3"><span className="text-3xl font-semibold tabular-nums">{telemetry.fresh ? `${Math.round(Math.max(0, Math.min(1, telemetry.input_level)) * 100)}%` : "—"}</span><span className="text-xs text-muted-foreground">Processed {telemetry.fresh ? `${Math.round(Math.max(0, Math.min(1, telemetry.processed_level)) * 100)}%` : "—"}</span></div>
+          <div className="h-3 overflow-hidden rounded-full bg-white/5" role="img" aria-label={`Live input level ${telemetry.fresh ? Math.round(Math.max(0, Math.min(1, telemetry.input_level)) * 100) : 0} percent`}>
+            <div className="h-full rounded-full bg-gradient-to-r from-violet-500 via-cyan-400 to-emerald-300 transition-[width] duration-100" style={{ width: `${telemetry.fresh ? Math.max(0, Math.min(1, telemetry.input_level)) * 100 : 0}%` }} />
+          </div>
+          {telemetry.fresh && telemetry.input_peak < 0.001 && <p className="text-xs text-muted-foreground">Very little signal. Check the selected input and capture gain.</p>}
+          {telemetry.fresh && telemetry.clipping_fraction > 0 && <p role="alert" className="text-xs text-amber-300">Input is clipping. Lower capture gain before calibrating.</p>}
+        </CardContent>
+      </Card>
 
-      <Card className="border-white/5 bg-card/80"><CardHeader><CardTitle className="flex items-center gap-2"><SlidersHorizontalIcon className="size-4 text-violet-300" />Normalization</CardTitle><CardDescription>The target used by automatic software gain.</CardDescription></CardHeader><CardContent><TuningSlider label="Target level" description="Higher values make quiet microphones more prominent." value={draft.target_level} min={0.1} max={0.8} step={0.005} onChange={(value) => change("target_level", value)} />{errors.target_level && <p role="alert" className="mt-2 text-xs text-red-300">{errors.target_level.message}</p>}</CardContent></Card>
+      <Card className="border-white/5 bg-card/80"><CardHeader><CardTitle className="flex items-center gap-2"><SlidersHorizontalIcon className="size-4 text-violet-300" />Basic tuning</CardTitle><CardDescription>Adjust the overall response without changing advanced signal processing.</CardDescription></CardHeader><CardContent className="space-y-3">
+        <TuningSlider label="Target level" description="Higher values make quiet microphones more prominent." value={draft.target_level} min={0.1} max={0.8} step={0.005} onChange={(value) => change("target_level", value)} error={errors.target_level?.message} disabled={saving} />
+        {response.hardware_gain_supported && response.hardware_gain_writable && <TuningSlider label="Hardware gain" description={`${response.hardware_gain_backend ?? "Hardware"} capture trim. Applied when saved.`} value={draft.hardware_gain_target ?? response.hardware_gain_value ?? 0.5} min={0} max={1} step={0.01} onChange={(value) => change("hardware_gain_target", value)} disabled={saving} />}
+        {!response.hardware_gain_supported && <p className="rounded-lg bg-white/[0.035] p-3 text-sm text-muted-foreground">Hardware gain is unavailable for this input. Software normalization remains active.{response.hardware_gain_error ? ` ${response.hardware_gain_error}` : ""}</p>}
+        {response.hardware_gain_supported && !response.hardware_gain_writable && <p className="rounded-lg bg-white/[0.035] p-3 text-sm text-muted-foreground">The input reports hardware gain, but it cannot be changed here. Software normalization remains active.{response.hardware_gain_error ? ` ${response.hardware_gain_error}` : ""}</p>}
+        <div><TuningSlider label="Musical response" description="Calm keeps quiet passages gentle; Dramatic gives loud highlights more contrast." value={draft.dynamic_response} min={0} max={1} step={0.01} onChange={(value) => change("dynamic_response", value)} error={errors.dynamic_response?.message} disabled={saving} /><div className="flex justify-between px-1 text-[11px] text-muted-foreground"><span>Calm</span><span>Balanced</span><span>Dramatic</span></div></div>
+      </CardContent></Card>
 
-      <Card className="border-white/5 bg-card/80"><CardHeader><CardTitle>Hardware gain</CardTitle><CardDescription>{response.hardware_gain_supported ? `ALSA ${response.hardware_gain_backend ?? "mixer"} · ${response.hardware_gain_control ?? "capture control"}` : "This input does not expose a writable hardware gain control."}</CardDescription></CardHeader><CardContent className="space-y-3">{response.hardware_gain_supported && response.hardware_gain_writable ? <TuningSlider label="Hardware trim" description="Applied when you save; software normalization handles live changes." value={draft.hardware_gain_target ?? response.hardware_gain_value ?? 0.5} min={0} max={1} step={0.01} onChange={(value) => change("hardware_gain_target", value)} /> : <p className="text-sm text-muted-foreground">Software-only normalization remains active.{response.hardware_gain_error ? ` ${response.hardware_gain_error}` : ""}</p>}</CardContent></Card>
+      <AudioCalibrationWizard device={selectedDevice} microphone={response.active_source === "mic"} onBusyChange={setCalibrating} onApplied={() => void load()} />
 
-      <Card className="border-white/5 bg-card/80"><CardHeader><CardTitle>Musical response</CardTitle><CardDescription>Choose how much contrast the lights keep between quiet passages and loud highlights.</CardDescription></CardHeader><CardContent><TuningSlider label="Calm ↔ Dramatic" description="Higher values make quiet parts gentler and reserve stronger effects for peaks." value={draft.dynamic_response} min={0} max={1} step={0.01} onChange={(value) => change("dynamic_response", value)} error={errors.dynamic_response?.message} /></CardContent></Card>
+      <Button type="button" variant="outline" className="h-11 w-full justify-between" aria-expanded={advancedOpen} aria-controls="advanced-audio-tuning" onClick={() => setAdvancedOpen((open) => !open)}>
+        <span className="flex items-center gap-2"><SlidersHorizontalIcon className="size-4" />Advanced DSP settings and diagnostics</span><ChevronDownIcon className={`size-4 transition-transform ${advancedOpen ? "rotate-180" : ""}`} />
+      </Button>
+      {advancedOpen && <section id="advanced-audio-tuning" aria-label="Advanced DSP settings" className="space-y-4">
+        <AudioTelemetryCards telemetry={telemetry} thresholds={thresholds} />
+        <AudioHistoryChart history={history} />
 
-      <Card className="border-white/5 bg-card/80"><CardHeader><CardTitle>Activation thresholds</CardTitle><CardDescription>Lower values make Music mode easier to activate.</CardDescription></CardHeader><CardContent className="space-y-2">{([
+      <Card className="border-white/5 bg-card/80"><CardHeader><CardTitle>Noise thresholds</CardTitle><CardDescription>Set the signal floor used to reject background noise.</CardDescription></CardHeader><CardContent className="space-y-2">{([
+        ["noise_floor", "Music noise floor", "Minimum normalized signal level for Music mode."],
+        ["input_noise_floor", "Microphone noise floor", "Minimum microphone signal for capture."],
+      ] as const).map(([key, label, description]) => <TuningSlider key={key} label={label} description={description} value={draft[key]} min={0} max={key === "input_noise_floor" ? 0.5 : 1} step={0.005} onChange={(value) => change(key, value)} error={errors[key]?.message} disabled={saving} />)}</CardContent></Card>
+
+      <Card className="border-white/5 bg-card/80"><CardHeader><CardTitle>Energy and onset thresholds</CardTitle><CardDescription>Control how readily changing audio activates Music mode.</CardDescription></CardHeader><CardContent className="space-y-2">{([
         ["energy_threshold", "Energy", "Minimum overall signal energy."],
         ["onset_threshold", "Onset", "Minimum transient strength for rhythmic input."],
         ["beat_density_threshold", "Beat density", "Required density of detected beats."],
         ["brightness_threshold", "Brightness", "Required treble energy for broadband music."],
         ["spectral_balance_ratio", "Spectral balance", "How balanced bass and treble must be."],
-      ] as const).map(([key, label, description]) => <TuningSlider key={key} label={label} description={description} value={draft[key]} min={0} max={1} step={0.005} onChange={(value) => change(key, value)} error={errors[key]?.message} />)}</CardContent></Card>
+      ] as const).map(([key, label, description]) => <TuningSlider key={key} label={label} description={description} value={draft[key]} min={0} max={1} step={0.005} onChange={(value) => change(key, value)} error={errors[key]?.message} disabled={saving} />)}</CardContent></Card>
+
+      <Card className="border-white/5 bg-card/80"><CardHeader><CardTitle>Spectral balance</CardTitle><CardDescription>Adjust how bass and treble energy contribute to activation.</CardDescription></CardHeader><CardContent className="space-y-2">{([
+        ["spectral_balance_ratio", "Spectral balance", "How balanced bass and treble must be."],
+      ] as const).map(([key, label, description]) => <TuningSlider key={key} label={label} description={description} value={draft[key]} min={0} max={1} step={0.005} onChange={(value) => change(key, value)} error={errors[key]?.message} disabled={saving} />)}</CardContent></Card>
 
       <Card className="border-white/5 bg-card/80"><CardHeader><CardTitle>Smoothing</CardTitle><CardDescription>Attack follows rising energy; release controls how slowly it fades.</CardDescription></CardHeader><CardContent className="space-y-2">{([
         ["rms_attack", "Level attack", "Response speed when volume rises."],
@@ -204,12 +246,14 @@ function AudioTuningPanelView() {
         ["band_attack", "Band attack", "Response speed for frequency bands."],
         ["band_release", "Band release", "Decay speed for frequency bands."],
         ["beat_release", "Beat release", "How long beat strength remains visible."],
-      ] as const).map(([key, label, description]) => <TuningSlider key={key} label={label} description={description} value={draft[key]} min={0.01} max={1} step={0.005} onChange={(value) => change(key, value)} error={errors[key]?.message} />)}</CardContent></Card>
+      ] as const).map(([key, label, description]) => <TuningSlider key={key} label={label} description={description} value={draft[key]} min={0.01} max={1} step={0.005} onChange={(value) => change(key, value)} error={errors[key]?.message} disabled={saving} />)}</CardContent></Card>
+      </section>}
 
       <div className="sticky bottom-[calc(4.75rem+env(safe-area-inset-bottom))] z-20 grid grid-cols-[auto_1fr] gap-2 rounded-2xl border border-white/10 bg-background/90 p-2 shadow-2xl backdrop-blur-xl">
-        <Button variant="outline" className="h-12 rounded-xl" disabled={saving || !selectedDevice} onClick={() => void reset()}><RotateCcwIcon />Reset</Button>
-        <Button className="h-12 rounded-xl" disabled={saving || !isDirty || !selectedDevice} onClick={() => void handleSubmit(apply)()}><SaveIcon />{saving ? "Applying…" : "Apply & save"}</Button>
+        <Button variant="outline" className="h-12 rounded-xl" disabled={saving || calibrating || !selectedDevice} onClick={() => void reset()}><RotateCcwIcon />Reset</Button>
+        <Button className="h-12 rounded-xl" disabled={saving || calibrating || !isDirty || !selectedDevice} onClick={() => void handleSubmit(apply)()}><SaveIcon />{saving ? "Applying…" : "Apply & save"}</Button>
       </div>
+      {calibrating && <p role="status" className="text-center text-xs text-muted-foreground">Finish or cancel calibration before applying or resetting the audio profile.</p>}
     </div>
   )
 }
