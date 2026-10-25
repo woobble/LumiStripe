@@ -125,6 +125,56 @@ def composite_screen_rgba_into(
     )
 
 
+def native_tunnel_rings_available() -> bool:
+    """Return whether the loaded render extension exposes the tunnel kernel."""
+
+    return _native_module is not None and hasattr(
+        _native_module, "render_tunnel_rings_into"
+    )
+
+
+def render_tunnel_rings_into(
+    destination: PixelArray,
+    geometry: npt.NDArray[np.float64],
+    colors: PixelArray,
+    clear_color: npt.NDArray[np.uint8],
+    ring_count: int,
+    brightness: float,
+) -> bool:
+    """Render one or two BeatTunnel rings into a reusable RGBA buffer.
+
+    Returns ``False`` without touching the destination when the optional native
+    kernel is unavailable, allowing the effect's Python renderer to take over.
+    """
+
+    if not native_tunnel_rings_available():
+        return False
+    _validate_rgba_source(destination, "destination")
+    if not destination.flags.writeable:
+        raise ValueError("destination must be writable")
+    if geometry.dtype != np.float64 or geometry.shape != (2, 5):
+        raise ValueError("geometry must be a float64 array of shape (2, 5)")
+    if not geometry.flags.c_contiguous or not geometry.flags.aligned:
+        raise ValueError("geometry must be aligned and C-contiguous")
+    if colors.dtype != np.uint8 or colors.shape != (2, 3):
+        raise ValueError("colors must be a uint8 array of shape (2, 3)")
+    if not colors.flags.c_contiguous or not colors.flags.aligned:
+        raise ValueError("colors must be aligned and C-contiguous")
+    if clear_color.dtype != np.uint8 or clear_color.shape != (3,):
+        raise ValueError("clear_color must be a uint8 array of shape (3,)")
+    if not clear_color.flags.c_contiguous or not clear_color.flags.aligned:
+        raise ValueError("clear_color must be aligned and C-contiguous")
+    if ring_count not in (1, 2):
+        raise ValueError("ring_count must be one or two")
+    if not np.isfinite(brightness) or not 0.0 <= brightness <= 1.0:
+        raise ValueError("brightness must be finite and between zero and one")
+    assert _native_module is not None
+    _native_module.render_tunnel_rings_into(
+        destination, geometry, colors, clear_color, ring_count, brightness
+    )
+    return True
+
+
 def _composite_screen_rgba_numpy(
     base: PixelArray,
     destination: PixelArray,
@@ -208,4 +258,6 @@ __all__ = [
     "apply_alpha_scale_into",
     "composite_screen_rgba_into",
     "correct_rgba_into",
+    "native_tunnel_rings_available",
+    "render_tunnel_rings_into",
 ]

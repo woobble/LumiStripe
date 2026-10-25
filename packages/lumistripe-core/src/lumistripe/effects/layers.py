@@ -912,19 +912,26 @@ class LayeredRenderer:
         layers: list[tuple[np.ndarray, float]] = []
         for index, active in enumerate(self.scheduler.active):
             buffer = self._effect_buffers[index]
-            buffer.fill(_TRANSPARENT)
             audio = active.trigger_frame if active.frame == 0 else snapshot.frame
             configured_audio = active.animation.effective_audio(audio)
-            effect_controller = active.animation.output_controller(
-                buffer, player.brightness
-            )
             effect_frame = active.animation.effective_frame(active.frame)
-            if configured_audio is None:
-                active.animation.tick(effect_frame, effect_controller)
-            else:
-                active.animation.tick_audio(
-                    effect_frame, effect_controller, configured_audio
+            rendered = active.animation._render_native(
+                effect_frame,
+                buffer.pixels(),
+                configured_audio,
+                player.brightness,
+            )
+            if not rendered:
+                buffer.fill(_TRANSPARENT)
+                effect_controller = active.animation.output_controller(
+                    buffer, player.brightness
                 )
+                if configured_audio is None:
+                    active.animation.tick(effect_frame, effect_controller)
+                else:
+                    active.animation.tick_audio(
+                        effect_frame, effect_controller, configured_audio
+                    )
             active.frame += 1
             layers.append(
                 (

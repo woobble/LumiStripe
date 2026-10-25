@@ -224,6 +224,112 @@ static PyObject *composite_screen_rgba_into(PyObject *module, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+static int validate_fixed_array(PyArrayObject *array, int type, int dimensions,
+                                npy_intp first, npy_intp second,
+                                const char *name) {
+    if (PyArray_TYPE(array) != type || PyArray_NDIM(array) != dimensions ||
+        PyArray_DIM(array, 0) != first ||
+        (dimensions == 2 && PyArray_DIM(array, 1) != second) ||
+        !PyArray_ISCARRAY_RO(array)) {
+        PyErr_Format(PyExc_ValueError, "%s has an invalid dtype, shape, or layout", name);
+        return -1;
+    }
+    return 0;
+}
+
+static PyObject *render_tunnel_rings_into(PyObject *module, PyObject *args) {
+    (void)module;
+    PyArrayObject *destination;
+    PyArrayObject *geometry;
+    PyArrayObject *colors;
+    PyArrayObject *clear_color;
+    int ring_count;
+    double brightness;
+    if (!PyArg_ParseTuple(args, "O!O!O!O!id", &PyArray_Type, &destination,
+                          &PyArray_Type, &geometry, &PyArray_Type, &colors,
+                          &PyArray_Type, &clear_color, &ring_count, &brightness)) {
+        return NULL;
+    }
+    if (validate_rgba(destination, "destination", 1) < 0 ||
+        validate_fixed_array(geometry, NPY_DOUBLE, 2, 2, 5, "geometry") < 0 ||
+        validate_fixed_array(colors, NPY_UINT8, 2, 2, 3, "colors") < 0 ||
+        validate_fixed_array(clear_color, NPY_UINT8, 1, 3, 0, "clear_color") < 0) {
+        return NULL;
+    }
+    if (ring_count < 1 || ring_count > 2) {
+        PyErr_SetString(PyExc_ValueError, "ring_count must be one or two");
+        return NULL;
+    }
+    if (!isfinite(brightness) || brightness < 0.0 || brightness > 1.0) {
+        PyErr_SetString(PyExc_ValueError, "brightness must be finite and between zero and one");
+        return NULL;
+    }
+
+    const double *ring_data = (const double *)PyArray_DATA(geometry);
+    const uint8_t *ring_colors = (const uint8_t *)PyArray_DATA(colors);
+    const uint8_t *background = (const uint8_t *)PyArray_DATA(clear_color);
+    uint8_t *output = (uint8_t *)PyArray_DATA(destination);
+    const npy_intp led_count = PyArray_DIM(destination, 0);
+
+    for (int ring_index = 0; ring_index < ring_count; ring_index++) {
+        const size_t parameter_offset = (size_t)ring_index * 5u;
+        const double center = ring_data[parameter_offset];
+        const double radius = ring_data[parameter_offset + 1u];
+        const double width = ring_data[parameter_offset + 2u];
+        const double max_distance = ring_data[parameter_offset + 3u];
+        const double alpha = ring_data[parameter_offset + 4u];
+        if (!isfinite(center) || !isfinite(radius) || !isfinite(width) ||
+            !isfinite(max_distance) || !isfinite(alpha) || width <= 0.0 ||
+            max_distance <= 0.0) {
+            PyErr_SetString(PyExc_ValueError, "ring geometry must be finite with positive width and distance");
+            return NULL;
+        }
+    }
+
+    for (npy_intp index = 0; index < led_count; index++) {
+        const size_t offset = (size_t)index * 4u;
+        output[offset] = background[0];
+        output[offset + 1u] = background[1];
+        output[offset + 2u] = background[2];
+        output[offset + 3u] = 0u;
+    }
+
+    for (int ring_index = 0; ring_index < ring_count; ring_index++) {
+        const size_t parameter_offset = (size_t)ring_index * 5u;
+        const double center = ring_data[parameter_offset];
+        const double radius = ring_data[parameter_offset + 1u];
+        const double width = ring_data[parameter_offset + 2u];
+        const double max_distance = ring_data[parameter_offset + 3u];
+        const double alpha = ring_data[parameter_offset + 4u];
+        const size_t color_offset = (size_t)ring_index * 3u;
+
+        for (npy_intp index = 0; index < led_count; index++) {
+            const double distance = fabs((double)index - center);
+            const double ring = fmax(1.0 - fabs(distance - radius) / width, 0.0);
+            const double ambient = fmax(1.0 - distance / max_distance, 0.0) * 0.1;
+            double combined = fmin(ambient + ring * alpha, 1.0);
+            if (combined <= 0.0)
+                continue;
+
+            const size_t offset = (size_t)index * 4u;
+            const uint8_t previous_alpha = output[offset + 3u];
+            if (previous_alpha > 0u) {
+                const double visible_alpha = (double)previous_alpha / 255.0;
+                if (visible_alpha > combined)
+                    combined = visible_alpha;
+            }
+            output[offset] = ring_colors[color_offset];
+            output[offset + 1u] = ring_colors[color_offset + 1u];
+            output[offset + 2u] = ring_colors[color_offset + 2u];
+            double scaled_alpha = combined * brightness;
+            if (scaled_alpha > 1.0)
+                scaled_alpha = 1.0;
+            output[offset + 3u] = (uint8_t)(scaled_alpha * 255.0);
+        }
+    }
+    Py_RETURN_NONE;
+}
+
 static PyMethodDef module_methods[] = {
     {"correct_rgba_into", correct_rgba_into, METH_VARARGS,
      "Apply integer RGB correction into a contiguous RGBA destination."},
@@ -231,6 +337,8 @@ static PyMethodDef module_methods[] = {
      "Copy RGBA pixels and floor-scale alpha into reusable destinations."},
     {"composite_screen_rgba_into", composite_screen_rgba_into, METH_VARARGS,
      "Composite up to two alpha-weighted RGBA overlays using SCREEN blending."},
+    {"render_tunnel_rings_into", render_tunnel_rings_into, METH_VARARGS,
+     "Render up to two alpha-weighted BeatTunnel rings into an RGBA frame."},
     {NULL, NULL, 0, NULL}
 };
 

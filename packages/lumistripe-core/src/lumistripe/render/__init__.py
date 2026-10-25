@@ -5,6 +5,8 @@ from .kernels import (
     apply_alpha_scale_into,
     composite_screen_rgba_into,
     correct_rgba_into,
+    native_tunnel_rings_available,
+    render_tunnel_rings_into,
 )
 
 __all__ = [
@@ -12,4 +14,6 @@ __all__ = [
     "apply_alpha_scale_into",
     "composite_screen_rgba_into",
     "correct_rgba_into",
+    "native_tunnel_rings_available",
+    "render_tunnel_rings_into",
 ]

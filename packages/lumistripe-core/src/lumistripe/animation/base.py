@@ -81,12 +81,19 @@ class Animation(ABC):
                 cast(str, palette),
                 cast(str, configuration.get("custom_color", "#7C3AED")),
             )
+        return BrightnessController(target, self._output_brightness(brightness))
+
+    def _output_brightness(self, brightness: float) -> float:
+        """Return the configured output brightness before controller clamping."""
+
+        configuration = getattr(self, "_animation_configuration", {})
+        typed_settings = getattr(self, "settings", None)
         intensity = (
             1.0
             if hasattr(typed_settings, "intensity")
             else float(configuration.get("intensity", 100)) / 100.0
         )
-        return BrightnessController(target, brightness * intensity)
+        return brightness * intensity
 
     @property
     @abstractmethod

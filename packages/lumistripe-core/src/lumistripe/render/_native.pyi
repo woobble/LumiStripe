@@ -23,3 +23,12 @@ def composite_screen_rgba_into(
     overlay_2: npt.NDArray[np.uint8] | None,
     strength_2: float,
 ) -> None: ...
+
+def render_tunnel_rings_into(
+    destination: npt.NDArray[np.uint8],
+    geometry: npt.NDArray[np.float64],
+    colors: npt.NDArray[np.uint8],
+    clear_color: npt.NDArray[np.uint8],
+    ring_count: int,
+    brightness: float,
+) -> None: ...
