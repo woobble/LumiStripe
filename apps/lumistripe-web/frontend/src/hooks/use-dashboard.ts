@@ -8,6 +8,7 @@ import {
   websocketUrl,
   type CalibrationPattern,
   type DashboardState,
+  type AnimationSettingsResponse,
   type SequenceCreateRequest,
   type SequenceDefinitionRequest,
   type PlaybackMode,
@@ -18,7 +19,7 @@ import {
 import { useWebSocketStream } from "@/hooks/use-websocket-stream"
 
 export type ConnectionStatus = "connecting" | "connected" | "reconnecting"
-export type CommandName = "mode" | "brightness" | "solidColor" | "animation" | "blackout" | "calibration" | "stripes" | "stripeTest" | "sequencer" | "transitions" | "sequence"
+export type CommandName = "mode" | "brightness" | "solidColor" | "animation" | "animationSettings" | "blackout" | "calibration" | "stripes" | "stripeTest" | "sequencer" | "transitions" | "sequence"
 export const dashboardStateQueryKey = ["dashboard-state"] as const
 export const animationsQueryKey = ["animations"] as const
 export const sequenceLibraryQueryKey = ["animation-sequences"] as const
@@ -159,6 +160,22 @@ export function useDashboard() {
     }
   }, [queryClient, sequenceMutation])
 
+  const runAnimationSettingsCommand = useCallback(async (
+    command: () => Promise<AnimationSettingsResponse>,
+  ) => {
+    if (commandActive.current) throw new Error("Another playback change is in progress.")
+    commandActive.current = true
+    setPendingCommand("animationSettings")
+    try {
+      const response = await command()
+      await queryClient.invalidateQueries({ queryKey: dashboardStateQueryKey })
+      return response
+    } finally {
+      commandActive.current = false
+      setPendingCommand(null)
+    }
+  }, [queryClient])
+
   const refreshSequences = useCallback(async () => {
     await sequenceLibraryQuery.refetch()
   }, [sequenceLibraryQuery])
@@ -185,6 +202,19 @@ export function useDashboard() {
       runCommand("solidColor", () => dashboardApi.setMode("solid", color, stripeId)),
     selectAnimation: (name: string, stripeId?: string) =>
       runCommand("animation", () => dashboardApi.selectAnimation(name, stripeId)),
+    getAnimationSettings: (name: string, stripeId?: string) =>
+      dashboardApi.getAnimationSettings(name, stripeId),
+    setAnimationSettings: (
+      name: string,
+      values: Record<string, string | number | boolean>,
+      stripeId?: string,
+    ) => runAnimationSettingsCommand(
+      () => dashboardApi.setAnimationSettings(name, values, stripeId),
+    ),
+    resetAnimationSettings: (name: string, stripeId?: string) =>
+      runAnimationSettingsCommand(
+        () => dashboardApi.resetAnimationSettings(name, stripeId),
+      ),
     setBlackout: (enabled: boolean, stripeId?: string) =>
       runCommand("blackout", () => dashboardApi.setBlackout(enabled, stripeId)),
     setSequencerSettings: (mode: SwitchQuantization, barsPerPhrase: 4 | 8 | 16) =>

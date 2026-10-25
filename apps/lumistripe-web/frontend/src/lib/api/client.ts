@@ -23,6 +23,9 @@ export type {
   AccessStatus,
   AnimationList,
   AnimationOption,
+  AnimationSettingOption,
+  AnimationSettingsResponse,
+  AnimationSettingsUpdateRequest,
   AnimationSequenceContract,
   AnimationSequenceStepContract,
   AudioCalibrationResult,
@@ -288,13 +291,34 @@ export function parseDashboardState(value: unknown): DashboardState {
   return dashboardStateSchema.parse(value)
 }
 
+const animationSettingOptionSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  type: z.enum(["number", "boolean", "enum", "color"]),
+  default: z.union([z.string(), z.number(), z.boolean()]),
+  description: z.string(),
+  minimum: z.number().nullable().optional(),
+  maximum: z.number().nullable().optional(),
+  step: z.number().nullable().optional(),
+  unit: z.string().nullable().optional(),
+  choices: z.array(z.string()).optional().default([]),
+  visible_when_option: z.string().nullable().optional(),
+  visible_when_value: z.string().nullable().optional(),
+}).strict()
 const animationOptionSchema = z.object({
   name: z.string(),
   mood: z.string(),
   dynamic_safe: z.boolean(),
   sequence_eligible: z.boolean().optional().default(false),
+  settings: z.array(animationSettingOptionSchema).optional().default([]),
 }).strict()
 const animationListSchema = z.object({ items: z.array(animationOptionSchema) }).strict()
+const animationSettingsResponseSchema = z.object({
+  animation: z.string(),
+  stripe_id: z.string().nullable().optional(),
+  options: z.array(animationSettingOptionSchema),
+  values: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])),
+}).strict()
 const animationSequenceStepSchema = z.object({
   animation_name: z.string().min(1).max(100),
   duration_bars: z.union([z.literal(1), z.literal(2), z.literal(4), z.literal(8)]),
@@ -641,6 +665,24 @@ export const dashboardApi = {
   checkForUpdates: () => request("/api/system/update/check", { method: "POST" }, updateStatusSchema),
   installUpdate: () => request("/api/system/update/install", { method: "POST" }, updateStatusSchema),
   getAnimations: async () => (await request("/api/animations", undefined, animationListSchema)).items,
+  getAnimationSettings: (animation: string, stripeId?: string) => {
+    const suffix = stripeId ? `?stripe_id=${encodeURIComponent(stripeId)}` : ""
+    return request(`/api/animations/${encodeURIComponent(animation)}/settings${suffix}`, undefined, animationSettingsResponseSchema)
+  },
+  setAnimationSettings: (
+    animation: string,
+    values: Record<string, string | number | boolean>,
+    stripeId?: string,
+  ) => request(`/api/animations/${encodeURIComponent(animation)}/settings`, {
+    method: "PUT",
+    body: JSON.stringify({ values, ...(stripeId ? { stripe_id: stripeId } : {}) }),
+  }, animationSettingsResponseSchema),
+  resetAnimationSettings: (animation: string, stripeId?: string) => {
+    const suffix = stripeId ? `?stripe_id=${encodeURIComponent(stripeId)}` : ""
+    return request(`/api/animations/${encodeURIComponent(animation)}/settings/reset${suffix}`, {
+      method: "POST",
+    }, animationSettingsResponseSchema)
+  },
   getAnimationSequences: () => request("/api/sequencer/sequences", undefined, animationSequenceLibrarySchema),
   createAnimationSequence: (sequence: SequenceCreateRequest) => request("/api/sequencer/sequences", {
     method: "POST",

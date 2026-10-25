@@ -286,7 +286,16 @@ export function ControlPanel({ controller }: { controller: DashboardController }
               animations={animations}
               current={animation}
               disabled={disabled || pendingCommand === "animation"}
+              stripeId={targetId}
+              settingsDisabledReason={
+                state.stripe_topology.layout === "independent" && targetId === undefined
+                  ? "Choose a stripe to edit its animation settings."
+                  : undefined
+              }
               onSelect={(name) => controller.selectAnimation(name, targetId)}
+              onLoadSettings={controller.getAnimationSettings}
+              onSaveSettings={controller.setAnimationSettings}
+              onResetSettings={controller.resetAnimationSettings}
             />
           )}
         </CardContent>

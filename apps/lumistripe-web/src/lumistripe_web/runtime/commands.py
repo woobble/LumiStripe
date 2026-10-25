@@ -149,6 +149,14 @@ class _TransitionSettingsCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class _AnimationSettingsCommand:
+    animation_name: str
+    values: dict[str, object] | None
+    stripe_id: str | None = None
+    reset: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class _SequenceLibraryCommand:
     action: Literal["create", "update", "delete", "activate"]
     sequence_id: str | None = None
@@ -156,6 +164,7 @@ class _SequenceLibraryCommand:
 
 
 __all__ = [
+    "_AnimationSettingsCommand",
     "_AudioCalibrationFinishCommand",
     "_AudioCalibrationMusicCommand",
     "_AudioCalibrationStartCommand",

@@ -6,7 +6,7 @@ import queue
 import threading
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -33,7 +33,11 @@ from lumistripe import (
     estimate_frame_power,
 )
 from lumistripe.animation import AnimationPlayer
-from lumistripe.animation.catalog import dynamic_sequence_eligible
+from lumistripe.animation.catalog import (
+    AnimationDefinition,
+    animation_catalog,
+    dynamic_sequence_eligible,
+)
 from lumistripe.audio.capture import AudioInput
 from lumistripe.audio.devices import list_input_device_details
 from lumistripe.audio.hardware_gain import HardwareGainController
@@ -76,6 +80,8 @@ from ..contracts.sequencer import (
 )
 from ..models import (
     AnimationOption,
+    AnimationSettingOption,
+    AnimationSettingsResponse,
     AudioCalibrationSessionResponse,
     AudioDeviceOption,
     AudioOutputDeviceInfo,
@@ -111,6 +117,7 @@ from ..models import (
 from ..models import AudioCalibrationResult as AudioCalibrationResultModel
 from ..settings import (
     MAX_SAVED_ANIMATION_SEQUENCES,
+    SHARED_ANIMATION_SETTINGS_KEY,
     AudioTuningProfile,
     CalibrationSettingsStore,
     StartupPlaybackSettings,
@@ -126,6 +133,7 @@ from .audio import default_audio_factory
 from .audio_service import complete_audio_calibration, complete_microphone_calibration
 from .calibration_service import calibration_color
 from .commands import (
+    _AnimationSettingsCommand,
     _AudioCalibrationFinishCommand,
     _AudioCalibrationMusicCommand,
     _AudioCalibrationStartCommand,
@@ -228,6 +236,14 @@ class SequenceConflictError(RuntimeCommandError):
 
 
 class SequencePersistenceError(RuntimeCommandError):
+    pass
+
+
+class InvalidAnimationSettingsError(RuntimeCommandError):
+    pass
+
+
+class AnimationSettingsPersistenceError(RuntimeCommandError):
     pass
 
 
@@ -358,6 +374,10 @@ class RuntimeWorker:
             Literal[4, 8, 16], loaded_settings.bars_per_phrase
         )
         self._animation_sequences = loaded_settings.animation_sequences
+        self._animation_settings = {
+            scope: {name: dict(values) for name, values in animations.items()}
+            for scope, animations in loaded_settings.animation_settings.items()
+        }
         self._active_sequence_id = loaded_settings.active_sequence_id
         self._active_animation_sequence = next(
             (
@@ -379,6 +399,9 @@ class RuntimeWorker:
         )
         self._playback_policy = PlaybackPolicy()
         self.player = AnimationPlayer.party()
+        self._apply_saved_animation_settings(
+            self.player, SHARED_ANIMATION_SETTINGS_KEY
+        )
         self.playback = PlaybackEngine(
             self.player,
             PlaybackConfig(
@@ -453,6 +476,7 @@ class RuntimeWorker:
         self._controller: OutputGateController | None = None
         self._output_gates: tuple[OutputGateController, ...] = ()
         self._playbacks: dict[str, tuple[AnimationPlayer, PlaybackEngine]] = {}
+        self._animation_settings_snapshot = self._build_animation_settings_snapshot()
         self._correction_controllers: tuple[ColorCorrectionController, ...] = ()
         self._calibration: _CalibrationSession | None = None
         self._audio_calibration: _AudioCalibrationSession | None = None
@@ -588,9 +612,52 @@ class RuntimeWorker:
                     entry.definition is not None
                     and dynamic_sequence_eligible(entry.definition)
                 ),
+                settings=(
+                    tuple(
+                        AnimationSettingOption(
+                            id=option.id,
+                            label=option.label,
+                            type=option.type.value,
+                            default=option.default,
+                            description=option.description,
+                            minimum=option.minimum,
+                            maximum=option.maximum,
+                            step=option.step,
+                            unit=option.unit,
+                            choices=option.choices,
+                            visible_when_option=option.visible_when_option,
+                            visible_when_value=option.visible_when_value,
+                        )
+                        for option in entry.definition.settings
+                    )
+                    if entry.definition is not None
+                    else ()
+                ),
             )
             for entry in self.player.animations
         )
+
+    def animation_settings(
+        self, animation_name: str, stripe_id: str | None = None
+    ) -> AnimationSettingsResponse:
+        definition = next(
+            (item for item in animation_catalog(self.player) if item.name == animation_name),
+            None,
+        )
+        if definition is None:
+            raise UnknownAnimationError(f"unknown animation: {animation_name}")
+        if not definition.settings:
+            raise InvalidAnimationSettingsError(
+                f"animation {animation_name} has no configurable settings"
+            )
+        key = (animation_name, stripe_id)
+        with self._snapshot_lock:
+            response = self._animation_settings_snapshot.get(key)
+            if response is None:
+                raise InvalidAnimationSettingsError(
+                    f"unknown stripe: {stripe_id}" if stripe_id else "animation settings are unavailable"
+                )
+            return response.model_copy(deep=True)
 
     def audio_telemetry(self) -> AudioTelemetry:
         with self._snapshot_lock:
@@ -887,6 +954,34 @@ class RuntimeWorker:
             self._submit(
                 "transition_settings",
                 _TransitionSettingsCommand(enabled, duration_ms, effect),
+            ),
+        )
+
+    def set_animation_settings(
+        self,
+        animation_name: str,
+        values: dict[str, object],
+        *,
+        stripe_id: str | None = None,
+    ) -> Future[DashboardState]:
+        return cast(
+            Future[DashboardState],
+            self._submit(
+                "animation_settings",
+                _AnimationSettingsCommand(animation_name, values, stripe_id),
+            ),
+        )
+
+    def reset_animation_settings(
+        self, animation_name: str, *, stripe_id: str | None = None
+    ) -> Future[DashboardState]:
+        return cast(
+            Future[DashboardState],
+            self._submit(
+                "animation_settings",
+                _AnimationSettingsCommand(
+                    animation_name, None, stripe_id, reset=True
+                ),
             ),
         )
 
@@ -1337,6 +1432,7 @@ class RuntimeWorker:
             if output.id in self._playbacks:
                 continue
             player = AnimationPlayer.party()
+            self._apply_saved_animation_settings(player, output.id)
             player.set_brightness(self.player.brightness)
             engine = PlaybackEngine(
                 player,
@@ -1531,6 +1627,12 @@ class RuntimeWorker:
                     transition_settings.duration_ms,
                     transition_settings.effect,
                 )
+                result = self._publish(running=True)
+            elif command.name == "animation_settings":
+                animation_settings = _expect(
+                    command.value, _AnimationSettingsCommand
+                )
+                self._set_animation_settings(animation_settings)
                 result = self._publish(running=True)
             elif command.name == "sequence_library":
                 sequence_command = _expect(
@@ -2522,6 +2624,149 @@ profile.audio_config(microphone=True),
         self._active_sequence_id = selected_id
         self._active_animation_sequence = next_active
 
+    def _set_animation_settings(self, command: _AnimationSettingsCommand) -> None:
+        definition = next(
+            (
+                item
+                for item in animation_catalog(self.player)
+                if item.name == command.animation_name
+            ),
+            None,
+        )
+        if definition is None:
+            raise UnknownAnimationError(
+                f"unknown animation: {command.animation_name}"
+            )
+        if not definition.settings:
+            raise InvalidAnimationSettingsError(
+                f"animation {command.animation_name} has no configurable settings"
+            )
+        try:
+            values = definition.normalize_settings(
+                None if command.reset else command.values,
+                allow_partial=command.reset,
+            )
+        except (TypeError, ValueError) as exc:
+            raise InvalidAnimationSettingsError(str(exc)) from exc
+
+        stripe_id = command.stripe_id
+        if stripe_id is not None:
+            if self._topology.layout != "independent":
+                raise InvalidAnimationSettingsError(
+                    "a stripe target is only available in independent layout"
+                )
+            if stripe_id not in {output.id for output in self._topology.outputs}:
+                raise InvalidAnimationSettingsError(f"unknown stripe: {stripe_id}")
+            targets = self._target_playbacks(stripe_id)
+        else:
+            targets = self._target_playbacks(None)
+
+        updated = {
+            scope: {name: dict(saved) for name, saved in animations.items()}
+            for scope, animations in self._animation_settings.items()
+        }
+        if stripe_id is None:
+            shared = updated.setdefault(SHARED_ANIMATION_SETTINGS_KEY, {})
+            shared[command.animation_name] = dict(values)
+            for scope, animations in updated.items():
+                if scope != SHARED_ANIMATION_SETTINGS_KEY:
+                    animations.pop(command.animation_name, None)
+            updated = {
+                scope: animations
+                for scope, animations in updated.items()
+                if animations or scope == SHARED_ANIMATION_SETTINGS_KEY
+            }
+        else:
+            updated.setdefault(stripe_id, {})[command.animation_name] = dict(values)
+
+        try:
+            with self._settings_io_lock:
+                self._settings_store.save_animation_settings(updated)
+        except Exception as exc:
+            raise AnimationSettingsPersistenceError(
+                f"could not save animation settings: {exc}"
+            ) from exc
+
+        self._animation_settings = updated
+        players = (
+            tuple(player for player, _ in targets)
+            if stripe_id is not None
+            else (self.player, *(player for player, _ in targets))
+        )
+        for player in players:
+            player.set_animation_settings(command.animation_name, values)
+
+    def _apply_saved_animation_settings(
+        self, player: AnimationPlayer, scope: str
+    ) -> None:
+        shared = self._animation_settings.get(SHARED_ANIMATION_SETTINGS_KEY, {})
+        overrides = (
+            {} if scope == SHARED_ANIMATION_SETTINGS_KEY else self._animation_settings.get(scope, {})
+        )
+        for definition in animation_catalog(player):
+            if not definition.settings:
+                continue
+            values = overrides.get(definition.name, shared.get(definition.name))
+            if values is not None:
+                player.set_animation_settings(definition.name, values)
+
+    def _build_animation_settings_snapshot(
+        self,
+    ) -> dict[tuple[str, str | None], AnimationSettingsResponse]:
+        snapshot: dict[tuple[str, str | None], AnimationSettingsResponse] = {}
+        shared = self._animation_settings.get(SHARED_ANIMATION_SETTINGS_KEY, {})
+        for definition in animation_catalog(self.player):
+            if not definition.settings:
+                continue
+            shared_values = definition.normalize_settings(
+                shared.get(definition.name), allow_partial=True
+            )
+            snapshot[(definition.name, None)] = self._animation_settings_response(
+                definition, shared_values, None
+            )
+            for output in self._topology.outputs:
+                saved_values = self._animation_settings.get(output.id, {}).get(
+                    definition.name, shared_values
+                )
+                values = definition.normalize_settings(
+                    saved_values, allow_partial=True
+                )
+                snapshot[(definition.name, output.id)] = (
+                    self._animation_settings_response(
+                        definition, values, output.id
+                    )
+                )
+        return snapshot
+
+    @staticmethod
+    def _animation_settings_response(
+        definition: AnimationDefinition,
+        values: Mapping[str, str | int | float | bool],
+        stripe_id: str | None,
+    ) -> AnimationSettingsResponse:
+        return AnimationSettingsResponse(
+            animation=definition.name,
+            stripe_id=stripe_id,
+            options=tuple(
+                AnimationSettingOption(
+                    id=option.id,
+                    label=option.label,
+                    type=option.type.value,
+                    default=option.default,
+                    description=option.description,
+                    minimum=option.minimum,
+                    maximum=option.maximum,
+                    step=option.step,
+                    unit=option.unit,
+                    choices=option.choices,
+                    visible_when_option=option.visible_when_option,
+                    visible_when_value=option.visible_when_value,
+                )
+                for option in definition.settings
+            ),
+            values=dict(values),
+        )
+
     def _sequence_engines(self) -> tuple[PlaybackEngine, ...]:
         return (self.playback, *(engine for _, engine in self._playbacks.values()))
 
@@ -3355,6 +3600,9 @@ profile.audio_config(microphone=True),
             self._snapshot = state
             self._sequence_library_snapshot = self._sequence_library_response(
                 self._animation_sequences, self._active_sequence_id
+            )
+            self._animation_settings_snapshot = (
+                self._build_animation_settings_snapshot()
             )
         return state
 

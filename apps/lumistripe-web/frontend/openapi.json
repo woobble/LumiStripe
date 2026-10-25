@@ -52,6 +52,14 @@
           "sequence_eligible": {
             "title": "Sequence Eligible",
             "type": "boolean"
+          },
+          "settings": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/AnimationSettingOption"
+            },
+            "title": "Settings",
+            "type": "array"
           }
         },
         "required": [
@@ -151,6 +159,213 @@
           "duration_bars"
         ],
         "title": "AnimationSequenceStepContract",
+        "type": "object"
+      },
+      "AnimationSettingOption": {
+        "properties": {
+          "choices": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Choices",
+            "type": "array"
+          },
+          "default": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ],
+            "title": "Default"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "maximum": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximum"
+          },
+          "minimum": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimum"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          },
+          "type": {
+            "enum": [
+              "number",
+              "boolean",
+              "enum",
+              "color"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          },
+          "visible_when_option": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visible When Option"
+          },
+          "visible_when_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visible When Value"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "type",
+          "default",
+          "description"
+        ],
+        "title": "AnimationSettingOption",
+        "type": "object"
+      },
+      "AnimationSettingsResponse": {
+        "properties": {
+          "animation": {
+            "title": "Animation",
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/AnimationSettingOption"
+            },
+            "title": "Options",
+            "type": "array"
+          },
+          "stripe_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stripe Id"
+          },
+          "values": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            "title": "Values",
+            "type": "object"
+          }
+        },
+        "required": [
+          "animation",
+          "options",
+          "values"
+        ],
+        "title": "AnimationSettingsResponse",
+        "type": "object"
+      },
+      "AnimationSettingsUpdateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "stripe_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stripe Id"
+          },
+          "values": {
+            "additionalProperties": true,
+            "title": "Values",
+            "type": "object"
+          }
+        },
+        "required": [
+          "values"
+        ],
+        "title": "AnimationSettingsUpdateRequest",
         "type": "object"
       },
       "AudioCalibrationFinishRequest": {
@@ -3409,6 +3624,173 @@
           }
         },
         "summary": "Animations"
+      }
+    },
+    "/api/animations/{animation_name}/settings": {
+      "get": {
+        "operationId": "get_animation_settings_api_animations__animation_name__settings_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "animation_name",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Animation Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stripe_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Stripe Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnimationSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Animation Settings"
+      },
+      "put": {
+        "operationId": "update_animation_settings_api_animations__animation_name__settings_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "animation_name",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Animation Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnimationSettingsUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnimationSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Animation Settings"
+      }
+    },
+    "/api/animations/{animation_name}/settings/reset": {
+      "post": {
+        "operationId": "reset_animation_settings_api_animations__animation_name__settings_reset_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "animation_name",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Animation Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stripe_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Stripe Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnimationSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reset Animation Settings"
       }
     },
     "/api/audio/bluetooth": {

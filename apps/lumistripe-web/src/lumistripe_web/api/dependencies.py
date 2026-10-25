@@ -8,6 +8,8 @@ from concurrent.futures import Future
 from fastapi import HTTPException, Request, status
 
 from ..runtime import (
+    AnimationSettingsPersistenceError,
+    InvalidAnimationSettingsError,
     InvalidSequenceError,
     LumiStripeRuntime,
     RuntimeCommandError,
@@ -59,6 +61,16 @@ async def await_command[T](future: Future[T]) -> T:
     except SequencePersistenceError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        ) from exc
+    except AnimationSettingsPersistenceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        ) from exc
+    except InvalidAnimationSettingsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
     except RuntimeCommandError as exc:

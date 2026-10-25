@@ -14,6 +14,11 @@ from .catalog import (
     party_catalog,
     validate_animation_catalog,
 )
+from .settings import (
+    AnimationSettingDefinition,
+    AnimationSettingType,
+    normalize_animation_settings,
+)
 
 _LAZY_ANIMATIONS: dict[str, tuple[str, str]] = {
     "AudioReactive": ("lumistripe.animation.reactive", "AudioReactive"),
@@ -23,6 +28,7 @@ _LAZY_ANIMATIONS: dict[str, tuple[str, str]] = {
     "Bpm": ("lumistripe.animation.bpm", "Bpm"),
     "ColorWipe": ("lumistripe.animation.color_wipe", "ColorWipe"),
     "Comet": ("lumistripe.animation.comet", "Comet"),
+    "CometSettings": ("lumistripe.animation.comet", "CometSettings"),
     "CometStorm": ("lumistripe.animation.comet_storm", "CometStorm"),
     "DanceFloor": ("lumistripe.animation.dance_floor", "DanceFloor"),
     "DiscoComet": ("lumistripe.animation.disco_comet", "DiscoComet"),
@@ -39,6 +45,7 @@ _LAZY_ANIMATIONS: dict[str, tuple[str, str]] = {
     "PlasmaRave": ("lumistripe.animation.plasma_rave", "PlasmaRave"),
     "Police": ("lumistripe.animation.police", "Police"),
     "Pulse": ("lumistripe.animation.pulse", "Pulse"),
+    "PulseSettings": ("lumistripe.animation.pulse", "PulseSettings"),
     "Rainbow": ("lumistripe.animation.rainbow", "Rainbow"),
     "RainbowCycle": ("lumistripe.animation.rainbow_cycle", "RainbowCycle"),
     "RainbowStrobe": ("lumistripe.animation.rainbow_strobe", "RainbowStrobe"),
@@ -72,9 +79,12 @@ __all__ = [
     "AnimationMetadata",
     "AnimationPlayer",
     "AnimationRole",
+    "AnimationSettingDefinition",
+    "AnimationSettingType",
     "TransitionEffect",
     "animation_catalog",
     "dynamic_sequence_eligible",
+    "normalize_animation_settings",
     "party_catalog",
     "validate_animation_catalog",
 ]

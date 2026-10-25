@@ -425,6 +425,110 @@ def test_transition_settings_api_validation_live_update_and_restart(
         }
 
 
+def test_animation_settings_api_validates_updates_persists_and_resets(
+    tmp_path: Path,
+) -> None:
+    settings_path = tmp_path / "settings.json"
+    app = create_app(
+        RuntimeSettings(pixels=8, settings_file=settings_path), pairing_code="1234"
+    )
+
+    with TestClient(app) as client:
+        assert client.get("/api/animations/comet/settings").status_code == 401
+        assert client.post("/api/auth/pair", json={"code": "1234"}).status_code == 200
+
+        initial = client.get("/api/animations/comet/settings")
+        assert initial.status_code == 200
+        defaults = initial.json()["values"]
+        assert defaults["direction"] == "bounce"
+        assert defaults["tail_length"] == 8
+        assert len(initial.json()["options"]) == 7
+        assert client.get("/api/animations/rainbow/settings").status_code == 422
+        assert client.get("/api/animations/not_registered/settings").status_code == 404
+
+        invalid = dict(defaults, speed=101)
+        assert client.put(
+            "/api/animations/comet/settings", json={"values": invalid}
+        ).status_code == 422
+        assert client.get("/api/animations/comet/settings").json()["values"] == defaults
+
+        values = dict(defaults, speed=88, palette="custom", custom_color="#12AB34")
+        updated = client.put(
+            "/api/animations/comet/settings", json={"values": values}
+        )
+        assert updated.status_code == 200
+        assert updated.json()["values"]["speed"] == 88
+        assert updated.json()["values"]["custom_color"] == "#12AB34"
+        runtime = app.state.runtime
+        assert runtime.player.animation_settings("comet")["speed"] == 88
+
+        pulse = client.get("/api/animations/pulse/settings").json()["values"]
+        invalid_pulse = dict(pulse, minimum_intensity=90, maximum_intensity=20)
+        assert client.put(
+            "/api/animations/pulse/settings", json={"values": invalid_pulse}
+        ).status_code == 422
+
+    saved, warning = CalibrationSettingsStore(settings_path).load_all()
+    assert warning is None
+    assert saved.animation_settings["shared"]["comet"]["speed"] == 88
+
+    restarted = create_app(
+        RuntimeSettings(pixels=8, settings_file=settings_path), pairing_code="1234"
+    )
+    with TestClient(restarted) as client:
+        assert client.post("/api/auth/pair", json={"code": "1234"}).status_code == 200
+        restored = client.get("/api/animations/comet/settings").json()
+        assert restored["values"]["speed"] == 88
+        reset = client.post("/api/animations/comet/settings/reset")
+        assert reset.status_code == 200
+        assert reset.json()["values"] == defaults
+
+
+def test_animation_settings_api_keeps_independent_stripe_values_separate(
+    tmp_path: Path,
+) -> None:
+    settings_path = tmp_path / "settings.json"
+    store = CalibrationSettingsStore(settings_path)
+    store.save_stripes(
+        StripeTopologySettings(
+            layout="independent",
+            outputs=(
+                StripeOutputSettings(id="left", name="Left", pixels=8),
+                StripeOutputSettings(
+                    id="right", name="Right", pixels=8, spi_device="/dev/spidev1.0"
+                ),
+            ),
+        )
+    )
+    app = create_app(
+        RuntimeSettings(pixels=8, settings_file=settings_path), pairing_code="1234"
+    )
+
+    with TestClient(app) as client:
+        assert client.post("/api/auth/pair", json={"code": "1234"}).status_code == 200
+        left_url = "/api/animations/comet/settings?stripe_id=left"
+        right_url = "/api/animations/comet/settings?stripe_id=right"
+        defaults = client.get(right_url).json()["values"]
+        values = dict(defaults, speed=93)
+        updated = client.put(
+            "/api/animations/comet/settings",
+            json={"stripe_id": "left", "values": values},
+        )
+        assert updated.status_code == 200
+        assert client.get(left_url).json()["values"]["speed"] == 93
+        assert client.get(right_url).json()["values"] == defaults
+        assert app.state.runtime._playbacks["left"][0].animation_settings("comet")["speed"] == 93
+        assert app.state.runtime._playbacks["right"][0].animation_settings("comet")["speed"] != 93
+
+    restarted = create_app(
+        RuntimeSettings(pixels=8, settings_file=settings_path), pairing_code="1234"
+    )
+    with TestClient(restarted) as client:
+        assert client.post("/api/auth/pair", json={"code": "1234"}).status_code == 200
+        assert client.get("/api/animations/comet/settings?stripe_id=left").json()["values"]["speed"] == 93
+        assert client.get("/api/animations/comet/settings?stripe_id=right").json()["values"]["speed"] == defaults["speed"]
+
+
 def test_animation_sequence_api_crud_validation_and_authentication(
     tmp_path: Path,
 ) -> None:

@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from .protocols.preview import encode_preview_frame as encode_preview_frame
 from .routes import (
+    animations_router,
     audio_router,
     auth_router,
     bluetooth_router,
@@ -20,6 +21,7 @@ router = APIRouter()
 for feature_router in (
     auth_router,
     system_router,
+    animations_router,
     transitions_router,
     control_router,
     sequencer_router,

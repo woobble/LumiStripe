@@ -38,6 +38,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/animations/{animation_name}/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Animation Settings */
+        get: operations["get_animation_settings_api_animations__animation_name__settings_get"];
+        /** Update Animation Settings */
+        put: operations["update_animation_settings_api_animations__animation_name__settings_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/animations/{animation_name}/settings/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reset Animation Settings */
+        post: operations["reset_animation_settings_api_animations__animation_name__settings_reset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/audio/bluetooth": {
         parameters: {
             query?: never;
@@ -853,6 +888,11 @@ export interface components {
             name: string;
             /** Sequence Eligible */
             sequence_eligible: boolean;
+            /**
+             * Settings
+             * @default []
+             */
+            settings: components["schemas"]["AnimationSettingOption"][];
         };
         /** AnimationRequest */
         AnimationRequest: {
@@ -881,6 +921,61 @@ export interface components {
              * @enum {integer}
              */
             duration_bars: 1 | 2 | 4 | 8;
+        };
+        /** AnimationSettingOption */
+        AnimationSettingOption: {
+            /**
+             * Choices
+             * @default []
+             */
+            choices: string[];
+            /** Default */
+            default: string | number | boolean;
+            /** Description */
+            description: string;
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Maximum */
+            maximum?: number | null;
+            /** Minimum */
+            minimum?: number | null;
+            /** Step */
+            step?: number | null;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "number" | "boolean" | "enum" | "color";
+            /** Unit */
+            unit?: string | null;
+            /** Visible When Option */
+            visible_when_option?: string | null;
+            /** Visible When Value */
+            visible_when_value?: string | null;
+        };
+        /** AnimationSettingsResponse */
+        AnimationSettingsResponse: {
+            /** Animation */
+            animation: string;
+            /** Options */
+            options: components["schemas"]["AnimationSettingOption"][];
+            /** Stripe Id */
+            stripe_id?: string | null;
+            /** Values */
+            values: {
+                [key: string]: string | number | boolean;
+            };
+        };
+        /** AnimationSettingsUpdateRequest */
+        AnimationSettingsUpdateRequest: {
+            /** Stripe Id */
+            stripe_id?: string | null;
+            /** Values */
+            values: {
+                [key: string]: unknown;
+            };
         };
         /** AudioCalibrationFinishRequest */
         AudioCalibrationFinishRequest: {
@@ -2304,6 +2399,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AnimationList"];
+                };
+            };
+        };
+    };
+    get_animation_settings_api_animations__animation_name__settings_get: {
+        parameters: {
+            query?: {
+                stripe_id?: string | null;
+            };
+            header?: never;
+            path: {
+                animation_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnimationSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_animation_settings_api_animations__animation_name__settings_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                animation_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnimationSettingsUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnimationSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_animation_settings_api_animations__animation_name__settings_reset_post: {
+        parameters: {
+            query?: {
+                stripe_id?: string | null;
+            };
+            header?: never;
+            path: {
+                animation_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnimationSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

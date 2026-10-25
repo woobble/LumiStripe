@@ -119,8 +119,50 @@ describe("dashboardApi", () => {
   it("defaults missing sequence eligibility to false for older animation responses", async () => {
     fetchMock.mockReturnValueOnce(jsonResponse({ items: [{ name: "old_animation", mood: "calm", dynamic_safe: true }] }))
     await expect(dashboardApi.getAnimations()).resolves.toEqual([
-      { name: "old_animation", mood: "calm", dynamic_safe: true, sequence_eligible: false },
+      { name: "old_animation", mood: "calm", dynamic_safe: true, sequence_eligible: false, settings: [] },
     ])
+  })
+
+  it("loads, updates, and resets animation settings with stripe targeting", async () => {
+    const response = {
+      animation: "comet",
+      stripe_id: "left",
+      options: [{
+        id: "speed",
+        label: "Speed",
+        type: "number",
+        default: 65,
+        description: "Movement speed",
+        minimum: 0,
+        maximum: 100,
+        step: 1,
+        unit: "%",
+        choices: [],
+        visible_when_option: null,
+        visible_when_value: null,
+      }],
+      values: { speed: 88 },
+    }
+    fetchMock.mockReturnValueOnce(jsonResponse(response))
+    await expect(dashboardApi.getAnimationSettings("comet", "left")).resolves.toEqual(response)
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/animations/comet/settings?stripe_id=left",
+      expect.objectContaining({ headers: { "Content-Type": "application/json" } }),
+    )
+
+    fetchMock.mockReturnValueOnce(jsonResponse(response))
+    await dashboardApi.setAnimationSettings("comet", { speed: 88 }, "left")
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/animations/comet/settings", expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ values: { speed: 88 }, stripe_id: "left" }),
+    }))
+
+    fetchMock.mockReturnValueOnce(jsonResponse(response))
+    await dashboardApi.resetAnimationSettings("comet", "left")
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/animations/comet/settings/reset?stripe_id=left",
+      expect.objectContaining({ method: "POST" }),
+    )
   })
 
   it("defaults sequencer fields for older websocket payloads and rejects unknown fields", () => {

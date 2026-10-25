@@ -1,5 +1,6 @@
 """Feature routers assembled by :mod:`lumistripe_web.api`."""
 
+from .animations import router as animations_router
 from .audio import router as audio_router
 from .auth import router as auth_router
 from .bluetooth import router as bluetooth_router
@@ -12,6 +13,7 @@ from .transitions import router as transitions_router
 from .websocket import router as websocket_router
 
 __all__ = [
+    "animations_router",
     "audio_router",
     "auth_router",
     "bluetooth_router",

@@ -50,8 +50,11 @@ class _AnimationEntry:
     frames_per_cycle: int
     automatic: bool
     definition: Any = None
+    configuration: dict[str, object] = field(default_factory=dict)
 
     def fresh_animation(self) -> Animation:
+        if self.definition is not None and hasattr(self.definition, "create"):
+            return self.definition.create(self.configuration)
         animation_type: type[Animation] = type(self.animation)
         try:
             return animation_type()
@@ -107,7 +110,10 @@ class AnimationPlayer:
     def from_catalog(cls, definitions: tuple[Any, ...]) -> AnimationPlayer:
         player = cls()
         for definition in definitions:
-            animation = definition.create()
+            configuration = definition.normalize_settings(
+                None, allow_partial=True
+            )
+            animation = definition.create(configuration)
             player.animations.append(
                 _AnimationEntry(
                     animation,
@@ -115,12 +121,38 @@ class AnimationPlayer:
                     definition.frames_per_cycle,
                     definition.automatic,
                     definition,
+                    configuration,
                 )
             )
         return player
 
     def set_brightness(self, brightness: float) -> None:
         self.brightness = max(0.0, min(1.0, brightness))
+
+    def set_animation_settings(
+        self, name: str, values: object
+    ) -> dict[str, object]:
+        """Validate and apply settings without replacing animation runtime state."""
+
+        entry = next(
+            (item for item in self.animations if item.animation.name == name), None
+        )
+        if entry is None:
+            raise ValueError(f"unknown animation: {name}")
+        if entry.definition is None or not hasattr(entry.definition, "normalize_settings"):
+            raise ValueError(f"animation {name} has no configurable settings")
+        normalized = entry.definition.normalize_settings(values)
+        entry.definition.apply_settings(entry.animation, normalized)
+        entry.configuration = dict(normalized)
+        return dict(normalized)
+
+    def animation_settings(self, name: str) -> dict[str, object] | None:
+        entry = next(
+            (item for item in self.animations if item.animation.name == name), None
+        )
+        if entry is None or entry.definition is None or not entry.definition.settings:
+            return None
+        return dict(entry.configuration)
 
     def set_audio_snapshot(self, snapshot: Callable[[], AudioFrame]) -> None:
         self._audio_snapshot = snapshot

@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from ..selector import AnimationMetadata, AnimationRole, animation_metadata
 from .base import Animation, AnimationPlayer
+from .settings import (
+    COMET_SETTING_DEFINITIONS,
+    PULSE_SETTING_DEFINITIONS,
+    AnimationSettingDefinition,
+    AnimationSettingValue,
+    AnimationSettingValues,
+    normalize_animation_settings,
+)
 
 if TYPE_CHECKING:
     from ..effects.definitions import EffectDefinition
@@ -27,6 +35,13 @@ class AnimationDefinition:
     role: AnimationRole | None = None
     dynamic_metadata: AnimationMetadata | None = None
     effect_metadata: EffectDefinition | None = None
+    settings: tuple[AnimationSettingDefinition, ...] = ()
+    configuration_applier: Callable[
+        [Animation, Mapping[str, AnimationSettingValue]], None
+    ] | None = None
+    configuration_validator: Callable[
+        [Mapping[str, AnimationSettingValue]], None
+    ] | None = None
 
     def __post_init__(self) -> None:
         if self.metadata is None:
@@ -38,8 +53,53 @@ class AnimationDefinition:
         if self.dynamic_metadata is None:
             object.__setattr__(self, "dynamic_metadata", self.metadata)
 
-    def create(self) -> Animation:
-        return self.factory()
+    def normalize_settings(
+        self,
+        values: object | None,
+        *,
+        allow_partial: bool = False,
+    ) -> AnimationSettingValues:
+        if not self.settings:
+            if values not in (None, {}):
+                raise ValueError(f"animation {self.name} has no configurable settings")
+            return {}
+        normalized = normalize_animation_settings(
+            self.settings, values, allow_partial=allow_partial
+        )
+        if self.configuration_validator is not None:
+            self.configuration_validator(normalized)
+        return normalized
+
+    def apply_settings(
+        self, animation: Animation, values: object | None = None
+    ) -> AnimationSettingValues:
+        normalized = self.normalize_settings(values, allow_partial=True)
+        if self.configuration_applier is not None:
+            self.configuration_applier(animation, normalized)
+        return normalized
+
+    def create(self, values: object | None = None) -> Animation:
+        animation = self.factory()
+        self.apply_settings(animation, values)
+        return animation
+
+
+class _ConfigurableAnimation(Protocol):
+    def set_settings(self, values: Mapping[str, object]) -> None: ...
+
+
+def _apply_animation_settings(
+    animation: Animation, values: Mapping[str, AnimationSettingValue]
+) -> None:
+    configurable = cast(_ConfigurableAnimation, animation)
+    configurable.set_settings(values)
+
+
+def _validate_pulse_settings(values: Mapping[str, AnimationSettingValue]) -> None:
+    minimum = cast(float, values["minimum_intensity"])
+    maximum = cast(float, values["maximum_intensity"])
+    if minimum > maximum:
+        raise ValueError("minimum intensity must not exceed maximum intensity")
 
 
 def _effect_definitions() -> dict[str, EffectDefinition]:
@@ -58,6 +118,13 @@ def _entry(
     *,
     automatic: bool = True,
     effects: dict[str, EffectDefinition],
+    settings: tuple[AnimationSettingDefinition, ...] = (),
+    configuration_applier: Callable[
+        [Animation, Mapping[str, AnimationSettingValue]], None
+    ] | None = None,
+    configuration_validator: Callable[
+        [Mapping[str, AnimationSettingValue]], None
+    ] | None = None,
 ) -> AnimationDefinition:
     instance = factory()
     metadata = animation_metadata(instance.name)
@@ -72,6 +139,9 @@ def _entry(
         role=metadata.role,
         dynamic_metadata=metadata,
         effect_metadata=effects.get(instance.name),
+        settings=settings,
+        configuration_applier=configuration_applier,
+        configuration_validator=configuration_validator,
     )
 
 
@@ -136,9 +206,24 @@ def party_catalog() -> tuple[AnimationDefinition, ...]:
     effects = _effect_definitions()
     definitions = (
         _entry(RainbowCycle, 15, 300, effects=effects),
-        _entry(Pulse, 20, 180, effects=effects),
+        _entry(
+            Pulse,
+            20,
+            180,
+            effects=effects,
+            settings=PULSE_SETTING_DEFINITIONS,
+            configuration_applier=_apply_animation_settings,
+            configuration_validator=_validate_pulse_settings,
+        ),
         _entry(Confetti, 15, 220, effects=effects),
-        _entry(Comet, 16, 240, effects=effects),
+        _entry(
+            Comet,
+            16,
+            240,
+            effects=effects,
+            settings=COMET_SETTING_DEFINITIONS,
+            configuration_applier=_apply_animation_settings,
+        ),
         _entry(Shockwave, 16, 180, effects=effects),
         _entry(TheaterChase, 30, 220, effects=effects),
         _entry(Aurora, 18, 260, effects=effects),

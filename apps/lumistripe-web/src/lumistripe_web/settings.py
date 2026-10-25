@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from lumistripe.animation.catalog import animation_catalog
 from lumistripe.audio.config import (
     AudioConfig,
     AudioNormalization,
@@ -25,7 +26,8 @@ from lumistripe.playback import (
 )
 from lumistripe_app_support import build_audio_config
 
-SETTINGS_VERSION = 10
+SETTINGS_VERSION = 11
+SHARED_ANIMATION_SETTINGS_KEY = "shared"
 MAX_SAVED_ANIMATION_SEQUENCES = 20
 PROFILE_NAMES = ("primary", "secondary")
 StripeLayout = Literal["mirrored", "continuous", "independent"]
@@ -296,6 +298,9 @@ class DashboardSettings:
         default_factory=StartupPlaybackSettings
     )
     transition_settings: TransitionSettings = field(default_factory=TransitionSettings)
+    animation_settings: dict[str, dict[str, dict[str, object]]] = field(
+        default_factory=dict
+    )
 
 
 class CalibrationSettingsStore:
@@ -323,7 +328,7 @@ class CalibrationSettingsStore:
             if not isinstance(payload, dict):
                 raise TypeError("settings must be an object")
             version = payload.get("version")
-            if version not in {1, 2, 3, 4, 5, 6, 7, 8, 9, SETTINGS_VERSION}:
+            if version not in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, SETTINGS_VERSION}:
                 raise ValueError(
                     f"expected settings version 1 through {SETTINGS_VERSION}"
                 )
@@ -350,7 +355,7 @@ class CalibrationSettingsStore:
                 except (TypeError, ValueError) as exc:
                     warnings.append(str(exc))
 
-        if payload.get("version") in {2, 3, 4, 5, 6, 7, 8, 9, SETTINGS_VERSION}:
+        if payload.get("version") in {2, 3, 4, 5, 6, 7, 8, 9, 10, SETTINGS_VERSION}:
             selected = payload.get("selected_audio_device")
             if selected is not None and not isinstance(selected, str):
                 warnings.append("selected_audio_device must be a string or null")
@@ -388,13 +393,13 @@ class CalibrationSettingsStore:
                     except (TypeError, ValueError) as exc:
                         warnings.append(str(exc))
 
-        if payload.get("version") in {3, 4, 5, 6, 7, 8, 9, SETTINGS_VERSION} and "stripes" in payload:
+        if payload.get("version") in {3, 4, 5, 6, 7, 8, 9, 10, SETTINGS_VERSION} and "stripes" in payload:
             try:
                 settings.stripe_topology = _decode_stripes(payload["stripes"])
             except (TypeError, ValueError) as exc:
                 warnings.append(str(exc))
 
-        if payload.get("version") in {4, 5, 6, 7, 8, 9, SETTINGS_VERSION}:
+        if payload.get("version") in {4, 5, 6, 7, 8, 9, 10, SETTINGS_VERSION}:
             restore = payload.get("restore_last_state", False)
             if not isinstance(restore, bool):
                 warnings.append("restore_last_state must be a boolean")
@@ -416,7 +421,7 @@ class CalibrationSettingsStore:
                 except (TypeError, ValueError) as exc:
                     warnings.append(str(exc))
 
-        if payload.get("version") in {6, 7, 8, 9, SETTINGS_VERSION}:
+        if payload.get("version") in {6, 7, 8, 9, 10, SETTINGS_VERSION}:
             encoded_offsets = payload.get("audio_sync_offsets_ms", {})
             if not isinstance(encoded_offsets, dict):
                 warnings.append("audio_sync_offsets_ms must be an object")
@@ -434,7 +439,7 @@ class CalibrationSettingsStore:
                     except (TypeError, ValueError) as exc:
                         warnings.append(str(exc))
 
-        if payload.get("version") in {7, 8, 9, SETTINGS_VERSION}:
+        if payload.get("version") in {7, 8, 9, 10, SETTINGS_VERSION}:
             encoded_quantization = payload.get("switch_quantization", "off")
             try:
                 settings.switch_quantization = SwitchQuantization(encoded_quantization)
@@ -451,12 +456,12 @@ class CalibrationSettingsStore:
             else:
                 settings.bars_per_phrase = encoded_bars
 
-        if payload.get("version") in {8, 9, SETTINGS_VERSION}:
+        if payload.get("version") in {8, 9, 10, SETTINGS_VERSION}:
             settings.animation_sequences, settings.active_sequence_id = (
                 _decode_animation_sequences(payload, warnings)
             )
 
-        if payload.get("version") in {9, SETTINGS_VERSION} and "transition_settings" in payload:
+        if payload.get("version") in {9, 10, SETTINGS_VERSION} and "transition_settings" in payload:
             encoded_transitions = payload["transition_settings"]
             try:
                 if not isinstance(encoded_transitions, dict):
@@ -468,6 +473,11 @@ class CalibrationSettingsStore:
                 )
             except (TypeError, ValueError) as exc:
                 warnings.append(f"transition settings: {exc}")
+
+        if payload.get("version") == SETTINGS_VERSION and "animation_settings" in payload:
+            settings.animation_settings = _decode_animation_settings(
+                payload["animation_settings"], warnings
+            )
 
         warning = None
         if warnings:
@@ -524,6 +534,16 @@ class CalibrationSettingsStore:
         settings.transition_settings = transitions
         self.save_all(settings)
 
+    def save_animation_settings(
+        self, animation_settings: dict[str, dict[str, dict[str, object]]]
+    ) -> None:
+        settings, _ = self.load_all()
+        settings.animation_settings = {
+            scope: {name: dict(values) for name, values in animations.items()}
+            for scope, animations in animation_settings.items()
+        }
+        self.save_all(settings)
+
     def save_animation_sequences(
         self,
         sequences: tuple[AnimationSequence, ...],
@@ -547,6 +567,9 @@ class CalibrationSettingsStore:
             and settings.active_sequence_id not in sequence_ids
         ):
             raise ValueError("active_sequence_id must identify a saved sequence")
+        normalized_animation_settings = _normalize_animation_settings_map(
+            settings.animation_settings
+        )
         payload = {
             "version": SETTINGS_VERSION,
             "color_correction": {
@@ -620,6 +643,7 @@ class CalibrationSettingsStore:
                 "duration_ms": settings.transition_settings.duration_ms,
                 "effect": settings.transition_settings.effect.value,
             },
+            "animation_settings": normalized_animation_settings,
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path: Path | None = None
@@ -733,6 +757,75 @@ def _decode_animation_sequences(
             None if encoded_active_id is None else encoded_active_id.strip()
         )
     return tuple(valid), active_sequence_id
+
+
+def _animation_definitions_with_settings():
+    return {
+        definition.name: definition
+        for definition in animation_catalog()
+        if definition.settings
+    }
+
+
+def _decode_animation_settings(
+    encoded: object, warnings: list[str]
+) -> dict[str, dict[str, dict[str, object]]]:
+    decoded: dict[str, dict[str, dict[str, object]]] = {}
+    if not isinstance(encoded, dict):
+        warnings.append("animation_settings must be an object")
+        return decoded
+    definitions = _animation_definitions_with_settings()
+    for scope, encoded_animations in encoded.items():
+        if not isinstance(scope, str) or not scope.strip():
+            warnings.append("animation settings scopes must be non-empty strings")
+            continue
+        if not isinstance(encoded_animations, dict):
+            warnings.append(f"animation settings for {scope!r} must be an object")
+            continue
+        animations: dict[str, dict[str, object]] = {}
+        for name, values in encoded_animations.items():
+            try:
+                if not isinstance(name, str) or not name:
+                    raise ValueError("animation name must be a non-empty string")
+                definition = definitions.get(name)
+                if definition is None:
+                    raise ValueError(f"animation {name!r} has no configurable settings")
+                animations[name] = definition.normalize_settings(
+                    values, allow_partial=True
+                )
+            except (TypeError, ValueError) as exc:
+                warnings.append(
+                    f"animation settings for {scope!r}/{name!r} were ignored: {exc}"
+                )
+        if animations:
+            decoded[scope] = animations
+    return decoded
+
+
+def _normalize_animation_settings_map(
+    encoded: dict[str, dict[str, dict[str, object]]],
+) -> dict[str, dict[str, dict[str, object]]]:
+    if not isinstance(encoded, dict):
+        raise TypeError("animation_settings must be an object")
+    definitions = _animation_definitions_with_settings()
+    normalized: dict[str, dict[str, dict[str, object]]] = {}
+    for scope, animations in encoded.items():
+        if not isinstance(scope, str) or not scope.strip():
+            raise ValueError("animation settings scopes must be non-empty strings")
+        if not isinstance(animations, dict):
+            raise TypeError(f"animation settings for {scope!r} must be an object")
+        normalized_animations: dict[str, dict[str, object]] = {}
+        for name, values in animations.items():
+            if not isinstance(name, str) or not name:
+                raise ValueError("animation name must be a non-empty string")
+            definition = definitions.get(name)
+            if definition is None:
+                raise ValueError(f"animation {name!r} has no configurable settings")
+            normalized_animations[name] = cast(
+                dict[str, object], definition.normalize_settings(values)
+            )
+        normalized[scope] = normalized_animations
+    return normalized
 
 
 def _decode_stripes(encoded: object) -> StripeTopologySettings | None:

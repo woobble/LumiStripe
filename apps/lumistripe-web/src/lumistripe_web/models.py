@@ -264,6 +264,39 @@ class DashboardState(BaseModel):
     error: str | None = None
 
 
+class AnimationSettingOption(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    label: str
+    type: Literal["number", "boolean", "enum", "color"]
+    default: str | int | float | bool
+    description: str
+    minimum: float | None = None
+    maximum: float | None = None
+    step: float | None = None
+    unit: str | None = None
+    choices: tuple[str, ...] = ()
+    visible_when_option: str | None = None
+    visible_when_value: str | None = None
+
+
+class AnimationSettingsResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    animation: str
+    stripe_id: str | None = None
+    options: tuple[AnimationSettingOption, ...]
+    values: dict[str, str | int | float | bool]
+
+
+class AnimationSettingsUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    values: dict[str, object]
+    stripe_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+
 class AnimationOption(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -271,6 +304,7 @@ class AnimationOption(BaseModel):
     mood: str
     dynamic_safe: bool
     sequence_eligible: bool
+    settings: tuple[AnimationSettingOption, ...] = ()
 
 
 class AnimationList(BaseModel):

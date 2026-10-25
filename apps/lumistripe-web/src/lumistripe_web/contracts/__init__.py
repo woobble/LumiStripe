@@ -4,6 +4,11 @@ The original model module remains available for compatibility while route
 modules migrate to these narrower contract namespaces.
 """
 
+from .animations import (
+    AnimationSettingOption,
+    AnimationSettingsResponse,
+    AnimationSettingsUpdateRequest,
+)
 from .audio import (
     AudioCalibrationFinishRequest,
     AudioCalibrationResult,
@@ -87,6 +92,9 @@ __all__ = [
     "AnimationRequest",
     "AnimationSequenceContract",
     "AnimationSequenceStepContract",
+    "AnimationSettingOption",
+    "AnimationSettingsResponse",
+    "AnimationSettingsUpdateRequest",
     "AudioCalibrationFinishRequest",
     "AudioCalibrationResult",
     "AudioCalibrationSessionResponse",

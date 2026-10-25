@@ -12,6 +12,7 @@ from lumistripe import (
     SwitchQuantization,
     TransitionEffect,
 )
+from lumistripe.animation.catalog import animation_catalog
 from lumistripe_web.settings import (
     AudioTuningProfile,
     CalibrationSettingsStore,
@@ -65,7 +66,7 @@ def test_settings_round_trip_both_profiles_atomically(tmp_path: Path) -> None:
     assert warning is None
     assert profiles["primary"] == ColorCorrection(255, 220, 180)
     assert profiles["secondary"] == ColorCorrection(200, 210, 220)
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 10
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 11
     assert not list(path.parent.glob("*.tmp"))
 
 
@@ -127,7 +128,7 @@ def test_power_budget_round_trip_and_legacy_defaults(tmp_path: Path) -> None:
     assert loaded.stripe_topology == topology
     assert topology.available_led_watts == 185.0
     assert topology.effective_power_budget_watts == 18.5
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 10
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 11
 
     path.write_text(
         json.dumps(
@@ -164,7 +165,7 @@ def test_audio_sync_offsets_persist_per_route_and_migrate_from_v5(
         "bluetooth|AA:BB|bluez_output": 100.0,
         "mic|USB Mic|analog_output": -35.0,
     }
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 10
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 11
 
     path.write_text(
         json.dumps({"version": 5, "selected_audio_device": "USB Mic"}),
@@ -277,7 +278,7 @@ def test_transition_settings_default_round_trip_and_preserve_existing_settings(
     )
     assert restored.audio_sync_offsets_ms == {"mic|USB Mic|analog_output": -85.0}
     payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload["version"] == 10
+    assert payload["version"] == 11
     assert payload["transition_settings"] == {
         "enabled": False,
         "duration_ms": 850,
@@ -353,6 +354,81 @@ def test_invalid_transition_settings_fall_back_to_defaults(
     assert "transition" in warning
 
 
+def test_animation_settings_round_trip_scopes_and_validate_values(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.json"
+    store = CalibrationSettingsStore(path)
+    definitions = {item.name: item for item in animation_catalog()}
+    comet = definitions["comet"].normalize_settings(None, allow_partial=True)
+    comet["speed"] = 88
+    pulse = definitions["pulse"].normalize_settings(None, allow_partial=True)
+    pulse["palette"] = "neon"
+
+    store.save_animation_settings(
+        {"shared": {"comet": comet}, "left": {"pulse": pulse}}
+    )
+    restored, warning = store.load_all()
+
+    assert warning is None
+    assert restored.animation_settings == {
+        "shared": {"comet": comet},
+        "left": {"pulse": pulse},
+    }
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["version"] == 11
+    assert payload["animation_settings"]["shared"]["comet"]["speed"] == 88
+
+    invalid = {"shared": {"comet": {**comet, "speed": 101}}}
+    with pytest.raises(ValueError, match="speed must be between"):
+        store.save_animation_settings(invalid)
+
+
+def test_version_ten_settings_migrate_with_empty_animation_settings(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 10,
+                "transition_settings": {"enabled": False, "duration_ms": 600},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings, warning = CalibrationSettingsStore(path).load_all()
+
+    assert warning is None
+    assert settings.transition_settings.enabled is False
+    assert settings.animation_settings == {}
+
+
+def test_invalid_persisted_animation_settings_are_ignored_with_warning(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 11,
+                "animation_settings": {
+                    "left": {"comet": {"speed": 101}},
+                    "right": {"not_an_animation": {}},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings, warning = CalibrationSettingsStore(path).load_all()
+
+    assert settings.animation_settings == {}
+    assert warning is not None
+    assert "animation settings" in warning
+
+
 def test_animation_sequences_round_trip_and_version_seven_migration(
     tmp_path: Path,
 ) -> None:
@@ -392,7 +468,7 @@ def test_animation_sequences_round_trip_and_version_seven_migration(
     assert restarted.animation_sequences == (sequence,)
     assert restarted.active_sequence_id == sequence.id
     assert restarted.audio_sync_offsets_ms == {"mic|USB|out": -85.0}
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 10
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 11
 
 
 def test_invalid_saved_sequence_entries_are_skipped_individually(
