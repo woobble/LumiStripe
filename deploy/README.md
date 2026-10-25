@@ -94,62 +94,9 @@ sudo journalctl -u lumistripe-update-check.service \
   -u lumistripe-update.service --since today
 ```
 
-## Docker Compose installation
-
-Docker is supported as an alternative to the systemd installation. The
-Docker path builds the application locally on the Pi, so it produces native
-ARM64 Python extensions without requiring a registry. It runs the LumiStripe
-web runtime, Spotify Soloist, and Nginx in containers. Bluetooth/BlueZ,
-PipeWire/WirePlumber, the user D-Bus session, and the physical GPIO/SPI
-devices stay on the host and are exposed through explicit sockets and device
-mappings.
-
-From the checkout on the Pi, run:
-
-```bash
-sudo env LUMI_PAIRING_CODE=0427 \
-  LUMI_SPOTIFY_API_KEY=YOUR_SOLOIST_API_KEY \
-  ./deploy/docker-install.sh
-```
-
-The installer configures Docker's official Debian apt repository, removes
-conflicting distro Docker packages when present, and installs
-`docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, and
-`docker-compose-plugin`. Docker's repository publishes arm64 packages for the
-64-bit Raspberry Pi OS target. It also installs the host Bluetooth/PipeWire
-prerequisites, enables SPI, creates the host audio configuration, builds the
-ARM64-capable image, and starts the Compose stack. Set
-`LUMI_DOCKER_DEBIAN_SUITE` if a Debian derivative does not expose
-`VERSION_CODENAME` correctly.
-The Spotify key is stored in a mode-600 local secret file readable only by the
-service account and root; it is not copied into the image. If the key is
-omitted from the environment, an interactive terminal prompts for it.
-
-The Docker installer refuses to take over an existing LumiStripe systemd
-installation. To explicitly stop the LumiStripe systemd services and the
-LumiStripe-owned host Nginx service during migration, use:
-
-```bash
-sudo ./deploy/docker-install.sh --takeover-systemd
-```
-
-Use the following commands after updating the checkout:
-
-```bash
-sudo ./deploy/docker-update.sh
-sudo ./deploy/docker-uninstall.sh
-```
-
-The Docker uninstaller removes the Compose services and local image, the
-Docker deployment environment, certificates, Spotify key, and Docker-owned
-host audio fragments. It preserves Docker and shared host audio/Bluetooth
-packages. By default it also removes the Docker-specific LumiStripe state and
-Spotify session; use `--keep-data` to retain `/var/lib/lumistripe-docker` for
-a later reinstall.
-
 ## Local Docker development with Spotify Connect
 
-The local development stack runs the production image with simulated LED
+The local development stack builds the web app with simulated LED
 output. It uses Spotify Connect as its audio source and plays Spotify through
 the host speakers. It does not start Bluetooth, mount GPIO/SPI devices, or
 require a microphone. This profile targets Linux hosts with Docker Compose and
@@ -196,51 +143,6 @@ two containers. If Docker cannot access the host audio socket, confirm that
 `XDG_RUNTIME_DIR` points to the logged-in desktop session and that
 `$XDG_RUNTIME_DIR/pulse/native` exists. The Spotify container creates a
 temporary `lumistripe_spotify` virtual sink and removes it when the stack stops.
-
-The default Compose mapping expects the LED output at
-`/dev/spidev0.0` and the GPIO chip at `/dev/gpiochip0`. Set
-`LUMI_SPI_DEVICE` and `LUMI_GPIO_CHIP` when the host paths differ. The
-configured device paths are preserved inside the containers. To use a second
-SPI controller for a second strip, enable SPI1 on the host and install with:
-
-```bash
-sudo env LUMI_PAIRING_CODE=0427 \
-  LUMI_SPOTIFY_API_KEY=YOUR_SOLOIST_API_KEY \
-  LUMI_SPI_DEVICE=/dev/spidev0.0 \
-  LUMI_SPI_DEVICE_2=/dev/spidev1.0 \
-  ./deploy/docker-install.sh
-```
-
-On Raspberry Pi OS, add `dtoverlay=spi1-1cs` to
-`/boot/firmware/config.txt`, reboot, and verify that both
-`/dev/spidev0.0` and `/dev/spidev1.0` exist. SPI0 uses GPIO10/data and
-GPIO11/clock; SPI1 uses GPIO20/data and GPIO21/clock. Then add the second
-output on **Setup → Stripes**, select **SPI**, set its device to
-`/dev/spidev1.0`, and choose **Save & apply**. An existing installation can
-be changed by adding `LUMI_SPI_DEVICE_2=/dev/spidev1.0` to
-`/etc/lumistripe/lumistripe-docker.env` and running
-`sudo ./deploy/docker-update.sh`.
-
-Optional `/dev/gpiomem` mapping can be enabled with
-`LUMI_GPIOMEM_DEVICE`.
-
-The containers use host networking because Soloist's local WebSocket API and
-the existing runtime both use `127.0.0.1:9090`. Only one LumiStripe web
-runtime and one host HTTPS proxy may own those ports. For troubleshooting,
-inspect the stack with:
-
-```bash
-sudo docker compose --project-name lumistripe \
-  --env-file /etc/lumistripe/lumistripe-docker.env \
-  -f ./deploy/docker-compose.yml ps
-sudo docker compose --project-name lumistripe \
-  --env-file /etc/lumistripe/lumistripe-docker.env \
-  -f ./deploy/docker-compose.yml logs --tail=100
-```
-
-The HTTPS certificate is generated with mkcert in the Docker deployment state
-directory. Trust the printed service-user CA on each phone or PC that opens
-`https://led.controller/`, just as with the systemd installer.
 
 ## Uninstallation
 

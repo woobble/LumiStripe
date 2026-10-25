@@ -95,11 +95,8 @@ RUN apt-get update \
 
 COPY --from=python-build /opt/lumistripe /opt/lumistripe
 COPY --from=soloist /usr/local/bin/soloist /usr/local/bin/soloist
-COPY deploy/docker/web-entrypoint.sh /usr/local/bin/lumistripe-web-entrypoint
 COPY deploy/docker/spotify-entrypoint.sh /usr/local/bin/lumistripe-spotify-entrypoint
 
-RUN chmod 755 \
-    /usr/local/bin/lumistripe-web-entrypoint \
-    /usr/local/bin/lumistripe-spotify-entrypoint
+RUN chmod 755 /usr/local/bin/lumistripe-spotify-entrypoint
 
 WORKDIR /opt/lumistripe

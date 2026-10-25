@@ -1,4 +1,0 @@
-services:
-  lumistripe-web:
-    devices:
-      - "${LUMI_SPI_DEVICE_2}:${LUMI_SPI_DEVICE_2}"
