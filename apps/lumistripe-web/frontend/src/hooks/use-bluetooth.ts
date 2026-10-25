@@ -97,9 +97,17 @@ export function useBluetooth(initialStatus?: BluetoothStatusResponse | null) {
 
   const refresh = useCallback(async () => {
     if (coordinator.active) return queryClient.getQueryData<BluetoothStatusResponse>(bluetoothStatusQueryKey) ?? null
-    const result = await refetch({ throwOnError: true, cancelRefetch: false })
-    setActionError(null)
-    return result.data ?? null
+    try {
+      const result = await refetch({ throwOnError: true, cancelRefetch: false })
+      setActionError(null)
+      return result.data ?? null
+    } catch (cause) {
+      setActionError({
+        message: cause instanceof Error ? cause.message : "Bluetooth status refresh failed.",
+        confirmedAt: queryClient.getQueryState(bluetoothStatusQueryKey)?.dataUpdatedAt ?? 0,
+      })
+      throw cause
+    }
   }, [coordinator, queryClient, refetch])
 
   const replaceStatus = useCallback((next: BluetoothStatusResponse) => {

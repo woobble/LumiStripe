@@ -66,6 +66,7 @@ export function DashboardRoutes({
       <Route path="/" element={<Suspense fallback={fallback}><ControlPanel controller={controller} /></Suspense>} />
       <Route path="/audio" element={<Suspense fallback={fallback}><AudioStatusPanel
         audioStatus={controller.state?.audio_status ?? "Audio input status unavailable."}
+        audioHealth={controller.state?.audio_health}
         configuredAudioSource={controller.state?.configured_audio_source}
         activeAudioSource={controller.state?.active_audio_source}
         audioMonitoring={controller.state?.audio_monitoring}

@@ -1,4 +1,4 @@
-import { memo, useCallback, useState } from "react"
+import { memo, useCallback, useMemo, useState } from "react"
 import { Link } from "react-router"
 import { AudioLinesIcon, ChevronDownIcon, Settings2Icon } from "lucide-react"
 import { toast } from "sonner"
@@ -10,12 +10,13 @@ import {
   AudioTelemetryCards,
   useAudioTelemetry,
 } from "@/components/dashboard/audio-telemetry"
+import { AudioDiagnostics } from "@/components/dashboard/audio-diagnostics"
+import { getAudioDiagnostics } from "@/components/dashboard/audio-diagnostics-model"
 import { AudioOutputControls } from "@/components/dashboard/audio-output-controls"
 import { AudioSourceStatus } from "@/components/dashboard/audio-source-status"
 import { audioSourceLabel } from "@/components/dashboard/audio-source"
 import { SpotifyControls } from "@/components/dashboard/spotify-controls"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useBluetooth } from "@/hooks/use-bluetooth"
@@ -78,11 +79,13 @@ function sourceHeading(source: string | null | undefined, configuredSource: stri
 
 function AudioStatusPanelView({
   audioStatus,
+  audioHealth,
   configuredAudioSource,
   activeAudioSource,
   audioMonitoring,
 }: {
   audioStatus: string
+  audioHealth?: string
   configuredAudioSource?: string | null
   activeAudioSource?: string | null
   audioMonitoring?: boolean | null
@@ -95,7 +98,9 @@ function AudioStatusPanelView({
     status: bluetoothStatus,
     busy: bluetoothBusy,
     error: bluetoothError,
+    loading: bluetoothLoading,
     run: runBluetooth,
+    refresh: refreshBluetooth,
   } = bluetoothController
 
   const runOutputAction = useCallback(async (
@@ -122,6 +127,21 @@ function AudioStatusPanelView({
     && activeSource !== "off"
     && telemetry.input_peak < 0.001
   const outputStatus = bluetoothStatus ?? settings?.bluetooth ?? null
+  const audioDiagnostics = useMemo(() => getAudioDiagnostics({
+    settings,
+    settingsLoading: loading,
+    settingsError,
+    audioStatus,
+    audioHealth,
+    configuredSource,
+    activeSource,
+    monitoring,
+    telemetry,
+    connection,
+    bluetoothStatus: outputStatus,
+    outputLoading: outputStatus === null && bluetoothLoading,
+    bluetoothError,
+  }), [activeSource, audioHealth, audioStatus, bluetoothError, bluetoothLoading, configuredSource, connection, loading, monitoring, outputStatus, settings, settingsError, telemetry])
 
   return (
     <div className="space-y-4 pb-4">
@@ -141,14 +161,11 @@ function AudioStatusPanelView({
         {telemetry.health !== "inactive" && <Badge variant="outline">{telemetry.health}</Badge>}
       </div>
 
-      {settingsError && (
-        <Card className="border-amber-300/15 bg-amber-400/5">
-          <CardContent className="flex flex-wrap items-center justify-between gap-3 py-3">
-            <p role="alert" className="text-sm text-amber-100">{settingsError}</p>
-            <Button type="button" variant="outline" size="sm" disabled={loading} onClick={() => { void refreshSettings().catch(() => undefined) }}>Retry</Button>
-          </CardContent>
-        </Card>
-      )}
+      <AudioDiagnostics
+        issues={audioDiagnostics}
+        onRetrySettings={() => { void refreshSettings().catch(() => undefined) }}
+        onRetryOutput={() => { void refreshBluetooth().catch(() => undefined) }}
+      />
 
       <section className="grid gap-3" aria-label="Audio routing status">
         <AudioSourceStatus
@@ -160,13 +177,14 @@ function AudioStatusPanelView({
           statusMessage={sourceStatus}
           compact
         />
-        <AudioOutputControls
-          status={outputStatus}
-          busy={bluetoothBusy}
-          onAction={runOutputAction}
-          variant="compact"
-          statusError={bluetoothError}
-        />
+        <section id="audio-output-controls" aria-label="Audio output controls">
+          <AudioOutputControls
+            status={outputStatus}
+            busy={bluetoothBusy}
+            onAction={runOutputAction}
+            variant="compact"
+          />
+        </section>
       </section>
 
       {spotifySelected ? (
