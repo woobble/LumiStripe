@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { MemoryRouter } from "react-router"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import type { ReactNode } from "react"
 
 const api = vi.hoisted(() => ({
   getAudioSettings: vi.fn(),
@@ -29,6 +31,14 @@ vi.mock("@/components/dashboard/audio-telemetry", () => ({
 }))
 
 import { AudioTuningPanel } from "./audio-tuning-panel"
+
+function renderTuning() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  function Wrapper({ children }: { children: ReactNode }) {
+    return <MemoryRouter><QueryClientProvider client={queryClient}>{children}</QueryClientProvider></MemoryRouter>
+  }
+  return { ...render(<AudioTuningPanel />, { wrapper: Wrapper }), queryClient }
+}
 
 const tuningValues = {
   target_level: 0.36,
@@ -113,7 +123,7 @@ describe("audio tuning presentation", () => {
 
   it("keeps dirty values when switching Basic and Advanced views", async () => {
     const user = userEvent.setup()
-    render(<AudioTuningPanel />, { wrapper: MemoryRouter })
+    renderTuning()
     await screen.findByRole("group", { name: "Target level" })
     changeSlider("Target level", 0.365)
     expect(await screen.findByText("0.365")).toBeInTheDocument()
@@ -123,6 +133,7 @@ describe("audio tuning presentation", () => {
     expect(advanced).toHaveAttribute("aria-expanded", "true")
     expect(screen.getByText("Detailed gate metrics")).toBeInTheDocument()
     expect(screen.getByRole("group", { name: "Target level" })).toBeInTheDocument()
+    expect(screen.getAllByRole("group", { name: "Spectral balance" })).toHaveLength(1)
     expect(screen.getByText("0.365")).toBeInTheDocument()
 
     await user.click(advanced)
@@ -145,7 +156,7 @@ describe("audio tuning presentation", () => {
         ],
         settings: { ...tuningValues, target_level: 0.6 },
       })
-    render(<AudioTuningPanel />, { wrapper: MemoryRouter })
+    renderTuning()
     await screen.findByRole("group", { name: "Target level" })
     changeSlider("Target level", 0.365)
     expect(await screen.findByText("0.365")).toBeInTheDocument()
@@ -163,9 +174,28 @@ describe("audio tuning presentation", () => {
     await waitFor(() => expect(api.updateAudioSettings).toHaveBeenCalledWith("mic-usb", expect.objectContaining({ target_level: 0.365 })))
   })
 
+  it("preserves a dirty tuning draft when shared settings change elsewhere", async () => {
+    const user = userEvent.setup()
+    const { queryClient } = renderTuning()
+    await screen.findByRole("group", { name: "Target level" })
+    changeSlider("Target level", 0.365)
+
+    queryClient.setQueryData(["audio-settings"], {
+      ...audioSettings,
+      active_device: "mic-other",
+      active_device_name: "Other microphone",
+      settings: { ...tuningValues, target_level: 0.6 },
+    })
+
+    expect(await screen.findByText("0.365")).toBeInTheDocument()
+    expect(screen.getByText("USB microphone")).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Apply & save" }))
+    await waitFor(() => expect(api.updateAudioSettings).toHaveBeenCalledWith("mic-usb", expect.objectContaining({ target_level: 0.365 })))
+  })
+
   it("applies and saves the edited tuning values and can reset the profile", async () => {
     const user = userEvent.setup()
-    render(<AudioTuningPanel />, { wrapper: MemoryRouter })
+    renderTuning()
     await screen.findByRole("group", { name: "Target level" })
     changeSlider("Target level", 0.365)
     await user.click(screen.getByRole("button", { name: "Apply & save" }))
@@ -183,11 +213,11 @@ describe("audio tuning presentation", () => {
       hardware_gain_writable: true,
       hardware_gain_value: 0.42,
     })
-    const { rerender } = render(<AudioTuningPanel />, { wrapper: MemoryRouter })
+    const { rerender, queryClient } = renderTuning()
     expect(await screen.findByRole("group", { name: "Hardware gain" })).toBeInTheDocument()
     expect(screen.queryByText(/Hardware gain is unavailable/)).not.toBeInTheDocument()
 
-    api.getAudioSettings.mockResolvedValueOnce(audioSettings)
+    queryClient.setQueryData(["audio-settings"], audioSettings)
     rerender(<AudioTuningPanel key="software-only" />)
     expect(await screen.findByText(/Hardware gain is unavailable/)).toBeInTheDocument()
     expect(screen.queryByRole("group", { name: "Hardware gain" })).not.toBeInTheDocument()
@@ -195,7 +225,7 @@ describe("audio tuning presentation", () => {
 
   it("shows a retry state when audio settings cannot be loaded", async () => {
     api.getAudioSettings.mockRejectedValueOnce(new Error("Settings service unavailable"))
-    render(<AudioTuningPanel />, { wrapper: MemoryRouter })
+    renderTuning()
     await waitFor(() => expect(screen.getByText("Audio tuning unavailable")).toBeInTheDocument())
     expect(screen.getByRole("button", { name: "Try again" })).toBeEnabled()
   })

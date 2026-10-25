@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode, type MouseEvent } from "react"
+import { createContext, useCallback, useContext, useEffect, useId, useMemo, useState, type ReactNode, type MouseEvent } from "react"
 import { Link, NavLink, useNavigate } from "react-router"
 import type { NavLinkProps, LinkProps } from "react-router"
 
@@ -16,7 +16,8 @@ import {
 type GuardContextValue = {
   dirty: boolean
   description: string
-  setDirty: (dirty: boolean, description?: string) => void
+  register: (id: string, dirty: boolean, description?: string) => void
+  unregister: (id: string) => void
   requestNavigation: (to: string) => boolean
 }
 
@@ -25,9 +26,11 @@ const GuardContext = createContext<GuardContextValue | null>(null)
 
 export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
   const navigate = useNavigate()
-  const [dirty, setDirty] = useState(false)
-  const [description, setDescription] = useState(defaultUnsavedDescription)
+  const [registrations, setRegistrations] = useState<Record<string, string>>({})
   const [pendingPath, setPendingPath] = useState<string | null>(null)
+  const dirty = Object.keys(registrations).length > 0
+  const descriptions = [...new Set(Object.values(registrations))]
+  const description = descriptions.length > 0 ? descriptions.join(" ") : defaultUnsavedDescription
 
   useEffect(() => {
     const handler = (event: BeforeUnloadEvent) => {
@@ -45,17 +48,35 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
     return true
   }, [dirty])
 
-  const updateDirty = useCallback((nextDirty: boolean, nextDescription?: string) => {
-    setDirty(nextDirty)
-    if (nextDirty) setDescription(nextDescription ?? defaultUnsavedDescription)
+  const register = useCallback((id: string, nextDirty: boolean, nextDescription?: string) => {
+    setRegistrations((current) => {
+      if (nextDirty) {
+        const value = nextDescription ?? defaultUnsavedDescription
+        if (current[id] === value) return current
+        return { ...current, [id]: value }
+      }
+      if (!(id in current)) return current
+      const next = { ...current }
+      delete next[id]
+      return next
+    })
+  }, [])
+  const unregister = useCallback((id: string) => {
+    setRegistrations((current) => {
+      if (!(id in current)) return current
+      const next = { ...current }
+      delete next[id]
+      return next
+    })
   }, [])
 
   const value = useMemo(() => ({
     dirty,
     description,
-    setDirty: updateDirty,
+    register,
+    unregister,
     requestNavigation,
-  }), [description, dirty, requestNavigation, updateDirty])
+  }), [description, dirty, register, requestNavigation, unregister])
   return (
     <GuardContext.Provider value={value}>
       {children}
@@ -77,12 +98,17 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
 
 export function useUnsavedChangesGuard(isDirty: boolean, description?: string, enabled = true) {
   const context = useContext(GuardContext)
-  const setDirty = context?.setDirty
+  const id = useId()
+  const register = context?.register
+  const unregister = context?.unregister
   useEffect(() => {
-    if (!setDirty || !enabled) return
-    setDirty(isDirty, description)
-    return () => setDirty(false)
-  }, [description, enabled, isDirty, setDirty])
+    if (!register || !unregister || !enabled) {
+      unregister?.(id)
+      return
+    }
+    register(id, isDirty, description)
+    return () => unregister(id)
+  }, [description, enabled, id, isDirty, register, unregister])
   return {
     dirty: isDirty,
     requestNavigation: context?.requestNavigation ?? (() => false),

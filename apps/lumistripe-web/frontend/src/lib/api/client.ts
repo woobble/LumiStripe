@@ -695,7 +695,7 @@ export const dashboardApi = {
       method: "POST",
       body: JSON.stringify({ save }),
     }, dashboardStateSchema),
-  getAudioSettings: () => request("/api/audio/settings", undefined, audioSettingsSchema),
+  getAudioSettings: (signal?: AbortSignal) => request("/api/audio/settings", signal ? { signal } : undefined, audioSettingsSchema),
   getSequencerSettings: () => request("/api/sequencer/settings", undefined, sequencerSettingsSchema),
   setSequencerSettings: (switchQuantization: SwitchQuantization, barsPerPhrase: 4 | 8 | 16) =>
     request("/api/sequencer/settings", {
@@ -724,13 +724,13 @@ export const dashboardApi = {
       method: "PUT",
       body: JSON.stringify({ source }),
     }, audioSettingsSchema),
-  getSpotifyStatus: () => request("/api/audio/spotify", undefined, spotifyStatusSchema),
+  getSpotifyStatus: (signal?: AbortSignal) => request("/api/audio/spotify", signal ? { signal } : undefined, spotifyStatusSchema),
   controlSpotify: (action: SpotifyControlAction, value?: number | boolean | string) =>
     request("/api/audio/spotify/control", {
       method: "POST",
       body: JSON.stringify({ action, ...(value === undefined ? {} : { value }) }),
     }, spotifyStatusSchema),
-  getBluetoothStatus: () => request("/api/audio/bluetooth", undefined, parseBluetoothStatus),
+  getBluetoothStatus: (signal?: AbortSignal) => request("/api/audio/bluetooth", signal ? { signal } : undefined, parseBluetoothStatus),
   setBluetoothPower: (powered: boolean) => request("/api/audio/bluetooth/power", { method: "PUT", body: JSON.stringify({ powered }) }, parseBluetoothStatus),
   setBluetoothAlias: (alias: string) => request("/api/audio/bluetooth/alias", { method: "PUT", body: JSON.stringify({ alias }) }, parseBluetoothStatus),
   scanBluetooth: () => request("/api/audio/bluetooth/scan", { method: "POST" }, parseBluetoothStatus),

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Slider } from "@/components/ui/slider"
 import { dashboardApi, type SpotifyControlAction, type SpotifyStatusResponse } from "@/lib/api"
+import { useSpotifyStatus } from "@/hooks/use-spotify-status"
 
 type SpotifySliderKey = "position" | "volume"
 type SpotifySliderCommand = { queuedValue: number | null; sequence: number; running: boolean }
@@ -25,7 +26,7 @@ function formatMilliseconds(value: number | null | undefined) {
 }
 
 export function SpotifyControls({ initialStatus }: { initialStatus: SpotifyStatusResponse }) {
-  const [spotify, setSpotify] = useState(initialStatus)
+  const { status: spotify, error: pollingError, publishStatus, beginCommand, endCommand } = useSpotifyStatus(initialStatus)
   const [commandBusy, setCommandBusy] = useState(false)
   const [positionDraft, setPositionDraft] = useState<number | null>(null)
   const [volumeDraft, setVolumeDraft] = useState<number | null>(null)
@@ -37,21 +38,9 @@ export function SpotifyControls({ initialStatus }: { initialStatus: SpotifyStatu
   })
   const sliderPending = useRef<Record<SpotifySliderKey, number | null>>({ position: null, volume: null })
   const sliderOptimistic = useRef<Record<SpotifySliderKey, SpotifySliderOptimisticValue | null>>({ position: null, volume: null })
-  const commandEpoch = useRef(0)
-  const pendingCommands = useRef(0)
-  const pollSequence = useRef(0)
-
-  const beginCommand = useCallback(() => {
-    commandEpoch.current += 1
-    pendingCommands.current += 1
-  }, [])
-
-  const endCommand = useCallback(() => {
-    pendingCommands.current = Math.max(0, pendingCommands.current - 1)
-  }, [])
 
   const updateStatus = useCallback((next: SpotifyStatusResponse) => {
-    setSpotify(next)
+    publishStatus(next)
     const now = Date.now()
     for (const key of ["position", "volume"] as const) {
       const optimistic = sliderOptimistic.current[key]
@@ -63,32 +52,21 @@ export function SpotifyControls({ initialStatus }: { initialStatus: SpotifyStatu
     if (!volumeDragging.current && sliderPending.current.volume === null) {
       setVolumeDraft(sliderOptimistic.current.volume?.value ?? next.volume)
     }
-  }, [])
+  }, [publishStatus])
 
   useEffect(() => {
-    let mounted = true
-    const refresh = async () => {
-      if (pendingCommands.current > 0) return
-      const requestEpoch = commandEpoch.current
-      const requestSequence = ++pollSequence.current
-      try {
-        const next = await dashboardApi.getSpotifyStatus()
-        if (
-          mounted
-          && pendingCommands.current === 0
-          && requestEpoch === commandEpoch.current
-          && requestSequence === pollSequence.current
-        ) updateStatus(next)
-      } catch {
-        // Keep the last useful status while the optional service is unavailable.
-      }
+    const now = Date.now()
+    for (const key of ["position", "volume"] as const) {
+      const optimistic = sliderOptimistic.current[key]
+      if (optimistic && optimistic.expiresAt <= now) sliderOptimistic.current[key] = null
     }
-    const interval = window.setInterval(() => void refresh(), 1000)
-    return () => {
-      mounted = false
-      window.clearInterval(interval)
+    if (!positionDragging.current && sliderPending.current.position === null) {
+      setPositionDraft(sliderOptimistic.current.position?.value ?? spotify.position_ms)
     }
-  }, [updateStatus])
+    if (!volumeDragging.current && sliderPending.current.volume === null) {
+      setVolumeDraft(sliderOptimistic.current.volume?.value ?? spotify.volume)
+    }
+  }, [spotify])
 
   const runControl = async (action: SpotifyControlAction, value?: number | boolean | string) => {
     if (commandBusy) return
@@ -167,6 +145,7 @@ export function SpotifyControls({ initialStatus }: { initialStatus: SpotifyStatu
         {spotify.configured && !spotify.connected && <p className="rounded-xl bg-white/[0.03] p-3 text-sm text-muted-foreground">Waiting for the local Soloist WebSocket service.</p>}
         {spotify.configured && spotify.connected && !spotify.logged_in && <p className="rounded-xl bg-amber-500/10 p-3 text-sm text-amber-100">Open Spotify on a phone or desktop and choose this device, <span className="font-medium">{spotify.device_name ?? "LumiStripe"}</span>, to sign in and start playback.</p>}
         {spotify.error && <div role="alert" className="flex gap-2 rounded-xl bg-red-500/10 p-3 text-sm text-red-200"><CircleAlertIcon className="mt-0.5 size-4 shrink-0" /><span>{spotify.error}</span></div>}
+        {pollingError && <p role="status" className="text-xs text-amber-200">Playback status could not be refreshed: {pollingError}</p>}
         {spotify.track && (
           <div className="flex items-center gap-3 rounded-xl border border-white/5 bg-white/[0.03] p-3">
             {spotify.track.cover_url

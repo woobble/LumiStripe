@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react"
+import { memo, useEffect, useRef, useState } from "react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
@@ -20,9 +20,9 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Slider } from "@/components/ui/slider"
 import {
   dashboardApi,
-  type AudioSettingsResponse,
 } from "@/lib/api"
 import { useUnsavedChangesGuard } from "@/hooks/use-unsaved-changes"
+import { useAudioSettings } from "@/hooks/use-audio-settings"
 
 type SliderKey = keyof AudioTuningFormValues
 
@@ -88,13 +88,11 @@ function TuningSlider({
 }
 
 function AudioTuningPanelView() {
-  const [response, setResponse] = useState<AudioSettingsResponse | null>(null)
+  const { settings: response, loading, loadError, refresh, applySettings } = useAudioSettings()
   const [selectedDevice, setSelectedDevice] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [calibrating, setCalibrating] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
-  const loadRequest = useRef(0)
   const dirtyRef = useRef(false)
   const form = useForm<AudioTuningFormValues>({ resolver: zodResolver(audioTuningSchema), defaultValues: {
     noise_floor: 0.015, input_noise_floor: 0.003,
@@ -107,28 +105,11 @@ function AudioTuningPanelView() {
   useUnsavedChangesGuard(isDirty)
   useEffect(() => { dirtyRef.current = isDirty }, [isDirty])
 
-  const load = useCallback(async () => {
-    const request = ++loadRequest.current
-    setLoading(true)
-    try {
-      const next = await dashboardApi.getAudioSettings()
-      if (request !== loadRequest.current) return
-      setResponse(next)
-      if (!dirtyRef.current) {
-        setSelectedDevice(next.active_device ?? null)
-        formReset(next.settings)
-      }
-    } catch (error) {
-      if (request === loadRequest.current) toast.error(error instanceof Error ? error.message : "Could not load audio settings.")
-    } finally {
-      if (request === loadRequest.current) setLoading(false)
-    }
-  }, [formReset])
-
   useEffect(() => {
-    void load()
-    return () => { loadRequest.current += 1 }
-  }, [load])
+    if (!response || dirtyRef.current) return
+    setSelectedDevice(response.active_device ?? null)
+    formReset(response.settings)
+  }, [formReset, response])
   const { telemetry, history, connection } = useAudioTelemetry()
 
   const change = (key: SliderKey, value: number) => setValue(key, value, { shouldDirty: true, shouldValidate: true })
@@ -138,7 +119,7 @@ function AudioTuningPanelView() {
     setSaving(true)
     try {
       const next = await dashboardApi.updateAudioSettings(selectedDevice, values)
-      setResponse(next)
+      applySettings(next)
       formReset(next.settings)
       toast.success("Audio profile applied and saved.")
     } catch (error) {
@@ -153,7 +134,7 @@ function AudioTuningPanelView() {
     setSaving(true)
     try {
       const next = await dashboardApi.resetAudioSettings(selectedDevice)
-      setResponse(next)
+      applySettings(next)
       formReset(next.settings)
       toast.success("Default audio profile restored.")
     } catch (error) {
@@ -167,7 +148,7 @@ function AudioTuningPanelView() {
     return <div className="space-y-4"><Skeleton className="h-32 rounded-xl" /><Skeleton className="h-64 rounded-xl" /><Skeleton className="h-72 rounded-xl" /></div>
   }
   if (!response) {
-    return <Card><CardHeader><CardTitle>Audio tuning unavailable</CardTitle><CardDescription>Could not load microphone settings.</CardDescription></CardHeader><CardContent><Button onClick={() => void load()}>Try again</Button></CardContent></Card>
+    return <Card><CardHeader><CardTitle>Audio tuning unavailable</CardTitle><CardDescription>{loadError ?? "Could not load microphone settings."}</CardDescription></CardHeader><CardContent><Button disabled={loading} onClick={() => { void refresh().catch((error: unknown) => toast.error(error instanceof Error ? error.message : "Could not load audio settings.")) }}>Try again</Button></CardContent></Card>
   }
   const activeDeviceName = response.devices.find((item) => item.selector === selectedDevice)?.name
     ?? response.active_device_name
@@ -214,7 +195,8 @@ function AudioTuningPanelView() {
         <div><TuningSlider label="Musical response" description="Calm keeps quiet passages gentle; Dramatic gives loud highlights more contrast." value={draft.dynamic_response} min={0} max={1} step={0.01} onChange={(value) => change("dynamic_response", value)} error={errors.dynamic_response?.message} disabled={saving} /><div className="flex justify-between px-1 text-[11px] text-muted-foreground"><span>Calm</span><span>Balanced</span><span>Dramatic</span></div></div>
       </CardContent></Card>
 
-      <AudioCalibrationWizard device={selectedDevice} microphone={response.active_source === "mic"} onBusyChange={setCalibrating} onApplied={() => void load()} />
+      {loadError && <p role="alert" className="rounded-xl bg-amber-500/10 p-3 text-sm text-amber-100">Using the last loaded audio settings: {loadError}</p>}
+      <AudioCalibrationWizard device={selectedDevice} microphone={response.active_source === "mic"} onBusyChange={setCalibrating} onApplied={() => { void refresh().catch(() => undefined) }} />
 
       <Button type="button" variant="outline" className="h-11 w-full justify-between" aria-expanded={advancedOpen} aria-controls="advanced-audio-tuning" onClick={() => setAdvancedOpen((open) => !open)}>
         <span className="flex items-center gap-2"><SlidersHorizontalIcon className="size-4" />Advanced DSP settings and diagnostics</span><ChevronDownIcon className={`size-4 transition-transform ${advancedOpen ? "rotate-180" : ""}`} />
@@ -233,7 +215,6 @@ function AudioTuningPanelView() {
         ["onset_threshold", "Onset", "Minimum transient strength for rhythmic input."],
         ["beat_density_threshold", "Beat density", "Required density of detected beats."],
         ["brightness_threshold", "Brightness", "Required treble energy for broadband music."],
-        ["spectral_balance_ratio", "Spectral balance", "How balanced bass and treble must be."],
       ] as const).map(([key, label, description]) => <TuningSlider key={key} label={label} description={description} value={draft[key]} min={0} max={1} step={0.005} onChange={(value) => change(key, value)} error={errors[key]?.message} disabled={saving} />)}</CardContent></Card>
 
       <Card className="border-white/5 bg-card/80"><CardHeader><CardTitle>Spectral balance</CardTitle><CardDescription>Adjust how bass and treble energy contribute to activation.</CardDescription></CardHeader><CardContent className="space-y-2">{([

@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useState } from "react"
+import { memo, useCallback, useState } from "react"
 import { Link } from "react-router"
 import { AudioLinesIcon, ChevronDownIcon, Settings2Icon } from "lucide-react"
 import { toast } from "sonner"
@@ -20,8 +20,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton"
 import { useBluetooth } from "@/hooks/use-bluetooth"
 import type { BluetoothAction } from "@/hooks/use-bluetooth"
+import { useAudioSettings } from "@/hooks/use-audio-settings"
 import type { AudioSettingsResponse, BluetoothStatusResponse } from "@/lib/api"
-import { dashboardApi } from "@/lib/api"
 import type { WebSocketStreamStatus } from "@/hooks/use-websocket-stream"
 
 function streamStateLabel(connection: WebSocketStreamStatus, fresh: boolean, sequence: number) {
@@ -88,48 +88,14 @@ function AudioStatusPanelView({
   audioMonitoring?: boolean | null
 }) {
   const { telemetry, history, connection } = useAudioTelemetry()
-  const [settings, setSettings] = useState<AudioSettingsResponse | null>(null)
-  const [settingsError, setSettingsError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
+  const { settings, loadError: settingsError, loading, refresh: refreshSettings } = useAudioSettings()
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
   const bluetoothController = useBluetooth(settings?.bluetooth)
   const {
     status: bluetoothStatus,
     busy: bluetoothBusy,
-    replaceStatus,
     run: runBluetooth,
   } = bluetoothController
-
-  const applySettings = useCallback((next: AudioSettingsResponse) => {
-    setSettings(next)
-    setSettingsError(null)
-    if (next.bluetooth) replaceStatus(next.bluetooth)
-  }, [replaceStatus])
-
-  const failSettingsLoad = useCallback((error: unknown) => {
-    const message = error instanceof Error ? error.message : "Audio settings are unavailable."
-    setSettingsError(message)
-    setSettings(null)
-  }, [])
-
-  const loadSettings = useCallback(async () => {
-    try {
-      applySettings(await dashboardApi.getAudioSettings())
-    } catch (error) {
-      failSettingsLoad(error)
-    } finally {
-      setLoading(false)
-    }
-  }, [applySettings, failSettingsLoad])
-
-  useEffect(() => {
-    let mounted = true
-    void dashboardApi.getAudioSettings()
-      .then((next) => { if (mounted) applySettings(next) })
-      .catch((error: unknown) => { if (mounted) failSettingsLoad(error) })
-      .finally(() => { if (mounted) setLoading(false) })
-    return () => { mounted = false }
-  }, [applySettings, failSettingsLoad])
 
   const runOutputAction = useCallback(async (
     action: BluetoothAction,
@@ -178,7 +144,7 @@ function AudioStatusPanelView({
         <Card className="border-amber-300/15 bg-amber-400/5">
           <CardContent className="flex flex-wrap items-center justify-between gap-3 py-3">
             <p role="alert" className="text-sm text-amber-100">{settingsError}</p>
-            <Button type="button" variant="outline" size="sm" disabled={loading} onClick={() => { setLoading(true); setSettingsError(null); void loadSettings() }}>Retry</Button>
+            <Button type="button" variant="outline" size="sm" disabled={loading} onClick={() => { void refreshSettings().catch(() => undefined) }}>Retry</Button>
           </CardContent>
         </Card>
       )}

@@ -1,52 +1,42 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 
+import { audioSettingsQueryKey } from "@/hooks/audio-query-keys"
 import { dashboardApi, type AudioSettingsResponse } from "@/lib/api"
 
-export function useAudioSettings() {
-  const [settings, setSettings] = useState<AudioSettingsResponse | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState<string | null>(null)
-  const requestVersion = useRef(0)
-  const mounted = useRef(false)
+export { audioSettingsQueryKey }
 
-  const refresh = useCallback(async (showLoading = true) => {
-    const version = ++requestVersion.current
-    if (mounted.current && showLoading) {
-      setLoading(true)
-      setLoadError(null)
-    }
-    try {
-      const next = await dashboardApi.getAudioSettings()
-      if (mounted.current && version === requestVersion.current) {
-        setSettings(next)
-        setLoadError(null)
-      }
-      return next
-    } catch (error) {
-      if (mounted.current && version === requestVersion.current) {
-        setLoadError(error instanceof Error ? error.message : "Could not load audio settings.")
-      }
-      throw error
-    } finally {
-      if (mounted.current && version === requestVersion.current) setLoading(false)
-    }
-  }, [])
+export function useAudioSettings() {
+  const queryClient = useQueryClient()
+  const query = useQuery({
+    queryKey: audioSettingsQueryKey,
+    queryFn: ({ signal }) => dashboardApi.getAudioSettings(signal),
+    staleTime: 5_000,
+    gcTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+    retry: false,
+  })
+  const refetch = query.refetch
+
+  const refresh = useCallback(async (_showLoading = true) => {
+    const result = await refetch({ throwOnError: true, cancelRefetch: false })
+    return result.data ?? null
+  }, [refetch])
 
   const applySettings = useCallback((next: AudioSettingsResponse) => {
-    requestVersion.current += 1
-    if (!mounted.current) return
-    setSettings(next)
-    setLoadError(null)
-  }, [])
+    // Canceling first makes TanStack Query discard any older in-flight read.
+    // The API request also consumes the query signal so the network request
+    // stops when the browser supports aborting it.
+    void queryClient.cancelQueries({ queryKey: audioSettingsQueryKey, exact: true })
+    queryClient.setQueryData(audioSettingsQueryKey, next)
+  }, [queryClient])
 
-  useEffect(() => {
-    mounted.current = true
-    void refresh(false).catch(() => undefined)
-    return () => {
-      mounted.current = false
-      requestVersion.current += 1
-    }
-  }, [refresh])
-
-  return { settings, loading, loadError, refresh, applySettings }
+  const loadError = query.error instanceof Error ? query.error.message : null
+  return {
+    settings: query.data ?? null,
+    loading: query.isPending || query.isFetching,
+    loadError,
+    refresh,
+    applySettings,
+  }
 }
