@@ -1,13 +1,10 @@
-x-lumistripe-dev-image: &lumistripe-dev-image
-  image: lumistripe:dev
-  pull_policy: build
-  build:
-    context: ..
-    dockerfile: deploy/docker/Dockerfile
-
 services:
   lumistripe-web:
-    <<: *lumistripe-dev-image
+    image: lumistripe:dev
+    build:
+      context: ..
+      dockerfile: deploy/docker/Dockerfile
+    pull_policy: build
     network_mode: host
     restart: unless-stopped
     user: "${LUMI_DEV_UID:?Set LUMI_DEV_UID to the current user ID}:${LUMI_DEV_GID:?Set LUMI_DEV_GID to the current group ID}"
@@ -40,7 +37,8 @@ services:
       start_period: 30s
 
   lumistripe-spotify:
-    <<: *lumistripe-dev-image
+    image: lumistripe:dev
+    pull_policy: never
     network_mode: host
     restart: unless-stopped
     user: "${LUMI_DEV_UID:?Set LUMI_DEV_UID to the current user ID}:${LUMI_DEV_GID:?Set LUMI_DEV_GID to the current group ID}"
