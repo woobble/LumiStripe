@@ -678,8 +678,16 @@ def test_audio_settings_api_and_telemetry_websocket(
             )
 
     class FakeBluetoothManager(BluetoothManager):
-        def __init__(self, *, enabled: bool = False) -> None:
-            super().__init__(enabled=enabled)
+        def __init__(
+            self,
+            *,
+            enabled: bool = False,
+            spotify_audio_routing_enabled: bool | None = None,
+        ) -> None:
+            super().__init__(
+                enabled=enabled,
+                spotify_audio_routing_enabled=spotify_audio_routing_enabled,
+            )
 
         def status(self) -> BluetoothStatus:
             return BluetoothStatus(default_sink="alsa_output.usb-speakers")
