@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from collections import deque
@@ -27,6 +28,7 @@ from .protocols import AudioBatchBuffer
 from .types import AudioFrame, AudioInputHealth, BeatEvent, MusicFeatures
 
 _BEAT_EVENT_SEQUENCE = count(1)
+_CALLBACK_TIMING_SAMPLE_CAPACITY = 512
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +171,16 @@ class AudioInput:
         self._status_count = 0
         self._last_status: str | None = None
         self._last_callback_at: float | None = None
+        self._profile_callback_timing = (
+            os.environ.get("LUMISTRIPE_PROFILE_AUDIO_CALLBACKS") == "1"
+        )
+        self._callback_duration_samples_ns = (
+            [0] * _CALLBACK_TIMING_SAMPLE_CAPACITY
+            if self._profile_callback_timing
+            else []
+        )
+        self._callback_duration_count = 0
+        self._callback_duration_next = 0
 
         device = find_input_device(sounddevice, device_pattern)
         self._device_name = _device_name(device)
@@ -183,38 +195,48 @@ class AudioInput:
         self._worker.start()
 
         def callback(indata: Any, frames: int, time_info: Any, status: Any) -> None:
-            callback_time = time.monotonic()
-            captured_at = _capture_timestamp(time_info, frames, sample_rate, callback_time)
+            timing_started_ns = (
+                time.perf_counter_ns() if self._profile_callback_timing else None
+            )
             try:
-                samples = np.asarray(indata, dtype=np.float32)
-                if samples.ndim == 2:
-                    if samples.shape[1] > 1:
-                        mono = samples.mean(axis=1, dtype=np.float32)
-                    else:
-                        mono = samples[:, 0]
-                else:
-                    mono = samples.reshape(-1)
-                # PortAudio may reuse its input memory as soon as the callback
-                # returns, so the worker receives an owned contiguous batch.
-                batch = np.ascontiguousarray(mono, dtype=np.float32).copy()
-            except Exception as exc:  # noqa: BLE001 - backend conversion errors vary
-                with self._health_lock:
-                    self._worker_error = f"audio callback conversion failed: {exc}"
-                return
-
-            with self._health_lock:
-                self._callback_count += 1
-                self._last_callback_at = time.monotonic()
-                if status:
-                    self._status_count += 1
-                    self._last_status = str(status)
-                push = cast(Any, self._buffer).push
+                callback_time = time.monotonic()
+                captured_at = _capture_timestamp(
+                    time_info, frames, sample_rate, callback_time
+                )
                 try:
-                    push(batch, captured_at)
-                except TypeError:
-                    # Older injected buffers implement the original one-argument
-                    # callback contract; they still receive samples safely.
-                    push(batch)
+                    samples = np.asarray(indata, dtype=np.float32)
+                    if samples.ndim == 2:
+                        if samples.shape[1] > 1:
+                            mono = samples.mean(axis=1, dtype=np.float32)
+                        else:
+                            mono = samples[:, 0]
+                    else:
+                        mono = samples.reshape(-1)
+                    # PortAudio may reuse its input memory as soon as the callback
+                    # returns, so the worker receives an owned contiguous batch.
+                    batch = np.ascontiguousarray(mono, dtype=np.float32).copy()
+                except Exception as exc:  # noqa: BLE001 - backend conversion errors vary
+                    with self._health_lock:
+                        self._worker_error = f"audio callback conversion failed: {exc}"
+                    return
+
+                with self._health_lock:
+                    self._callback_count += 1
+                    self._last_callback_at = time.monotonic()
+                    if status:
+                        self._status_count += 1
+                        self._last_status = str(status)
+                    push = cast(Any, self._buffer).push
+                    try:
+                        push(batch, captured_at)
+                    except TypeError:
+                        # Older injected buffers implement the original one-argument
+                        # callback contract; they still receive samples safely.
+                        push(batch)
+            finally:
+                if timing_started_ns is not None:
+                    elapsed_ns = time.perf_counter_ns() - timing_started_ns
+                    self._record_callback_duration(elapsed_ns)
 
         try:
             self._stream = sounddevice.InputStream(
@@ -349,6 +371,42 @@ class AudioInput:
             worker_error=worker_error,
             processor=processor,
         )
+
+    def _clear_callback_timing_samples(self) -> None:
+        """Reset opt-in callback profiling without changing audio health state."""
+
+        if not self._profile_callback_timing:
+            return
+        with self._health_lock:
+            self._callback_duration_count = 0
+            self._callback_duration_next = 0
+
+    def _callback_timing_samples_ms(self) -> tuple[float, ...]:
+        """Return the bounded, opt-in callback timing window in milliseconds."""
+
+        if not self._profile_callback_timing:
+            return ()
+        with self._health_lock:
+            count = min(
+                self._callback_duration_count,
+                _CALLBACK_TIMING_SAMPLE_CAPACITY,
+            )
+            first = self._callback_duration_count - count
+            return tuple(
+                self._callback_duration_samples_ns[
+                    (first + index) % _CALLBACK_TIMING_SAMPLE_CAPACITY
+                ]
+                / 1_000_000.0
+                for index in range(count)
+            )
+
+    def _record_callback_duration(self, elapsed_ns: int) -> None:
+        with self._health_lock:
+            self._callback_duration_samples_ns[self._callback_duration_next] = elapsed_ns
+            self._callback_duration_next = (
+                self._callback_duration_next + 1
+            ) % _CALLBACK_TIMING_SAMPLE_CAPACITY
+            self._callback_duration_count += 1
 
     def reconfigure(self, config: AudioConfig) -> None:
         self._wait_for_worker()

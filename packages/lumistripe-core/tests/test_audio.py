@@ -981,6 +981,7 @@ def test_list_input_device_details_uses_sounddevice(monkeypatch: pytest.MonkeyPa
 def test_audio_input_reads_callback_samples(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = FakeSoundDevice()
     monkeypatch.setattr("lumistripe.audio.importlib.import_module", lambda name: fake)
+    monkeypatch.delenv("LUMISTRIPE_PROFILE_AUDIO_CALLBACKS", raising=False)
 
     audio_input = AudioInput.with_device("usb")
     assert audio_input.device_name() == "USB Mic"
@@ -998,6 +999,7 @@ def test_audio_input_reads_callback_samples(monkeypatch: pytest.MonkeyPatch) -> 
     frame = audio_input.read()
 
     assert frame.rms > 0.0
+    assert audio_input._callback_timing_samples_ms() == ()
     audio_input.close()
     assert fake.streams[0].stopped is True
     assert fake.streams[0].closed is True
@@ -1022,6 +1024,26 @@ def test_audio_input_health_tracks_callback_status(monkeypatch: pytest.MonkeyPat
     assert health.processor.feed_count == 1
     assert health.processor.samples_seen == FFT_SIZE
     assert health.processor.fft_count == 1
+    audio_input.close()
+
+
+def test_audio_input_callback_timing_is_opt_in_and_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeSoundDevice()
+    monkeypatch.setattr("lumistripe.audio.importlib.import_module", lambda name: fake)
+    monkeypatch.setenv("LUMISTRIPE_PROFILE_AUDIO_CALLBACKS", "1")
+
+    audio_input = AudioInput.with_device("usb")
+    samples = np.zeros((FFT_SIZE, 1), dtype=np.float32)
+    for _ in range(520):
+        fake.streams[0].callback(samples, FFT_SIZE, None, None)
+
+    durations = audio_input._callback_timing_samples_ms()
+    assert len(durations) == 512
+    assert all(duration >= 0.0 for duration in durations)
+    audio_input._clear_callback_timing_samples()
+    assert audio_input._callback_timing_samples_ms() == ()
     audio_input.close()
 
 

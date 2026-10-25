@@ -8,7 +8,7 @@ hardware.
 from __future__ import annotations
 
 import argparse
-from statistics import median
+from math import ceil
 from time import perf_counter_ns
 
 from lumistripe.animation.catalog import AnimationDefinition, party_catalog
@@ -18,7 +18,7 @@ from lumistripe.stripe import Stripe
 
 def _percentile(values: list[float], percentile: float) -> float:
     ordered = sorted(values)
-    index = min(round((len(ordered) - 1) * percentile), len(ordered) - 1)
+    index = min(max(0, ceil(len(ordered) * percentile) - 1), len(ordered) - 1)
     return ordered[index]
 
 
@@ -28,7 +28,7 @@ def _measure(
     mode: str,
     warmup: int,
     samples: int,
-) -> tuple[float, float]:
+) -> tuple[float, float, float]:
     animation = definition.create()
     stripe = Stripe(length)
     quiet = AudioFrame(
@@ -52,7 +52,11 @@ def _measure(
         elapsed_ms = (perf_counter_ns() - start) / 1_000_000.0
         if frame >= warmup:
             timings.append(elapsed_ms)
-    return median(timings), _percentile(timings, 0.95)
+    return (
+        _percentile(timings, 0.50),
+        _percentile(timings, 0.95),
+        _percentile(timings, 0.99),
+    )
 
 
 def main() -> int:
@@ -74,19 +78,22 @@ def main() -> int:
     if args.warmup < 0 or args.frames < 1:
         parser.error("warmup must be nonnegative and frames must be positive")
 
-    print("animation,length,mode,median_ms,p95_ms,budget_ms,within_budget")
+    print(
+        "animation,length,mode,p50_ms,p95_ms,p99_ms,effective_fps,budget_ms,within_budget"
+    )
     over_budget = False
     for definition in party_catalog():
         for length in lengths:
             for mode in ("static", "audio"):
-                median_ms, p95_ms = _measure(
+                p50_ms, p95_ms, p99_ms = _measure(
                     definition, length, mode, args.warmup, args.frames
                 )
                 within_budget = p95_ms <= definition.frame_ms
                 over_budget |= not within_budget
                 print(
-                    f"{definition.name},{length},{mode},{median_ms:.3f},"
-                    f"{p95_ms:.3f},{definition.frame_ms},{within_budget}"
+                    f"{definition.name},{length},{mode},{p50_ms:.3f},"
+                    f"{p95_ms:.3f},{p99_ms:.3f},{1000.0 / p50_ms:.1f},"
+                    f"{definition.frame_ms},{within_budget}"
                 )
     return int(args.fail_on_over_budget and over_budget)
 
