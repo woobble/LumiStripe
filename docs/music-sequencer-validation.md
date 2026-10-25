@@ -80,19 +80,68 @@ with all six playback scenarios:
 | 128 | Fail: breakdown, build-up, drop, and high-energy boundaries missed | 6.81 ms, pass | Pass | Unverified | Pass / pass |
 | 150 | Fail: breakdown, build-up, drop, and high-energy boundaries missed | 7.30 ms, pass | Pass | Pass | Pass / pass |
 
-No false drop events were reported. The measured phase failure is consistent
-across the sweep: the native feature stream's slower `program_loudness` remains
-high after short-term `energy` has fallen, and the structure tracker currently
-uses the maximum of those values. A targeted follow-up is to review the
-structure tracker's short-term energy input and add a regression using captured
-native feature traces before changing detector thresholds. Beat-clock timing
-and sequence transitions passed their stated software tolerances. Phrase mode
-was unverified where the audio did not produce a scheduled candidate switch.
+No false drop events were reported. The failure was consistent across the
+sweep: `program_loudness` remained elevated after the short-term signal fell,
+and the tracker selected the maximum of those values. This was the pre-Goal 8B
+baseline.
 
 These are software measurements using the native DSP and an in-memory stripe;
 they do not establish Bluetooth speaker-to-LED synchronization. The JSON and
 CSV files are generated locally by the runner and are not checked in as
 machine-specific artifacts.
+
+## Goal 8B revalidation
+
+The structure detector now uses native `rolling_loudness` as its short-term
+level when available. It keeps instantaneous RMS for transient evidence and
+does not use `program_loudness` to classify section energy. The structured test
+audio now makes the breakdown clearly quieter than the following build-up; its
+section labels and the runner's ±2 second boundary tolerance are unchanged.
+The validation CSV includes short-term `energy`, `rolling_loudness`, and
+`program_loudness` so transitions can be inspected directly.
+
+Native feature medians show the reason for that selection:
+
+| BPM | Groove rolling / program | Breakdown rolling / program | Build-up rolling, first to last quarter |
+| ---: | ---: | ---: | ---: |
+| 120 | 0.180 / 0.219 | 0.044 / 0.151 | 0.135 → 0.189 |
+| 128 | 0.187 / 0.222 | 0.045 / 0.156 | 0.141 → 0.197 |
+| 150 | 0.201 / 0.229 | 0.047 / 0.168 | 0.143 → 0.210 |
+
+After the fix, the complete six-scenario sweep reports:
+
+| BPM | Structure | Missed / false drops | False phase samples | Beat median error | Off / beat / bar | Phrase | Repeating / one-shot |
+| ---: | --- | ---: | ---: | ---: | --- | --- | --- |
+| 120 | Pass | 0 / 0 | 0 | 7.32 ms | Pass | Unverified | Pass / pass |
+| 128 | Pass | 0 / 0 | 0 | 7.19 ms | Pass | Unverified | Pass / pass |
+| 150 | Pass | 0 / 0 | 0 | 7.30 ms | Pass | Pass | Pass / pass |
+
+Section transition errors against the unchanged timeline labels were:
+
+| BPM | Silence | Groove | Breakdown | Build-up | Drop | High-energy groove |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 120 | +0.01 s | +1.25 s | +0.84 s | +1.77 s | +0.24 s | −0.91 s |
+| 128 | +0.01 s | +1.24 s | +0.95 s | +1.75 s | +0.22 s | −0.67 s |
+| 150 | +0.01 s | +1.25 s | +0.89 s | +1.74 s | +0.20 s | −0.14 s |
+
+All phase boundary errors are within the existing ±2 second tolerance. Each
+track produced one confirmed drop, with no missed drops, false drops, or false
+phase samples. Automatic off/beat/bar switching and both custom sequence modes
+passed. Phrase switching remains unverified at 120 and 128 BPM because those
+runs did not produce a scheduled candidate switch. Beat-clock errors remain
+well below the 75 ms tolerance and close to the original baseline.
+
+Native regression tests process the generated audio through `AudioState` and
+assert the section sequence, energy-feature behavior, drop count, silence
+recovery, and resistance to an isolated transient and repeated feature frames.
+Existing playback tests continue to cover stale snapshots. These results use
+the native DSP and an in-memory stripe; Bluetooth-to-LED synchronization still
+requires measurement on the Raspberry Pi.
+
+The native drop path waits for at least eight seconds of confirmed build-up and
+a short-term level increase. This rejects ordinary kick transients in the
+reference, but shorter real-world build-ups may not produce a confirmed drop;
+evaluate that tradeoff against real tracks before tuning it.
 
 Repeat the complete software sweep with:
 

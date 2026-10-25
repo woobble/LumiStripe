@@ -117,16 +117,15 @@ def make_structure_track(
                 if name == "groove":
                     kick_gain, hat_gain = 0.66, 0.07
                 elif name == "breakdown":
-                    # Keep a subdued pulse so Dynamic activity remains latched,
-                    # while staying below the structure tracker's breakdown
-                    # energy threshold.
-                    kick_gain, hat_gain = (0.45, 0.12) if beat_in_bar in (1, 3) else (0.28, 0.12)
+                    # Keep a subdued pulse that remains distinctly below the
+                    # following build-up in the native short-term energy feed.
+                    kick_gain, hat_gain = (0.18, 0.06) if beat_in_bar in (1, 3) else (0.12, 0.06)
                 elif name == "buildup":
                     progress = ((bar - start_bar) * 4 + beat_in_bar - 1) / max(
                         section_bars * 4 - 1, 1
                     )
-                    kick_gain = 0.20 + 0.58 * progress
-                    hat_gain = 0.035 + 0.11 * progress
+                    kick_gain = 0.28 + 0.50 * progress
+                    hat_gain = 0.05 + 0.095 * progress
                 elif name == "drop":
                     kick_gain, hat_gain = 1.0, 0.20
                 else:

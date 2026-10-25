@@ -52,6 +52,14 @@ _BUILDUP_WINDOW_SECONDS = 2.5
 _BUILDUP_MIN_SPAN_SECONDS = 0.8
 _BUILDUP_MIN_RISE = 0.12
 _BUILDUP_MIN_SLOPE = 0.045
+# Native rolling loudness spreads gradual builds across several bars and has a
+# narrower scale than the legacy synthetic feature inputs.
+_NATIVE_BUILDUP_WINDOW_SECONDS = 8.0
+_NATIVE_BUILDUP_MIN_SPAN_SECONDS = 1.2
+_NATIVE_BUILDUP_MIN_RISE = 0.008
+_NATIVE_BUILDUP_MIN_SLOPE = 0.005
+_NATIVE_GROOVE_BUILDUP_ARM_SECONDS = 4.0
+_NATIVE_BUILDUP_CONFIRM_SECONDS = 1.2
 _BUILDUP_CONFIRM_SECONDS = 0.3
 _BREAKDOWN_ENERGY = 0.12
 _BREAKDOWN_CONFIRM_SECONDS = 0.65
@@ -59,6 +67,14 @@ _GROOVE_ENERGY = 0.14
 _GROOVE_CONFIRM_SECONDS = 0.35
 _DROP_COOLDOWN_SECONDS = 4.0
 _DROP_HOLD_SECONDS = 1.0
+_NATIVE_DROP_HOLD_SECONDS = 2.5
+# A local rolling-level jump rejects ordinary RMS kick spikes as drop evidence.
+# The reference build is eight bars long; requiring half of that progression
+# avoids confirming a drop during the early rising section.
+_NATIVE_DROP_MIN_BUILDUP_SECONDS = 8.0
+_NATIVE_DROP_ENERGY_JUMP = 0.02
+_NATIVE_DROP_COMPARISON_SECONDS = 1.5
+_GROOVE_REFERENCE_TAU_SECONDS = 6.0
 
 
 class MusicStructureTracker:
@@ -75,18 +91,22 @@ class MusicStructureTracker:
         "_candidate_phase",
         "_candidate_since",
         "_confidence",
+        "_groove_reference_energy",
         "_history",
         "_last_drop_at",
         "_last_timestamp",
         "_phase",
         "_phase_since",
         "_smoothed_energy",
+        "_uses_rolling_energy",
     )
 
     def __init__(self) -> None:
         self._history: deque[_Sample] = deque(maxlen=_HISTORY_MAX_SAMPLES)
+        self._groove_reference_energy = 0.0
         self._last_timestamp: float | None = None
         self._smoothed_energy = 0.0
+        self._uses_rolling_energy = False
         self._phase = MusicStructurePhase.IDLE
         self._phase_since = 0.0
         self._candidate_phase: MusicStructurePhase | None = None
@@ -100,8 +120,10 @@ class MusicStructureTracker:
         """Clear all signal history and return the tracker to its initial state."""
 
         self._history.clear()
+        self._groove_reference_energy = 0.0
         self._last_timestamp = None
         self._smoothed_energy = 0.0
+        self._uses_rolling_energy = False
         self._phase = MusicStructurePhase.IDLE
         self._phase_since = 0.0
         self._candidate_phase = None
@@ -126,10 +148,13 @@ class MusicStructureTracker:
             self._clear_signal_state()
             elapsed = 0.0
 
-        raw_energy, bass, onset, silent = _feature_values(features)
+        energy, raw_energy, bass, onset, silent = _feature_values(features)
+        self._uses_rolling_energy = features.rolling_loudness > 0.003
         if silent:
             self._history.clear()
+            self._groove_reference_energy = 0.0
             self._smoothed_energy = 0.0
+            self._uses_rolling_energy = False
             self._phase = MusicStructurePhase.IDLE
             self._phase_since = now_s
             self._candidate_phase = None
@@ -143,10 +168,10 @@ class MusicStructureTracker:
             return self._state()
 
         if gap_reset or previous_timestamp is None:
-            self._smoothed_energy = raw_energy
+            self._smoothed_energy = energy
         elif elapsed > 0.0:
             alpha = 1.0 - math.exp(-elapsed / _SMOOTHING_TAU_SECONDS)
-            self._smoothed_energy += (raw_energy - self._smoothed_energy) * alpha
+            self._smoothed_energy += (energy - self._smoothed_energy) * alpha
 
         self._last_timestamp = now_s
         if self._history and self._history[-1].timestamp == now_s:
@@ -157,11 +182,20 @@ class MusicStructureTracker:
         while self._history and now_s - self._history[0].timestamp > _HISTORY_SECONDS:
             self._history.popleft()
 
-        if raw_energy <= 0.008:
+        if energy <= 0.008:
             self._transition(MusicStructurePhase.IDLE, now_s)
             self._buildup_progress = 0.0
             self._confidence = 0.9
             return self._state()
+
+        if self._phase is MusicStructurePhase.GROOVE and elapsed > 0.0:
+            alpha = 1.0 - math.exp(-elapsed / _GROOVE_REFERENCE_TAU_SECONDS)
+            if self._groove_reference_energy <= 0.0:
+                self._groove_reference_energy = self._smoothed_energy
+            elif self._smoothed_energy > self._groove_reference_energy:
+                self._groove_reference_energy += (
+                    self._smoothed_energy - self._groove_reference_energy
+                ) * alpha
 
         drop_confirmed = self._drop_confirmed(features, now_s)
         if drop_confirmed:
@@ -173,7 +207,12 @@ class MusicStructureTracker:
 
         if (
             self._phase is MusicStructurePhase.DROP
-            and now_s - self._phase_since < _DROP_HOLD_SECONDS
+            and now_s - self._phase_since
+            < (
+                _NATIVE_DROP_HOLD_SECONDS
+                if self._uses_rolling_energy
+                else _DROP_HOLD_SECONDS
+            )
         ):
             self._confidence = max(0.75, self._confidence * 0.96)
             return self._state()
@@ -183,7 +222,11 @@ class MusicStructureTracker:
             MusicStructurePhase.IDLE: 0.0,
             MusicStructurePhase.BREAKDOWN: _BREAKDOWN_CONFIRM_SECONDS,
             MusicStructurePhase.GROOVE: _GROOVE_CONFIRM_SECONDS,
-            MusicStructurePhase.BUILDUP: _BUILDUP_CONFIRM_SECONDS,
+            MusicStructurePhase.BUILDUP: (
+                _NATIVE_BUILDUP_CONFIRM_SECONDS
+                if self._uses_rolling_energy
+                else _BUILDUP_CONFIRM_SECONDS
+            ),
             MusicStructurePhase.DROP: 0.0,
         }[desired]
         changed = self._update_candidate(desired, now_s, confirm_seconds)
@@ -220,7 +263,9 @@ class MusicStructureTracker:
 
     def _clear_signal_state(self) -> None:
         self._history.clear()
+        self._groove_reference_energy = 0.0
         self._smoothed_energy = 0.0
+        self._uses_rolling_energy = False
         self._phase = MusicStructurePhase.IDLE
         self._phase_since = self._last_timestamp or 0.0
         self._candidate_phase = None
@@ -234,10 +279,28 @@ class MusicStructureTracker:
         if self._phase is not MusicStructurePhase.BUILDUP:
             return False
         if (
+            self._uses_rolling_energy
+            and now_s - self._phase_since < _NATIVE_DROP_MIN_BUILDUP_SECONDS
+        ):
+            return False
+        if (
             self._last_drop_at is not None
             and now_s - self._last_drop_at < _DROP_COOLDOWN_SECONDS
         ):
             return False
+
+        if self._uses_rolling_energy:
+            recent_level = [
+                sample
+                for sample in self._history
+                if now_s - sample.timestamp <= _NATIVE_DROP_COMPARISON_SECONDS
+            ]
+            if len(recent_level) < 2:
+                return False
+            baseline_level = median(sample.energy for sample in recent_level[:-1])
+            return (
+                recent_level[-1].energy - baseline_level >= _NATIVE_DROP_ENERGY_JUMP
+            )
 
         recent = [sample for sample in self._history if now_s - sample.timestamp <= 0.8]
         if len(recent) < 2:
@@ -267,16 +330,30 @@ class MusicStructureTracker:
         return explicit_evidence or transient_evidence or section_evidence
 
     def _desired_phase(self, now_s: float) -> tuple[MusicStructurePhase, float, float]:
+        window_seconds = (
+            _NATIVE_BUILDUP_WINDOW_SECONDS
+            if self._uses_rolling_energy
+            else _BUILDUP_WINDOW_SECONDS
+        )
         recent = [
             sample
             for sample in self._history
-            if now_s - sample.timestamp <= _BUILDUP_WINDOW_SECONDS
+            if now_s - sample.timestamp <= window_seconds
+            and (
+                not self._uses_rolling_energy
+                or sample.timestamp >= self._phase_since
+            )
         ]
         rise = 0.0
         slope = 0.0
         if (
             len(recent) >= 3
-            and recent[-1].timestamp - recent[0].timestamp >= _BUILDUP_MIN_SPAN_SECONDS
+            and recent[-1].timestamp - recent[0].timestamp
+            >= (
+                _NATIVE_BUILDUP_MIN_SPAN_SECONDS
+                if self._uses_rolling_energy
+                else _BUILDUP_MIN_SPAN_SECONDS
+            )
         ):
             span = recent[-1].timestamp - recent[0].timestamp
             earlier_end = recent[0].timestamp + span * 0.3
@@ -292,10 +369,36 @@ class MusicStructureTracker:
                 rise = max(0.0, later_energy - baseline)
                 slope = rise / duration
 
-        if self._smoothed_energy < _BREAKDOWN_ENERGY:
+        breakdown_threshold = _BREAKDOWN_ENERGY
+        if self._uses_rolling_energy and self._groove_reference_energy > 0.0:
+            breakdown_threshold = max(
+                breakdown_threshold,
+                min(0.16, self._groove_reference_energy * 0.60),
+            )
+        if (
+            self._uses_rolling_energy
+            and self._phase is MusicStructurePhase.BUILDUP
+            and self._smoothed_energy > 0.06
+        ):
+            return MusicStructurePhase.BUILDUP, rise, slope
+        if (
+            self._uses_rolling_energy
+            and self._smoothed_energy > 0.06
+            and rise >= _NATIVE_BUILDUP_MIN_RISE
+            and slope >= _NATIVE_BUILDUP_MIN_SLOPE
+            and (
+                self._phase is MusicStructurePhase.BREAKDOWN
+                or self._phase is MusicStructurePhase.GROOVE
+                and now_s - self._phase_since
+                >= _NATIVE_GROOVE_BUILDUP_ARM_SECONDS
+            )
+        ):
+            return MusicStructurePhase.BUILDUP, rise, slope
+        if self._smoothed_energy < breakdown_threshold:
             return MusicStructurePhase.BREAKDOWN, rise, slope
         if (
-            self._smoothed_energy >= _GROOVE_ENERGY
+            not self._uses_rolling_energy
+            and self._smoothed_energy >= _GROOVE_ENERGY
             and rise >= _BUILDUP_MIN_RISE
             and slope >= _BUILDUP_MIN_SLOPE
         ):
@@ -333,10 +436,15 @@ class MusicStructureTracker:
             self._buildup_start_energy = 0.0
 
     def _buildup_reference_energy(self, now_s: float) -> float:
+        window_seconds = (
+            _NATIVE_BUILDUP_WINDOW_SECONDS
+            if self._uses_rolling_energy
+            else _BUILDUP_WINDOW_SECONDS
+        )
         recent = [
             sample
             for sample in self._history
-            if now_s - sample.timestamp <= _BUILDUP_WINDOW_SECONDS
+            if now_s - sample.timestamp <= window_seconds
         ]
         if len(recent) < 3:
             return self._smoothed_energy
@@ -354,13 +462,17 @@ class MusicStructureTracker:
         )
 
 
-def _feature_values(features: MusicFeatures) -> tuple[float, float, float, bool]:
-    energy = max(
+def _feature_values(features: MusicFeatures) -> tuple[float, float, float, float, bool]:
+    instantaneous_energy = max(
         _finite_clamp(features.energy),
         _finite_clamp(features.volume),
         _finite_clamp(features.energy_level),
-        _finite_clamp(features.rolling_loudness),
-        _finite_clamp(features.program_loudness),
+    )
+    rolling_energy = _finite_clamp(features.rolling_loudness)
+    energy = (
+        max(instantaneous_energy, rolling_energy)
+        if rolling_energy <= 0.003
+        else rolling_energy
     )
     bass = max(_finite_clamp(features.bass), _finite_clamp(features.bass_energy))
     onset = max(
@@ -369,7 +481,7 @@ def _feature_values(features: MusicFeatures) -> tuple[float, float, float, bool]
         _finite_clamp(features.beat_strength) if features.beat else 0.0,
     )
     silent = features.silence or energy <= 0.003
-    return (0.0 if silent else energy), bass, onset, silent
+    return (0.0 if silent else energy), instantaneous_energy, bass, onset, silent
 
 
 def _finite_clamp(value: float) -> float:
