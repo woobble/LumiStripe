@@ -315,7 +315,7 @@ class AnimationPlayer:
                 frame = self._transition_target_float
                 brightness = (amount - 0.5) * 2.0
             np.multiply(frame, brightness, out=self._transition_work_float)
-            self._transition_work_float[:, 3] = 255.0
+            self._transition_work_float[:, 3] = frame[:, 3]
         else:
             np.multiply(self._transition_source_float, 1.0 - amount, out=self._transition_work_float)
             np.multiply(self._transition_target_float, amount, out=self._transition_target_float)

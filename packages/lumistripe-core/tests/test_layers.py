@@ -818,6 +818,27 @@ def test_transition_effects_render_deterministic_frames_at_elapsed_progress(
         np.testing.assert_array_equal(stripe.pixels(), np.tile(color, (4, 1)))
 
 
+def test_fade_black_preserves_partial_alpha_at_transition_endpoints() -> None:
+    source = np.array([[180, 30, 20, 128], [90, 120, 240, 64]], dtype=np.uint8)
+    incoming = np.array([[15, 200, 50, 192], [255, 100, 10, 160]], dtype=np.uint8)
+    player = AnimationPlayer(transition_effect=TransitionEffect.FADE_BLACK)
+    stripe = Stripe(2)
+    player.begin_transition(duration_ms=100, source=source, now_s=0.0)
+
+    stripe.set_pixels(incoming)
+    player.apply_transition(stripe, now_s=0.0)
+    np.testing.assert_array_equal(stripe.pixels(), source)
+
+    stripe.set_pixels(incoming)
+    player.apply_transition(stripe, now_s=0.05)
+    np.testing.assert_array_equal(stripe.pixels()[:, :3], np.zeros((2, 3), dtype=np.uint8))
+    np.testing.assert_array_equal(stripe.pixels()[:, 3], source[:, 3])
+
+    stripe.set_pixels(incoming)
+    player.apply_transition(stripe, now_s=0.1)
+    np.testing.assert_array_equal(stripe.pixels(), incoming)
+
+
 @pytest.mark.parametrize(
     ("progress", "indices", "expected"),
     [
