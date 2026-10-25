@@ -94,6 +94,7 @@ function AudioStatusPanelView({
   const {
     status: bluetoothStatus,
     busy: bluetoothBusy,
+    error: bluetoothError,
     run: runBluetooth,
   } = bluetoothController
 
@@ -149,7 +150,7 @@ function AudioStatusPanelView({
         </Card>
       )}
 
-      <section className="grid gap-3 md:grid-cols-2" aria-label="Audio routing status">
+      <section className="grid gap-3" aria-label="Audio routing status">
         <AudioSourceStatus
           configuredSource={configuredSource}
           activeSource={activeSource}
@@ -164,6 +165,7 @@ function AudioStatusPanelView({
           busy={bluetoothBusy}
           onAction={runOutputAction}
           variant="compact"
+          statusError={bluetoothError}
         />
       </section>
 

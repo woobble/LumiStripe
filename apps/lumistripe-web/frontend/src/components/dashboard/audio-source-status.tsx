@@ -57,10 +57,10 @@ export function AudioSourceStatus({
   return (
     <Card className="border-white/5 bg-card/80">
       <CardHeader className="pb-3">
-        <CardTitle className="flex items-center gap-2 text-base"><AudioLinesIcon className="size-4 text-cyan-300" />{compact ? "Input source" : "Audio source status"}</CardTitle>
-        {statusMessage && !compact && <p className="text-sm text-muted-foreground" aria-live="polite">{statusMessage}</p>}
+        <CardTitle className="flex min-w-0 items-center gap-2 text-base"><AudioLinesIcon className="size-4 shrink-0 text-cyan-300" />{compact ? "Input source" : "Audio source status"}</CardTitle>
+        {statusMessage && !compact && <p className="break-words text-sm text-muted-foreground [overflow-wrap:anywhere]" aria-live="polite">{statusMessage}</p>}
       </CardHeader>
-      <CardContent className="grid gap-3 text-sm sm:grid-cols-2">
+      <CardContent className="space-y-3 text-sm">
         <StatusItem label="Configured source" value={audioSourceLabel(configuredSource)} />
         <StatusItem label="Active source" value={activeSource && activeSource !== "off" ? audioSourceLabel(activeSource) : "None"} />
         <StatusItem label="Audio monitor" value={monitoring ? "Running" : "Inactive"} />
@@ -76,9 +76,9 @@ export function AudioSourceStatus({
 
 function StatusItem({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between gap-2 rounded-lg bg-white/[0.03] px-3 py-2">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="truncate font-medium" title={value}>{value}</span>
+    <div className="flex items-start justify-between gap-3 rounded-lg bg-white/[0.03] px-3 py-2">
+      <span className="shrink-0 text-muted-foreground">{label}</span>
+      <span className="min-w-0 flex-1 break-words text-right font-medium [overflow-wrap:anywhere]">{value}</span>
     </div>
   )
 }

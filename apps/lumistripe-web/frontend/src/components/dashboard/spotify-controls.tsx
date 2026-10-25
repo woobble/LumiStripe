@@ -132,12 +132,12 @@ export function SpotifyControls({ initialStatus }: { initialStatus: SpotifyStatu
   return (
     <Card className="border-white/5 bg-card/80">
       <CardHeader>
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <CardTitle className="flex items-center gap-2"><Music2Icon className="size-4 text-emerald-300" />Now Playing</CardTitle>
-            <CardDescription>Spotify playback through the selected audio output.</CardDescription>
+        <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+          <div className="min-w-0 flex-1">
+            <CardTitle className="flex min-w-0 items-center gap-2"><Music2Icon className="size-4 shrink-0 text-emerald-300" />Now Playing</CardTitle>
+            <CardDescription className="mt-1">Spotify playback through the selected audio output.</CardDescription>
           </div>
-          <Badge variant={ready ? "default" : "outline"}>{ready ? "Ready" : "Unavailable"}</Badge>
+          <Badge className="shrink-0" variant={ready ? "default" : "outline"}>{ready ? "Ready" : "Unavailable"}</Badge>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -151,9 +151,9 @@ export function SpotifyControls({ initialStatus }: { initialStatus: SpotifyStatu
             {spotify.track.cover_url
               ? <img src={spotify.track.cover_url} alt={`${spotify.track.album || spotify.track.name || "Track"} cover art`} loading="lazy" className="size-16 shrink-0 rounded-lg object-cover" />
               : <div className="flex size-16 shrink-0 items-center justify-center rounded-lg bg-emerald-400/15 text-emerald-200"><Music2Icon className="size-6" /></div>}
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium">{spotify.track.name || "Unknown track"}</p>
-              <p className="truncate text-xs text-muted-foreground">{spotify.track.artists.join(", ") || "Unknown artist"}{spotify.track.album ? ` · ${spotify.track.album}` : ""}</p>
+            <div className="min-w-0 flex-1">
+              <p className="break-words text-sm font-medium [overflow-wrap:anywhere]">{spotify.track.name || "Unknown track"}</p>
+              <p className="break-words text-xs text-muted-foreground [overflow-wrap:anywhere]">{spotify.track.artists.join(", ") || "Unknown artist"}{spotify.track.album ? ` · ${spotify.track.album}` : ""}</p>
             </div>
           </div>
         )}

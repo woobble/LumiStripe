@@ -283,8 +283,8 @@ export function AudioMusicStructureSummary({ telemetry, fresh }: { telemetry: Au
       <CardContent className="space-y-3">
         {telemetry.music_structure_active ? (
           <>
-            <div className="flex items-end justify-between gap-3">
-              <p className="text-2xl font-semibold">Estimated {structurePhaseLabel(telemetry.music_structure_phase).toLowerCase()}</p>
+            <div className="flex flex-wrap items-end justify-between gap-x-3 gap-y-1">
+              <p className="min-w-0 break-words text-2xl font-semibold">Estimated {structurePhaseLabel(telemetry.music_structure_phase).toLowerCase()}</p>
               <p className="text-sm tabular-nums text-muted-foreground">{percent(telemetry.music_structure_confidence)}% confidence</p>
             </div>
             <div>
@@ -355,8 +355,8 @@ export function AudioTelemetryCards({
   return (
     <>
       <Card className="border-white/5 bg-card/80 shadow-xl shadow-black/10 backdrop-blur-xl">
-        <CardHeader className="grid-cols-[1fr_auto]">
-          <div>
+        <CardHeader className="grid-cols-1 @sm/card-header:grid-cols-[minmax(0,1fr)_auto]">
+          <div className="min-w-0">
             <CardTitle className="flex items-center gap-2"><GaugeIcon className="size-4 text-cyan-300" />Live input</CardTitle>
             <CardDescription>Input level, noise floor, and the processed signal sent to Music mode.</CardDescription>
           </div>
@@ -375,7 +375,7 @@ export function AudioTelemetryCards({
           {telemetry.configured_input_noise_floor !== null && <p className="text-xs text-muted-foreground">Peak {percent(telemetry.input_peak)}% · Microphone input gate {telemetry.microphone_gate_open ? "open" : "closed"} · Opens at {(telemetry.configured_input_noise_floor * 2).toFixed(4)}</p>}
           {telemetry.fresh && telemetry.clipping_fraction > 0 && <p role="alert" className="text-sm text-amber-300">Input is clipping. Lower microphone capture gain, then repeat calibration.</p>}
           {telemetry.fresh && telemetry.input_peak < 0.001 && <p className="text-sm text-muted-foreground">Very little input. Check the selected microphone and its capture gain.</p>}
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             <div className={`rounded-xl p-3 text-center transition-colors ${telemetry.beat ? "bg-fuchsia-400/20 text-fuchsia-100" : "bg-white/[0.035]"}`}><AudioLinesIcon className="mx-auto mb-1 size-4" /><p className="font-semibold">{telemetry.beat ? "Beat" : "Waiting"}</p><p className="text-[11px] text-muted-foreground">{percent(telemetry.beat_strength)}% strength</p></div>
             <div className="rounded-xl bg-white/[0.035] p-3 text-center"><WavesIcon className="mx-auto mb-1 size-4" /><p className="font-semibold">{telemetry.bpm > 0 ? telemetry.bpm.toFixed(0) : "—"} BPM</p><p className="text-[11px] text-muted-foreground">Detected tempo</p></div>
             <div className="rounded-xl bg-white/[0.035] p-3 text-center"><ActivityIcon className="mx-auto mb-1 size-4" /><p className="font-semibold">{telemetry.normalization_gain.toFixed(2)}×</p><p className="text-[11px] text-muted-foreground">Auto gain</p></div>
@@ -383,10 +383,10 @@ export function AudioTelemetryCards({
             <div className="rounded-xl bg-white/[0.035] p-3 text-center"><GaugeIcon className="mx-auto mb-1 size-4" /><p className="font-semibold">{percent(telemetry.musical_impact)}%</p><p className="text-[11px] text-muted-foreground">Musical impact</p></div>
           </div>
           <div className="space-y-2 rounded-xl border border-white/5 bg-white/[0.025] p-3">
-            <div className="flex items-center justify-between gap-3 text-sm"><span>Beat phase</span><span className="font-mono tabular-nums">{percent(telemetry.beat_phase / 1)}% · {Math.round(telemetry.bpm_confidence * 100)}% confidence</span></div>
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-sm"><span>Beat phase</span><span className="min-w-0 break-words text-right font-mono tabular-nums [overflow-wrap:anywhere]">{percent(telemetry.beat_phase / 1)}% · {Math.round(telemetry.bpm_confidence * 100)}% confidence</span></div>
             <div className="h-2 overflow-hidden rounded-full bg-white/5"><div className="h-full rounded-full bg-fuchsia-400 transition-[width] duration-75" style={{ width: `${percent(telemetry.beat_phase) || 0.5}%` }} /></div>
             <div className="flex flex-wrap justify-between gap-x-4 gap-y-1 text-[11px] text-muted-foreground"><span>Next beat {telemetry.next_beat_in_ms === null ? "—" : `${Math.round(telemetry.next_beat_in_ms)} ms`}</span><span>Event #{telemetry.beat_event_sequence}</span><span>{telemetry.dropped_beat_events} dropped · {telemetry.pending_beat_events} queued</span></div>
-            <p className="truncate text-[11px] text-muted-foreground">Route {telemetry.sync_route} · offset {telemetry.sync_offset_ms > 0 ? "+" : ""}{Math.round(telemetry.sync_offset_ms)} ms</p>
+            <p className="break-words text-[11px] text-muted-foreground [overflow-wrap:anywhere]">Route {telemetry.sync_route} · offset {telemetry.sync_offset_ms > 0 ? "+" : ""}{Math.round(telemetry.sync_offset_ms)} ms</p>
             <p className="text-[11px] text-muted-foreground">
               Scheduler: {telemetry.beat_scheduler_late_ticks_dropped} late dropped · {telemetry.beat_scheduler_late_ticks_coalesced} coalesced · p95 {telemetry.beat_scheduler_lateness_p95_ms.toFixed(1)} ms
               {telemetry.calibration_output_callback_count > 0 && <> · Output {Math.round(telemetry.calibration_output_sample_rate / 1000)} kHz / {telemetry.calibration_output_block_duration_ms.toFixed(2)} ms blocks · callback p95 {telemetry.calibration_output_callback_p95_ms.toFixed(2)} ms · interval jitter p95 {telemetry.calibration_output_interval_jitter_p95_ms.toFixed(2)} ms · {telemetry.calibration_output_underflow_count} underflows / {telemetry.calibration_output_overflow_count} overflows / {telemetry.calibration_output_callback_error_count} callback errors</>}
@@ -400,8 +400,8 @@ export function AudioTelemetryCards({
       </Card>
 
       <Card className="border-white/5 bg-card/80">
-        <CardHeader className="grid-cols-[1fr_auto]">
-          <div>
+        <CardHeader className="grid-cols-1 @sm/card-header:grid-cols-[minmax(0,1fr)_auto]">
+          <div className="min-w-0">
             <CardTitle className="flex items-center gap-2"><ActivityIcon className="size-4 text-fuchsia-300" />Music structure</CardTitle>
             <CardDescription>Illustrative estimate of the current musical section; future drops are not predicted.</CardDescription>
           </div>
@@ -414,8 +414,8 @@ export function AudioTelemetryCards({
           </Badge>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex items-end justify-between gap-4">
-            <p className="text-3xl font-semibold">{structurePhaseLabel(telemetry.music_structure_phase)}</p>
+          <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-1">
+            <p className="min-w-0 break-words text-3xl font-semibold">{structurePhaseLabel(telemetry.music_structure_phase)}</p>
             <p className="text-sm tabular-nums text-muted-foreground">{percent(telemetry.music_structure_confidence)}% confidence</p>
           </div>
           <div>
