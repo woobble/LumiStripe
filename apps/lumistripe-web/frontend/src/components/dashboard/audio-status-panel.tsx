@@ -1,18 +1,25 @@
 import { Link } from "react-router"
-import { memo } from "react"
+import { memo, useEffect, useState } from "react"
 import { AudioLinesIcon, Settings2Icon } from "lucide-react"
 
-import { Badge } from "@/components/ui/badge"
-import { Card, CardContent } from "@/components/ui/card"
 import { AudioHistoryChart, AudioTelemetryCards, useAudioTelemetry } from "@/components/dashboard/audio-telemetry"
+import { AudioSourceStatus } from "@/components/dashboard/audio-source-status"
+import type { AudioSettingsResponse } from "@/lib/api"
+import { dashboardApi } from "@/lib/api"
 
 function AudioStatusPanelView({ audioStatus }: { audioStatus: string }) {
   const { telemetry, history, connection } = useAudioTelemetry()
-  const connectionLabel = connection === "connected"
-    ? "Audio stream connected"
-    : connection === "connecting"
-      ? "Connecting to audio stream"
-      : "Audio stream reconnecting"
+  const [settings, setSettings] = useState<AudioSettingsResponse | null>(null)
+
+  useEffect(() => {
+    let mounted = true
+    void dashboardApi.getAudioSettings().then((next) => {
+      if (mounted) setSettings(next)
+    }).catch(() => {
+      if (mounted) setSettings(null)
+    })
+    return () => { mounted = false }
+  }, [])
 
   return (
     <div className="space-y-4 pb-4">
@@ -26,17 +33,14 @@ function AudioStatusPanelView({ audioStatus }: { audioStatus: string }) {
         </Link>
       </div>
 
-      <Card className="border-white/5 bg-card/80">
-        <CardContent className="flex flex-wrap items-center justify-between gap-2 pt-4 text-sm">
-          <div className="space-y-1">
-            <p className="font-medium" aria-live="polite">{audioStatus}</p>
-            <p className="text-xs text-muted-foreground">{connectionLabel}</p>
-          </div>
-          <Badge variant={telemetry.fresh ? "default" : "outline"}>
-            {telemetry.fresh ? "Samples active" : "Waiting for samples"}
-          </Badge>
-        </CardContent>
-      </Card>
+      <AudioSourceStatus
+        configuredSource={settings?.source}
+        activeSource={settings?.active_source}
+        monitoring={settings?.monitoring ?? false}
+        connection={connection}
+        fresh={telemetry.fresh}
+        statusMessage={audioStatus}
+      />
 
       <AudioTelemetryCards telemetry={telemetry} />
       <AudioHistoryChart history={history} />

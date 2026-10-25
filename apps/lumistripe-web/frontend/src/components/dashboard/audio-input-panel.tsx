@@ -1,181 +1,72 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react"
-import { Controller, useForm } from "react-hook-form"
-import { zodResolver } from "@hookform/resolvers/zod"
-import { AudioLinesIcon, CircleAlertIcon, MicIcon, Music2Icon, PauseIcon, PlayIcon, RefreshCwIcon, Repeat2Icon, SaveIcon, ShuffleIcon, SkipBackIcon, SkipForwardIcon, Volume2Icon, VolumeXIcon } from "lucide-react"
-import { z } from "zod"
+import { AudioSetupPage } from "@/components/dashboard/setup-nav"
+import { AudioOutputControls } from "@/components/dashboard/audio-output-controls"
+import { AudioSourceControls } from "@/components/dashboard/audio-source-controls"
+import { LiveAudioSourceStatus } from "@/components/dashboard/audio-source-status"
+import { AudioSyncControls } from "@/components/dashboard/audio-sync-controls"
+import { BluetoothDevicePanel } from "@/components/dashboard/bluetooth-device-panel"
+import { MicrophoneInputControls } from "@/components/dashboard/microphone-input-controls"
+import { SpotifyControls } from "@/components/dashboard/spotify-controls"
+import { useBluetooth, type BluetoothAction } from "@/hooks/use-bluetooth"
+import { dashboardApi, type AudioSettingsResponse, type BluetoothStatusResponse } from "@/lib/api"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent } from "@/components/ui/card"
+import { Skeleton } from "@/components/ui/skeleton"
 import { toast } from "sonner"
 
-import { AudioSetupPage } from "@/components/dashboard/setup-nav"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Slider } from "@/components/ui/slider"
-import { Switch } from "@/components/ui/switch"
-import { BluetoothDevicePanel } from "@/components/dashboard/bluetooth-device-panel"
-import { useBluetooth, type BluetoothAction } from "@/hooks/use-bluetooth"
-import { dashboardApi, type AudioSettingsResponse, type BluetoothOperation, type BluetoothStatusResponse, type SpotifyControlAction, type SpotifyStatusResponse } from "@/lib/api"
-import { useUnsavedChangesGuard } from "@/hooks/use-unsaved-changes"
-
-const inputSelectionSchema = z.object({ selected: z.string().trim().min(1, "Choose an input device.") })
-type InputFormValues = z.infer<typeof inputSelectionSchema>
-const audioSources = ["auto", "spotify", "bluetooth", "mic", "demo", "off"] as const
-type AudioSourceValue = typeof audioSources[number]
-const audioSourceLabels: Record<AudioSourceValue, string> = {
-  auto: "Automatic — Bluetooth first",
-  spotify: "Spotify Connect",
-  bluetooth: "Bluetooth input",
-  mic: "Microphone",
-  demo: "Demo beat",
-  off: "Off",
-}
-
-function isAudioSource(value: string): value is AudioSourceValue {
-  return (audioSources as readonly string[]).includes(value)
-}
-
-function audioSourceLabel(value: string | null | undefined) {
-  return value && isAudioSource(value) ? audioSourceLabels[value] : "Select audio source"
-}
-
-function firstSliderValue(value: number | readonly number[]) {
-  return Array.isArray(value) ? value[0] ?? 0 : value
-}
-
-function formatMilliseconds(value: number | null | undefined) {
-  const totalSeconds = Math.max(0, Math.floor((value ?? 0) / 1000))
-  const minutes = Math.floor(totalSeconds / 60)
-  const seconds = String(totalSeconds % 60).padStart(2, "0")
-  return `${minutes}:${seconds}`
-}
-
-type SpotifySliderKey = "position" | "volume"
-type SpotifySliderCommand = {
-  queuedValue: number | null
-  sequence: number
-  running: boolean
-}
-type SpotifySliderOptimisticValue = {
-  value: number
-  expiresAt: number
-}
-
 function AudioInputPanelView() {
-  const [response, setResponse] = useState<AudioSettingsResponse | null>(null)
+  const [settings, setSettings] = useState<AudioSettingsResponse | null>(null)
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [source, setSource] = useState<AudioSourceValue>("auto")
-  const [sourceSaving, setSourceSaving] = useState(false)
-  const [syncOffsetDraft, setSyncOffsetDraft] = useState(0)
-  const [syncOffsetSaving, setSyncOffsetSaving] = useState(false)
-  const [syncCalibrationRunning, setSyncCalibrationRunning] = useState(false)
-  const syncCalibrationActive = useRef(false)
-  const syncStopTimer = useRef<number | null>(null)
-  const [spotify, setSpotify] = useState<SpotifyStatusResponse | null>(null)
-  const [spotifyCommandBusy, setSpotifyCommandBusy] = useState(false)
-  const [spotifyPositionDraft, setSpotifyPositionDraft] = useState<number | null>(null)
-  const [spotifyVolumeDraft, setSpotifyVolumeDraft] = useState<number | null>(null)
-  const spotifyPositionDragging = useRef(false)
-  const spotifyVolumeDragging = useRef(false)
-  const spotifySliderCommands = useRef<Record<SpotifySliderKey, SpotifySliderCommand>>({
-    position: { queuedValue: null, sequence: 0, running: false },
-    volume: { queuedValue: null, sequence: 0, running: false },
-  })
-  const spotifySliderPending = useRef<Record<SpotifySliderKey, number | null>>({ position: null, volume: null })
-  const spotifySliderOptimistic = useRef<Record<SpotifySliderKey, SpotifySliderOptimisticValue | null>>({ position: null, volume: null })
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [bluetoothAlias, setBluetoothAlias] = useState("")
-  const [outputVolumeDraft, setOutputVolumeDraft] = useState<number | null>(null)
-  const form = useForm<InputFormValues>({ resolver: zodResolver(inputSelectionSchema), defaultValues: { selected: "" } })
-  const { control, handleSubmit, reset, formState: { isDirty, errors } } = form
-  useUnsavedChangesGuard(isDirty)
-  const bluetoothController = useBluetooth(response?.bluetooth)
-  const { status: bluetoothStatus, busy: bluetoothBusy, replaceStatus, refresh: refreshBluetooth, run: runBluetooth } = bluetoothController
-  const bluetooth = bluetoothStatus ?? response?.bluetooth
+  const [calibrationRunning, setCalibrationRunning] = useState(false)
+  const calibrationActive = useRef(false)
+  const calibrationTimer = useRef<number | null>(null)
+  const initialLoadComplete = useRef(false)
+  const bluetoothController = useBluetooth(settings?.bluetooth)
+  const {
+    status: bluetoothStatus,
+    busy: bluetoothBusy,
+    replaceStatus,
+    refresh: refreshBluetooth,
+    run: runBluetooth,
+  } = bluetoothController
+  const bluetooth = bluetoothStatus ?? settings?.bluetooth ?? null
 
-  const updateSpotifyStatus = useCallback((next: SpotifyStatusResponse) => {
-    setSpotify(next)
-    const now = Date.now()
-    const positionOptimistic = spotifySliderOptimistic.current.position
-    if (positionOptimistic && positionOptimistic.expiresAt <= now) {
-      spotifySliderOptimistic.current.position = null
-    }
-    const volumeOptimistic = spotifySliderOptimistic.current.volume
-    if (volumeOptimistic && volumeOptimistic.expiresAt <= now) {
-      spotifySliderOptimistic.current.volume = null
-    }
-
-    if (
-      !spotifyPositionDragging.current
-      && spotifySliderPending.current.position === null
-    ) {
-      setSpotifyPositionDraft(spotifySliderOptimistic.current.position?.value ?? next.position_ms)
-    }
-    if (
-      !spotifyVolumeDragging.current
-      && spotifySliderPending.current.volume === null
-    ) {
-      setSpotifyVolumeDraft(spotifySliderOptimistic.current.volume?.value ?? next.volume)
-    }
-  }, [])
+  const applySettings = useCallback((next: AudioSettingsResponse) => {
+    setSettings(next)
+    if (next.bluetooth) replaceStatus(next.bluetooth)
+  }, [replaceStatus])
 
   const load = useCallback(async () => {
     setLoading(true)
+    setLoadError(null)
     try {
       const next = await dashboardApi.getAudioSettings()
-      setResponse(next)
-      setSyncOffsetDraft(next.sync_offset_ms)
-      updateSpotifyStatus(next.spotify)
-      if (next.bluetooth) replaceStatus(next.bluetooth)
-      if (next.bluetooth?.adapter_alias) setBluetoothAlias(next.bluetooth.adapter_alias)
-      setOutputVolumeDraft(next.bluetooth?.output_volume ?? null)
-      if (isAudioSource(next.source)) setSource(next.source)
-      reset({ selected: next.fallback_device ?? next.active_device ?? next.devices[0]?.selector ?? "" })
+      applySettings(next)
+      if (!initialLoadComplete.current && next.bluetooth?.adapter_alias) {
+        setBluetoothAlias(next.bluetooth.adapter_alias)
+      }
+      initialLoadComplete.current = true
     } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "Could not load audio devices.")
       toast.error(error instanceof Error ? error.message : "Could not load audio devices.")
     } finally {
       setLoading(false)
     }
-  }, [replaceStatus, reset, updateSpotifyStatus])
+  }, [applySettings])
 
   useEffect(() => {
     void load()
   }, [load])
 
-  useEffect(() => {
-    let mounted = true
-    const refresh = async () => {
-      try {
-        const next = await dashboardApi.getSpotifyStatus()
-        if (mounted) updateSpotifyStatus(next)
-      } catch {
-        // The audio settings response remains the source of truth while the
-        // optional Soloist service is starting or unavailable.
-      }
-    }
-    const interval = window.setInterval(() => void refresh(), 1000)
-    return () => {
-      mounted = false
-      window.clearInterval(interval)
-    }
-  }, [updateSpotifyStatus])
-
-  useEffect(() => () => {
-    if (syncStopTimer.current !== null) window.clearTimeout(syncStopTimer.current)
-    syncStopTimer.current = null
-    if (syncCalibrationActive.current) {
-      syncCalibrationActive.current = false
-      void dashboardApi.setAudioSyncCalibration(false).catch(() => undefined)
-    }
-  }, [])
-
   const startSyncCalibration = async () => {
-    if (syncCalibrationRunning) return
+    if (calibrationRunning) return
     try {
       await dashboardApi.setAudioSyncCalibration(true)
-      syncCalibrationActive.current = true
-      setSyncCalibrationRunning(true)
-      syncStopTimer.current = window.setTimeout(() => {
+      calibrationActive.current = true
+      setCalibrationRunning(true)
+      calibrationTimer.current = window.setTimeout(() => {
         void stopSyncCalibration()
       }, 45_000)
     } catch (error) {
@@ -184,10 +75,10 @@ function AudioInputPanelView() {
   }
 
   const stopSyncCalibration = async () => {
-    if (syncStopTimer.current !== null) window.clearTimeout(syncStopTimer.current)
-    syncStopTimer.current = null
-    syncCalibrationActive.current = false
-    setSyncCalibrationRunning(false)
+    if (calibrationTimer.current !== null) window.clearTimeout(calibrationTimer.current)
+    calibrationTimer.current = null
+    calibrationActive.current = false
+    setCalibrationRunning(false)
     try {
       await dashboardApi.setAudioSyncCalibration(false)
     } catch (error) {
@@ -195,104 +86,34 @@ function AudioInputPanelView() {
     }
   }
 
-  const saveSyncOffset = async () => {
-    if (syncOffsetSaving) return
-    setSyncOffsetSaving(true)
-    try {
-      const next = await dashboardApi.setAudioSyncOffset(syncOffsetDraft)
-      setResponse(next)
-      setSyncOffsetDraft(next.sync_offset_ms)
-      toast.success("Sync offset saved for this audio route.")
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Sync offset could not be saved.")
-    } finally {
-      setSyncOffsetSaving(false)
+  useEffect(() => () => {
+    if (calibrationTimer.current !== null) window.clearTimeout(calibrationTimer.current)
+    calibrationTimer.current = null
+    if (calibrationActive.current) {
+      calibrationActive.current = false
+      void dashboardApi.setAudioSyncCalibration(false).catch(() => undefined)
     }
+  }, [])
+
+  const saveSource = async (source: Parameters<typeof dashboardApi.setAudioSource>[0]) => {
+    if (calibrationRunning) await stopSyncCalibration()
+    const next = await dashboardApi.setAudioSource(source)
+    applySettings(next)
+    return next
   }
 
-  const saveSource = async () => {
-    if (sourceSaving || source === response?.source) return
-    if (syncCalibrationRunning) await stopSyncCalibration()
-    setSourceSaving(true)
-    try {
-      const next = await dashboardApi.setAudioSource(source)
-      setResponse(next)
-      setSyncOffsetDraft(next.sync_offset_ms)
-      updateSpotifyStatus(next.spotify)
-      if (next.bluetooth) replaceStatus(next.bluetooth)
-      setOutputVolumeDraft(next.bluetooth?.output_volume ?? null)
-      if (isAudioSource(next.source)) setSource(next.source)
-      toast.success("Audio input applied.")
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Audio input could not be changed.")
-    } finally {
-      setSourceSaving(false)
-    }
+  const saveMicrophone = async (device: string) => {
+    if (calibrationRunning) await stopSyncCalibration()
+    const next = await dashboardApi.selectAudioDevice(device)
+    applySettings(next)
+    return next
   }
 
-  const runSpotifyControl = async (action: SpotifyControlAction, value?: number | boolean | string) => {
-    if (spotifyCommandBusy) return
-    setSpotifyCommandBusy(true)
-    try {
-      const next = await dashboardApi.controlSpotify(action, value)
-      updateSpotifyStatus(next)
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Spotify control failed.")
-    } finally {
-      setSpotifyCommandBusy(false)
-    }
+  const saveSyncOffset = async (offsetMs: number) => {
+    const next = await dashboardApi.setAudioSyncOffset(offsetMs)
+    applySettings(next)
+    return next
   }
-
-  const sendSpotifySliderCommand = useCallback(
-    (key: SpotifySliderKey, action: "seek" | "set_volume", value: number) => {
-      const command = spotifySliderCommands.current[key]
-      command.queuedValue = value
-      command.sequence += 1
-      spotifySliderPending.current[key] = value
-
-      if (command.running) return
-      command.running = true
-
-      void (async () => {
-        try {
-          while (command.queuedValue !== null) {
-            const commandValue = command.queuedValue
-            command.queuedValue = null
-            const sequence = command.sequence
-
-            try {
-              const next = await dashboardApi.controlSpotify(action, commandValue)
-              updateSpotifyStatus(next)
-
-              // Soloist may acknowledge a command before its next status
-              // event contains the new value. Keep the local value stable for
-              // a short grace period so polling cannot snap the thumb back.
-              if (command.sequence === sequence) {
-                spotifySliderPending.current[key] = null
-                spotifySliderOptimistic.current[key] = {
-                  value: commandValue,
-                  expiresAt: Date.now() + 2000,
-                }
-                if (key === "position") setSpotifyPositionDraft(commandValue)
-                else setSpotifyVolumeDraft(commandValue)
-              }
-            } catch (error) {
-              if (command.sequence === sequence) {
-                spotifySliderPending.current[key] = null
-                spotifySliderOptimistic.current[key] = null
-                if (key === "position") setSpotifyPositionDraft(null)
-                else setSpotifyVolumeDraft(null)
-                toast.error(error instanceof Error ? error.message : "Spotify control failed.")
-              }
-            }
-          }
-        } finally {
-          command.running = false
-        }
-      })()
-    },
-    [updateSpotifyStatus],
-  )
 
   const runBluetoothAction = async (
     action: BluetoothAction,
@@ -302,248 +123,70 @@ function AudioInputPanelView() {
   ) => {
     try {
       const status = await runBluetooth(action, operation)
-      if (!status) return
-      setOutputVolumeDraft(status.output_volume ?? null)
+      if (!status) return null
       onSuccess?.()
       if (message) toast.success(message)
+      return status
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Bluetooth operation failed.")
+      return null
     }
-  }
-
-  const saveBluetoothAlias = async () => {
-    const alias = bluetoothAlias.trim()
-    if (!alias) return
-    void runBluetoothAction("alias", () => dashboardApi.setBluetoothAlias(alias), "Bluetooth device name saved.", () => setBluetoothAlias(alias))
   }
 
   const runOutputAction = async (
     action: BluetoothAction,
     operation: () => Promise<BluetoothStatusResponse>,
   ) => {
-    if (syncCalibrationRunning) await stopSyncCalibration()
-    void runBluetoothAction(action, operation, undefined, () => void load())
+    if (calibrationRunning) await stopSyncCalibration()
+    const status = await runBluetoothAction(action, operation)
+    if (status) void load()
+    return status
   }
 
-  const save = async ({ selected }: InputFormValues) => {
-    if (saving) return
-    if (syncCalibrationRunning) await stopSyncCalibration()
-    setSaving(true)
-    try {
-      const next = await dashboardApi.selectAudioDevice(selected)
-      setResponse(next)
-      setSyncOffsetDraft(next.sync_offset_ms)
-      updateSpotifyStatus(next.spotify)
-      if (next.bluetooth) replaceStatus(next.bluetooth)
-      setOutputVolumeDraft(next.bluetooth?.output_volume ?? null)
-      reset({ selected: next.fallback_device ?? next.active_device ?? "" })
-      toast.success("Microphone input applied and saved.")
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Microphone input could not be changed.")
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const selected = form.watch("selected")
-  const microphoneDevices = response?.devices.filter((device) => device.selector !== "bluetooth" && device.selector !== "spotify") ?? []
-  const selectedName = response?.devices.find((device) => device.selector === selected)?.name
-    ?? response?.active_device_name
-    ?? "Select microphone"
-  const dirty = isDirty
-  const bluetoothOperationBusy = bluetoothBusy
-  const outputSelector = bluetooth?.default_sink ?? bluetooth?.output_devices[0]?.selector ?? ""
-  const outputVolume = outputVolumeDraft ?? bluetooth?.output_volume ?? 0
-  const selectedOutput = bluetooth?.output_devices.find((device) => device.selector === outputSelector)
-  const outputBusyState = Boolean(bluetoothOperationBusy)
-  const spotifyReady = Boolean(spotify?.connected && spotify.logged_in)
-  const spotifyDuration = Math.max(1, spotify?.duration_ms ?? spotify?.track?.duration_ms ?? 1)
-  const spotifyPosition = Math.min(
-    Math.max(0, spotifyPositionDraft ?? spotify?.position_ms ?? 0),
-    spotifyDuration,
-  )
-  const spotifyVolume = Math.min(100, Math.max(0, spotifyVolumeDraft ?? spotify?.volume ?? 0))
-  const supportsBluetoothOperation = (operation: BluetoothOperation) => {
-    const operations = bluetooth?.capabilities?.operations
-    return operations?.length ? operations.includes(operation) : true
+  const saveBluetoothAlias = () => {
+    const alias = bluetoothAlias.trim()
+    if (!alias) return
+    void runBluetoothAction("alias", () => dashboardApi.setBluetoothAlias(alias), "Bluetooth device name saved.", () => setBluetoothAlias(alias))
   }
 
   return (
     <AudioSetupPage>
-      {loading && !response ? <Skeleton className="h-56 rounded-xl" /> : (
+      {loading && !settings ? <Skeleton className="h-56 rounded-xl" /> : settings ? (
         <div className="space-y-4">
-          <Card className="border-white/5 bg-card/80">
-            <CardHeader>
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <CardTitle className="flex items-center gap-2"><AudioLinesIcon className="size-4 text-cyan-300" />Audio input</CardTitle>
-                  <CardDescription>Choose what drives the Stripe animation. Bluetooth is preferred automatically on hardware, with the microphone as fallback. Spotify Connect is available as a dedicated source.</CardDescription>
-                </div>
-                <Badge variant={response?.monitoring ? "default" : "outline"}>{audioSourceLabel(response?.monitoring ? response?.active_source : response?.source)}</Badge>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <Select value={source} onValueChange={(value) => { if (value && isAudioSource(value)) setSource(value) }} disabled={sourceSaving}>
-                <SelectTrigger aria-label="Audio input source" className="h-11 rounded-xl"><SelectValue>{(value) => audioSourceLabel(value)}</SelectValue></SelectTrigger>
-                <SelectContent>
-                  {audioSources.map((value) => <SelectItem key={value} value={value}>{audioSourceLabels[value]}</SelectItem>)}
-                </SelectContent>
-              </Select>
-              <Button className="h-12 w-full rounded-xl" disabled={sourceSaving || source === response?.source} onClick={() => void saveSource()}><SaveIcon />{sourceSaving ? "Applying…" : "Save audio input"}</Button>
-            </CardContent>
-          </Card>
-
-          <Card className="border-white/5 bg-card/80">
-            <CardHeader>
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <CardTitle className="flex items-center gap-2"><Music2Icon className="size-4 text-emerald-300" />Spotify Connect</CardTitle>
-                  <CardDescription>Play Spotify through Soloist. Its dedicated PipeWire sink is analysed for the Stripe animation and routed to the selected output.</CardDescription>
-                </div>
-                <Badge variant={spotify?.connected && spotify.logged_in ? "default" : "outline"}>{spotify?.connected && spotify.logged_in ? "Ready" : "Unavailable"}</Badge>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {!spotify?.configured ? <p className="rounded-xl bg-amber-500/10 p-3 text-sm text-amber-100">Spotify is not configured. Set <span className="font-mono">LUMI_SPOTIFY_API_KEY</span> during deployment and restart the Spotify service.</p> : null}
-              {spotify?.configured && !spotify.connected ? <p className="rounded-xl bg-white/[0.03] p-3 text-sm text-muted-foreground">Waiting for the local Soloist WebSocket service.</p> : null}
-              {spotify?.configured && spotify.connected && !spotify.logged_in ? <p className="rounded-xl bg-amber-500/10 p-3 text-sm text-amber-100">Open Spotify on a phone or desktop and choose this device, <span className="font-medium">{spotify.device_name ?? "LumiStripe"}</span>, to sign in and start playback.</p> : null}
-              {spotify?.error ? <div className="flex gap-2 rounded-xl bg-red-500/10 p-3 text-sm text-red-200"><CircleAlertIcon className="mt-0.5 size-4 shrink-0" /><span>{spotify.error}</span></div> : null}
-              {spotify?.track ? (
-                <div className="flex items-center gap-3 rounded-xl border border-white/5 bg-white/[0.03] p-3">
-                  <div className="flex size-12 shrink-0 items-center justify-center rounded-lg bg-emerald-400/15 text-emerald-200"><Music2Icon className="size-5" /></div>
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">{spotify.track.name || "Unknown track"}</p>
-                    <p className="truncate text-xs text-muted-foreground">{spotify.track.artists.join(", ") || "Unknown artist"}{spotify.track.album ? ` · ${spotify.track.album}` : ""}</p>
-                  </div>
-                </div>
-              ) : null}
-              <div className="flex items-center justify-center gap-2">
-                <Button variant="outline" size="icon" className="size-10 rounded-full" disabled={!spotifyReady || spotifyCommandBusy} onClick={() => void runSpotifyControl("skip_prev")} aria-label="Previous Spotify track"><SkipBackIcon /></Button>
-                <Button size="icon-lg" className="rounded-full" disabled={!spotifyReady || spotifyCommandBusy} onClick={() => void runSpotifyControl(spotify?.status === "playing" || spotify?.status === "buffering" ? "pause" : "play")} aria-label={spotify?.status === "playing" || spotify?.status === "buffering" ? "Pause Spotify" : "Play Spotify"}>{spotify?.status === "playing" || spotify?.status === "buffering" ? <PauseIcon /> : <PlayIcon />}</Button>
-                <Button variant="outline" size="icon" className="size-10 rounded-full" disabled={!spotifyReady || spotifyCommandBusy} onClick={() => void runSpotifyControl("skip_next")} aria-label="Next Spotify track"><SkipForwardIcon /></Button>
-              </div>
-              <div className="space-y-1">
-                <Slider aria-label="Spotify track position" min={0} max={spotifyDuration} step={1000} value={[spotifyPosition]} disabled={!spotifyReady || !spotify?.track} onValueChange={(value) => { spotifyPositionDragging.current = true; spotifySliderOptimistic.current.position = null; setSpotifyPositionDraft(firstSliderValue(value)) }} onValueCommitted={(value) => { const next = firstSliderValue(value); spotifyPositionDragging.current = false; setSpotifyPositionDraft(next); sendSpotifySliderCommand("position", "seek", next) }} />
-                <div className="flex justify-between text-xs text-muted-foreground"><span>{formatMilliseconds(spotifyPosition)}</span><span>{formatMilliseconds(spotifyDuration)}</span></div>
-              </div>
-              <div className="grid gap-4 rounded-xl border border-white/5 bg-white/[0.03] p-3 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between gap-3 text-sm"><span className="flex items-center gap-2"><Volume2Icon className="size-4" />Volume</span><span className="font-mono text-muted-foreground">{spotifyVolume}%</span></div>
-                  <Slider aria-label="Spotify volume" min={0} max={100} step={1} value={[spotifyVolume]} disabled={!spotifyReady} onValueChange={(value) => { spotifyVolumeDragging.current = true; spotifySliderOptimistic.current.volume = null; setSpotifyVolumeDraft(firstSliderValue(value)) }} onValueCommitted={(value) => { const next = firstSliderValue(value); spotifyVolumeDragging.current = false; setSpotifyVolumeDraft(next); sendSpotifySliderCommand("volume", "set_volume", next) }} />
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <Button variant={spotify?.shuffle ? "default" : "outline"} size="sm" disabled={!spotifyReady || spotifyCommandBusy} onClick={() => void runSpotifyControl("set_shuffle", !spotify?.shuffle)}><ShuffleIcon />Shuffle</Button>
-                  <Button variant="outline" size="sm" disabled={!spotifyReady || spotifyCommandBusy} onClick={() => void runSpotifyControl("set_repeat", spotify?.repeat === "off" ? "context" : spotify?.repeat === "context" ? "track" : "off")}><Repeat2Icon />{spotify?.repeat === "track" ? "Track" : spotify?.repeat === "context" ? "Context" : "Repeat"}</Button>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="border-white/5 bg-card/80">
-            <CardHeader>
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <CardTitle className="flex items-center gap-2"><Volume2Icon className="size-4 text-emerald-300" />Audio output</CardTitle>
-                  <CardDescription>Choose where the Pi sends music from Bluetooth inputs and other local audio.</CardDescription>
-                </div>
-                <Badge variant={selectedOutput ? "default" : "outline"}>{selectedOutput?.name ?? "Unavailable"}</Badge>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <Select value={outputSelector} onValueChange={(value) => value && void runOutputAction("select-output", () => dashboardApi.setAudioOutput(value))} disabled={!bluetooth?.output_devices.length || outputBusyState || !supportsBluetoothOperation("output_select")}>
-                <SelectTrigger aria-label="Audio output device" className="h-11 rounded-xl"><SelectValue>{selectedOutput?.name ?? "Select audio output"}</SelectValue></SelectTrigger>
-                <SelectContent>
-                  {bluetooth?.output_devices.map((device) => <SelectItem key={device.selector} value={device.selector}>{device.name}{device.bluetooth ? " · Bluetooth" : ""}</SelectItem>)}
-                </SelectContent>
-              </Select>
-              {selectedOutput ? (
-                <div className="space-y-4 rounded-xl border border-white/5 bg-white/[0.03] p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium">{selectedOutput.name}</p>
-                      <p className="text-xs text-muted-foreground">{selectedOutput.bluetooth ? "Bluetooth speaker" : "Local PipeWire output"}</p>
-                    </div>
-                    <Badge variant="outline">{bluetooth?.default_sink === selectedOutput.selector ? "Active" : "Available"}</Badge>
-                  </div>
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between gap-3 text-sm"><span>Output volume</span><span className="font-mono text-muted-foreground">{Math.round(outputVolume * 100)}%</span></div>
-                    <Slider aria-label="Audio output volume" min={0} max={1} step={0.01} value={[outputVolume]} disabled={outputBusyState || !supportsBluetoothOperation("output_volume") || (outputVolumeDraft === null && selectedOutput.volume === null)} onValueChange={(value) => setOutputVolumeDraft(firstSliderValue(value))} onValueCommitted={(value) => { const next = firstSliderValue(value); void runOutputAction("output-volume", () => dashboardApi.setAudioOutputVolume(outputSelector, next)) }} className="py-3 [&_[data-slot=slider-track]]:h-2 [&_[data-slot=slider-thumb]]:size-5" />
-                  </div>
-                  <div className="flex items-center justify-between gap-3 rounded-lg bg-black/20 p-2.5">
-                    <div className="flex items-center gap-2 text-sm">{bluetooth?.output_muted ? <VolumeXIcon className="size-4 text-amber-300" /> : <Volume2Icon className="size-4 text-emerald-300" />}<span>{bluetooth?.output_muted ? "Muted" : "Output enabled"}</span></div>
-                    <Switch checked={!bluetooth?.output_muted} disabled={outputBusyState || !supportsBluetoothOperation("output_mute")} onCheckedChange={(checked) => void runOutputAction("output-mute", () => dashboardApi.setAudioOutputMute(outputSelector, !checked))} aria-label="Enable audio output" />
-                  </div>
-                </div>
-              ) : <p className="text-sm text-muted-foreground">No PipeWire output devices were found.</p>}
-              <p className="text-xs text-muted-foreground">The output volume is the Pi’s software level. The connected speaker may have a separate hardware volume.</p>
-            </CardContent>
-          </Card>
-
-          <Card className="border-white/5 bg-card/80">
-            <CardHeader>
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <CardTitle className="flex items-center gap-2"><AudioLinesIcon className="size-4 text-fuchsia-300" />Audio-to-LED sync</CardTitle>
-                  <CardDescription>Compare the strip flash with the cue playing through the selected speaker, then save an offset for this input and output route.</CardDescription>
-                </div>
-                <Badge variant={syncCalibrationRunning ? "default" : "outline"}>{syncCalibrationRunning ? "Calibrating" : "Ready"}</Badge>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <p className="truncate text-xs text-muted-foreground" title={response?.sync_route}>Route: {response?.sync_route ?? "Loading route…"}</p>
-              <div className="space-y-2">
-                <div className="flex items-center justify-between gap-3 text-sm"><span>Sync offset</span><span className="font-mono tabular-nums">{syncOffsetDraft > 0 ? "+" : ""}{Math.round(syncOffsetDraft)} ms</span></div>
-                <Slider aria-label="Audio to LED sync offset" min={-500} max={500} step={5} value={[syncOffsetDraft]} onValueChange={(value) => setSyncOffsetDraft(firstSliderValue(value))} />
-                <div className="flex justify-between text-[11px] text-muted-foreground"><span>LED earlier</span><span>LED later</span></div>
-              </div>
-              <div className="flex flex-col gap-2 sm:flex-row">
-                {syncCalibrationRunning
-                  ? <Button variant="outline" className="flex-1" onClick={() => void stopSyncCalibration()}><PauseIcon />Stop calibration</Button>
-                  : <Button variant="outline" className="flex-1" disabled={!response?.monitoring} onClick={() => void startSyncCalibration()}><PlayIcon />Play sync cue</Button>}
-                <Button className="flex-1" disabled={syncOffsetSaving || Math.round(syncOffsetDraft) === Math.round(response?.sync_offset_ms ?? 0)} onClick={() => void saveSyncOffset()}><SaveIcon />{syncOffsetSaving ? "Saving…" : "Save offset"}</Button>
-              </div>
-              <p className="text-xs text-muted-foreground">The Pi plays a distinctive cue through its selected PipeWire output. Positive values delay the LEDs. Sync settings are saved separately for each active input and output route.</p>
-            </CardContent>
-          </Card>
-
+          <LiveAudioSourceStatus settings={settings} />
+          <AudioSourceControls settings={settings} onSave={saveSource} />
+          <SpotifyControls initialStatus={settings.spotify} />
+          <AudioOutputControls status={bluetooth} busy={bluetoothBusy} onAction={runOutputAction} />
+          <AudioSyncControls
+            settings={settings}
+            calibrationRunning={calibrationRunning}
+            onStartCalibration={() => void startSyncCalibration()}
+            onStopCalibration={() => void stopSyncCalibration()}
+            onSave={saveSyncOffset}
+          />
           <BluetoothDevicePanel
-            status={bluetooth}
+            status={bluetooth ?? undefined}
             alias={bluetoothAlias}
-            busy={bluetoothOperationBusy}
+            busy={bluetoothBusy}
             onAliasChange={setBluetoothAlias}
-            onAliasSave={() => void saveBluetoothAlias()}
+            onAliasSave={saveBluetoothAlias}
             onAction={(action, operation, message) => void runBluetoothAction(action, operation, message)}
             onRefresh={() => void refreshBluetooth()}
           />
-
-          <Card className="border-white/5 bg-card/80">
-            <CardHeader>
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <CardTitle className="flex items-center gap-2"><MicIcon className="size-4 text-violet-300" />Microphone input</CardTitle>
-                  <CardDescription>Choose the microphone used when Bluetooth is not connected or is disabled.</CardDescription>
-                </div>
-                <Badge variant={response?.monitoring && response.active_source === "mic" ? "default" : "outline"}>{response?.monitoring && response.active_source === "mic" ? "Active" : "Fallback"}</Badge>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex gap-2">
-                <Controller control={control} name="selected" render={({ field }) => (
-                  <Select value={field.value} onValueChange={(value) => value && field.onChange(value)} disabled={!microphoneDevices.length || saving}>
-                    <SelectTrigger aria-label="Microphone input device" aria-invalid={errors.selected ? true : undefined} className="h-11 min-w-0 flex-1 rounded-xl"><SelectValue>{selectedName}</SelectValue></SelectTrigger>
-                    <SelectContent>{microphoneDevices.map((device) => <SelectItem key={device.selector} value={device.selector}>{device.name}</SelectItem>)}</SelectContent>
-                  </Select>
-                )} />
-                <Button variant="outline" size="icon" className="size-11 rounded-xl" disabled={saving} onClick={() => void load()} aria-label="Refresh microphone devices"><RefreshCwIcon /></Button>
-              </div>
-              {response?.error && <div className="flex gap-2 rounded-xl bg-red-500/10 p-3 text-sm text-red-200"><CircleAlertIcon className="mt-0.5 size-4 shrink-0" /><span>{response.error}</span></div>}
-              {!microphoneDevices.length && !response?.error && <p className="text-sm text-muted-foreground">No microphone input devices were found.</p>}
-              {errors.selected && <p role="alert" className="text-sm text-red-300">{errors.selected.message}</p>}
-              <Button className="h-12 w-full rounded-xl" disabled={!dirty || saving} onClick={() => void handleSubmit(save)()}><SaveIcon />{saving ? "Applying…" : "Save microphone input"}</Button>
-              <p className="text-xs text-muted-foreground">Each microphone keeps its own tuning profile. Fine-tune the active input from the Audio page.</p>
-            </CardContent>
-          </Card>
+          <MicrophoneInputControls
+            settings={settings}
+            loading={loading}
+            onRefresh={() => void load()}
+            onSave={saveMicrophone}
+          />
         </div>
+      ) : (
+        <Card className="border-white/5 bg-card/80">
+          <CardContent className="space-y-3 pt-4">
+            <p role="alert" className="text-sm text-red-200">{loadError ?? "Audio settings are unavailable."}</p>
+            <Button type="button" variant="outline" disabled={loading} onClick={() => void load()}>Retry audio settings</Button>
+          </CardContent>
+        </Card>
       )}
     </AudioSetupPage>
   )
