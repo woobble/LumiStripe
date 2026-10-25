@@ -9,7 +9,7 @@ from random import Random
 
 import numpy as np
 
-from ..animation.base import AnimationPlayer
+from ..animation.base import AnimationPlayer, TransitionEffect
 from ..animation.catalog import animation_catalog, dynamic_sequence_eligible
 from ..audio.beat import BeatClockTracker
 from ..audio.dsp import features_from_frame
@@ -125,6 +125,7 @@ class PlaybackEngine:
         )
         self._structure_tracker = MusicStructureTracker()
         self.player.transition_ms = int(self.config.transition_duration_s * 1000.0)
+        self.player.transition_effect = self.config.transition_effect
         self._rng = Random(self.config.cycling.seed)
 
     @property
@@ -150,6 +151,14 @@ class PlaybackEngine:
 
         self.config = replace(self.config, transition_duration_s=duration_s)
         self.player.transition_ms = int(self.config.transition_duration_s * 1000.0)
+
+    def set_transition_effect(self, effect: TransitionEffect) -> None:
+        """Set the effect used by transitions started from now on."""
+
+        if not isinstance(effect, TransitionEffect):
+            raise TypeError("effect must be a TransitionEffect")
+        self.config = replace(self.config, transition_effect=effect)
+        self.player.transition_effect = effect
 
     @property
     def beat_clock_state(self) -> BeatClockState:

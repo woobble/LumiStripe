@@ -2,8 +2,10 @@ import { useState } from "react"
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Slider } from "@/components/ui/slider"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Toggle } from "@/components/ui/toggle"
 import type { DashboardController } from "@/hooks/use-dashboard"
+import type { TransitionEffect } from "@/lib/api"
 
 type TransitionSettingsPanelProps = {
   controller: DashboardController
@@ -11,12 +13,16 @@ type TransitionSettingsPanelProps = {
 }
 
 export function TransitionSettingsPanel({ controller, disabled }: TransitionSettingsPanelProps) {
-  const settings = controller.state?.transition_settings ?? { enabled: true, duration_ms: 300 }
+  const settings = controller.state?.transition_settings ?? {
+    enabled: true,
+    duration_ms: 300,
+    effect: "crossfade" as const,
+  }
   const [durationDraft, setDurationDraft] = useState<number | null>(null)
   const duration = durationDraft ?? settings.duration_ms
 
-  const apply = async (enabled: boolean, durationMs: number) => {
-    const applied = await controller.setTransitionSettings(enabled, durationMs)
+  const apply = async (enabled: boolean, durationMs: number, effect: TransitionEffect) => {
+    const applied = await controller.setTransitionSettings(enabled, durationMs, effect)
     if (applied) setDurationDraft(null)
   }
 
@@ -26,19 +32,19 @@ export function TransitionSettingsPanel({ controller, disabled }: TransitionSett
 
   const handleSliderCommit = (value: number | readonly number[]) => {
     const durationMs = Array.isArray(value) ? value[0] ?? settings.duration_ms : value
-    void apply(settings.enabled, durationMs)
+    void apply(settings.enabled, durationMs, settings.effect)
   }
 
   return (
     <Card className="border-white/5 bg-card/80 shadow-xl shadow-black/10 backdrop-blur-xl">
       <CardHeader>
         <CardTitle>Transitions</CardTitle>
-        <CardDescription>Crossfade between animations when they change.</CardDescription>
+        <CardDescription>Choose how animations transition when they change.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <Toggle
           pressed={settings.enabled}
-          onPressedChange={(enabled) => void apply(enabled, settings.duration_ms)}
+          onPressedChange={(enabled) => void apply(enabled, settings.duration_ms, settings.effect)}
           disabled={disabled}
           variant="outline"
           className="h-11 w-full justify-between rounded-lg px-3 data-[state=on]:border-violet-300/40 data-[state=on]:bg-violet-400/15 data-[state=on]:text-violet-100"
@@ -47,6 +53,25 @@ export function TransitionSettingsPanel({ controller, disabled }: TransitionSett
           <span>Animation transitions</span>
           <span className="text-xs text-muted-foreground">{settings.enabled ? "On" : "Off"}</span>
         </Toggle>
+        <div className="space-y-2">
+          <label htmlFor="transition-effect" className="text-sm font-medium">Effect</label>
+          <Select
+            value={settings.effect}
+            onValueChange={(value) => {
+              if (value) void apply(settings.enabled, settings.duration_ms, value as TransitionEffect)
+            }}
+            disabled={disabled}
+          >
+            <SelectTrigger id="transition-effect" aria-label="Transition effect" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="crossfade">Crossfade</SelectItem>
+              <SelectItem value="fade_black">Fade through black</SelectItem>
+              <SelectItem value="wipe">Wipe</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
         <div className="space-y-2">
           <div className="flex items-end justify-between">
             <label htmlFor="transition-duration" className="text-sm font-medium">Duration</label>

@@ -14,6 +14,7 @@ from .config import (
     PlaybackConfig,
     PlaybackMode,
     SwitchQuantization,
+    TransitionEffect,
 )
 from .engine import PlaybackEngine, demo_snapshot
 from .quantized import QuantizedSwitchCoordinator, QuantizedSwitchDiagnostics
@@ -48,6 +49,7 @@ __all__ = [
     "RenderPlan",
     "SequencePlaybackState",
     "SwitchQuantization",
+    "TransitionEffect",
     "build_render_plan",
     "decide_playback",
     "demo_snapshot",

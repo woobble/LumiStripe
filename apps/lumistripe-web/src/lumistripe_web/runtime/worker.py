@@ -57,6 +57,7 @@ from lumistripe.playback import (
     PlaybackMode,
     QuantizedSwitchDiagnostics,
     SwitchQuantization,
+    TransitionEffect,
     demo_snapshot,
 )
 
@@ -388,6 +389,7 @@ class RuntimeWorker:
                     if self._transition_settings.enabled
                     else 0.0
                 ),
+                transition_effect=self._transition_settings.effect,
                 musical_timeline=MusicalTimelineConfig(
                     bars_per_phrase=self._bars_per_phrase
                 ),
@@ -442,6 +444,7 @@ class RuntimeWorker:
             transition_settings=TransitionSettingsResponse(
                 enabled=self._transition_settings.enabled,
                 duration_ms=self._transition_settings.duration_ms,
+                effect=self._transition_settings.effect,
             ),
             sequence_library=self._sequence_library_summary(),
         )
@@ -874,13 +877,16 @@ class RuntimeWorker:
         )
 
     def set_transition_settings(
-        self, enabled: bool, duration_ms: int
+        self,
+        enabled: bool,
+        duration_ms: int,
+        effect: TransitionEffect | None = None,
     ) -> Future[DashboardState]:
         return cast(
             Future[DashboardState],
             self._submit(
                 "transition_settings",
-                _TransitionSettingsCommand(enabled, duration_ms),
+                _TransitionSettingsCommand(enabled, duration_ms, effect),
             ),
         )
 
@@ -1343,6 +1349,7 @@ class RuntimeWorker:
                         if self._transition_settings.enabled
                         else 0.0
                     ),
+                    transition_effect=self._transition_settings.effect,
                     musical_timeline=MusicalTimelineConfig(
                         bars_per_phrase=self._bars_per_phrase
                     ),
@@ -1522,6 +1529,7 @@ class RuntimeWorker:
                 self._set_transition_settings(
                     transition_settings.enabled,
                     transition_settings.duration_ms,
+                    transition_settings.effect,
                 )
                 result = self._publish(running=True)
             elif command.name == "sequence_library":
@@ -2398,7 +2406,10 @@ profile.audio_config(microphone=True),
         )
 
     def _set_transition_settings(
-        self, enabled: bool, duration_ms: int
+        self,
+        enabled: bool,
+        duration_ms: int,
+        effect: TransitionEffect | None = None,
     ) -> TransitionSettingsResponse:
         if not isinstance(enabled, bool):
             raise RuntimeCommandError("transition enabled must be a boolean")
@@ -2408,10 +2419,17 @@ profile.audio_config(microphone=True),
             or not 100 <= duration_ms <= 1500
         ):
             raise RuntimeCommandError("transition duration must be between 100 and 1500 ms")
-        updated = TransitionSettings(enabled=enabled, duration_ms=duration_ms)
+        selected_effect = self._transition_settings.effect if effect is None else effect
+        if not isinstance(selected_effect, TransitionEffect):
+            raise RuntimeCommandError("transition effect is invalid")
+        updated = TransitionSettings(
+            enabled=enabled, duration_ms=duration_ms, effect=selected_effect
+        )
         if updated == self._transition_settings:
             return TransitionSettingsResponse(
-                enabled=updated.enabled, duration_ms=updated.duration_ms
+                enabled=updated.enabled,
+                duration_ms=updated.duration_ms,
+                effect=updated.effect,
             )
 
         try:
@@ -2426,8 +2444,11 @@ profile.audio_config(microphone=True),
         duration_s = updated.duration_ms / 1000.0 if updated.enabled else 0.0
         for engine in (self.playback, *(item for _, item in self._playbacks.values())):
             engine.set_transition_duration(duration_s)
+            engine.set_transition_effect(updated.effect)
         return TransitionSettingsResponse(
-            enabled=updated.enabled, duration_ms=updated.duration_ms
+            enabled=updated.enabled,
+            duration_ms=updated.duration_ms,
+            effect=updated.effect,
         )
 
     def _set_sequence_library(self, command: _SequenceLibraryCommand) -> None:
@@ -3320,6 +3341,7 @@ profile.audio_config(microphone=True),
             transition_settings=TransitionSettingsResponse(
                 enabled=self._transition_settings.enabled,
                 duration_ms=self._transition_settings.duration_ms,
+                effect=self._transition_settings.effect,
             ),
             sequence_library=self._sequence_library_summary(),
             stripe_playback=self._stripe_playback_state(),

@@ -10,6 +10,7 @@ import type {
   PlaybackMode,
   SpotifyControlAction,
   SwitchQuantization,
+  TransitionEffect,
   TransitionSettingsRequest,
   SequenceCreateRequest,
   SequenceDefinitionRequest,
@@ -61,6 +62,7 @@ export type {
   SequencerDiagnostics,
   SequencerSettingsRequest,
   SequencerSettingsResponse,
+  TransitionEffect,
   TransitionSettingsRequest,
   TransitionSettingsResponse,
   SpotifyControlAction,
@@ -73,6 +75,7 @@ export const ACCESS_REVOKED_EVENT = "lumistripe:access-revoked"
 
 const playbackModeSchema = z.enum(["solid", "static", "cycling", "dynamic"])
 const switchQuantizationSchema = z.enum(["off", "beat", "bar", "phrase"])
+const transitionEffectSchema = z.enum(["crossfade", "fade_black", "wipe"])
 const sequencerSettingsSchema = z.object({
   switch_quantization: switchQuantizationSchema,
   bars_per_phrase: z.union([z.literal(4), z.literal(8), z.literal(16)]),
@@ -80,6 +83,7 @@ const sequencerSettingsSchema = z.object({
 const transitionSettingsSchema = z.object({
   enabled: z.boolean(),
   duration_ms: z.number().int().min(100).max(1500),
+  effect: transitionEffectSchema.optional().default("crossfade"),
 }).strict()
 const sequencerDiagnosticsSchema = z.object({
   mode: switchQuantizationSchema,
@@ -269,6 +273,7 @@ const dashboardStateSchema = z.object({
   transition_settings: transitionSettingsSchema.optional().default({
     enabled: true,
     duration_ms: 300,
+    effect: "crossfade",
   }),
   sequence_library: sequenceLibrarySummarySchema.optional().default({
     sequences: [],
@@ -717,8 +722,8 @@ export const dashboardApi = {
       }),
     }, dashboardStateSchema),
   getTransitionSettings: () => request("/api/transitions/settings", undefined, transitionSettingsSchema),
-  setTransitionSettings: (enabled: boolean, durationMs: number) => {
-    const body: TransitionSettingsRequest = { enabled, duration_ms: durationMs }
+  setTransitionSettings: (enabled: boolean, durationMs: number, effect: TransitionEffect) => {
+    const body: TransitionSettingsRequest = { enabled, duration_ms: durationMs, effect }
     return request("/api/transitions/settings", {
       method: "PUT",
       body: JSON.stringify(body),

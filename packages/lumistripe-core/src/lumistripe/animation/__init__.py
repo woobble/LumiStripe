@@ -6,7 +6,7 @@ from importlib import import_module
 from typing import Any
 
 from ..selector import AnimationMetadata, AnimationRole
-from .base import Animation, AnimationPlayer
+from .base import Animation, AnimationPlayer, TransitionEffect
 from .catalog import (
     AnimationDefinition,
     animation_catalog,
@@ -72,6 +72,7 @@ __all__ = [
     "AnimationMetadata",
     "AnimationPlayer",
     "AnimationRole",
+    "TransitionEffect",
     "animation_catalog",
     "dynamic_sequence_eligible",
     "party_catalog",

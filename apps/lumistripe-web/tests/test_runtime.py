@@ -21,6 +21,7 @@ from lumistripe import (
     Rgb,
     Stripe,
     SwitchQuantization,
+    TransitionEffect,
 )
 from lumistripe_web.runtime import (
     LumiStripeRuntime,
@@ -1173,14 +1174,24 @@ def test_transition_settings_apply_to_existing_and_future_independent_outputs(
             for stripe_id, (_, engine) in runtime._playbacks.items()
         }
 
-        state = runtime.set_transition_settings(True, 900).result(timeout=1)
+        state = runtime.set_transition_settings(
+            True, 900, TransitionEffect.WIPE
+        ).result(timeout=1)
 
         assert state.mode is PlaybackMode.STATIC
         assert state.transition_settings.enabled is True
         assert state.transition_settings.duration_ms == 900
+        assert state.transition_settings.effect is TransitionEffect.WIPE
         assert runtime.playback.player.transition_ms == 900
+        assert runtime.playback.player.transition_effect is TransitionEffect.WIPE
+        assert runtime.playback.config.transition_effect is TransitionEffect.WIPE
         assert all(
             engine.player.transition_ms == 900
+            for _, engine in runtime._playbacks.values()
+        )
+        assert all(
+            engine.player.transition_effect is TransitionEffect.WIPE
+            and engine.config.transition_effect is TransitionEffect.WIPE
             for _, engine in runtime._playbacks.values()
         )
         assert runtime.playback.config.switch_quantization is SwitchQuantization.BEAT
@@ -1209,6 +1220,7 @@ def test_transition_settings_apply_to_existing_and_future_independent_outputs(
         )
         runtime.apply_stripe_topology(updated_topology).result(timeout=1)
         assert runtime._playbacks["new-right"][1].player.transition_ms == 900
+        assert runtime._playbacks["new-right"][1].player.transition_effect is TransitionEffect.WIPE
 
         disabled = runtime.set_transition_settings(False, 900).result(timeout=1)
         assert disabled.transition_settings.enabled is False
@@ -1221,7 +1233,7 @@ def test_transition_settings_apply_to_existing_and_future_independent_outputs(
         saved, warning = CalibrationSettingsStore(settings_path).load_all()
         assert warning is None
         assert saved.transition_settings == TransitionSettings(
-            enabled=False, duration_ms=900
+            enabled=False, duration_ms=900, effect=TransitionEffect.WIPE
         )
     finally:
         runtime.stop()

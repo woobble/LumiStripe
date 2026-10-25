@@ -4,6 +4,8 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import Enum
+from math import ceil, floor
 from typing import Any
 
 import numpy as np
@@ -35,6 +37,12 @@ class Animation(ABC):
         return animation_metadata(self.name)
 
 
+class TransitionEffect(str, Enum):
+    CROSSFADE = "crossfade"
+    FADE_BLACK = "fade_black"
+    WIPE = "wipe"
+
+
 @dataclass(slots=True)
 class _AnimationEntry:
     animation: Animation
@@ -63,9 +71,13 @@ class AnimationPlayer:
     brightness: float = 1.0
     audio_enabled: bool = True
     transition_ms: int = 0
+    transition_effect: TransitionEffect = field(
+        default=TransitionEffect.CROSSFADE, kw_only=True
+    )
     _audio_snapshot: Callable[[], AudioFrame] | None = None
     _transition_duration_ms: int = 0
     _transition_started_at_s: float | None = None
+    _active_transition_effect: TransitionEffect | None = None
     _transition_source: Any = None
     _transition_buffer: Any = None
     _transition_source_float: Any = None
@@ -224,6 +236,7 @@ class AnimationPlayer:
         duration_ms: int,
         source: Any = None,
         now_s: float | None = None,
+        effect: TransitionEffect | None = None,
     ) -> None:
         duration_ms = max(int(duration_ms), 0)
         if duration_ms == 0:
@@ -231,6 +244,9 @@ class AnimationPlayer:
             return
         self._transition_duration_ms = duration_ms
         self._transition_started_at_s = time.monotonic() if now_s is None else now_s
+        self._active_transition_effect = (
+            self.transition_effect if effect is None else TransitionEffect(effect)
+        )
         self._transition_source = None
         if source is not None:
             self.capture_transition_source(source)
@@ -238,6 +254,7 @@ class AnimationPlayer:
     def cancel_transition(self) -> None:
         self._transition_duration_ms = 0
         self._transition_started_at_s = None
+        self._active_transition_effect = None
         self._transition_source = None
 
     def capture_transition_source(self, source: Any) -> None:
@@ -267,6 +284,20 @@ class AnimationPlayer:
             self.capture_transition_source(target)
         assert self._transition_source is not None
         shape = target.shape
+        if self._transition_output is None or self._transition_output.shape != shape:
+            self._transition_output = np.empty(shape, dtype=np.uint8)
+        amount = self.transition_progress_at(now_s)
+        effect = self._active_transition_effect or self.transition_effect
+
+        if effect is TransitionEffect.WIPE:
+            self._apply_wipe_transition(target, amount)
+            controller.set_pixels(self._transition_output)
+            if flush:
+                controller.flush()
+            if amount >= 1.0:
+                self.cancel_transition()
+            return
+
         if (
             self._transition_source_float is None
             or self._transition_source_float.shape != shape
@@ -274,17 +305,25 @@ class AnimationPlayer:
             self._transition_source_float = np.empty(shape, dtype=np.float32)
             self._transition_target_float = np.empty(shape, dtype=np.float32)
             self._transition_work_float = np.empty(shape, dtype=np.float32)
-            self._transition_output = np.empty(shape, dtype=np.uint8)
         np.copyto(self._transition_source_float, self._transition_source)
         np.copyto(self._transition_target_float, target)
-        amount = self.transition_progress_at(now_s)
-        np.multiply(self._transition_source_float, 1.0 - amount, out=self._transition_work_float)
-        np.multiply(self._transition_target_float, amount, out=self._transition_target_float)
-        np.add(
-            self._transition_work_float,
-            self._transition_target_float,
-            out=self._transition_work_float,
-        )
+        if effect is TransitionEffect.FADE_BLACK:
+            if amount <= 0.5:
+                frame = self._transition_source_float
+                brightness = 1.0 - amount * 2.0
+            else:
+                frame = self._transition_target_float
+                brightness = (amount - 0.5) * 2.0
+            np.multiply(frame, brightness, out=self._transition_work_float)
+            self._transition_work_float[:, 3] = 255.0
+        else:
+            np.multiply(self._transition_source_float, 1.0 - amount, out=self._transition_work_float)
+            np.multiply(self._transition_target_float, amount, out=self._transition_target_float)
+            np.add(
+                self._transition_work_float,
+                self._transition_target_float,
+                out=self._transition_work_float,
+            )
         np.clip(self._transition_work_float, 0.0, 255.0, out=self._transition_work_float)
         np.copyto(self._transition_output, self._transition_work_float, casting="unsafe")
         controller.set_pixels(self._transition_output)
@@ -292,6 +331,41 @@ class AnimationPlayer:
             controller.flush()
         if amount >= 1.0:
             self.cancel_transition()
+
+    def _apply_wipe_transition(self, target: Any, amount: float) -> None:
+        assert self._transition_source is not None
+        assert self._transition_output is not None
+        if amount <= 0.0:
+            np.copyto(self._transition_output, self._transition_source)
+            return
+        if amount >= 1.0:
+            np.copyto(self._transition_output, target)
+            return
+
+        length = target.shape[0]
+        feather = max(1, min(8, round(length * 0.02)))
+        boundary = amount * length
+        feather_start = boundary - feather / 2.0
+        feather_end = boundary + feather / 2.0
+        blend_start = max(0, min(length, floor(feather_start - 0.5) + 1))
+        blend_end = max(
+            blend_start,
+            min(length, ceil(feather_end - 0.5)),
+        )
+
+        np.copyto(self._transition_output, self._transition_source)
+        np.copyto(self._transition_output[:blend_start], target[:blend_start])
+        for pixel in range(blend_start, blend_end):
+            incoming_weight = min(
+                1.0,
+                max(0.0, (feather_end - (pixel + 0.5)) / feather),
+            )
+            outgoing_weight = 1.0 - incoming_weight
+            for channel in range(target.shape[1]):
+                self._transition_output[pixel, channel] = int(
+                    self._transition_source[pixel, channel] * outgoing_weight
+                    + target[pixel, channel] * incoming_weight
+                )
 
     def fresh_animation(self, name: str) -> Animation | None:
         index = self.index_of(name)

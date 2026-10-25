@@ -14,6 +14,7 @@ from lumistripe import (
     PlaybackMode,
     RgbwTest,
     Stripe,
+    TransitionEffect,
 )
 from lumistripe.animation import AnimationPlayer
 from lumistripe.audio import MusicalTimelineState
@@ -415,6 +416,7 @@ def test_dynamic_sequence_overrides_selector_and_uses_elapsed_crossfade() -> Non
         PlaybackConfig(
             mode=PlaybackMode.DYNAMIC,
             animation_sequence=sequence,
+            transition_effect=TransitionEffect.FADE_BLACK,
             activity=MusicActivityConfig(activation_delay_s=0.0),
         ),
     )
@@ -435,6 +437,7 @@ def test_dynamic_sequence_overrides_selector_and_uses_elapsed_crossfade() -> Non
     assert engine.player.name_at(engine.player.current_index()) == "comet"
     assert engine.sequence_playback_state.current_step_index == 1
     assert engine.player.transition_active is True
+    assert engine.player._active_transition_effect is TransitionEffect.FADE_BLACK
 
 
 def test_dynamic_sequence_keeps_music_structure_drop_accent_pipeline() -> None:

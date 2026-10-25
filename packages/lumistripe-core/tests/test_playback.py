@@ -20,6 +20,7 @@ from lumistripe import (
     Rgb,
     RgbwTest,
     Stripe,
+    TransitionEffect,
 )
 from lumistripe.animation import AnimationPlayer
 from lumistripe.audio import BeatEvent, MusicalTimelineConfig, MusicStructurePhase
@@ -182,6 +183,57 @@ def test_manual_selection_crossfades_from_the_last_rendered_frame() -> None:
     assert engine.transition_active is False
 
 
+def test_manual_selection_uses_configured_fade_through_black_effect() -> None:
+    player = AnimationPlayer()
+    player.add(Red(), 20, 10)
+    player.add(Blue(), 80, 10)
+    engine = PlaybackEngine(
+        player,
+        PlaybackConfig(
+            transition_duration_s=0.1,
+            transition_effect=TransitionEffect.FADE_BLACK,
+        ),
+    )
+    stripe = Stripe(2)
+    engine.step(stripe, now_s=0.0)
+
+    engine.select_animation("blue", now_s=1.0)
+    engine.step(stripe, now_s=1.05)
+
+    np.testing.assert_array_equal(stripe.pixels(), [[0, 0, 0, 255]] * 2)
+
+
+def test_runtime_effect_update_keeps_active_effect_and_changes_next_transition() -> None:
+    player = AnimationPlayer()
+    player.add(Red(), 20, 10)
+    player.add(Blue(), 80, 10)
+    engine = PlaybackEngine(
+        player,
+        PlaybackConfig(
+            transition_duration_s=0.1,
+            transition_effect=TransitionEffect.FADE_BLACK,
+        ),
+    )
+    stripe = Stripe(2)
+    engine.step(stripe, now_s=0.0)
+    engine.select_animation("blue", now_s=1.0)
+    engine.set_transition_effect(TransitionEffect.WIPE)
+    engine.step(stripe, now_s=1.05)
+
+    np.testing.assert_array_equal(stripe.pixels(), [[0, 0, 0, 255]] * 2)
+    assert engine.transition_active is True
+    engine.step(stripe, now_s=1.1)
+    assert engine.transition_active is False
+
+    engine.select_animation("red", now_s=2.0)
+    engine.step(stripe, now_s=2.06)
+
+    np.testing.assert_array_equal(
+        stripe.pixels(), [[255, 0, 0, 255], [51, 0, 203, 255]]
+    )
+    assert engine.player._active_transition_effect is TransitionEffect.WIPE
+
+
 def test_zero_transition_duration_keeps_manual_selection_instant() -> None:
     player = AnimationPlayer()
     player.add(Red(), 20, 10)
@@ -237,6 +289,27 @@ def test_cycling_switch_uses_elapsed_transition_duration() -> None:
     engine.step(stripe, now_s=1.05)
 
     np.testing.assert_array_equal(stripe.pixels()[0, :3], [127, 0, 127])
+    assert engine.transition_active is True
+
+
+def test_cycling_switch_uses_configured_transition_effect() -> None:
+    player = AnimationPlayer()
+    player.add(Red(), 20, 1)
+    player.add(Blue(), 80, 10)
+    engine = PlaybackEngine(
+        player,
+        PlaybackConfig(
+            mode=PlaybackMode.CYCLING,
+            transition_duration_s=0.1,
+            transition_effect=TransitionEffect.WIPE,
+        ),
+    )
+    stripe = Stripe(2)
+    engine.step(stripe, now_s=0.0)
+    engine.step(stripe, now_s=1.0)
+
+    assert engine.player.name_at(engine.player.current_index()) == "blue"
+    assert engine.player._active_transition_effect is TransitionEffect.WIPE
     assert engine.transition_active is True
 
 

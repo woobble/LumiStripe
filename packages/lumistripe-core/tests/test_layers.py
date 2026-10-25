@@ -22,6 +22,7 @@ from lumistripe import (
     Rgb,
     Rgba,
     Stripe,
+    TransitionEffect,
     animation_metadata,
 )
 from lumistripe.audio import MusicStructurePhase, MusicStructureState
@@ -779,6 +780,135 @@ def test_transition_progress_uses_elapsed_time_across_irregular_frames() -> None
     player.step(stripe, now_s=3.2)
 
     np.testing.assert_array_equal(stripe.pixels()[0, :3], [0, 0, 255])
+
+
+@pytest.mark.parametrize(
+    ("effect", "expected"),
+    [
+        (TransitionEffect.CROSSFADE, {
+            0.0: [255, 0, 0, 255],
+            0.25: [191, 0, 63, 255],
+            0.5: [127, 0, 127, 255],
+            0.75: [63, 0, 191, 255],
+            1.0: [0, 0, 255, 255],
+        }),
+        (TransitionEffect.FADE_BLACK, {
+            0.0: [255, 0, 0, 255],
+            0.25: [127, 0, 0, 255],
+            0.5: [0, 0, 0, 255],
+            0.75: [0, 0, 127, 255],
+            1.0: [0, 0, 255, 255],
+        }),
+    ],
+)
+def test_transition_effects_render_deterministic_frames_at_elapsed_progress(
+    effect: TransitionEffect, expected: dict[float, list[int]]
+) -> None:
+    source = np.tile(np.array([255, 0, 0, 255], dtype=np.uint8), (4, 1))
+    incoming = np.tile(np.array([0, 0, 255, 255], dtype=np.uint8), (4, 1))
+
+    for progress, color in expected.items():
+        player = AnimationPlayer(transition_effect=effect)
+        stripe = Stripe(4)
+        player.begin_transition(duration_ms=100, source=source, now_s=2.0)
+        stripe.set_pixels(incoming)
+
+        player.apply_transition(stripe, now_s=2.0 + progress * 0.1)
+
+        np.testing.assert_array_equal(stripe.pixels(), np.tile(color, (4, 1)))
+
+
+@pytest.mark.parametrize(
+    ("progress", "indices", "expected"),
+    [
+        (0.0, [0, 24, 25, 26, 99], [[255, 0, 0, 255]] * 5),
+        (0.25, [0, 23, 24, 25, 26, 99], [
+            [0, 0, 255, 255], [0, 0, 255, 255], [63, 0, 191, 255],
+            [191, 0, 63, 255], [255, 0, 0, 255], [255, 0, 0, 255],
+        ]),
+        (0.5, [0, 48, 49, 50, 51, 52, 99], [
+            [0, 0, 255, 255], [0, 0, 255, 255], [63, 0, 191, 255],
+            [191, 0, 63, 255], [255, 0, 0, 255], [255, 0, 0, 255],
+            [255, 0, 0, 255],
+        ]),
+        (0.75, [0, 73, 74, 75, 76, 99], [
+            [0, 0, 255, 255], [0, 0, 255, 255], [63, 0, 191, 255],
+            [191, 0, 63, 255], [255, 0, 0, 255], [255, 0, 0, 255],
+        ]),
+        (1.0, [0, 24, 25, 26, 99], [[0, 0, 255, 255]] * 5),
+    ],
+)
+def test_wipe_reveals_incoming_frame_left_to_right_with_a_soft_edge(
+    progress: float,
+    indices: list[int],
+    expected: list[list[int]],
+) -> None:
+    source = np.tile(np.array([255, 0, 0, 255], dtype=np.uint8), (100, 1))
+    incoming = np.tile(np.array([0, 0, 255, 255], dtype=np.uint8), (100, 1))
+    player = AnimationPlayer(transition_effect=TransitionEffect.WIPE)
+    stripe = Stripe(100)
+    player.begin_transition(duration_ms=100, source=source, now_s=3.0)
+    stripe.set_pixels(incoming)
+
+    player.apply_transition(stripe, now_s=3.0 + progress * 0.1)
+
+    np.testing.assert_array_equal(stripe.pixels()[indices], expected)
+
+
+@pytest.mark.parametrize("length", [1, 2, 39, 40, 401, 4096])
+def test_wipe_supports_different_strip_lengths(length: int) -> None:
+    source = np.tile(np.array([255, 0, 0, 255], dtype=np.uint8), (length, 1))
+    incoming = np.tile(np.array([0, 0, 255, 255], dtype=np.uint8), (length, 1))
+    player = AnimationPlayer(transition_effect=TransitionEffect.WIPE)
+    stripe = Stripe(length)
+    player.begin_transition(duration_ms=100, source=source, now_s=0.0)
+    stripe.set_pixels(incoming)
+
+    player.apply_transition(stripe, now_s=0.05)
+
+    assert stripe.pixels().shape == (length, 4)
+    if length == 1:
+        np.testing.assert_array_equal(stripe.pixels()[0], [127, 0, 127, 255])
+    else:
+        np.testing.assert_array_equal(stripe.pixels()[0], incoming[0])
+        np.testing.assert_array_equal(stripe.pixels()[-1], source[-1])
+
+
+def test_transition_effect_is_latched_until_the_active_transition_finishes() -> None:
+    source = np.tile(np.array([255, 0, 0, 255], dtype=np.uint8), (2, 1))
+    incoming = np.tile(np.array([0, 0, 255, 255], dtype=np.uint8), (2, 1))
+    player = AnimationPlayer(transition_effect=TransitionEffect.FADE_BLACK)
+    stripe = Stripe(2)
+    stripe.set_pixels(incoming)
+    player.begin_transition(duration_ms=100, source=source, now_s=1.0)
+
+    player.apply_transition(stripe, now_s=1.025)
+    before_setting_change = stripe.pixels().copy()
+    player.transition_effect = TransitionEffect.WIPE
+    player.apply_transition(stripe, now_s=1.025)
+
+    np.testing.assert_array_equal(stripe.pixels(), before_setting_change)
+
+
+@pytest.mark.parametrize("effect", list(TransitionEffect))
+def test_interrupted_effect_transition_starts_from_the_visible_frame(
+    effect: TransitionEffect,
+) -> None:
+    source = np.tile(np.array([255, 0, 0, 255], dtype=np.uint8), (2, 1))
+    incoming = np.tile(np.array([0, 0, 255, 255], dtype=np.uint8), (2, 1))
+    next_frame = np.tile(np.array([0, 255, 0, 255], dtype=np.uint8), (2, 1))
+    player = AnimationPlayer(transition_effect=effect)
+    stripe = Stripe(2)
+    stripe.set_pixels(incoming)
+    player.begin_transition(duration_ms=100, source=source, now_s=1.0)
+    player.apply_transition(stripe, now_s=1.025)
+    visible = stripe.pixels().copy()
+
+    player.begin_transition(duration_ms=100, source=visible, now_s=1.03)
+    stripe.set_pixels(next_frame)
+    player.apply_transition(stripe, now_s=1.03)
+
+    np.testing.assert_array_equal(stripe.pixels(), visible)
 
 
 def test_layered_renderer_crossfades_after_composing_the_incoming_frame() -> None:

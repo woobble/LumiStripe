@@ -20,7 +20,7 @@ describe("TransitionSettingsPanel", () => {
     await user.click(screen.getByRole("button", { name: "Transitions" }))
 
     await waitFor(() => {
-      expect(setTransitionSettings).toHaveBeenCalledWith(false, 300)
+      expect(setTransitionSettings).toHaveBeenCalledWith(false, 300, "crossfade")
     })
   })
 
@@ -28,7 +28,7 @@ describe("TransitionSettingsPanel", () => {
     const controller = {
       state: {
         ...initialState,
-        transition_settings: { enabled: false, duration_ms: 300 },
+        transition_settings: { enabled: false, duration_ms: 300, effect: "crossfade" },
       },
       setTransitionSettings: vi.fn().mockResolvedValue(true),
     } as unknown as DashboardController
@@ -52,7 +52,25 @@ describe("TransitionSettingsPanel", () => {
     fireEvent.change(slider!, { target: { value: "350" } })
 
     await waitFor(() => {
-      expect(setTransitionSettings).toHaveBeenCalledWith(true, 350)
+      expect(setTransitionSettings).toHaveBeenCalledWith(true, 350, "crossfade")
+    })
+  })
+
+  it("changes the transition effect immediately", async () => {
+    const user = userEvent.setup()
+    const setTransitionSettings = vi.fn().mockResolvedValue(true)
+    const controller = {
+      state: initialState,
+      setTransitionSettings,
+    } as unknown as DashboardController
+
+    render(<TransitionSettingsPanel controller={controller} disabled={false} />)
+
+    await user.click(screen.getByRole("combobox", { name: "Transition effect" }))
+    await user.click(await screen.findByRole("option", { name: "Fade through black" }))
+
+    await waitFor(() => {
+      expect(setTransitionSettings).toHaveBeenCalledWith(true, 300, "fade_black")
     })
   })
 })

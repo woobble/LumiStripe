@@ -148,11 +148,11 @@ describe("useDashboard", () => {
       if (path === "/api/sequencer/sequences") return jsonResponse({ sequences: [], active_sequence_id: null })
       if (path === "/api/transitions/settings") {
         expect(init?.method).toBe("PUT")
-        expect(init?.body).toBe(JSON.stringify({ enabled: false, duration_ms: 900 }))
+        expect(init?.body).toBe(JSON.stringify({ enabled: false, duration_ms: 900, effect: "wipe" }))
         return jsonResponse({
           ...initialState,
           revision: 2,
-          transition_settings: { enabled: false, duration_ms: 900 },
+          transition_settings: { enabled: false, duration_ms: 900, effect: "wipe" },
         })
       }
       return jsonResponse(initialState)
@@ -163,7 +163,7 @@ describe("useDashboard", () => {
 
     let applied: boolean | undefined
     await act(async () => {
-      applied = await result.current.setTransitionSettings(false, 900)
+      applied = await result.current.setTransitionSettings(false, 900, "wipe")
     })
 
     expect(applied).toBe(true)
@@ -171,6 +171,7 @@ describe("useDashboard", () => {
     expect(result.current.state?.transition_settings).toEqual({
       enabled: false,
       duration_ms: 900,
+      effect: "wipe",
     })
   })
 

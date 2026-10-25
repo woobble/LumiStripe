@@ -25,7 +25,9 @@ async def set_transition_settings(
 ) -> DashboardState:
     return await await_command(
         runtime_from_request(request).set_transition_settings(
-            body.enabled, body.duration_ms
+            body.enabled,
+            body.duration_ms,
+            body.effect if "effect" in body.model_fields_set else None,
         )
     )
 

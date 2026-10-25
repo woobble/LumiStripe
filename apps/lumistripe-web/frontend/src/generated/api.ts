@@ -2176,10 +2176,17 @@ export interface components {
             /** Uptime Seconds */
             uptime_seconds: number | null;
         };
+        /**
+         * TransitionEffect
+         * @enum {string}
+         */
+        TransitionEffect: "crossfade" | "fade_black" | "wipe";
         /** TransitionSettingsRequest */
         TransitionSettingsRequest: {
             /** Duration Ms */
             duration_ms: number;
+            /** @default crossfade */
+            effect: components["schemas"]["TransitionEffect"];
             /** Enabled */
             enabled: boolean;
         };
@@ -2190,6 +2197,8 @@ export interface components {
              * @default 300
              */
             duration_ms: number;
+            /** @default crossfade */
+            effect: components["schemas"]["TransitionEffect"];
             /**
              * Enabled
              * @default true

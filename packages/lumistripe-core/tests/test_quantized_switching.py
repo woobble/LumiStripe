@@ -18,6 +18,7 @@ from lumistripe import (
     SelectorDecision,
     Stripe,
     SwitchQuantization,
+    TransitionEffect,
 )
 from lumistripe.audio.timeline import MusicalTimelineConfig, MusicalTimelineState
 from lumistripe.playback import QuantizedSwitchCoordinator
@@ -332,6 +333,7 @@ def test_dynamic_engine_quantizes_switch_after_immediate_initial_selection(
         PlaybackConfig(
             mode=PlaybackMode.DYNAMIC,
             switch_quantization=SwitchQuantization.BEAT,
+            transition_effect=TransitionEffect.WIPE,
             activity=MusicActivityConfig(activation_delay_s=0.0),
             dynamic=DynamicSelectorConfig(
                 randomness=0.0,
@@ -401,3 +403,4 @@ def test_dynamic_engine_quantizes_switch_after_immediate_initial_selection(
     engine.step(Stripe(8), snapshot=active_no_events, now_s=12.51)
     assert player.name_at(player.current_index()) == candidate_name
     assert player.transition_active is True
+    assert player._active_transition_effect is TransitionEffect.WIPE

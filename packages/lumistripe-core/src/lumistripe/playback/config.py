@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from math import isfinite
 
+from ..animation.base import TransitionEffect
 from ..audio.timeline import MusicalTimelineConfig
 from ..color import Color, Rgb
 from ..effects.layers import EffectSchedulerConfig
@@ -75,6 +76,9 @@ class PlaybackConfig:
     transition_duration_s: float = 0.3
     dynamic_response: float = 0.65
     effects: EffectSchedulerConfig = field(default_factory=EffectSchedulerConfig)
+    transition_effect: TransitionEffect = field(
+        default=TransitionEffect.CROSSFADE, kw_only=True
+    )
 
     def __post_init__(self) -> None:
         if self.animation_sequence is not None and not isinstance(
@@ -90,6 +94,8 @@ class PlaybackConfig:
             or self.transition_duration_s < 0.0
         ):
             raise ValueError("transition_duration_s must be a finite non-negative number")
+        if not isinstance(self.transition_effect, TransitionEffect):
+            raise TypeError("transition_effect must be a TransitionEffect")
         if not 0.0 <= self.dynamic_response <= 1.0:
             raise ValueError("dynamic_response must be between zero and one")
 
@@ -102,4 +108,5 @@ __all__ = [
     "PlaybackConfig",
     "PlaybackMode",
     "SwitchQuantization",
+    "TransitionEffect",
 ]

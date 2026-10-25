@@ -13,6 +13,7 @@ import {
   type PlaybackMode,
   type SwitchQuantization,
   type StripeTopology,
+  type TransitionEffect,
 } from "@/lib/api"
 import { useWebSocketStream } from "@/hooks/use-websocket-stream"
 
@@ -188,8 +189,8 @@ export function useDashboard() {
       runCommand("blackout", () => dashboardApi.setBlackout(enabled, stripeId)),
     setSequencerSettings: (mode: SwitchQuantization, barsPerPhrase: 4 | 8 | 16) =>
       runCommand("sequencer", () => dashboardApi.setSequencerSettings(mode, barsPerPhrase)),
-    setTransitionSettings: (enabled: boolean, durationMs: number) =>
-      runCommand("transitions", () => dashboardApi.setTransitionSettings(enabled, durationMs)),
+    setTransitionSettings: (enabled: boolean, durationMs: number, effect: TransitionEffect) =>
+      runCommand("transitions", () => dashboardApi.setTransitionSettings(enabled, durationMs, effect)),
     createSequence: (sequence: SequenceCreateRequest) => runSequenceCommand({ operation: "create", sequence }),
     updateSequence: (sequenceId: string, sequence: SequenceDefinitionRequest) => runSequenceCommand({ operation: "update", sequenceId, sequence }),
     deleteSequence: (sequenceId: string) => runSequenceCommand({ operation: "delete", sequenceId }),

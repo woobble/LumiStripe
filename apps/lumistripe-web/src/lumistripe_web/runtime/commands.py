@@ -11,7 +11,12 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from lumistripe.controller import ColorCorrection
-from lumistripe.playback import AnimationSequence, PlaybackMode, SwitchQuantization
+from lumistripe.playback import (
+    AnimationSequence,
+    PlaybackMode,
+    SwitchQuantization,
+    TransitionEffect,
+)
 
 from ..settings import AudioTuningProfile, StripeTopologySettings
 
@@ -140,6 +145,7 @@ class _SequencerSettingsCommand:
 class _TransitionSettingsCommand:
     enabled: bool
     duration_ms: int
+    effect: TransitionEffect | None = None
 
 
 @dataclass(frozen=True, slots=True)

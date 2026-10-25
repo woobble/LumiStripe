@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal
 
-from lumistripe.playback import PlaybackMode, SwitchQuantization
+from lumistripe.playback import PlaybackMode, SwitchQuantization, TransitionEffect
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -121,6 +121,20 @@ class TransitionSettingsRequest(BaseModel):
 
     enabled: bool
     duration_ms: int = Field(ge=100, le=1500)
+    effect: TransitionEffect = TransitionEffect.CROSSFADE
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_effect(cls, value: object) -> object:
+        if isinstance(value, dict) and "effect" in value:
+            try:
+                effect = TransitionEffect(value["effect"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "effect must be crossfade, fade_black, or wipe"
+                ) from exc
+            return {**value, "effect": effect}
+        return value
 
 
 class TransitionSettingsResponse(BaseModel):
@@ -128,6 +142,7 @@ class TransitionSettingsResponse(BaseModel):
 
     enabled: bool = True
     duration_ms: int = Field(default=300, ge=100, le=1500)
+    effect: TransitionEffect = TransitionEffect.CROSSFADE
 
 
 class SequencerDiagnostics(BaseModel):

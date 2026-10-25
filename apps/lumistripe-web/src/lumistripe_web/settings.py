@@ -21,10 +21,11 @@ from lumistripe.playback import (
     MusicActivityConfig,
     PlaybackMode,
     SwitchQuantization,
+    TransitionEffect,
 )
 from lumistripe_app_support import build_audio_config
 
-SETTINGS_VERSION = 9
+SETTINGS_VERSION = 10
 MAX_SAVED_ANIMATION_SEQUENCES = 20
 PROFILE_NAMES = ("primary", "secondary")
 StripeLayout = Literal["mirrored", "continuous", "independent"]
@@ -58,6 +59,7 @@ class StartupPlaybackSettings:
 class TransitionSettings:
     enabled: bool = True
     duration_ms: int = 300
+    effect: TransitionEffect = TransitionEffect.CROSSFADE
 
     def __post_init__(self) -> None:
         if not isinstance(self.enabled, bool):
@@ -68,6 +70,8 @@ class TransitionSettings:
             or not 100 <= self.duration_ms <= 1500
         ):
             raise ValueError("transition duration must be between 100 and 1500 ms")
+        if not isinstance(self.effect, TransitionEffect):
+            raise TypeError("transition effect is invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -319,7 +323,7 @@ class CalibrationSettingsStore:
             if not isinstance(payload, dict):
                 raise TypeError("settings must be an object")
             version = payload.get("version")
-            if version not in {1, 2, 3, 4, 5, 6, 7, 8, SETTINGS_VERSION}:
+            if version not in {1, 2, 3, 4, 5, 6, 7, 8, 9, SETTINGS_VERSION}:
                 raise ValueError(
                     f"expected settings version 1 through {SETTINGS_VERSION}"
                 )
@@ -346,7 +350,7 @@ class CalibrationSettingsStore:
                 except (TypeError, ValueError) as exc:
                     warnings.append(str(exc))
 
-        if payload.get("version") in {2, 3, 4, 5, 6, 7, 8, SETTINGS_VERSION}:
+        if payload.get("version") in {2, 3, 4, 5, 6, 7, 8, 9, SETTINGS_VERSION}:
             selected = payload.get("selected_audio_device")
             if selected is not None and not isinstance(selected, str):
                 warnings.append("selected_audio_device must be a string or null")
@@ -384,13 +388,13 @@ class CalibrationSettingsStore:
                     except (TypeError, ValueError) as exc:
                         warnings.append(str(exc))
 
-        if payload.get("version") in {3, 4, 5, 6, 7, 8, SETTINGS_VERSION} and "stripes" in payload:
+        if payload.get("version") in {3, 4, 5, 6, 7, 8, 9, SETTINGS_VERSION} and "stripes" in payload:
             try:
                 settings.stripe_topology = _decode_stripes(payload["stripes"])
             except (TypeError, ValueError) as exc:
                 warnings.append(str(exc))
 
-        if payload.get("version") in {4, 5, 6, 7, 8, SETTINGS_VERSION}:
+        if payload.get("version") in {4, 5, 6, 7, 8, 9, SETTINGS_VERSION}:
             restore = payload.get("restore_last_state", False)
             if not isinstance(restore, bool):
                 warnings.append("restore_last_state must be a boolean")
@@ -412,7 +416,7 @@ class CalibrationSettingsStore:
                 except (TypeError, ValueError) as exc:
                     warnings.append(str(exc))
 
-        if payload.get("version") in {6, 7, 8, SETTINGS_VERSION}:
+        if payload.get("version") in {6, 7, 8, 9, SETTINGS_VERSION}:
             encoded_offsets = payload.get("audio_sync_offsets_ms", {})
             if not isinstance(encoded_offsets, dict):
                 warnings.append("audio_sync_offsets_ms must be an object")
@@ -430,7 +434,7 @@ class CalibrationSettingsStore:
                     except (TypeError, ValueError) as exc:
                         warnings.append(str(exc))
 
-        if payload.get("version") in {7, 8, SETTINGS_VERSION}:
+        if payload.get("version") in {7, 8, 9, SETTINGS_VERSION}:
             encoded_quantization = payload.get("switch_quantization", "off")
             try:
                 settings.switch_quantization = SwitchQuantization(encoded_quantization)
@@ -447,12 +451,12 @@ class CalibrationSettingsStore:
             else:
                 settings.bars_per_phrase = encoded_bars
 
-        if payload.get("version") in {8, SETTINGS_VERSION}:
+        if payload.get("version") in {8, 9, SETTINGS_VERSION}:
             settings.animation_sequences, settings.active_sequence_id = (
                 _decode_animation_sequences(payload, warnings)
             )
 
-        if payload.get("version") == SETTINGS_VERSION and "transition_settings" in payload:
+        if payload.get("version") in {9, SETTINGS_VERSION} and "transition_settings" in payload:
             encoded_transitions = payload["transition_settings"]
             try:
                 if not isinstance(encoded_transitions, dict):
@@ -460,9 +464,10 @@ class CalibrationSettingsStore:
                 settings.transition_settings = TransitionSettings(
                     enabled=encoded_transitions.get("enabled", True),
                     duration_ms=encoded_transitions.get("duration_ms", 300),
+                    effect=TransitionEffect(encoded_transitions.get("effect", "crossfade")),
                 )
             except (TypeError, ValueError) as exc:
-                warnings.append(str(exc))
+                warnings.append(f"transition settings: {exc}")
 
         warning = None
         if warnings:
@@ -613,6 +618,7 @@ class CalibrationSettingsStore:
             "transition_settings": {
                 "enabled": settings.transition_settings.enabled,
                 "duration_ms": settings.transition_settings.duration_ms,
+                "effect": settings.transition_settings.effect.value,
             },
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)

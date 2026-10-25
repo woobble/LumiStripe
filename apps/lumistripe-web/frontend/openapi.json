@@ -3130,6 +3130,15 @@
         "title": "SystemStats",
         "type": "object"
       },
+      "TransitionEffect": {
+        "enum": [
+          "crossfade",
+          "fade_black",
+          "wipe"
+        ],
+        "title": "TransitionEffect",
+        "type": "string"
+      },
       "TransitionSettingsRequest": {
         "additionalProperties": false,
         "properties": {
@@ -3138,6 +3147,10 @@
             "minimum": 100.0,
             "title": "Duration Ms",
             "type": "integer"
+          },
+          "effect": {
+            "$ref": "#/components/schemas/TransitionEffect",
+            "default": "crossfade"
           },
           "enabled": {
             "title": "Enabled",
@@ -3159,6 +3172,10 @@
             "minimum": 100.0,
             "title": "Duration Ms",
             "type": "integer"
+          },
+          "effect": {
+            "$ref": "#/components/schemas/TransitionEffect",
+            "default": "crossfade"
           },
           "enabled": {
             "default": true,

@@ -73,6 +73,7 @@ export const initialState: DashboardState = {
   transition_settings: {
     enabled: true,
     duration_ms: 300,
+    effect: "crossfade",
   },
   sequence_library: {
     sequences: [],

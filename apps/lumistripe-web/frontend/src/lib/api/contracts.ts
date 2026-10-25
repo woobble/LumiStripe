@@ -103,6 +103,7 @@ export type StripeTopology = RestSchema<"StripeTopology">
 export type SequencerDiagnostics = RestSchema<"SequencerDiagnostics">
 export type SequencerSettingsRequest = RestSchema<"SequencerSettingsRequest">
 export type SequencerSettingsResponse = RestSchema<"SequencerSettingsResponse">
+export type TransitionEffect = RestSchema<"TransitionEffect">
 export type TransitionSettingsRequest = RestSchema<"TransitionSettingsRequest">
 export type TransitionSettingsResponse = RestSchema<"TransitionSettingsResponse">
 

@@ -365,6 +365,7 @@ def test_transition_settings_api_validation_live_update_and_restart(
         assert client.get("/api/transitions/settings").json() == {
             "enabled": True,
             "duration_ms": 300,
+            "effect": "crossfade",
         }
 
         before = client.get("/api/state").json()
@@ -374,7 +375,7 @@ def test_transition_settings_api_validation_live_update_and_restart(
         ).status_code == 200
         applied = client.put(
             "/api/transitions/settings",
-            json={"enabled": False, "duration_ms": 850},
+            json={"enabled": False, "duration_ms": 850, "effect": "wipe"},
         )
 
         assert applied.status_code == 200
@@ -382,7 +383,16 @@ def test_transition_settings_api_validation_live_update_and_restart(
         assert payload["transition_settings"] == {
             "enabled": False,
             "duration_ms": 850,
+            "effect": "wipe",
         }
+        # Clients that predate the effect field keep the currently selected effect.
+        legacy_update = client.put(
+            "/api/transitions/settings",
+            json={"enabled": False, "duration_ms": 850},
+        )
+        assert legacy_update.status_code == 200
+        payload = legacy_update.json()
+        assert payload["transition_settings"]["effect"] == "wipe"
         assert payload["mode"] == before["mode"]
         assert payload["animation"] == before["animation"]
         assert payload["sequencer_settings"] == {
@@ -395,6 +405,8 @@ def test_transition_settings_api_validation_live_update_and_restart(
             {"enabled": "true", "duration_ms": 300},
             {"enabled": True, "duration_ms": 300.5},
             {"enabled": True, "duration_ms": 300, "extra": True},
+            {"enabled": True, "duration_ms": 300, "effect": "dissolve"},
+            {"enabled": True, "duration_ms": 300, "effect": None},
         ):
             assert client.put("/api/transitions/settings", json=invalid).status_code == 422
 
@@ -402,12 +414,14 @@ def test_transition_settings_api_validation_live_update_and_restart(
     assert warning is None
     assert saved.transition_settings.enabled is False
     assert saved.transition_settings.duration_ms == 850
+    assert saved.transition_settings.effect.value == "wipe"
 
     restarted = create_app(RuntimeSettings(pixels=8, settings_file=settings_path))
     with TestClient(restarted) as client:
         assert client.get("/api/transitions/settings").json() == {
             "enabled": False,
             "duration_ms": 850,
+            "effect": "wipe",
         }
 
 
