@@ -1,9 +1,9 @@
 import { lazy, Suspense, type ReactNode } from "react"
-import { Navigate, Route, Routes } from "react-router"
+import { Navigate, Outlet, Route, Routes } from "react-router"
 
 import type { AccessController } from "@/hooks/use-access"
 import type { DashboardController } from "@/hooks/use-dashboard"
-import { SetupPage } from "@/components/dashboard/setup-nav"
+import { AudioSetupPage, SetupPage } from "@/components/dashboard/setup-nav"
 
 const AudioTuningPanel = lazy(async () => {
   const module = await import("@/components/dashboard/audio-tuning-panel")
@@ -21,9 +21,17 @@ const AudioStatusPanel = lazy(async () => {
   const module = await import("@/components/dashboard/audio-status-panel")
   return { default: module.AudioStatusPanel }
 })
-const AudioInputPanel = lazy(async () => {
-  const module = await import("@/components/dashboard/audio-input-panel")
-  return { default: module.AudioInputPanel }
+const AudioSourcesPage = lazy(async () => {
+  const module = await import("@/components/dashboard/audio-sources-page")
+  return { default: module.AudioSourcesPage }
+})
+const AudioDevicesPage = lazy(async () => {
+  const module = await import("@/components/dashboard/audio-devices-page")
+  return { default: module.AudioDevicesPage }
+})
+const AudioSyncPage = lazy(async () => {
+  const module = await import("@/components/dashboard/audio-sync-page")
+  return { default: module.AudioSyncPage }
 })
 const StartupPanel = lazy(async () => {
   const module = await import("@/components/dashboard/startup-panel")
@@ -65,12 +73,16 @@ export function DashboardRoutes({
       <Route path="/setup" element={<Navigate to="/setup/stripes" replace />} />
       <Route path="/setup/stripes" element={<SetupGuard access={access}><Suspense fallback={fallback}><StripeManagementPanel controller={controller} /></Suspense></SetupGuard>} />
       <Route path="/setup/color" element={<SetupGuard access={access}><SetupPage><Suspense fallback={fallback}><CalibrationPanel controller={controller} /></Suspense></SetupPage></SetupGuard>} />
-      <Route path="/setup/audio" element={<SetupGuard access={access}><Suspense fallback={fallback}><AudioInputPanel
-        configuredAudioSource={controller.state?.configured_audio_source}
-        activeAudioSource={controller.state?.active_audio_source}
-        audioMonitoring={controller.state?.audio_monitoring}
-      /></Suspense></SetupGuard>} />
-      <Route path="/setup/audio/tuning" element={<SetupGuard access={access}><Suspense fallback={fallback}><AudioTuningPanel /></Suspense></SetupGuard>} />
+      <Route path="/setup/audio" element={<SetupGuard access={access}><AudioSetupPage><Outlet /></AudioSetupPage></SetupGuard>}>
+        <Route index element={<Suspense fallback={fallback}><AudioSourcesPage
+          configuredAudioSource={controller.state?.configured_audio_source}
+          activeAudioSource={controller.state?.active_audio_source}
+          audioMonitoring={controller.state?.audio_monitoring}
+        /></Suspense>} />
+        <Route path="devices" element={<Suspense fallback={fallback}><AudioDevicesPage /></Suspense>} />
+        <Route path="tuning" element={<Suspense fallback={fallback}><AudioTuningPanel /></Suspense>} />
+        <Route path="sync" element={<Suspense fallback={fallback}><AudioSyncPage /></Suspense>} />
+      </Route>
       <Route path="/setup/startup" element={<SetupGuard access={access}><Suspense fallback={fallback}><StartupPanel /></Suspense></SetupGuard>} />
       <Route path="/calibration" element={<Navigate to="/setup/color" replace />} />
       <Route path="/diagnostics" element={<Suspense fallback={fallback}><StatusPanel controller={controller} onLogout={access.required && access.authenticated ? access.logout : undefined} /></Suspense>} />

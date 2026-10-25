@@ -75,14 +75,14 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
   )
 }
 
-export function useUnsavedChangesGuard(isDirty: boolean, description?: string) {
+export function useUnsavedChangesGuard(isDirty: boolean, description?: string, enabled = true) {
   const context = useContext(GuardContext)
   const setDirty = context?.setDirty
   useEffect(() => {
-    if (!setDirty) return
+    if (!setDirty || !enabled) return
     setDirty(isDirty, description)
     return () => setDirty(false)
-  }, [description, isDirty, setDirty])
+  }, [description, enabled, isDirty, setDirty])
   return {
     dirty: isDirty,
     requestNavigation: context?.requestNavigation ?? (() => false),

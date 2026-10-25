@@ -26,6 +26,8 @@ type BluetoothOperation = () => Promise<BluetoothStatusResponse>
 export function useBluetooth(initialStatus?: BluetoothStatusResponse | null) {
   const [status, setStatus] = useState<BluetoothStatusResponse | null>(initialStatus ?? null)
   const [busyAction, setBusyAction] = useState<BluetoothAction | null>(null)
+  const [loading, setLoading] = useState(initialStatus == null)
+  const [error, setError] = useState<string | null>(null)
   const statusRef = useRef(status)
   const requestVersion = useRef(0)
 
@@ -37,21 +39,29 @@ export function useBluetooth(initialStatus?: BluetoothStatusResponse | null) {
     requestVersion.current += 1
     statusRef.current = next
     setStatus(next)
+    setError(null)
   }, [])
 
   const refresh = useCallback(async () => {
     const version = ++requestVersion.current
+    if (!statusRef.current) setLoading(true)
     try {
       const next = await dashboardApi.getBluetoothStatus()
       if (version === requestVersion.current) {
         statusRef.current = next
         setStatus(next)
+        setError(null)
       }
       return next
-    } catch {
+    } catch (cause) {
       // Background refresh must not replace a useful status with a transient
       // network error. Explicit actions still surface their own errors.
+      if (version === requestVersion.current) {
+        setError(cause instanceof Error ? cause.message : "Could not refresh Bluetooth status.")
+      }
       return null
+    } finally {
+      if (version === requestVersion.current) setLoading(false)
     }
   }, [])
 
@@ -88,6 +98,7 @@ export function useBluetooth(initialStatus?: BluetoothStatusResponse | null) {
     poll()
     return () => {
       disposed = true
+      requestVersion.current += 1
       if (timer !== undefined) window.clearTimeout(timer)
       document.removeEventListener("visibilitychange", handleVisibilityChange)
     }
@@ -104,6 +115,7 @@ export function useBluetooth(initialStatus?: BluetoothStatusResponse | null) {
       if (version === requestVersion.current) {
         statusRef.current = next
         setStatus(next)
+        setError(null)
       }
       return next
     } finally {
@@ -115,6 +127,8 @@ export function useBluetooth(initialStatus?: BluetoothStatusResponse | null) {
     status,
     busyAction,
     busy: Boolean(busyAction || status?.operation_state === "running" || status?.operation),
+    loading,
+    error,
     refresh,
     replaceStatus,
     run,

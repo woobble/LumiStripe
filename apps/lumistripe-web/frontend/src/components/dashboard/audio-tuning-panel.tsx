@@ -11,7 +11,6 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
-import { AudioSetupPage } from "@/components/dashboard/setup-nav"
 import { AudioCalibrationWizard } from "@/components/dashboard/audio-calibration-wizard"
 import { AudioHistoryChart, AudioTelemetryCards, useAudioTelemetry } from "@/components/dashboard/audio-telemetry"
 import { Button } from "@/components/ui/button"
@@ -151,10 +150,10 @@ function AudioTuningPanelView() {
   }
 
   if (loading && !response) {
-    return <AudioSetupPage><div className="space-y-4"><Skeleton className="h-32 rounded-xl" /><Skeleton className="h-64 rounded-xl" /><Skeleton className="h-72 rounded-xl" /></div></AudioSetupPage>
+    return <div className="space-y-4"><Skeleton className="h-32 rounded-xl" /><Skeleton className="h-64 rounded-xl" /><Skeleton className="h-72 rounded-xl" /></div>
   }
   if (!response) {
-    return <AudioSetupPage><Card><CardHeader><CardTitle>Audio tuning unavailable</CardTitle><CardDescription>Could not load microphone settings.</CardDescription></CardHeader><CardContent><Button onClick={() => void load()}>Try again</Button></CardContent></Card></AudioSetupPage>
+    return <Card><CardHeader><CardTitle>Audio tuning unavailable</CardTitle><CardDescription>Could not load microphone settings.</CardDescription></CardHeader><CardContent><Button onClick={() => void load()}>Try again</Button></CardContent></Card>
   }
   const activeDeviceName = response.active_device_name
     ?? response.devices.find((item) => item.selector === selectedDevice)?.name
@@ -167,8 +166,7 @@ function AudioTuningPanelView() {
   ] as const
 
   return (
-    <AudioSetupPage>
-      <div className="space-y-4 pb-4">
+    <div className="space-y-4 pb-4">
       <div>
         <h2 className="text-lg font-semibold">Audio tuning</h2>
         <p className="text-sm text-muted-foreground">See what the active audio input hears and tune Music mode in real time.</p>
@@ -212,8 +210,7 @@ function AudioTuningPanelView() {
         <Button variant="outline" className="h-12 rounded-xl" disabled={saving || !selectedDevice} onClick={() => void reset()}><RotateCcwIcon />Reset</Button>
         <Button className="h-12 rounded-xl" disabled={saving || !isDirty || !selectedDevice} onClick={() => void handleSubmit(apply)()}><SaveIcon />{saving ? "Applying…" : "Apply & save"}</Button>
       </div>
-      </div>
-    </AudioSetupPage>
+    </div>
   )
 }
 

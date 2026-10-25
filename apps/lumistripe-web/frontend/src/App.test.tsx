@@ -153,13 +153,18 @@ class MockWebSocket {
 describe("App", () => {
   let pendingBrightnessResponse: Promise<Response> | null = null
   let pendingSpotifyControlResponse: Promise<Response> | null = null
+  let pendingSyncCalibrationStart: Promise<Response> | null = null
+  let pendingSyncCalibrationStop: Promise<Response> | null = null
   let spotifyStatusResponse: SpotifyStatusResponse = spotifyStatus
   let spotifySettingsStatus: SpotifyStatusResponse = spotifyStatus
   let failAudioSourceChange = false
+  let failAudioDeviceChange = false
   let failOutputVolume = false
   let failOutputMute = false
   let currentBluetoothStatus: BluetoothStatusResponse = bluetoothStatus as unknown as BluetoothStatusResponse
   let currentSyncRoute = audioSettings.sync_route
+  let currentAudioSource = audioSettings.source
+  let currentMicrophone = audioSettings.active_device
   let currentSyncOffsets: Record<string, number> = {}
   const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
     const path = String(input)
@@ -168,22 +173,34 @@ describe("App", () => {
     }
     if (path === "/api/animations") return jsonResponse({ items: animations })
     if (path === "/api/audio/settings" || path === "/api/audio/settings/reset") {
-      return jsonResponse({ ...audioSettings, spotify: spotifySettingsStatus, bluetooth: currentBluetoothStatus, sync_route: currentSyncRoute, sync_offset_ms: currentSyncOffsets[currentSyncRoute] ?? 0 })
+      const microphone = audioSettings.devices.find((device) => device.selector === currentMicrophone)
+      return jsonResponse({ ...audioSettings, source: currentAudioSource, active_device: currentMicrophone, active_device_name: microphone?.name ?? null, spotify: spotifySettingsStatus, bluetooth: currentBluetoothStatus, sync_route: currentSyncRoute, sync_offset_ms: currentSyncOffsets[currentSyncRoute] ?? 0 })
     }
     if (path === "/api/audio/bluetooth" || path === "/api/audio/bluetooth/connect") {
+      return jsonResponse(currentBluetoothStatus)
+    }
+    if (path === "/api/audio/bluetooth/alias") {
+      const body = JSON.parse(String(init?.body)) as { alias: string }
+      currentBluetoothStatus = { ...currentBluetoothStatus, adapter_alias: body.alias }
       return jsonResponse(currentBluetoothStatus)
     }
     if (path === "/api/audio/spotify") return jsonResponse(spotifyStatusResponse)
     if (path === "/api/audio/source") {
       if (failAudioSourceChange) return jsonResponse({ detail: "Audio source unavailable." }, 503)
       const body = JSON.parse(String(init?.body)) as { source: string }
-      return jsonResponse({ ...audioSettings, bluetooth: currentBluetoothStatus, source: body.source, active_source: body.source, monitoring: body.source !== "off" })
+      currentAudioSource = body.source
+      const microphone = audioSettings.devices.find((device) => device.selector === currentMicrophone)
+      const inputName = body.source === "mic" ? microphone?.name ?? "USB Mic" : body.source === "bluetooth" ? "Dual-role device" : body.source === "spotify" ? "Spotify" : body.source
+      currentSyncRoute = `${body.source}|${inputName}|${currentBluetoothStatus.default_sink ?? "sink-main"}`
+      return jsonResponse({ ...audioSettings, bluetooth: currentBluetoothStatus, source: body.source, active_source: body.source, monitoring: body.source !== "off", sync_route: currentSyncRoute, sync_offset_ms: currentSyncOffsets[currentSyncRoute] ?? 0 })
     }
     if (path === "/api/audio/output") {
       const body = JSON.parse(String(init?.body)) as { selector: string }
       const output = currentBluetoothStatus.output_devices.find((device) => device.selector === body.selector)
       currentBluetoothStatus = { ...currentBluetoothStatus, default_sink: body.selector, output_volume: output?.volume ?? null }
-      currentSyncRoute = `mic|USB Mic|${body.selector}`
+      const microphone = audioSettings.devices.find((device) => device.selector === currentMicrophone)
+      const inputName = currentAudioSource === "mic" ? microphone?.name ?? "USB Mic" : currentAudioSource === "bluetooth" ? "Dual-role device" : currentAudioSource === "spotify" ? "Spotify" : currentAudioSource
+      currentSyncRoute = `${currentAudioSource}|${inputName}|${body.selector}`
       return jsonResponse(currentBluetoothStatus)
     }
     if (path === "/api/audio/output/volume") {
@@ -211,14 +228,23 @@ describe("App", () => {
       currentSyncOffsets[currentSyncRoute] = body.offset_ms
       return jsonResponse({ ...audioSettings, bluetooth: currentBluetoothStatus, sync_route: currentSyncRoute, sync_offset_ms: body.offset_ms })
     }
+    if (path === "/api/audio/sync-calibration") {
+      const body = JSON.parse(String(init?.body)) as { active: boolean }
+      if (body.active && pendingSyncCalibrationStart) return pendingSyncCalibrationStart
+      if (!body.active && pendingSyncCalibrationStop) return pendingSyncCalibrationStop
+      return jsonResponse({ start_at_ms: body.active ? Date.now() + 250 : null, sync_route: currentSyncRoute, sync_offset_ms: currentSyncOffsets[currentSyncRoute] ?? 0 })
+    }
     if (path === "/api/audio/spotify/control") {
       if (pendingSpotifyControlResponse) return pendingSpotifyControlResponse
       return jsonResponse(spotifyStatus)
     }
     if (path === "/api/audio/device") {
+      if (failAudioDeviceChange) return jsonResponse({ detail: "Microphone input could not be changed." }, 503)
       const body = JSON.parse(String(init?.body)) as { device: string }
       const device = audioSettings.devices.find((item) => item.selector === body.device)
-      return jsonResponse({ ...audioSettings, active_device: body.device, active_device_name: device?.name ?? null })
+      currentMicrophone = body.device
+      currentSyncRoute = `mic|${device?.name ?? "unknown"}|${currentBluetoothStatus.default_sink ?? "sink-main"}`
+      return jsonResponse({ ...audioSettings, active_device: body.device, active_device_name: device?.name ?? null, sync_route: currentSyncRoute, sync_offset_ms: currentSyncOffsets[currentSyncRoute] ?? 0 })
     }
     if (path === "/api/startup") {
       const enabled = init?.body
@@ -279,14 +305,19 @@ describe("App", () => {
     MockWebSocket.instances = []
     pendingBrightnessResponse = null
     pendingSpotifyControlResponse = null
+    pendingSyncCalibrationStart = null
+    pendingSyncCalibrationStop = null
     spotifyStatusResponse = spotifyStatus
     spotifySettingsStatus = spotifyStatus
     failAudioSourceChange = false
+    failAudioDeviceChange = false
     failOutputVolume = false
     failOutputMute = false
     currentBluetoothStatus = bluetoothStatus as unknown as BluetoothStatusResponse
     currentSyncRoute = audioSettings.sync_route
-    currentSyncOffsets = { "mic|USB Mic|sink-main": -85, "mic|USB Mic|sink-bt": 0 }
+    currentAudioSource = audioSettings.source
+    currentMicrophone = audioSettings.active_device
+    currentSyncOffsets = { "mic|USB Mic|sink-main": -85, "mic|USB Mic|sink-bt": 0, "spotify|Spotify|sink-main": 0, "bluetooth|Dual-role device|sink-main": 25 }
     fetchMock.mockClear()
     vi.stubGlobal("fetch", fetchMock)
     vi.stubGlobal("WebSocket", MockWebSocket)
@@ -442,6 +473,24 @@ describe("App", () => {
     ))
   })
 
+  it("keeps a failed microphone selection as a draft and shows the API error", async () => {
+    const user = userEvent.setup()
+    failAudioDeviceChange = true
+    render(<App />, { wrapper: Router })
+    await screen.findByText(/aurora wave/i)
+
+    await user.click(screen.getByRole("link", { name: "Setup" }))
+    const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
+    await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
+    await user.click(await screen.findByRole("combobox", { name: "Microphone input device" }))
+    await user.click(await screen.findByRole("option", { name: "Built-in Mic" }))
+    await user.click(screen.getByRole("button", { name: "Save microphone input" }))
+
+    expect(await screen.findByText("Microphone input could not be changed.")).toBeInTheDocument()
+    expect(screen.getByRole("combobox", { name: "Microphone input device" })).toHaveTextContent("Built-in Mic")
+    expect(screen.getByRole("button", { name: "Save microphone input" })).toBeEnabled()
+  })
+
   it("shows configured and active audio sources and updates them after a source change", async () => {
     const user = userEvent.setup()
     render(<App />, { wrapper: Router })
@@ -486,7 +535,7 @@ describe("App", () => {
     expect(screen.getByText("Configured source").parentElement).toHaveTextContent("Microphone")
   })
 
-  it("preserves unsaved microphone and sync drafts when audio settings refresh", async () => {
+  it("navigates all four setup sections with a compact keyboard-accessible tab grid", async () => {
     const user = userEvent.setup()
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
@@ -495,21 +544,62 @@ describe("App", () => {
     const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
     await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
 
+    const audioNav = await screen.findByRole("navigation", { name: "Audio setup sections" })
+    expect(audioNav).toHaveClass("grid-cols-2")
+    expect(within(audioNav).getByRole("link", { name: "Sources" })).toHaveAttribute("href", "/setup/audio")
+    expect(within(audioNav).getByRole("link", { name: "Devices" })).toHaveAttribute("href", "/setup/audio/devices")
+    expect(within(audioNav).getByRole("link", { name: "Tuning" })).toHaveAttribute("href", "/setup/audio/tuning")
+    expect(within(audioNav).getByRole("link", { name: "Sync" })).toHaveAttribute("href", "/setup/audio/sync")
+    expect(within(audioNav).getByRole("link", { name: "Sources" })).toHaveAttribute("aria-current", "page")
+    expect(fetchMock.mock.calls.filter(([path]) => String(path) === "/api/audio/bluetooth")).toHaveLength(0)
+
+    within(audioNav).getByRole("link", { name: "Sources" }).focus()
+    await user.tab()
+    expect(within(audioNav).getByRole("link", { name: "Devices" })).toHaveFocus()
+    await user.keyboard("{Enter}")
+    expect(await screen.findByRole("heading", { name: "Audio outputs" })).toBeInTheDocument()
+    expect(within(audioNav).getByRole("link", { name: "Devices" })).toHaveAttribute("aria-current", "page")
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([path]) => String(path) === "/api/audio/bluetooth").length).toBeGreaterThan(0))
+    const bluetoothPolls = fetchMock.mock.calls.filter(([path]) => String(path) === "/api/audio/bluetooth").length
+
+    await user.click(within(audioNav).getByRole("link", { name: "Tuning" }))
+    expect(await screen.findByRole("heading", { name: "Audio tuning" })).toBeInTheDocument()
+    expect(fetchMock.mock.calls.filter(([path]) => String(path) === "/api/audio/bluetooth")).toHaveLength(bluetoothPolls)
+    await user.click(within(audioNav).getByRole("link", { name: "Sync" }))
+    expect(await screen.findByText("Route: mic|USB Mic|sink-main")).toBeInTheDocument()
+    await user.click(within(audioNav).getByRole("link", { name: "Sources" }))
+    expect(await screen.findByRole("combobox", { name: "Audio input source" })).toBeInTheDocument()
+  })
+
+  it("preserves unsaved source and microphone drafts when audio settings refresh", async () => {
+    const user = userEvent.setup()
+    render(<App />, { wrapper: Router })
+    await screen.findByText(/aurora wave/i)
+
+    await user.click(screen.getByRole("link", { name: "Setup" }))
+    const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
+    await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
+
+    await user.click(await screen.findByRole("combobox", { name: "Audio input source" }))
+    await user.click(await screen.findByRole("option", { name: "Spotify Connect" }))
     await user.click(await screen.findByRole("combobox", { name: "Microphone input device" }))
     await user.click(await screen.findByRole("option", { name: "Built-in Mic" }))
-    const syncOffset = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="range"]'))[0]
-    expect(syncOffset).toBeDefined()
-    fireEvent.change(syncOffset!, { target: { value: "150" } })
-    expect(screen.getByText("+150 ms")).toBeInTheDocument()
 
     await user.click(screen.getByRole("button", { name: "Refresh microphone devices" }))
 
+    expect(await screen.findByRole("combobox", { name: "Audio input source" })).toHaveTextContent("Spotify Connect")
     expect(await screen.findByRole("combobox", { name: "Microphone input device" })).toHaveTextContent("Built-in Mic")
-    expect(screen.getByText("+150 ms")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Save microphone input" })).toBeEnabled()
+    expect(screen.getByRole("button", { name: "Save audio input" })).toBeEnabled()
+
+    const audioNav = screen.getByRole("navigation", { name: "Audio setup sections" })
+    await user.click(within(audioNav).getByRole("link", { name: "Devices" }))
+    expect(await screen.findByRole("heading", { name: "Leave without saving?" })).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Stay" }))
+    expect(screen.getByRole("combobox", { name: "Audio input source" })).toHaveTextContent("Spotify Connect")
   })
 
-  it("routes audio output and saves the selected route sync offset", async () => {
+  it("keeps output and sync settings attached to their selected routes", async () => {
     const user = userEvent.setup()
     currentBluetoothStatus = bluetoothStatusWithOutputs
     render(<App />, { wrapper: Router })
@@ -518,12 +608,12 @@ describe("App", () => {
     await user.click(screen.getByRole("link", { name: "Setup" }))
     const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
     await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
-    expect(await screen.findByText("-85 ms")).toBeInTheDocument()
+    const audioNav = await screen.findByRole("navigation", { name: "Audio setup sections" })
+    await user.click(within(audioNav).getByRole("link", { name: "Devices" }))
+    expect(await screen.findByText("Output volume")).toBeInTheDocument()
     await user.click(await screen.findByRole("combobox", { name: "Audio output device" }))
     await user.click(await screen.findByRole("option", { name: "Bluetooth Speaker · Bluetooth" }))
 
-    expect(await screen.findByText("Route: mic|USB Mic|sink-bt")).toBeInTheDocument()
-    expect(screen.getByText("0 ms")).toBeInTheDocument()
     expect(screen.getByText("62%")).toBeInTheDocument()
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
@@ -538,9 +628,22 @@ describe("App", () => {
       expect.objectContaining({ method: "PUT", body: JSON.stringify({ selector: "sink-bt", volume: 0.77 }) }),
     ))
 
-    const syncOffset = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="range"]'))[1]
+    await user.click(screen.getByRole("switch", { name: "Enable audio output" }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/audio/output/mute",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ selector: "sink-bt", muted: true }) }),
+    ))
+
+    await user.click(within(audioNav).getByRole("link", { name: "Sync" }))
+    expect(await screen.findByText("Route: mic|USB Mic|sink-bt")).toBeInTheDocument()
+    expect(screen.getByText("0 ms")).toBeInTheDocument()
+    const syncOffset = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="range"]'))[0]
     expect(syncOffset).toBeDefined()
     fireEvent.change(syncOffset!, { target: { value: "125" } })
+    await user.click(within(audioNav).getByRole("link", { name: "Devices" }))
+    expect(await screen.findByRole("heading", { name: "Leave without saving?" })).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Stay" }))
+    expect(screen.getByText("+125 ms")).toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: "Save offset" }))
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
@@ -549,10 +652,216 @@ describe("App", () => {
     ))
     expect(screen.getByText("+125 ms")).toBeInTheDocument()
 
-    await user.click(screen.getByRole("switch", { name: "Enable audio output" }))
+    await user.click(within(audioNav).getByRole("link", { name: "Devices" }))
+    await user.click(await screen.findByRole("combobox", { name: "Audio output device" }))
+    await user.click(await screen.findByRole("option", { name: "Built-in Output" }))
+    await user.click(within(audioNav).getByRole("link", { name: "Sync" }))
+    expect(await screen.findByText("Route: mic|USB Mic|sink-main")).toBeInTheDocument()
+    expect(screen.getByText("-85 ms")).toBeInTheDocument()
+
+    await user.click(within(audioNav).getByRole("link", { name: "Devices" }))
+    await user.click(await screen.findByRole("combobox", { name: "Audio output device" }))
+    await user.click(await screen.findByRole("option", { name: "Bluetooth Speaker · Bluetooth" }))
+    await user.click(within(audioNav).getByRole("link", { name: "Sync" }))
+    expect(await screen.findByText("+125 ms")).toBeInTheDocument()
+  })
+
+  it("stops an active calibration cue when navigating to another setup section", async () => {
+    const user = userEvent.setup()
+    render(<App />, { wrapper: Router })
+    await screen.findByText(/aurora wave/i)
+
+    await user.click(screen.getByRole("link", { name: "Setup" }))
+    const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
+    await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
+    const audioNav = await screen.findByRole("navigation", { name: "Audio setup sections" })
+    await user.click(within(audioNav).getByRole("link", { name: "Sync" }))
+    await user.click(await screen.findByRole("button", { name: "Play sync cue" }))
+
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
-      "/api/audio/output/mute",
-      expect.objectContaining({ method: "PUT", body: JSON.stringify({ selector: "sink-bt", muted: true }) }),
+      "/api/audio/sync-calibration",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ active: true }) }),
+    ))
+    await user.click(within(audioNav).getByRole("link", { name: "Devices" }))
+    await screen.findByRole("heading", { name: "Audio outputs" })
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/audio/sync-calibration",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ active: false }) }),
+    ))
+  })
+
+  it("preserves an edited Bluetooth alias across refresh and guards leaving Devices", async () => {
+    const user = userEvent.setup()
+    render(<App />, { wrapper: Router })
+    await screen.findByText(/aurora wave/i)
+
+    await user.click(screen.getByRole("link", { name: "Setup" }))
+    const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
+    await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
+    const audioNav = await screen.findByRole("navigation", { name: "Audio setup sections" })
+    await user.click(within(audioNav).getByRole("link", { name: "Devices" }))
+    const aliasInput = await screen.findByRole("textbox", { name: "Visible Bluetooth name" })
+    await user.clear(aliasInput)
+    await user.type(aliasInput, "Studio Speaker")
+    await user.click(screen.getByRole("button", { name: "Refresh Bluetooth status" }))
+    expect(await screen.findByRole("textbox", { name: "Visible Bluetooth name" })).toHaveValue("Studio Speaker")
+
+    await user.click(within(audioNav).getByRole("link", { name: "Sync" }))
+    expect(await screen.findByRole("heading", { name: "Leave without saving?" })).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Stay" }))
+    expect(screen.getByRole("textbox", { name: "Visible Bluetooth name" })).toHaveValue("Studio Speaker")
+    await user.click(screen.getByRole("button", { name: "Save name" }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/audio/bluetooth/alias",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ alias: "Studio Speaker" }) }),
+    ))
+  })
+
+  it("respects Bluetooth input and output role capability limits", async () => {
+    const user = userEvent.setup()
+    currentBluetoothStatus = {
+      ...(bluetoothStatus as unknown as BluetoothStatusResponse),
+      capabilities: { operations: ["connect"], max_inputs: 1, max_outputs: 1 },
+      connected_inputs: [{ address: "11:22:33:44:55:66", name: "Existing input", paired: true, connected: true, roles: ["input"] }],
+    }
+    render(<App />, { wrapper: Router })
+    await screen.findByText(/aurora wave/i)
+
+    await user.click(screen.getByRole("link", { name: "Setup" }))
+    const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
+    await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
+    const audioNav = await screen.findByRole("navigation", { name: "Audio setup sections" })
+    await user.click(within(audioNav).getByRole("link", { name: "Devices" }))
+
+    expect(await screen.findByRole("button", { name: "Connect as input" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "Connect as output" })).toBeEnabled()
+    await user.click(screen.getByRole("button", { name: "Connect as output" }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/audio/bluetooth/connect",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ address: "AA:BB:CC:DD:EE:FF", role: "output" }) }),
+    ))
+  })
+
+  it("shows unavailable Bluetooth service and provider error on Devices", async () => {
+    const user = userEvent.setup()
+    currentBluetoothStatus = {
+      ...(bluetoothStatus as unknown as BluetoothStatusResponse),
+      available: false,
+      error: "Bluetooth provider unavailable.",
+      capabilities: { operations: [], max_inputs: 1, max_outputs: 1 },
+    }
+    render(<App />, { wrapper: Router })
+    await screen.findByText(/aurora wave/i)
+
+    await user.click(screen.getByRole("link", { name: "Setup" }))
+    const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
+    await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
+    const audioNav = await screen.findByRole("navigation", { name: "Audio setup sections" })
+    await user.click(within(audioNav).getByRole("link", { name: "Devices" }))
+
+    expect(await screen.findByText(/Bluetooth tools are unavailable/)).toBeInTheDocument()
+    expect(screen.getByText("Bluetooth provider unavailable.")).toBeInTheDocument()
+    expect(screen.getByRole("switch", { name: "Enable Bluetooth" })).toHaveAttribute("aria-disabled", "true")
+  })
+
+  it("keeps sync offsets separate when the configured input source changes", async () => {
+    const user = userEvent.setup()
+    render(<App />, { wrapper: Router })
+    await screen.findByText(/aurora wave/i)
+
+    await user.click(screen.getByRole("link", { name: "Setup" }))
+    const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
+    await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
+    const audioNav = await screen.findByRole("navigation", { name: "Audio setup sections" })
+    await user.click(within(audioNav).getByRole("link", { name: "Sync" }))
+    expect(await screen.findByText("-85 ms")).toBeInTheDocument()
+    const offset = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="range"]'))[0]
+    fireEvent.change(offset!, { target: { value: "55" } })
+    await user.click(screen.getByRole("button", { name: "Save offset" }))
+    await waitFor(() => expect(screen.getByText("+55 ms")).toBeInTheDocument())
+
+    await user.click(within(audioNav).getByRole("link", { name: "Sources" }))
+    await user.click(await screen.findByRole("combobox", { name: "Audio input source" }))
+    await user.click(await screen.findByRole("option", { name: "Bluetooth input" }))
+    await user.click(screen.getByRole("button", { name: "Save audio input" }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/audio/source",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ source: "bluetooth" }) }),
+    ))
+
+    await user.click(within(audioNav).getByRole("link", { name: "Sync" }))
+    expect(await screen.findByText("Route: bluetooth|Dual-role device|sink-main")).toBeInTheDocument()
+    expect(screen.getByText("+25 ms")).toBeInTheDocument()
+
+    await user.click(within(audioNav).getByRole("link", { name: "Sources" }))
+    await user.click(await screen.findByRole("combobox", { name: "Audio input source" }))
+    await user.click(await screen.findByRole("option", { name: "Microphone" }))
+    await user.click(screen.getByRole("button", { name: "Save audio input" }))
+    await user.click(within(audioNav).getByRole("link", { name: "Sync" }))
+    expect(await screen.findByText("+55 ms")).toBeInTheDocument()
+  })
+
+  it("stops the calibration cue if its start request finishes after navigation", async () => {
+    const user = userEvent.setup()
+    let resolveStart: ((response: Response) => void) | undefined
+    pendingSyncCalibrationStart = new Promise<Response>((resolve) => { resolveStart = resolve })
+    render(<App />, { wrapper: Router })
+    await screen.findByText(/aurora wave/i)
+
+    await user.click(screen.getByRole("link", { name: "Setup" }))
+    const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
+    await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
+    const audioNav = await screen.findByRole("navigation", { name: "Audio setup sections" })
+    await user.click(within(audioNav).getByRole("link", { name: "Sync" }))
+    await user.click(await screen.findByRole("button", { name: "Play sync cue" }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/audio/sync-calibration",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ active: true }) }),
+    ))
+
+    await user.click(within(audioNav).getByRole("link", { name: "Devices" }))
+    await screen.findByRole("heading", { name: "Audio outputs" })
+    resolveStart?.(await jsonResponse({ start_at_ms: Date.now() + 250, sync_route: currentSyncRoute, sync_offset_ms: 0 }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/audio/sync-calibration",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ active: false }) }),
+    ))
+  })
+
+  it("waits for calibration cleanup before changing the output route", async () => {
+    const user = userEvent.setup()
+    currentBluetoothStatus = bluetoothStatusWithOutputs
+    let resolveStop: ((response: Response) => void) | undefined
+    pendingSyncCalibrationStop = new Promise<Response>((resolve) => { resolveStop = resolve })
+    render(<App />, { wrapper: Router })
+    await screen.findByText(/aurora wave/i)
+
+    await user.click(screen.getByRole("link", { name: "Setup" }))
+    const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
+    await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
+    const audioNav = await screen.findByRole("navigation", { name: "Audio setup sections" })
+    await user.click(within(audioNav).getByRole("link", { name: "Sync" }))
+    await user.click(await screen.findByRole("button", { name: "Play sync cue" }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/audio/sync-calibration",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ active: true }) }),
+    ))
+
+    await user.click(within(audioNav).getByRole("link", { name: "Devices" }))
+    await screen.findByRole("heading", { name: "Audio outputs" })
+    await user.click(await screen.findByRole("combobox", { name: "Audio output device" }))
+    await user.click(await screen.findByRole("option", { name: "Bluetooth Speaker · Bluetooth" }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/audio/sync-calibration",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ active: false }) }),
+    ))
+    expect(fetchMock.mock.calls.some(([path]) => String(path) === "/api/audio/output")).toBe(false)
+
+    resolveStop?.(await jsonResponse({ start_at_ms: null, sync_route: currentSyncRoute, sync_offset_ms: 0 }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/audio/output",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ selector: "sink-bt" }) }),
     ))
   })
 
@@ -566,6 +875,8 @@ describe("App", () => {
     await user.click(screen.getByRole("link", { name: "Setup" }))
     const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
     await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
+    const audioNav = await screen.findByRole("navigation", { name: "Audio setup sections" })
+    await user.click(within(audioNav).getByRole("link", { name: "Devices" }))
     await screen.findByText("Output volume")
     const outputVolume = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="range"]'))[0]
     expect(outputVolume).toBeDefined()
@@ -698,12 +1009,12 @@ describe("App", () => {
     const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
     await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
 
-    expect(await screen.findByText("Spotify Connect")).toBeInTheDocument()
+    expect(await screen.findByRole("heading", { name: "Spotify Connect" })).toBeInTheDocument()
     expect(screen.getByRole("link", { name: /open controls/i })).toHaveAttribute("href", "/audio")
     expect(screen.queryByRole("button", { name: "Previous Spotify track" })).not.toBeInTheDocument()
     expect(fetchMock.mock.calls.filter(([path]) => String(path) === "/api/audio/spotify")).toHaveLength(0)
     expect(screen.getByRole("combobox", { name: "Audio input source" })).toBeInTheDocument()
-    expect(screen.getByRole("combobox", { name: "Audio output device" })).toBeInTheDocument()
+    expect(screen.queryByRole("combobox", { name: "Audio output device" })).not.toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Refresh microphone devices" })).toBeInTheDocument()
   })
 
@@ -849,6 +1160,8 @@ describe("App", () => {
     await user.click(screen.getByRole("link", { name: "Setup" }))
     const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
     await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
+    const audioNav = await screen.findByRole("navigation", { name: "Audio setup sections" })
+    await user.click(within(audioNav).getByRole("link", { name: "Devices" }))
 
     expect(await screen.findByRole("button", { name: "Connect as input" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Connect as output" })).toBeInTheDocument()

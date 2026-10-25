@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { AudioLinesIcon, PauseIcon, PlayIcon, SaveIcon } from "lucide-react"
 import { toast } from "sonner"
 
@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Slider } from "@/components/ui/slider"
+import { useUnsavedChangesGuard } from "@/hooks/use-unsaved-changes"
 import type { AudioSettingsResponse } from "@/lib/api"
 
 function firstSliderValue(value: number | readonly number[]) {
@@ -15,18 +16,33 @@ function firstSliderValue(value: number | readonly number[]) {
 export function AudioSyncControls({
   settings,
   calibrationRunning,
+  calibrationBusy = false,
+  calibrationStarting = false,
+  calibrationStopping = false,
   onStartCalibration,
   onStopCalibration,
   onSave,
 }: {
   settings: AudioSettingsResponse
   calibrationRunning: boolean
+  calibrationBusy?: boolean
+  calibrationStarting?: boolean
+  calibrationStopping?: boolean
   onStartCalibration: () => void
   onStopCalibration: () => void
   onSave: (offsetMs: number) => Promise<AudioSettingsResponse>
 }) {
   const [offsetDraft, setOffsetDraft] = useState(settings.sync_offset_ms)
   const [saving, setSaving] = useState(false)
+  const route = useRef(settings.sync_route)
+  const dirty = Math.round(offsetDraft) !== Math.round(settings.sync_offset_ms)
+  useUnsavedChangesGuard(dirty)
+
+  useEffect(() => {
+    const routeChanged = route.current !== settings.sync_route
+    route.current = settings.sync_route
+    if (routeChanged || !dirty) setOffsetDraft(settings.sync_offset_ms)
+  }, [dirty, settings.sync_offset_ms, settings.sync_route])
 
   const save = async () => {
     if (saving) return
@@ -50,7 +66,7 @@ export function AudioSyncControls({
             <CardTitle className="flex items-center gap-2"><AudioLinesIcon className="size-4 text-fuchsia-300" />Audio-to-LED sync</CardTitle>
             <CardDescription>Compare the strip flash with the cue playing through the selected speaker, then save an offset for this input and output route.</CardDescription>
           </div>
-          <Badge variant={calibrationRunning ? "default" : "outline"}>{calibrationRunning ? "Calibrating" : "Ready"}</Badge>
+          <Badge variant={calibrationRunning ? "default" : "outline"}>{calibrationStarting ? "Starting" : calibrationStopping ? "Stopping" : calibrationRunning ? "Calibrating" : "Ready"}</Badge>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -61,10 +77,10 @@ export function AudioSyncControls({
           <div className="flex justify-between text-[11px] text-muted-foreground"><span>LED earlier</span><span>LED later</span></div>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row">
-          {calibrationRunning
-            ? <Button variant="outline" className="flex-1" onClick={onStopCalibration}><PauseIcon />Stop calibration</Button>
-            : <Button variant="outline" className="flex-1" disabled={!settings.monitoring} onClick={onStartCalibration}><PlayIcon />Play sync cue</Button>}
-          <Button className="flex-1" disabled={saving || Math.round(offsetDraft) === Math.round(settings.sync_offset_ms)} onClick={() => void save()}><SaveIcon />{saving ? "Saving…" : "Save offset"}</Button>
+          {calibrationRunning || calibrationStopping
+            ? <Button variant="outline" className="flex-1" disabled={calibrationBusy} onClick={onStopCalibration}><PauseIcon />{calibrationStopping ? "Stopping…" : "Stop calibration"}</Button>
+            : <Button variant="outline" className="flex-1" disabled={!settings.monitoring || calibrationBusy} onClick={onStartCalibration}><PlayIcon />{calibrationStarting ? "Starting…" : "Play sync cue"}</Button>}
+        <Button className="flex-1" disabled={saving || !dirty} onClick={() => void save()}><SaveIcon />{saving ? "Saving…" : "Save offset"}</Button>
         </div>
         <p className="text-xs text-muted-foreground">The Pi plays a distinctive cue through its selected PipeWire output. Positive values delay the LEDs. Sync settings are saved separately for each active input and output route.</p>
       </CardContent>

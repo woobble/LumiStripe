@@ -22,18 +22,24 @@ function deviceSelection(settings: AudioSettingsResponse) {
 export function MicrophoneInputControls({
   settings,
   loading,
+  onDirtyChange,
   onRefresh,
   onSave,
 }: {
   settings: AudioSettingsResponse
   loading: boolean
+  onDirtyChange?: (dirty: boolean) => void
   onRefresh: () => void
   onSave: (device: string) => Promise<AudioSettingsResponse>
 }) {
   const [saving, setSaving] = useState(false)
   const form = useForm<InputFormValues>({ resolver: zodResolver(inputSelectionSchema), defaultValues: { selected: deviceSelection(settings) } })
   const { control, handleSubmit, reset, formState: { isDirty, errors } } = form
-  useUnsavedChangesGuard(isDirty)
+  useUnsavedChangesGuard(isDirty, undefined, !onDirtyChange)
+
+  useEffect(() => {
+    onDirtyChange?.(isDirty)
+  }, [isDirty, onDirtyChange])
 
   useEffect(() => {
     if (!isDirty) reset({ selected: deviceSelection(settings) })
@@ -52,6 +58,7 @@ export function MicrophoneInputControls({
     try {
       const next = await onSave(device)
       reset({ selected: deviceSelection(next) })
+      onDirtyChange?.(false)
       toast.success("Microphone input applied and saved.")
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Microphone input could not be changed.")
@@ -74,7 +81,7 @@ export function MicrophoneInputControls({
       <CardContent className="space-y-4">
         <div className="flex gap-2">
           <Controller control={control} name="selected" render={({ field }) => (
-            <Select value={field.value} onValueChange={(value) => value && field.onChange(value)} disabled={!microphoneDevices.length || saving}>
+            <Select value={field.value} onValueChange={(value) => value && field.onChange(value)} disabled={!microphoneDevices.length || saving || loading}>
               <SelectTrigger aria-label="Microphone input device" aria-invalid={errors.selected ? true : undefined} className="h-11 min-w-0 flex-1 rounded-xl"><SelectValue>{selectedName}</SelectValue></SelectTrigger>
               <SelectContent>{microphoneDevices.map((device) => <SelectItem key={device.selector} value={device.selector}>{device.name}</SelectItem>)}</SelectContent>
             </Select>
@@ -84,7 +91,7 @@ export function MicrophoneInputControls({
         {settings.error && <div role="alert" className="flex gap-2 rounded-xl bg-red-500/10 p-3 text-sm text-red-200"><CircleAlertIcon className="mt-0.5 size-4 shrink-0" /><span>{settings.error}</span></div>}
         {!microphoneDevices.length && !settings.error && <p className="text-sm text-muted-foreground">No microphone input devices were found.</p>}
         {errors.selected && <p role="alert" className="text-sm text-red-300">{errors.selected.message}</p>}
-        <Button className="h-12 w-full rounded-xl" disabled={!isDirty || saving} onClick={() => void handleSubmit(save)()}><SaveIcon />{saving ? "Applying…" : "Save microphone input"}</Button>
+        <Button className="h-12 w-full rounded-xl" disabled={!isDirty || saving || loading} onClick={() => void handleSubmit(save)()}><SaveIcon />{saving ? "Applying…" : "Save microphone input"}</Button>
         <p className="text-xs text-muted-foreground">Each microphone keeps its own tuning profile. Fine-tune the active input from the Audio page.</p>
       </CardContent>
     </Card>
