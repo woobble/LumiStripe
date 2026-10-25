@@ -40,9 +40,11 @@ class MirrorFlash(Effect):
             self.hue_seed = frame * 31 + int(reactive.mid * 60.0)
             self.alternate = 1 - self.alternate
 
-        flash = self.flash.step(0.0, 0.1)
+        decay = self.setting("decay", 50) / 100.0
+        flash = self.flash.step(0.0, 0.02 + decay * 0.16)
         center = (length - 1) / 2.0
-        span = max(2.0, center * (0.3 + reactive.drive() * 0.7))
+        width = self.setting("width", 30) / 100.0
+        span = max(1.0, center * (0.2 + width * 0.8) * (0.3 + reactive.drive() * 0.7))
         controller.clear()
         for index in range((length + 1) // 2):
             distance = abs(index - center)

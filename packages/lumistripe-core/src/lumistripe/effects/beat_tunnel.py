@@ -45,27 +45,31 @@ class BeatTunnel(Effect):
         controller.fill(Rgba(0, 0, 0, 0.0))
         center = max(controller.length - 1, 0) * 0.5
         max_dist = max(center, 1.0)
-        self.radius += 0.5 * self.direction
+        speed = 0.25 + self.setting("speed", 50) / 100.0 * 1.5
+        width = max(1.0, controller.length * self.setting("width", 30) / 100.0 * 0.14)
+        self.radius += 0.5 * speed * self.direction
         if self.radius > max_dist or self.radius < 0.0:
             self.direction *= -1.0
             self.radius = min(max(self.radius, 0.0), max_dist)
         hue_a = (frame * 4) % 256
         hue_b = (frame * 4 + 120) % 256
-        _render_ring(controller, center, self.radius, 4.0, hue_a, 0.85, max_dist)
+        _render_ring(controller, center, self.radius, width, hue_a, 0.85, max_dist)
         inner = (self.radius - max_dist * 0.5) % (max_dist + 4.0)
-        _render_ring(controller, center, inner, 3.0, hue_b, 0.6, max_dist)
+        _render_ring(controller, center, inner, max(1.0, width * 0.75), hue_b, 0.6, max_dist)
 
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
         controller.fill(Rgba(0, 0, 0, 0.0))
         reactive = AudioReactive.from_frame(audio)
         center = max(controller.length - 1, 0) * 0.5
         max_dist = max(center, 1.0)
+        speed = 0.25 + self.setting("speed", 50) / 100.0 * 1.5
+        width = max(1.0, controller.length * self.setting("width", 30) / 100.0 * 0.14)
         hit = self.pulse.step(reactive.accent, 0.05)
         if audio.beat:
             self.radius = 0.0
             self.direction = 1.0
         else:
-            self.radius += reactive.speed(0.3, 1.5) * self.direction
+            self.radius += reactive.speed(0.3, 1.5) * speed * self.direction
             if self.radius > max_dist + 2.0:
                 self.direction = -1.0
             elif self.radius < -2.0:
@@ -75,7 +79,7 @@ class BeatTunnel(Effect):
             controller,
             center,
             abs(self.radius),
-            3.0 + reactive.high * 3.0,
+            width + reactive.high * 2.0,
             hue,
             0.7 + hit * 0.3,
             max_dist,
@@ -86,7 +90,7 @@ class BeatTunnel(Effect):
                 controller,
                 center,
                 inner,
-                2.0,
+                max(1.0, width * 0.65),
                 (hue + 100) % 256,
                 0.4 + hit * 0.3,
                 max_dist,

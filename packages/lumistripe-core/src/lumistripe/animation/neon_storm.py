@@ -43,15 +43,17 @@ class NeonStorm(Animation):
             self.levels = np.zeros(length, dtype=np.float32)
             self.hues = np.zeros(length, dtype=np.int16)
             self.streak_positions.clear()
-        self.levels *= 0.82
-        streak_count = min(1 + int(reactive.low * 3.0), 4)
+        decay = self.setting("decay", 50) / 100.0
+        speed_scale = 0.25 + self.setting("speed", 50) / 100.0 * 1.5
+        self.levels *= 0.66 + decay * 0.32
+        streak_count = min(self.setting("count", 4), 1 + int(reactive.low * self.setting("count", 4)))
         while len(self.streak_positions) < streak_count:
             self.streak_positions.append(
                 (len(self.streak_positions) + 1) * length / (streak_count + 1)
             )
         self.streak_positions = self.streak_positions[:streak_count]
         for index in range(streak_count):
-            speed = 0.35 + index * 0.18 + reactive.drive() * 1.1 + reactive.high * 0.5
+            speed = (0.35 + index * 0.18 + reactive.drive() * 1.1 + reactive.high * 0.5) * speed_scale
             self.streak_positions[index] = (self.streak_positions[index] + speed) % max(length, 1)
 
         spawn_threshold = int(

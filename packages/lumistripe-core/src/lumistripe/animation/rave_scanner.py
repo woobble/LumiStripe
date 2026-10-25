@@ -29,17 +29,24 @@ class RaveScanner(Animation):
 
     def _step(self, frame: int, controller: Controller, reactive: AudioReactive, *, beat: bool) -> None:
         length = max(controller.length, 1)
-        if beat:
+        travel = self.setting("direction", "bounce")
+        if beat and travel == "bounce":
             self.direction *= -1.0
             self.flash.value = 1.0
 
-        width = 2.0 + reactive.low * 5.0
-        speed = reactive.speed(0.65, 1.75) + reactive.low * 0.35
-        self.phase += self.direction * max(0.45, speed)
+        width = max(1.0, length * self.setting("width", 30) / 100.0 * 0.14) + reactive.low * 3.0
+        speed = (reactive.speed(0.65, 1.75) + reactive.low * 0.35) * (0.25 + self.setting("speed", 50) / 100.0 * 1.5)
+        movement_direction = -1.0 if travel == "reverse" else (1.0 if travel == "forward" else self.direction)
+        self.phase += movement_direction * max(0.45, speed)
         max_pos = float(length - 1)
         if self.phase <= 0.0 or self.phase >= max_pos:
-            self.direction *= -1.0
-            self.phase = min(max(self.phase, 0.0), max_pos)
+            if travel == "bounce":
+                self.direction *= -1.0
+                self.phase = min(max(self.phase, 0.0), max_pos)
+            else:
+                self.phase %= max(length, 1)
+        if beat:
+            self.flash.value = 1.0
 
         flash = self.flash.step(0.0, 0.16)
         hue = reactive.hue_shift(frame, 2.2)

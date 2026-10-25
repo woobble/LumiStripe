@@ -49,10 +49,13 @@ class ColorBurst(Effect):
         self, frame: int, controller: Controller, *, center: float, strength: float
     ) -> None:
         length = max(controller.length, 1)
+        spread = self.setting("spread", 60) / 100.0
+        strip_center = (length - 1) * 0.5
+        center = strip_center + (center - strip_center) * spread
         hue_seed = frame * 17 + int(center * 13.0) + length * 5
         radius = 0.0
-        speed = 0.55 + strength * 1.95
-        width = 1.2 + strength * 4.5
+        speed = (0.55 + strength * 1.95) * (0.25 + self.setting("speed", 50) / 100.0 * 1.5)
+        width = (1.2 + strength * 4.5) * (0.5 + spread)
         self.bursts.append(
             BurstState(
                 center=center,
@@ -68,10 +71,11 @@ class ColorBurst(Effect):
     def _render(self, controller: Controller) -> None:
         controller.clear()
         active: list[BurstState] = []
+        decay = self.setting("decay", 50) / 100.0
         for burst in self.bursts:
             burst.radius += burst.speed
             burst.width = min(burst.width + 0.1, 8.0)
-            burst.strength = max(0.0, burst.strength - 0.04)
+            burst.strength = max(0.0, burst.strength - (0.01 + decay * 0.06))
             if burst.strength > 0.0:
                 active.append(burst)
         self.bursts = active

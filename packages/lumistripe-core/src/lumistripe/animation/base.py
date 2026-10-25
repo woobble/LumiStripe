@@ -2,19 +2,94 @@ from __future__ import annotations
 
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from collections.abc import Callable, Mapping
+from colorsys import rgb_to_hsv
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from math import ceil, floor
-from typing import Any
+from typing import Any, TypeVar, cast
 
 import numpy as np
 
-from ..audio.types import AudioFrame
+from ..audio.types import AudioFrame, BandTuple
+from ..color import Color, Hsl, Hsla, Rgba
 from ..controller import BrightnessController, Controller
+
+_SettingValue = TypeVar("_SettingValue")
 
 
 class Animation(ABC):
+    def configure(self, values: Mapping[str, object]) -> None:
+        """Store validated configuration separately from renderer state."""
+
+        self._animation_configuration = dict(values)
+
+    def setting(self, name: str, default: _SettingValue) -> _SettingValue:
+        """Read a catalog-defined option while keeping renderer defaults explicit."""
+
+        values = getattr(self, "_animation_configuration", {})
+        return cast(_SettingValue, values.get(name, default))
+
+    def effective_frame(self, frame: int) -> int:
+        values = getattr(self, "_animation_configuration", {})
+        # Comet and Pulse own typed speed settings and apply them to their
+        # motion curves. For the rest of the catalog, scaling the phase here
+        # gives frame-driven renderers one consistent speed control.
+        if "speed" not in values or hasattr(
+            getattr(self, "settings", None), "speed"
+        ):
+            return frame
+        speed = float(values["speed"])
+        return round(frame * (0.25 + speed * 0.015))
+
+    def effective_audio(self, audio: AudioFrame) -> AudioFrame | None:
+        typed_settings = getattr(self, "settings", None)
+        if hasattr(typed_settings, "music_reactivity"):
+            return audio
+        values = getattr(self, "_animation_configuration", {})
+        reactivity = float(values.get("music_reactivity", 100)) / 100.0
+        if reactivity <= 0.0:
+            return None
+        sensitivity = float(values.get("sensitivity", 50)) / 100.0
+        gain = reactivity * (0.5 + sensitivity)
+        beat_sensitivity = float(values.get("beat_sensitivity", 100)) / 100.0
+        beat_gain = reactivity * (0.25 + beat_sensitivity * 0.75)
+        if gain == 1.0 and beat_gain == 1.0:
+            return audio
+        beat_strength = audio.beat_strength * beat_gain
+        beat = audio.beat and (
+            beat_sensitivity >= 0.999 or beat_strength >= 0.08
+        )
+        return replace(
+            audio,
+            rms=min(1.0, audio.rms * gain),
+            bands=cast(
+                BandTuple, tuple(min(1.0, value * gain) for value in audio.bands)
+            ),
+            beat=beat,
+            beat_strength=min(1.0, beat_strength),
+        )
+
+    def output_controller(
+        self, controller: Controller, brightness: float
+    ) -> Controller:
+        configuration = getattr(self, "_animation_configuration", {})
+        typed_settings = getattr(self, "settings", None)
+        target: Controller = controller
+        palette = configuration.get("palette", "rainbow")
+        if palette != "rainbow" and not hasattr(typed_settings, "palette"):
+            target = _PaletteController(
+                target,
+                cast(str, palette),
+                cast(str, configuration.get("custom_color", "#7C3AED")),
+            )
+        intensity = (
+            1.0
+            if hasattr(typed_settings, "intensity")
+            else float(configuration.get("intensity", 100)) / 100.0
+        )
+        return BrightnessController(target, brightness * intensity)
+
     @property
     @abstractmethod
     def name(self) -> str:
@@ -35,6 +110,79 @@ class Animation(ABC):
         from ..selector import animation_metadata
 
         return animation_metadata(self.name)
+
+
+class _PaletteController(Controller):
+    """Apply palette color mapping without changing transparency."""
+
+    def __init__(self, inner: Controller, palette: str, custom_color: str) -> None:
+        self._inner = inner
+        self._palette = palette
+        self._custom_color = custom_color
+
+    @property
+    def length(self) -> int:
+        return self._inner.length
+
+    def pixels(self):
+        return self._inner.pixels()
+
+    def pixel(self, index: int) -> Color:
+        return self._inner.pixel(index)
+
+    def set_pixel(self, index: int, color: Color) -> None:
+        self._inner.set_pixel(index, self._transform(color))
+
+    def set_pixels(self, colors: Any) -> None:
+        from collections.abc import Sequence
+
+        if isinstance(colors, Sequence) and colors and isinstance(colors[0], Color):
+            self._inner.set_pixels(
+                [self._transform(cast(Color, color)) for color in colors]
+            )
+            return
+        self._inner.set_pixels(colors)
+
+    def fill(self, color: Color) -> None:
+        self._inner.fill(self._transform(color))
+
+    def clear(self) -> None:
+        self._inner.clear()
+
+    def flush(self) -> None:
+        self._inner.flush()
+
+    def _transform(self, color: Color) -> Color:
+        from .palettes import palette_color
+
+        red, green, blue, alpha = color.to_rgba()
+        if self._palette == "custom":
+            rgb_value = int(self._custom_color[1:], 16)
+            return Rgba(
+                (rgb_value >> 16) & 0xFF,
+                (rgb_value >> 8) & 0xFF,
+                rgb_value & 0xFF,
+                alpha,
+            )
+        if isinstance(color, (Hsl, Hsla)):
+            hue = float(color.h)
+            saturation = int(color.s)
+            lightness = int(color.lightness)
+        else:
+            hue, saturation_value, hsv_value = rgb_to_hsv(
+                red / 255.0, green / 255.0, blue / 255.0
+            )
+            hue *= 360.0
+            saturation = int(saturation_value * 100.0)
+            lightness = int(36.0 + hsv_value * 24.0)
+        return palette_color(
+            self._palette,
+            hue,
+            alpha=alpha,
+            custom_color=self._custom_color,
+            lightness=lightness,
+            saturation=saturation,
+        )
 
 
 class TransitionEffect(str, Enum):
@@ -181,6 +329,7 @@ class AnimationPlayer:
         if not self.audio_enabled:
             audio_frame = None
         entry = self.animations[self.index]
+        animation_frame = entry.animation.effective_frame(self.frame)
         target = controller
         if self.transition_active and not transition_external:
             from ..stripe import Stripe
@@ -193,11 +342,17 @@ class AnimationPlayer:
             ):
                 self._transition_buffer = Stripe(controller.length)
             target = self._transition_buffer
-        bright = BrightnessController(target, self.brightness)
+        bright = entry.animation.output_controller(target, self.brightness)
         if audio_frame is None:
-            entry.animation.tick(self.frame, bright)
+            entry.animation.tick(animation_frame, bright)
         else:
-            entry.animation.tick_audio(self.frame, bright, audio_frame)
+            configured_audio = entry.animation.effective_audio(audio_frame)
+            if configured_audio is None:
+                entry.animation.tick(animation_frame, bright)
+            else:
+                entry.animation.tick_audio(
+                    animation_frame, bright, configured_audio
+                )
         if self.transition_active and not transition_external:
             assert self._transition_buffer is not None
             self.apply_transition(

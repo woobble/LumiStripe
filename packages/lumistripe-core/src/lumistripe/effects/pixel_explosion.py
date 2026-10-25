@@ -33,15 +33,20 @@ class PixelExplosion(Effect):
             self.bursts.append(
                 _Burst(x=float(x), radius=0.0, hue=(frame * 17) % 256, alpha=Decay(1.0))
             )
-            self.bursts = self.bursts[-12:]
+            self.bursts = self.bursts[-self.setting("count", 4):]
         self._update(controller, 0.6)
 
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
         reactive = AudioReactive.from_frame(audio)
+        count_setting = self.setting("count", 4)
+        spread = self.setting("spread", 60) / 100.0
+        decay = self.setting("decay", 50) / 100.0
         if audio.beat or reactive.accent > 0.5:
-            count = min(1 + int(reactive.accent * 3 + reactive.drive() * 2), 4)
+            count = min(1 + int(reactive.accent * 2 + reactive.drive() * count_setting), count_setting)
             for _ in range(count):
-                x = self._rng.randint(0, max(controller.length - 1, 0))
+                center = (controller.length - 1) / 2.0
+                spread_px = center * spread
+                x = round(center + self._rng.uniform(-spread_px, spread_px))
                 hue = (
                     int(reactive.low * 90) + frame * 6 + self._rng.randint(0, 120)
                 ) % 256
@@ -53,20 +58,21 @@ class PixelExplosion(Effect):
                         alpha=Decay(0.7 + reactive.accent * 0.3),
                     )
                 )
-            self.bursts = self.bursts[-12:]
-        self._update(controller, 0.8 + reactive.high * 1.2)
+            self.bursts = self.bursts[-count_setting:]
+        self._update(controller, (0.8 + reactive.high * 1.2) * (0.25 + self.setting("spread", 60) / 100.0 * 1.5), decay=decay)
 
-    def _update(self, controller: Controller, speed: float) -> None:
+    def _update(self, controller: Controller, speed: float, *, decay: float = 0.5) -> None:
         max_pos = float(max(controller.length - 1, 0))
         for b in list(self.bursts):
             b.radius += speed
-            b.alpha.step(0.0, 0.04)
+            b.alpha.step(0.0, 0.015 + decay * 0.05)
             if b.alpha.value < 0.01 or b.radius > max_pos + 5.0:
                 self.bursts.remove(b)
                 continue
             for i in range(controller.length):
                 dist = abs(i - b.x)
-                ring = max(1.0 - abs(dist - b.radius) / 2.5, 0.0)
+                width = max(1.0, controller.length * self.setting("spread", 60) / 100.0 * 0.035)
+                ring = max(1.0 - abs(dist - b.radius) / width, 0.0)
                 if ring > 0.0:
                     alpha = ring * b.alpha.value
                     if alpha > 0.01:

@@ -19,7 +19,7 @@ class TheaterChase(Animation):
         return "theater_chase"
 
     def tick(self, frame: int, controller: Controller) -> None:
-        stride = 3
+        stride = max(1, self.setting("count", 3))
         phase = frame % stride
         hue = (frame * 5) % 256
         for i in range(controller.length):
@@ -33,7 +33,7 @@ class TheaterChase(Animation):
 
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
         reactive = AudioReactive.from_frame(audio)
-        stride = 4 if reactive.high > 0.65 else 3
+        stride = max(1, self.setting("count", 3) + (1 if reactive.high > 0.65 else 0))
         speed = 0.28 + reactive.drive() * 0.65 + reactive.accent * 0.2
         self.phase = (self.phase + speed) % stride
         self.hue_phase = (self.hue_phase + 0.45 + reactive.high * 1.2) % 360.0

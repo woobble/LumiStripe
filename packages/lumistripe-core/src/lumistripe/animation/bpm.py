@@ -31,7 +31,7 @@ class Bpm(Animation):
             self._flash = 1.0
             self._hue = (self._hue + 31) % 256
 
-        decay = 0.90 + reactive.rms * 0.05
+        decay = 0.98 - self.setting("decay", 50) * 0.0016 + reactive.rms * 0.04
         self._flash *= decay
 
         alpha = min(self._flash + reactive.rms * 0.15, 1.0)

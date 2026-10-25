@@ -20,9 +20,10 @@ class Sinelon(Animation):
         pos = sin(frame * 0.05) * 0.5 + 0.5
         center = pos * max(controller.length - 1, 0)
         hue = (frame * 4) % 256
+        width = max(1.0, controller.length * self.setting("fade_time", 50) / 100.0 * 0.16)
         for i in range(controller.length):
             dist = abs(i - center)
-            alpha = 1.0 - dist / 8.0 if dist < 8.0 else 0.0
+            alpha = 1.0 - dist / width if dist < width else 0.0
             controller.set_pixel(i, Rgba(hue, 255, 255, alpha) if alpha > 0.0 else Rgba(0, 0, 0, 0.0))
 
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
@@ -32,7 +33,8 @@ class Sinelon(Animation):
         pos = sin(frame * speed) * amplitude + 0.5
         center = pos * max(controller.length - 1, 0)
         hue = reactive.hue_shift(frame, 0.3)
+        width = max(1.0, controller.length * self.setting("fade_time", 50) / 100.0 * 0.16)
         for i in range(controller.length):
             dist = abs(i - center)
-            alpha = 1.0 - dist / 8.0 if dist < 8.0 else 0.0
+            alpha = 1.0 - dist / width if dist < width else 0.0
             controller.set_pixel(i, Rgba(hue, 255, 255, alpha) if alpha > 0.0 else Rgba(0, 0, 0, 0.0))

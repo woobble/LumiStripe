@@ -30,7 +30,11 @@ class ElectricStorm(Effect):
         return "electric_storm"
 
     def tick(self, frame: int, controller: Controller) -> None:
-        if frame % 4 < 1 and len(self.streaks) < 8:
+        count = self.setting("count", 4)
+        flash_rate = self.setting("flash_rate", 50)
+        decay = 0.02 + self.setting("decay", 50) * 0.0012
+        spawn_period = max(1, round(8 - count))
+        if frame % spawn_period < 1 and len(self.streaks) < count:
             self.streaks.append(
                 _Streak(
                     pos=self._rng.randint(0, max(controller.length - 1, 0)),
@@ -40,17 +44,18 @@ class ElectricStorm(Effect):
                     alpha=Decay(0.8 + self._rng.random() * 0.2),
                 )
             )
-        if frame % 30 < 2:
+        flash_period = max(4, round(60 - flash_rate * 0.6))
+        if frame % flash_period < max(1, round(flash_period * flash_rate / 100.0 * 0.08)):
             self.flash.value = 1.0
         for i in range(controller.length):
             controller.set_pixel(i, Rgba(0, 0, 0, 0.0))
-        flash_alpha = self.flash.step(0.0, 0.04)
+        flash_alpha = self.flash.step(0.0, decay)
         if flash_alpha > 0.1:
             for i in range(controller.length):
                 controller.set_pixel(i, Hsla(230, 80, 80, flash_alpha * 0.4))
         for s in list(self.streaks):
             s.pos += s.speed
-            s.alpha.step(0.0, 0.05)
+            s.alpha.step(0.0, decay)
             if s.alpha.value < 0.01 or s.pos >= controller.length + 2.0:
                 self.streaks.remove(s)
                 continue
@@ -64,10 +69,13 @@ class ElectricStorm(Effect):
 
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
         reactive = AudioReactive.from_frame(audio)
-        self.flash.step(reactive.accent, 0.035 + reactive.high * 0.03)
+        count = self.setting("count", 4)
+        decay = 0.02 + self.setting("decay", 50) * 0.0012
+        flash_decay = decay + reactive.high * 0.02
+        self.flash.step(reactive.accent, flash_decay)
         if audio.beat:
             self.flash.value = min(self.flash.value + 0.5, 1.0)
-        max_streaks = int(3 + reactive.drive() * 8 + reactive.shimmer() * 5)
+        max_streaks = min(count, int(1 + reactive.drive() * count + reactive.shimmer() * 2))
         should_spawn = reactive.accent > 0.3 or self._rng.random() < 0.15
         if len(self.streaks) < min(max_streaks, 8) and should_spawn:
             self.streaks.append(
@@ -81,13 +89,13 @@ class ElectricStorm(Effect):
             )
         for i in range(controller.length):
             controller.set_pixel(i, Rgba(0, 0, 0, 0.0))
-        flash_alpha = self.flash.step(0.0, 0.04)
+        flash_alpha = self.flash.step(0.0, flash_decay)
         if flash_alpha > 0.05:
             for i in range(controller.length):
                 controller.set_pixel(i, Hsla(230, 80, 80, flash_alpha * 0.3))
         for s in list(self.streaks):
             s.pos += s.speed
-            s.alpha.step(0.0, 0.04 + reactive.high * 0.04)
+            s.alpha.step(0.0, decay + reactive.high * 0.02)
             if s.alpha.value < 0.01 or s.pos >= controller.length + 2.0:
                 self.streaks.remove(s)
                 continue

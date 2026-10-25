@@ -14,9 +14,11 @@ from .reactive import AudioReactive
 @dataclass(slots=True)
 class Fire(Animation):
     heat: np.ndarray = field(init=False, repr=False)
+    _next_heat: np.ndarray = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.heat = np.zeros((0,), dtype=np.float32)
+        self._next_heat = np.zeros((0,), dtype=np.float32)
 
     @property
     def name(self) -> str:
@@ -49,14 +51,17 @@ class Fire(Animation):
         length = controller.length
         if len(self.heat) != length:
             self.heat = np.zeros(length, dtype=np.float32)
+            self._next_heat = np.zeros(length, dtype=np.float32)
         if length == 0:
             return
 
         seed_base = frame * 2654435761
-        new_heat = np.empty_like(self.heat)
-        retention = 0.84 + drive * 0.04
-        spark_threshold = 0.72 - shimmer * 0.14 - accent * 0.08
-        spark_strength = 0.22 + drive * 0.20 + accent * 0.10
+        new_heat = self._next_heat
+        cooling = self.setting("cooling", 50) / 100.0
+        sparking = self.setting("sparking", 35) / 100.0
+        retention = 0.94 - cooling * 0.16 + drive * 0.04
+        spark_threshold = 0.96 - sparking * 0.58 - shimmer * 0.10 - accent * 0.06
+        spark_strength = 0.10 + sparking * 0.34 + drive * 0.18 + accent * 0.08
         fuel = 0.015 + bass * 0.025
         for i in range(length):
             seed = (seed_base + i * 314159) & 0xFFFFFFFFFFFFFFFF
@@ -66,7 +71,7 @@ class Fire(Animation):
             spread = self.heat[i] * 0.68 + (left + right) * 0.14
             spark = max(0.0, noise - spark_threshold) * spark_strength
             new_heat[i] = min(1.0, spread * retention + spark + fuel)
-        self.heat = new_heat
+        self.heat, self._next_heat = new_heat, self.heat
 
         for i in range(length):
             controller.set_pixel(i, _fire_color(float(self.heat[i])))

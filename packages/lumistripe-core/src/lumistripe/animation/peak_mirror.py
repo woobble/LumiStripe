@@ -28,7 +28,7 @@ class PeakMirror(Animation):
 
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
         reactive = AudioReactive.from_frame(audio)
-        decay_rate = 0.15 + reactive.high * 0.10
+        decay_rate = 0.04 + self.setting("decay", 50) * 0.0022 + reactive.high * 0.08
         raw = [
             peak.step(audio.bands[band], decay_rate)
             for band, peak in enumerate(self.peaks)
@@ -58,7 +58,8 @@ class PeakMirror(Animation):
             blend = band_position - lower_band
             level = levels[lower_band] * (1.0 - blend) + levels[upper_band] * blend
 
-            center_glow = max(0.0, 1.0 - abs(i - center) / 2.5)
+            center_width = max(1.0, controller.length * self.setting("width", 30) / 100.0 * 0.08)
+            center_glow = max(0.0, 1.0 - abs(i - center) / center_width)
             beat_glow = self._center_flash * center_glow
             level = max(level, beat_glow)
             if level <= 0.015:

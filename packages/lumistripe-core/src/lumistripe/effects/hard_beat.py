@@ -19,7 +19,9 @@ class HardBeat(Effect):
         return "hard_beat"
 
     def tick(self, frame: int, controller: Controller) -> None:
-        intensity = 1.0 if frame % 8 < 2 else 0.0
+        period = 8
+        on_frames = max(1, round(period * self.setting("duty_cycle", 30) / 100.0))
+        intensity = 1.0 if frame % period < on_frames else 0.0
         hue = (frame * 10) % 256
         for i in range(controller.length):
             if intensity > 0.0:
@@ -32,7 +34,9 @@ class HardBeat(Effect):
         if audio.beat:
             self.flash.value = min(self.flash.value + 0.9, 1.0)
             self.hue = (self.hue + 43) % 256
-        alpha = self.flash.step(0.0, 0.12 + reactive.high * 0.06)
+        decay = self.setting("decay", 50) / 100.0
+        release = 0.005 + decay * 0.08 + (1.0 - self.setting("duty_cycle", 30) / 100.0) * 0.04
+        alpha = self.flash.step(0.0, release + reactive.high * 0.04)
         if alpha < 0.01:
             for i in range(controller.length):
                 controller.set_pixel(i, Rgba(0, 0, 0, 0.0))

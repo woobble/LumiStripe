@@ -20,9 +20,10 @@ class RainbowCycle(Animation):
     def tick(self, frame: int, controller: Controller) -> None:
         base = frame % 256
         wave = sin(frame * 0.035) * 10.0
+        spread = 0.35 + self.setting("color_spread", 50) / 100.0 * 1.3
         for i in range(controller.length):
             pos = strip_ratio(i, controller.length)
-            hue = (base + int(pos * 256.0) + int(wave)) % 256
+            hue = (base + int(pos * 256.0 * spread) + int(wave)) % 256
             light = 48 + int((sin(frame * 0.06 + pos * 6.0) * 0.5 + 0.5) * 4.0)
             controller.set_pixel(i, Hsla(hue, 100, light, 1.0))
 
@@ -30,9 +31,10 @@ class RainbowCycle(Animation):
         reactive = AudioReactive.from_frame(audio)
         speed = max(reactive.speed(0.35, 2.2), 0.1)
         base = reactive.hue_shift(frame, speed)
+        spread = 0.35 + self.setting("color_spread", 50) / 100.0 * 1.3
         for i in range(controller.length):
             pos = strip_ratio(i, controller.length)
             local = reactive.band_window(audio, i, controller.length, span=1)
-            hue = (base + int(pos * 256.0) + int(local * 22.0)) % 256
+            hue = (base + int(pos * 256.0 * spread) + int(local * 22.0)) % 256
             light = 48 + int(reactive.low * 6.0 + local * 6.0 + reactive.beat_pulse(0.0, 0.35) * 8.0)
             controller.set_pixel(i, Hsla(hue, 100, min(light, 64), 1.0))

@@ -21,20 +21,26 @@ class BouncingBall(Animation):
 
     def tick(self, frame: int, controller: Controller) -> None:
         max_pos = float(max(controller.length - 1, 0))
-        if self.speed == 0.0:
-            self.speed = 0.85
-        self.pos += self.speed * self.direction
-        if self.pos >= max_pos:
-            self.pos = max_pos
-            self.direction = -1.0
-        if self.pos < 0.0:
-            self.pos = 0.0
-            self.direction = 1.0
+        speed = 0.85 * (0.25 + self.setting("speed", 50) / 100.0 * 1.5)
+        travel = self.setting("direction", "bounce")
+        if travel == "forward":
+            self.pos = (self.pos + speed) % max(controller.length, 1)
+        elif travel == "reverse":
+            self.pos = (self.pos - speed) % max(controller.length, 1)
+        else:
+            self.pos += speed * self.direction
+            if self.pos >= max_pos:
+                self.pos = max_pos
+                self.direction = -1.0
+            if self.pos < 0.0:
+                self.pos = 0.0
+                self.direction = 1.0
 
         hue = (frame * 5) % 256
+        radius = max(1.0, controller.length * self.setting("particle_size", 35) / 100.0 * 0.1)
         for i in range(controller.length):
             dist = abs(i - self.pos)
-            alpha = 1.0 - dist / 4.0 if dist < 4.0 else 0.0
+            alpha = 1.0 - dist / radius if dist < radius else 0.0
             if alpha > 0.0:
                 controller.set_pixel(i, Hsla(hue, 100, 56, alpha))
             else:
@@ -42,31 +48,40 @@ class BouncingBall(Animation):
 
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
         reactive = AudioReactive.from_frame(audio)
+        travel = self.setting("direction", "bounce")
+        speed_scale = 0.25 + self.setting("speed", 50) / 100.0 * 1.5
         if audio.beat:
-            if reactive.low > 0.3 or reactive.accent > 0.35:
+            if travel == "bounce" and (reactive.low > 0.3 or reactive.accent > 0.35):
                 self.direction *= -1.0
             self.speed = min(3.0, self.speed + reactive.accent * 1.2 + reactive.low * 0.4)
         self.speed = max(0.45, min(3.2, self.speed * 0.985 + reactive.drive() * 0.08))
 
         max_pos = float(max(controller.length - 1, 0))
-        self.pos += self.speed * self.direction
-        if self.pos >= max_pos:
-            self.pos = max_pos
-            self.direction = -1.0
-        if self.pos < 0.0:
-            self.pos = 0.0
-            self.direction = 1.0
+        movement = self.speed * speed_scale
+        if travel == "forward":
+            self.pos = (self.pos + movement) % max(controller.length, 1)
+        elif travel == "reverse":
+            self.pos = (self.pos - movement) % max(controller.length, 1)
+        else:
+            self.pos += movement * self.direction
+            if self.pos >= max_pos:
+                self.pos = max_pos
+                self.direction = -1.0
+            if self.pos < 0.0:
+                self.pos = 0.0
+                self.direction = 1.0
 
         hue = reactive.hue_shift(frame, 0.35)
-        ball_rad = 2.0 + reactive.low * 3.0
+        ball_rad = max(1.0, controller.length * self.setting("particle_size", 35) / 100.0 * 0.1) + reactive.low * 3.0
         glow = 0.1 + reactive.rms * 0.5
+        glow_width = max(1.0, controller.length * 0.04)
         for i in range(controller.length):
             dist = abs(i - self.pos)
             if dist < ball_rad:
                 alpha = min(1.0 - dist / ball_rad + glow * 0.3, 1.0)
                 controller.set_pixel(i, Hsla(hue, 100, 56, alpha))
-            elif dist < ball_rad + 4.0:
-                alpha = glow * (1.0 - (dist - ball_rad) / 4.0)
+            elif dist < ball_rad + glow_width:
+                alpha = glow * (1.0 - (dist - ball_rad) / glow_width)
                 if alpha > 0.0:
                     controller.set_pixel(i, Hsla(hue, 90, 42, alpha))
                 else:

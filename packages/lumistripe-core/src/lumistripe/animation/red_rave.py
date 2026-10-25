@@ -23,13 +23,14 @@ class RedRaveSweep(Animation):
         return "red_rave_sweep"
 
     def tick(self, frame: int, controller: Controller) -> None:
-        self._step(controller, drive=0.35, low=0.25, accent=0.0)
+        self._step(frame, controller, drive=0.35, low=0.25, accent=0.0)
 
     def tick_audio(
         self, frame: int, controller: Controller, audio: AudioFrame
     ) -> None:
         reactive = AudioReactive.from_frame(audio)
         self._step(
+            frame,
             controller,
             drive=reactive.drive(),
             low=reactive.low,
@@ -38,6 +39,7 @@ class RedRaveSweep(Animation):
 
     def _step(
         self,
+        frame: int,
         controller: Controller,
         *,
         drive: float,
@@ -49,9 +51,10 @@ class RedRaveSweep(Animation):
         if length <= 0:
             return
 
-        width = max(1, round(length * (0.12 + low * 0.10)))
+        width_scale = self.setting("width", 30) / 30.0
+        width = max(1, round(length * (0.12 + low * 0.10) * width_scale))
         limit = max(length - width, 0)
-        speed = 0.35 + drive * 0.85 + accent * 0.55
+        speed = (0.35 + drive * 0.85 + accent * 0.55) * (0.25 + self.setting("speed", 50) / 100.0 * 1.5)
         self.position += self.direction * speed
 
         if self.position >= limit:
@@ -63,6 +66,9 @@ class RedRaveSweep(Animation):
             self.direction = 1.0
 
         start = round(self.position)
+        on_frames = max(1, round(10 * self.setting("duty_cycle", 90) / 100.0))
+        if frame % 10 >= on_frames:
+            return
         for index in range(start, min(start + width, length)):
             controller.set_pixel(index, RED)
 
@@ -93,12 +99,13 @@ class RedRaveChase(Animation):
         if length <= 0:
             return
 
-        block = max(1, round(length / 8))
-        period = block * 2
+        count = self.setting("count", 4)
+        period = max(2, round(length / count))
+        block = max(1, round(period * self.setting("duty_cycle", 50) / 100.0))
         if beat:
             self.direction *= -1.0
         self.phase = (
-            self.phase + self.direction * (0.45 + drive * 0.9)
+            self.phase + self.direction * (0.45 + drive * 0.9) * (0.25 + self.setting("speed", 50) / 100.0 * 1.5)
         ) % period
 
         midpoint = (length + 1) // 2
@@ -113,19 +120,24 @@ class RedBlackoutStrobe(Animation):
     """Short, pure-red flashes separated by complete blackouts."""
 
     flash_frames: int = 0
+    _last_beat_frame: int = -10_000
 
     @property
     def name(self) -> str:
         return "red_blackout_strobe"
 
     def tick(self, frame: int, controller: Controller) -> None:
-        self._paint(controller, on=frame % 10 < 3)
+        period = max(2, round(20 - self.setting("flash_rate", 50) * 0.2))
+        on_frames = max(1, round(period * self.setting("duty_cycle", 30) / 100.0))
+        self._paint(controller, on=frame % period < on_frames)
 
     def tick_audio(
         self, frame: int, controller: Controller, audio: AudioFrame
     ) -> None:
-        if audio.beat:
-            self.flash_frames = 2
+        min_gap = max(1, round(20 - self.setting("flash_rate", 50) * 0.2))
+        if audio.beat and frame - self._last_beat_frame >= min_gap:
+            self._last_beat_frame = frame
+            self.flash_frames = max(1, round(5 * self.setting("duty_cycle", 30) / 100.0))
         on = self.flash_frames > 0
         self.flash_frames = max(self.flash_frames - 1, 0)
         self._paint(controller, on=on)

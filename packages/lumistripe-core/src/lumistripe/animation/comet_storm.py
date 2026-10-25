@@ -33,18 +33,21 @@ class CometStorm(Animation):
 
     def tick(self, frame: int, controller: Controller) -> None:
         controller.fill(Rgba(0, 0, 0, 0.0))
-        n_comets = 5
+        n_comets = self.setting("count", 4)
+        tail = max(1.0, controller.length * self.setting("tail_length", 8) / 100.0)
+        speed = 2.0 * (0.25 + self.setting("speed", 50) / 100.0 * 1.5)
         for c in range(n_comets):
-            offset = c * 17 + frame // 60 * 11
-            head = float((frame * 2 + offset) % max(controller.length, 1))
+            offset = c * max(controller.length, 1) // max(n_comets, 1)
+            head = float((frame * speed + offset) % max(controller.length, 1))
             hue = (c * 51 + frame * 3) % 256
-            _render_comet(controller, head, hue, 4.0, 0.7)
+            _render_comet(controller, head, hue, tail, 0.7)
 
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
         controller.fill(Rgba(0, 0, 0, 0.0))
         reactive = AudioReactive.from_frame(audio)
-        n_comets = int(3.0 + reactive.drive() * 5.0 + reactive.shimmer() * 3.0)
-        speed = reactive.speed(0.8, 3.5)
+        base_count = self.setting("count", 4)
+        n_comets = max(1, min(12, base_count + int(reactive.shimmer() * 2.0)))
+        speed = reactive.speed(0.8, 3.5) * (0.25 + self.setting("speed", 50) / 100.0 * 1.5)
         self.phase = (self.phase + speed) % max(controller.length, 1)
         self.hue_phase = (self.hue_phase + 0.5 + reactive.high * 1.4) % 360.0
         for c in range(n_comets):
@@ -52,6 +55,6 @@ class CometStorm(Animation):
             offset = (seed % 200) + seed // 100 * 7
             head = (self.phase + offset) % max(controller.length, 1)
             hue = int(self.hue_phase + c * 40) % 360
-            tail = 2.0 + reactive.high * 4.0
+            tail = max(1.0, controller.length * self.setting("tail_length", 8) / 100.0) * (0.75 + reactive.high * 0.5)
             alph = 0.4 + reactive.pulse(0.0, 0.4)
             _render_comet(controller, head, hue, tail, alph)

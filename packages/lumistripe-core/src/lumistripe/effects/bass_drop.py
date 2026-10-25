@@ -19,10 +19,13 @@ class BassDrop(Effect):
         return "bass_drop"
 
     def tick(self, frame: int, controller: Controller) -> None:
-        self.charge = min(self.charge + 0.008, 1.0)
-        if frame % 60 < 2:
+        speed = 0.25 + self.setting("speed", 50) / 100.0 * 1.5
+        period = max(16, round(100 - self.setting("speed", 50) * 0.8))
+        self.charge = min(self.charge + 0.008 * speed, 1.0)
+        if frame % period < 2:
             self.flash.value = 1.0
             self.charge = 0.0
+        self.flash.step(0.0, 0.01 + self.setting("decay", 50) * 0.0005)
         tension = self.charge
         preview = (frame % 30) / 30.0 if tension > 0.6 else 0.0
         alpha = max(preview * tension * 0.4, self.flash.value)
@@ -37,11 +40,13 @@ class BassDrop(Effect):
 
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
         reactive = AudioReactive.from_frame(audio)
-        flash = self.flash.step(reactive.accent, 0.035)
+        speed = 0.25 + self.setting("speed", 50) / 100.0 * 1.5
+        decay = 0.01 + self.setting("decay", 50) * 0.0005
+        flash = self.flash.step(reactive.accent, decay)
         if reactive.drop_hit(beat=audio.beat, low_threshold=0.3, accent_threshold=0.7):
             self.flash.value = 1.0
             self.charge = 0.0
-        self.charge = min(self.charge + 0.006 + reactive.low * 0.012, 1.0)
+        self.charge = min(self.charge + (0.006 + reactive.low * 0.012) * speed, 1.0)
         if audio.beat and self.charge < 0.3:
             self.charge = 0.0
         tension = self.charge

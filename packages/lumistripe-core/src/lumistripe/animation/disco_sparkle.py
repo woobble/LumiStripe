@@ -25,13 +25,16 @@ class DiscoSparkle(Animation):
     def tick(self, frame: int, controller: Controller) -> None:
         if len(self._intensities) != controller.length:
             self._intensities = np.zeros(controller.length, dtype=np.float32)
-        self._intensities *= 0.85
+        fade = self.setting("fade_time", 50) / 100.0
+        density = self.setting("density", 40) / 100.0
+        variation = self.setting("variation", 50) / 100.0
+        self._intensities *= 0.65 + fade * 0.4
         for i in range(controller.length):
             seed = (frame * 1103515245 + i * 12345) & 0xFFFFFFFFFFFFFFFF
-            if (seed % 100) < 30:
+            if (seed % 100) < 5 + int(density * 65.0):
                 self._intensities[i] = min(self._intensities[i] + 0.7, 1.0)
             if self._intensities[i] > 0.05:
-                hue = ((seed // 100) + frame * 3) % 256
+                hue = ((seed // 100) + frame * 3 + int(((seed % 21) - 10) * variation)) % 256
                 controller.set_pixel(i, Hsl(hue, 100, 50))
             else:
                 controller.set_pixel(i, Rgba(0, 0, 0, 0.0))
@@ -40,16 +43,19 @@ class DiscoSparkle(Animation):
         reactive = AudioReactive.from_frame(audio)
         if len(self._intensities) != controller.length:
             self._intensities = np.zeros(controller.length, dtype=np.float32)
-        decay = 0.7 + reactive.high * 0.15
+        fade = self.setting("fade_time", 50) / 100.0
+        density_setting = self.setting("density", 40) / 100.0
+        variation = self.setting("variation", 50) / 100.0
+        decay = 0.58 + fade * 0.27 + reactive.high * 0.12
         self._intensities *= decay
-        density = int(15.0 + reactive.drive() * 50.0 + reactive.shimmer() * 25.0)
+        density = int(4.0 + density_setting * 35.0 + reactive.drive() * 38.0 + reactive.shimmer() * 22.0)
         for i in range(controller.length):
             seed = (frame * 1103515245 + i * 12345) & 0xFFFFFFFFFFFFFFFF
             trigger = reactive.accent > 0.5 or (seed % 100) < density
             if trigger:
                 self._intensities[i] = min(self._intensities[i] + 0.8, 1.0)
             if self._intensities[i] > 0.05:
-                hue = ((seed // 100) + int(frame * reactive.speed(0.1, 0.6))) % 256
+                hue = ((seed // 100) + int(frame * reactive.speed(0.1, 0.6)) + int(((seed % 21) - 10) * variation)) % 256
                 lightness = int(40 + self._intensities[i] * 25 + reactive.pulse(0.0, 10))
                 controller.set_pixel(i, Hsl(hue, 100, lightness))
             else:

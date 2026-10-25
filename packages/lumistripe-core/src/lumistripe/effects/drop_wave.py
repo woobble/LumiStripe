@@ -38,20 +38,23 @@ class DropWave(Effect):
         self.charge = min(
             1.0, self.charge + 0.006 + reactive.low * 0.018 + reactive.mid * 0.01
         )
+        speed_scale = 0.25 + self.setting("speed", 50) / 100.0 * 1.5
+        width = max(1.0, length * self.setting("width", 30) / 100.0 * 0.12)
+        decay = self.setting("decay", 50) / 100.0
 
         drop_hit = reactive.drop_hit(beat=beat)
         if drop_hit:
             self.wave.value = 1.0
             self.radius = 0.0
-            self.speed = 0.75 + reactive.accent * 2.4
+            self.speed = (0.75 + reactive.accent * 2.4) * speed_scale
             self.hue_seed = frame * 19 + int(reactive.low * 120.0)
             self.charge = 0.0
         elif self.charge > 0.78 and frame % 7 == 0:
             self.wave.value = max(self.wave.value, 0.45)
-            self.speed = max(self.speed, 0.55 + reactive.drive() * 1.2)
+            self.speed = max(self.speed, (0.55 + reactive.drive() * 1.2) * speed_scale)
 
         self.radius += self.speed
-        flash = self.wave.step(0.0, 0.07)
+        flash = self.wave.step(0.0, 0.02 + decay * 0.1)
         center = (length - 1) / 2.0
         controller.clear()
 
@@ -59,7 +62,7 @@ class DropWave(Effect):
             distance = abs(index - center)
             if flash > 0.0:
                 intensity = burst_profile(
-                    distance, self.radius, 1.5 + self.charge * 4.0
+                    distance, self.radius, width + self.charge * width
                 )
                 if intensity > 0.0:
                     alpha = min(1.0, intensity * (0.22 + flash * 0.78))

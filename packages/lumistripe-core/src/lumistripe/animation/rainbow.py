@@ -19,9 +19,10 @@ class Rainbow(Animation):
         return "rainbow"
 
     def tick(self, frame: int, controller: Controller) -> None:
+        spread = 0.35 + self.setting("color_spread", 50) / 100.0 * 1.3
         for i in range(controller.length):
             pos = strip_ratio(i, controller.length)
-            hue = int(pos * 256.0 + frame * 1.5) % 256
+            hue = int(pos * 256.0 * spread + frame * 1.5) % 256
             controller.set_pixel(i, Hsl(hue, 100, 50))
 
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
@@ -33,10 +34,11 @@ class Rainbow(Animation):
         brightness = 0.42 + reactive.rms * 0.58
         sat = int(62.0 + reactive.low * 34.0)
         offset = reactive.hue_shift(frame, 0.15)
+        spread = 0.35 + self.setting("color_spread", 50) / 100.0 * 1.3
         for i in range(controller.length):
             pos = strip_ratio(i, controller.length)
             local = reactive.band_window(audio, i, controller.length, span=1)
-            hue = (int(pos * 256.0) + offset + int(local * 44.0)) % 256
+            hue = (int(pos * 256.0 * spread) + offset + int(local * 44.0)) % 256
             alpha = min(brightness + self._beat_flash * 0.4, 1.0)
             light = 48 + int(reactive.mid * 6.0 + local * 6.0)
             controller.set_pixel(i, Hsla(hue, sat, light, alpha))

@@ -11,7 +11,7 @@ import numpy as np
 from ..audio.structure import MusicStructurePhase, MusicStructureState
 from ..audio.types import AudioFrame, AudioSnapshot, BeatClockState, BeatEvent
 from ..color import Rgba
-from ..controller import BrightnessController, Controller
+from ..controller import Controller
 from ..stripe import Stripe
 from .base import Effect
 
@@ -910,11 +910,17 @@ class LayeredRenderer:
             buffer = self._effect_buffers[index]
             buffer.fill(_TRANSPARENT)
             audio = active.trigger_frame if active.frame == 0 else snapshot.frame
-            active.animation.tick_audio(
-                active.frame,
-                BrightnessController(buffer, player.brightness),
-                audio,
+            configured_audio = active.animation.effective_audio(audio)
+            effect_controller = active.animation.output_controller(
+                buffer, player.brightness
             )
+            effect_frame = active.animation.effective_frame(active.frame)
+            if configured_audio is None:
+                active.animation.tick(effect_frame, effect_controller)
+            else:
+                active.animation.tick_audio(
+                    effect_frame, effect_controller, configured_audio
+                )
             active.frame += 1
             layers.append(
                 (

@@ -29,15 +29,17 @@ class StrobeChase(Animation):
         self._step(frame, controller, reactive, beat=audio.beat, bass_hit=bass_hit)
 
     def _step(self, frame: int, controller: Controller, reactive: AudioReactive, *, beat: bool, bass_hit: bool) -> None:
-        stride = 3 if reactive.high < 0.65 else 4
-        advance = 0.3 + reactive.drive() * 0.65
+        stride = max(2, self.setting("count", 4))
+        speed_scale = 0.25 + self.setting("speed", 50) / 100.0 * 1.5
+        advance = (0.3 + reactive.drive() * 0.65) * speed_scale
         self.phase = (self.phase + advance + (0.25 if beat else 0.0)) % stride
         self.hue_phase = (self.hue_phase + 0.6 + reactive.high * 1.2) % 360.0
 
         if bass_hit:
             self.flash.value = 1.0
 
-        flash = self.flash.step(0.0, 0.2)
+        release = 0.02 + (1.0 - self.setting("duty_cycle", 30) / 100.0) * 0.24
+        flash = self.flash.step(0.0, release)
         hue = int(self.hue_phase)
         controller.clear()
         for index in range(controller.length):

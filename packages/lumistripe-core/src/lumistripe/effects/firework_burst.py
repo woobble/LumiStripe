@@ -28,42 +28,56 @@ class FireworkBurst(Effect):
 
     def tick(self, frame: int, controller: Controller) -> None:
         center = max(controller.length - 1, 0) * 0.5
-        phase = (frame * 0.25) % (center + 4.0)
+        spread = 0.5 + self.setting("spread", 60) / 100.0
+        count = self.setting("count", 4)
+        phases = [
+            (frame * 0.25 * spread + index * (center + 4.0) / count)
+            % (center + 4.0)
+            for index in range(count)
+        ]
+        fade = self.setting("fade_time", 50) / 100.0
+        fade_alpha = max(0.25, 1.0 - (frame % 36) / 36.0 * (1.0 - fade * 0.75))
         burst_id = int(frame / 36)
         seed = burst_id * 1103515245 + 12345
         hue = ((seed // 100) % 256 + frame * 2) % 256
         for i in range(controller.length):
             dist = abs(i - center)
-            if dist <= phase:
-                sparkle_dist = (phase - dist) / max(phase, 1.0)
-                alpha = max(1.0 - sparkle_dist * 1.5, 0.0)
-                offset = int(i * 7 + burst_id * 13) % 5
-                variance = (offset - 2) * 0.04
-                alpha = max(alpha + variance, 0.0)
-                controller.set_pixel(i, Hsla(hue, 100, 60, alpha * 0.85))
+            alpha = 0.0
+            for phase in phases:
+                if dist <= phase:
+                    sparkle_dist = (phase - dist) / max(phase, 1.0)
+                    candidate = max(1.0 - sparkle_dist * 1.5, 0.0)
+                    offset = int(i * 7 + burst_id * 13) % 5
+                    variance = (offset - 2) * 0.04
+                    alpha = max(alpha, max(candidate + variance, 0.0))
+            if alpha > 0.0:
+                controller.set_pixel(i, Hsla(hue, 100, 60, alpha * 0.85 * fade_alpha))
             else:
                 controller.set_pixel(i, Rgba(0, 0, 0, 0.0))
 
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
         reactive = AudioReactive.from_frame(audio)
         center = max(controller.length - 1, 0) * 0.5
+        count = self.setting("count", 4)
+        spread = 0.5 + self.setting("spread", 60) / 100.0
+        fade = self.setting("fade_time", 50) / 100.0
 
         if audio.beat:
             self._hue = (self._hue + 41) % 256
             self.bursts.append(
                 _Burst(
                     phase=0.5,
-                    speed=0.5
-                    + reactive.speed(0.15, 2.5) * (0.8 + reactive.accent * 0.4),
+                    speed=(0.5
+                    + reactive.speed(0.15, 2.5) * (0.8 + reactive.accent * 0.4)) * spread,
                     strength=0.7 + reactive.accent * 0.3,
                     hue=self._hue,
                 )
             )
-            self.bursts = self.bursts[-8:]
+            self.bursts = self.bursts[-count:]
 
         for b in self.bursts:
             b.phase += b.speed
-            b.strength *= 0.97
+            b.strength *= 0.90 + fade * 0.14
         self.bursts = [
             b for b in self.bursts if b.strength > 0.02 and b.phase < center + 6.0
         ]

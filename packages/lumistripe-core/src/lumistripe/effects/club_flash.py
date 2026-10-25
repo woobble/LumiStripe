@@ -63,17 +63,20 @@ class ClubFlash(Effect):
             (beat and low > 0.24) or accent > 0.74 or low > 0.78 or drive > 0.82
         )
         trigger_prob = 0.03 + drive * 0.08 + accent * 0.07 + low * 0.05
+        flash_rate = self.setting("flash_rate", 50) / 100.0
+        release = 0.02 + (1.0 - self.setting("duty_cycle", 30) / 100.0) * 0.12
+        trigger_prob *= 0.5 + flash_rate
 
         if strong_hit or (seed % 1000) < int(trigger_prob * 1000.0):
             strength = min(1.0, 0.18 + low * 0.34 + accent * 0.52 + drive * 0.24)
-            self.flash.step(strength, 0.08)
+            self.flash.step(strength, release)
             self.hue_seed = seed
             self.whole_strip = strong_hit and ((seed // 7) % 3 != 0 or strength > 0.72)
             max_width = max(3, length // 2)
             self.segment_width = max(2, min(max_width, 2 + int(strength * max_width)))
             self.segment_start = seed % length
         else:
-            self.flash.step(0.0, 0.08)
+            self.flash.step(0.0, release)
 
         brightness = self.flash.step(self.flash.value, 0.0)
         if brightness <= 0.01:

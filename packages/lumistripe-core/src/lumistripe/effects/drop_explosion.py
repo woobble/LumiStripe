@@ -19,14 +19,17 @@ class DropExplosion(Effect):
         return "drop_explosion"
 
     def tick(self, frame: int, controller: Controller) -> None:
-        self.charge = min(self.charge + 0.006, 1.0)
-        drop = frame % 80 < 3
+        speed = 0.25 + self.setting("speed", 50) / 100.0 * 1.5
+        period = max(12, round(80 - (self.setting("speed", 50) - 50) * 0.8))
+        on_frames = max(1, round(period * self.setting("duty_cycle", 30) / 800.0))
+        self.charge = min(self.charge + 0.006 * speed, 1.0)
+        drop = frame % period < on_frames
         if drop:
             self.flash.value = 1.0
             self.charge = 0.0
         tension = self.charge
         preview = (frame % 20) / 20.0 if tension > 0.7 else 0.0
-        flash_alpha = self.flash.value
+        flash_alpha = self.flash.step(0.0, self.setting("decay", 50) * 0.0001)
         for i in range(controller.length):
             flicker = ((frame + i * 7) % 6) / 6.0
             if flash_alpha > 0.5:
@@ -43,15 +46,21 @@ class DropExplosion(Effect):
 
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
         reactive = AudioReactive.from_frame(audio)
+        speed = 0.25 + self.setting("speed", 50) / 100.0 * 1.5
         bass_energy = (audio.bands[0] + audio.bands[1]) * 0.5
         if audio.beat and bass_energy > 0.35:
             self.flash.value = 1.0
             self.charge = 0.0
         self.charge = min(
-            self.charge + 0.004 + reactive.low * 0.014 + reactive.mid * 0.006, 1.0
+            self.charge + (0.004 + reactive.low * 0.014 + reactive.mid * 0.006) * speed, 1.0
         )
         tension = self.charge
-        flash_alpha = self.flash.step(0.0, 0.04)
+        release = (
+            0.015
+            + self.setting("decay", 50) * 0.0005
+            + (100 - self.setting("duty_cycle", 30)) * 0.0001
+        )
+        flash_alpha = self.flash.step(0.0, release)
         preview = reactive.mid * 0.3 + reactive.rms * 0.2 if tension > 0.65 else 0.0
         for i in range(controller.length):
             flicker = ((frame + i * 7) % 5) / 5.0 * reactive.high * 0.3

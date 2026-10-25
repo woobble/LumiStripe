@@ -30,15 +30,22 @@ class DiscoComet(Animation):
         length = max(controller.length, 1)
         if beat:
             self.direction *= -1.0
-        speed = reactive.speed(0.45, 1.65)
+        travel = self.setting("direction", "bounce")
+        speed = reactive.speed(0.45, 1.65) * (0.25 + self.setting("speed", 50) / 100.0 * 1.5)
         speed += reactive.rms * 0.35 + reactive.mid * 0.15
         self.phase += self.direction * max(0.3, speed)
         max_pos = float(length - 1)
-        if self.phase <= 0.0 or self.phase >= max_pos:
+        if travel == "forward":
+            self.phase %= max(length, 1)
+            self.direction = 1.0
+        elif travel == "reverse":
+            self.phase %= max(length, 1)
+            self.direction = -1.0
+        elif self.phase <= 0.0 or self.phase >= max_pos:
             self.direction *= -1.0
             self.phase = min(max(self.phase, 0.0), max_pos)
 
-        width = 4.0 + reactive.high * 5.0
+        width = max(1.0, length * self.setting("tail_length", 8) / 100.0)
         trail = 0.15 + reactive.drive() * 0.25
         sparkle_prob = 0.08 + reactive.high * 0.32 + reactive.accent * 0.18
         hue = reactive.hue_shift(frame, 0.55)

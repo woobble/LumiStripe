@@ -50,7 +50,8 @@ class SpectrumFlash(Effect):
         ):
             self.flash.value = 1.0
 
-        flash = self.flash.step(0.0, 0.08)
+        decay = self.setting("decay", 50) / 100.0
+        flash = self.flash.step(0.0, 0.02 + decay * 0.12)
         self.hue_phase = (self.hue_phase + 0.35 + reactive.high * 0.9) % 360.0
         length = max(controller.length, 1)
         controller.clear()
@@ -58,6 +59,9 @@ class SpectrumFlash(Effect):
             ratio = 0.0 if length <= 1 else index / (length - 1)
             band_index = min(int(ratio * len(audio.bands)), len(audio.bands) - 1)
             band = audio.bands[band_index]
+            blend = self.setting("width", 30) / 100.0 * 0.5
+            neighbor = (audio.bands[max(band_index - 1, 0)] + audio.bands[min(band_index + 1, len(audio.bands) - 1)]) * 0.5
+            band = band * (1.0 - blend) + neighbor * blend
             alpha = band_alpha(band, base=0.18, scale=0.72)
             hue = (self.hue_phase + ratio * 300.0) % 360.0
             controller.set_pixel(index, Hsla(hue, 100, 56, min(1.0, alpha)))

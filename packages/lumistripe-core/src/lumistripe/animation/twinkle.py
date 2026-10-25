@@ -47,11 +47,15 @@ class Twinkle(Animation):
         if len(self.levels) != length:
             self.levels = np.zeros(length, dtype=np.float32)
             self.hues = np.zeros(length, dtype=np.int16)
-        self.levels *= 0.92 - reactive.high * 0.025
+        fade = self.setting("fade_time", 50) / 100.0
+        density = self.setting("density", 40) / 100.0
+        particle_size = self.setting("particle_size", 35) / 100.0
+        self.levels *= max(0.68, 0.80 + fade * 0.16 - reactive.high * 0.02)
         spawn_threshold = int(
-            (0.004 + reactive.drive() * 0.012 + reactive.shimmer() * 0.018)
+            (0.001 + density * 0.025 + reactive.drive() * 0.008 + reactive.shimmer() * 0.012)
             * 10_000.0
         )
+        radius = max(1, round(length * particle_size * 0.018))
         for index in range(length):
             seed = (frame * 1103515245 + index * 2654435761) & 0xFFFFFFFF
             if seed % 10_000 < spawn_threshold:
@@ -61,6 +65,17 @@ class Twinkle(Animation):
             pos = strip_ratio(index, length)
             drift = sin(frame * 0.018 + pos * 4.2) * 0.5 + 0.5
             level = float(self.levels[index])
+            if radius > 1:
+                left = max(index - radius, 0)
+                right = min(index + radius + 1, length)
+                level = max(
+                    level,
+                    max(
+                        float(self.levels[neighbor])
+                        * (1.0 - abs(neighbor - index) / (radius + 1.0))
+                        for neighbor in range(left, right)
+                    ),
+                )
             hue = int(self.hues[index]) if level > 0.01 else 154 + int(drift * 8.0)
             alpha = min(0.05 + drift * 0.03 + level * 0.38 + self._bloom * 0.08, 0.5)
             lightness = 28 + int(drift * 5.0 + level * 34.0)

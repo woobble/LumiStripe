@@ -18,9 +18,10 @@ class Wave(Animation):
         return "wave"
 
     def tick(self, frame: int, controller: Controller) -> None:
+        frequency = 0.5 + self.setting("frequency", 50) / 100.0
         for i in range(controller.length):
             pos = strip_ratio(i, controller.length)
-            phase = pos * 5.5 + frame * 0.28
+            phase = pos * 5.5 * frequency + frame * 0.28
             crest = sin(phase) * 0.5 + 0.5
             hue = ((frame + i) * 2) % 256
             alpha = 0.22 + crest * 0.78
@@ -29,10 +30,11 @@ class Wave(Animation):
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
         reactive = AudioReactive.from_frame(audio)
         speed = reactive.speed(0.16, 0.62)
+        frequency = 0.5 + self.setting("frequency", 50) / 100.0
         for i in range(controller.length):
             pos = strip_ratio(i, controller.length)
             amplitude = 0.24 + reactive.band_window(audio, i, controller.length, span=1) * 0.76
-            phase = pos * 5.5 + frame * speed + reactive.low * 2.0
+            phase = pos * 5.5 * frequency + frame * speed + reactive.low * 2.0
             crest = (sin(phase) * 0.5 + 0.5) * amplitude
             hue = reactive.hue_shift(frame + i, 0.08)
             alpha = 0.22 + crest * 0.78

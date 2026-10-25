@@ -12,6 +12,7 @@ from .settings import (
     COMET_SETTING_DEFINITIONS,
     PULSE_SETTING_DEFINITIONS,
     AnimationSettingDefinition,
+    AnimationSettingType,
     AnimationSettingValue,
     AnimationSettingValues,
     normalize_animation_settings,
@@ -74,6 +75,7 @@ class AnimationDefinition:
         self, animation: Animation, values: object | None = None
     ) -> AnimationSettingValues:
         normalized = self.normalize_settings(values, allow_partial=True)
+        animation.configure(normalized)
         if self.configuration_applier is not None:
             self.configuration_applier(animation, normalized)
         return normalized
@@ -100,6 +102,143 @@ def _validate_pulse_settings(values: Mapping[str, AnimationSettingValue]) -> Non
     maximum = cast(float, values["maximum_intensity"])
     if minimum > maximum:
         raise ValueError("minimum intensity must not exceed maximum intensity")
+
+
+def _number_setting(
+    id: str,
+    label: str,
+    default: int,
+    description: str,
+    *,
+    minimum: int = 0,
+    maximum: int = 100,
+    unit: str = "%",
+) -> AnimationSettingDefinition:
+    return AnimationSettingDefinition(
+        id=id,
+        label=label,
+        type=AnimationSettingType.NUMBER,
+        default=default,
+        minimum=minimum,
+        maximum=maximum,
+        step=1,
+        unit=unit,
+        description=description,
+    )
+
+
+def _enum_setting(
+    id: str,
+    label: str,
+    default: str,
+    choices: tuple[str, ...],
+    description: str,
+) -> AnimationSettingDefinition:
+    return AnimationSettingDefinition(
+        id=id,
+        label=label,
+        type=AnimationSettingType.ENUM,
+        default=default,
+        choices=choices,
+        description=description,
+    )
+
+
+SPEED = _number_setting("speed", "Speed", 50, "How quickly the animation advances.")
+INTENSITY = _number_setting(
+    "intensity", "Intensity", 100, "Maximum brightness of the animation."
+)
+MUSIC_REACTIVITY = _number_setting(
+    "music_reactivity", "Music reactivity", 100, "How strongly audio changes the animation."
+)
+DENSITY = _number_setting(
+    "density", "Density", 40, "How many particles or details appear at once."
+)
+PARTICLE_SIZE = _number_setting(
+    "particle_size", "Particle size", 35, "Size of each visible particle."
+)
+TAIL_LENGTH = _number_setting(
+    "tail_length", "Trail length", 8, "Trail length relative to the strip."
+)
+WIDTH = _number_setting("width", "Width", 30, "Width relative to the strip.")
+SPREAD = _number_setting("spread", "Spread", 60, "How far the effect spreads along the strip.")
+FREQUENCY = _number_setting(
+    "frequency", "Frequency", 50, "Spacing of repeated waves or pulses."
+)
+FADE_TIME = _number_setting(
+    "fade_time", "Fade time", 50, "How long trails and particles remain visible."
+)
+DECAY = _number_setting("decay", "Decay", 50, "How quickly the effect fades away.")
+COOLING = _number_setting("cooling", "Cooling", 50, "How quickly heat dissipates.")
+SPARKING = _number_setting("sparking", "Sparking", 35, "How often new sparks appear.")
+SENSITIVITY = _number_setting(
+    "sensitivity", "Sensitivity", 50, "Audio level required to produce a response."
+)
+BEAT_SENSITIVITY = _number_setting(
+    "beat_sensitivity", "Beat sensitivity", 100, "How strongly detected beats trigger accents."
+)
+FLASH_RATE = _number_setting(
+    "flash_rate", "Flash rate", 50, "Flash timing from slow to fast.", minimum=1
+)
+DUTY_CYCLE = _number_setting(
+    "duty_cycle", "On time", 30, "Fraction of each flash cycle spent illuminated.",
+    minimum=5, maximum=90,
+)
+RED_SWEEP_DUTY_CYCLE = _number_setting(
+    "duty_cycle", "On time", 90, "Fraction of each sweep cycle spent illuminated.",
+    minimum=5, maximum=100,
+)
+RED_CHASE_DUTY_CYCLE = _number_setting(
+    "duty_cycle", "On time", 50, "Fraction of each block pattern that is illuminated.",
+    minimum=5, maximum=90,
+)
+SEPARATION = _number_setting(
+    "separation", "Separation", 50, "Distance between moving elements relative to strip length."
+)
+COLOR_SPREAD = _number_setting(
+    "color_spread", "Color spread", 50, "How quickly color changes across the strip."
+)
+VARIATION = _number_setting(
+    "variation", "Variation", 50, "Amount of natural variation between particles or flashes."
+)
+COUNT = _number_setting(
+    "count", "Count", 4, "Number of simultaneous elements.", minimum=1, maximum=12,
+    unit="",
+)
+CHASE_COUNT = _number_setting(
+    "count", "Count", 3, "Number of staggered light groups.", minimum=1, maximum=12,
+    unit="",
+)
+DIRECTION = _enum_setting(
+    "direction", "Direction", "bounce", ("forward", "reverse", "bounce"),
+    "Travel forward, reverse, or bounce between both ends.",
+)
+PULSE_CURVE = _enum_setting(
+    "pulse_curve", "Pulse curve", "sine", ("sine", "smoothstep", "sharp"),
+    "Shape of the pulse between its dim and bright phases.",
+)
+PATTERN = _enum_setting(
+    "pattern", "Pattern", "alternate", ("alternate", "double", "solid"),
+    "Arrangement of repeated flashes.",
+)
+PALETTE = _enum_setting(
+    "palette", "Color palette", "rainbow", ("rainbow", "neon", "fire", "custom"),
+    "Choose a built-in palette or use one custom color.",
+)
+CUSTOM_COLOR = AnimationSettingDefinition(
+    id="custom_color",
+    label="Custom color",
+    type=AnimationSettingType.COLOR,
+    default="#7C3AED",
+    description="Color used when the palette is Custom.",
+    visible_when_option="palette",
+    visible_when_value="custom",
+)
+PALETTE_SETTINGS = (PALETTE, CUSTOM_COLOR)
+
+
+def _schema(*options: AnimationSettingDefinition) -> tuple[AnimationSettingDefinition, ...]:
+    return options
 
 
 def _effect_definitions() -> dict[str, EffectDefinition]:
@@ -205,7 +344,7 @@ def party_catalog() -> tuple[AnimationDefinition, ...]:
 
     effects = _effect_definitions()
     definitions = (
-        _entry(RainbowCycle, 15, 300, effects=effects),
+        _entry(RainbowCycle, 15, 300, effects=effects, settings=_schema(SPEED, INTENSITY, *PALETTE_SETTINGS, COLOR_SPREAD, MUSIC_REACTIVITY)),
         _entry(
             Pulse,
             20,
@@ -215,7 +354,7 @@ def party_catalog() -> tuple[AnimationDefinition, ...]:
             configuration_applier=_apply_animation_settings,
             configuration_validator=_validate_pulse_settings,
         ),
-        _entry(Confetti, 15, 220, effects=effects),
+        _entry(Confetti, 15, 220, effects=effects, settings=_schema(COUNT, SPREAD, FADE_TIME, INTENSITY, *PALETTE_SETTINGS)),
         _entry(
             Comet,
             16,
@@ -224,56 +363,56 @@ def party_catalog() -> tuple[AnimationDefinition, ...]:
             settings=COMET_SETTING_DEFINITIONS,
             configuration_applier=_apply_animation_settings,
         ),
-        _entry(Shockwave, 16, 180, effects=effects),
-        _entry(TheaterChase, 30, 220, effects=effects),
-        _entry(Aurora, 18, 260, effects=effects),
-        _entry(ColorWipe, 18, 220, effects=effects),
-        _entry(Fire, 20, 300, effects=effects),
-        _entry(PeakMirror, 18, 220, effects=effects),
-        _entry(Wave, 18, 240, effects=effects),
-        _entry(Twinkle, 15, 200, effects=effects),
-        _entry(BouncingBall, 20, 200, effects=effects),
-        _entry(DualComet, 16, 220, effects=effects),
-        _entry(Rainbow, 20, 200, effects=effects),
-        _entry(Police, 25, 160, effects=effects),
-        _entry(Juggle, 18, 240, effects=effects),
-        _entry(Sinelon, 18, 200, effects=effects),
-        _entry(Strobe, 12, 160, effects=effects),
-        _entry(Bpm, 20, 120, effects=effects),
-        _entry(BeatWave, 20, 200, effects=effects),
-        _entry(DiscoSparkle, 12, 160, effects=effects),
-        _entry(BeatExplosion, 16, 140, effects=effects),
-        _entry(CometStorm, 14, 180, effects=effects),
-        _entry(LaserSweep, 12, 140, effects=effects),
-        _entry(PlasmaRave, 18, 220, effects=effects),
-        _entry(FireworkBurst, 15, 160, effects=effects),
-        _entry(LightningStrike, 10, 100, effects=effects),
-        _entry(BeatTunnel, 18, 200, effects=effects),
-        _entry(DropExplosion, 20, 180, effects=effects),
-        _entry(BassDrop, 20, 200, effects=effects),
-        _entry(RavePulse, 14, 160, effects=effects),
-        _entry(NeonStorm, 12, 140, effects=effects),
-        _entry(PixelExplosion, 14, 140, effects=effects),
-        _entry(DualLaser, 14, 160, effects=effects),
-        _entry(RainbowStrobe, 10, 120, effects=effects),
-        _entry(BeatRipple, 18, 160, effects=effects),
-        _entry(DanceFloor, 18, 200, effects=effects),
-        _entry(ElectricStorm, 12, 120, effects=effects),
-        _entry(GlowRush, 16, 200, effects=effects),
-        _entry(HardBeat, 12, 100, effects=effects),
-        _entry(ClubFlash, 12, 120, effects=effects),
-        _entry(ColorBurst, 16, 180, effects=effects),
-        _entry(DiscoComet, 14, 180, effects=effects),
-        _entry(RaveScanner, 12, 140, effects=effects),
-        _entry(RedRaveSweep, 16, 180, effects=effects),
-        _entry(RedRaveChase, 16, 160, effects=effects),
-        _entry(RedBlackoutStrobe, 24, 120, effects=effects),
-        _entry(NeonConfetti, 12, 150, effects=effects),
-        _entry(StrobeChase, 12, 120, effects=effects),
-        _entry(CenterBurst, 16, 160, effects=effects),
-        _entry(MirrorFlash, 14, 140, effects=effects),
-        _entry(SpectrumFlash, 16, 180, effects=effects),
-        _entry(DropWave, 18, 180, effects=effects),
+        _entry(Shockwave, 16, 180, effects=effects, settings=_schema(SPEED, WIDTH, INTENSITY, *PALETTE_SETTINGS, BEAT_SENSITIVITY)),
+        _entry(TheaterChase, 30, 220, effects=effects, settings=_schema(SPEED, CHASE_COUNT, INTENSITY, *PALETTE_SETTINGS)),
+        _entry(Aurora, 18, 260, effects=effects, settings=_schema(SPEED, FREQUENCY, INTENSITY, *PALETTE_SETTINGS, MUSIC_REACTIVITY)),
+        _entry(ColorWipe, 18, 220, effects=effects, settings=_schema(SPEED, TAIL_LENGTH, DIRECTION, *PALETTE_SETTINGS, MUSIC_REACTIVITY)),
+        _entry(Fire, 20, 300, effects=effects, settings=_schema(COOLING, SPARKING, INTENSITY, MUSIC_REACTIVITY)),
+        _entry(PeakMirror, 18, 220, effects=effects, settings=_schema(SENSITIVITY, DECAY, WIDTH, INTENSITY, *PALETTE_SETTINGS)),
+        _entry(Wave, 18, 240, effects=effects, settings=_schema(SPEED, FREQUENCY, INTENSITY, *PALETTE_SETTINGS, MUSIC_REACTIVITY)),
+        _entry(Twinkle, 15, 200, effects=effects, settings=_schema(DENSITY, FADE_TIME, PARTICLE_SIZE, INTENSITY, *PALETTE_SETTINGS)),
+        _entry(BouncingBall, 20, 200, effects=effects, settings=_schema(SPEED, PARTICLE_SIZE, DIRECTION, INTENSITY, *PALETTE_SETTINGS)),
+        _entry(DualComet, 16, 220, effects=effects, settings=_schema(SPEED, TAIL_LENGTH, SEPARATION, INTENSITY, *PALETTE_SETTINGS)),
+        _entry(Rainbow, 20, 200, effects=effects, settings=_schema(SPEED, INTENSITY, *PALETTE_SETTINGS, COLOR_SPREAD)),
+        _entry(Police, 25, 160, effects=effects, settings=_schema(SPEED, DUTY_CYCLE, INTENSITY, PATTERN)),
+        _entry(Juggle, 18, 240, effects=effects, settings=_schema(SPEED, COUNT, PARTICLE_SIZE, INTENSITY, *PALETTE_SETTINGS)),
+        _entry(Sinelon, 18, 200, effects=effects, settings=_schema(SPEED, FADE_TIME, INTENSITY, *PALETTE_SETTINGS, MUSIC_REACTIVITY)),
+        _entry(Strobe, 12, 160, effects=effects, settings=_schema(FLASH_RATE, DUTY_CYCLE, INTENSITY, *PALETTE_SETTINGS)),
+        _entry(Bpm, 20, 120, effects=effects, settings=_schema(BEAT_SENSITIVITY, DECAY, INTENSITY, *PALETTE_SETTINGS)),
+        _entry(BeatWave, 20, 200, effects=effects, settings=_schema(SPEED, WIDTH, INTENSITY, *PALETTE_SETTINGS, BEAT_SENSITIVITY)),
+        _entry(DiscoSparkle, 12, 160, effects=effects, settings=_schema(DENSITY, FADE_TIME, VARIATION, INTENSITY, *PALETTE_SETTINGS)),
+        _entry(BeatExplosion, 16, 140, effects=effects, settings=_schema(SPEED, WIDTH, INTENSITY, *PALETTE_SETTINGS, BEAT_SENSITIVITY)),
+        _entry(CometStorm, 14, 180, effects=effects, settings=_schema(COUNT, SPEED, TAIL_LENGTH, INTENSITY, *PALETTE_SETTINGS)),
+        _entry(LaserSweep, 12, 140, effects=effects, settings=_schema(SPEED, WIDTH, DIRECTION, INTENSITY, *PALETTE_SETTINGS)),
+        _entry(PlasmaRave, 18, 220, effects=effects, settings=_schema(SPEED, FREQUENCY, INTENSITY, *PALETTE_SETTINGS, MUSIC_REACTIVITY)),
+        _entry(FireworkBurst, 15, 160, effects=effects, settings=_schema(COUNT, SPREAD, FADE_TIME, INTENSITY, *PALETTE_SETTINGS)),
+        _entry(LightningStrike, 10, 100, effects=effects, settings=_schema(SPREAD, WIDTH, DECAY, INTENSITY, *PALETTE_SETTINGS)),
+        _entry(BeatTunnel, 18, 200, effects=effects, settings=_schema(SPEED, WIDTH, INTENSITY, *PALETTE_SETTINGS, BEAT_SENSITIVITY)),
+        _entry(DropExplosion, 20, 180, effects=effects, settings=_schema(SPEED, DECAY, DUTY_CYCLE, INTENSITY, MUSIC_REACTIVITY)),
+        _entry(BassDrop, 20, 200, effects=effects, settings=_schema(SPEED, DECAY, INTENSITY, *PALETTE_SETTINGS, BEAT_SENSITIVITY)),
+        _entry(RavePulse, 14, 160, effects=effects, settings=_schema(SPEED, PULSE_CURVE, INTENSITY, *PALETTE_SETTINGS, MUSIC_REACTIVITY)),
+        _entry(NeonStorm, 12, 140, effects=effects, settings=_schema(COUNT, SPEED, DECAY, INTENSITY, *PALETTE_SETTINGS)),
+        _entry(PixelExplosion, 14, 140, effects=effects, settings=_schema(COUNT, SPREAD, DECAY, INTENSITY, *PALETTE_SETTINGS)),
+        _entry(DualLaser, 14, 160, effects=effects, settings=_schema(SPEED, WIDTH, SEPARATION, INTENSITY, *PALETTE_SETTINGS)),
+        _entry(RainbowStrobe, 10, 120, effects=effects, settings=_schema(FLASH_RATE, DUTY_CYCLE, INTENSITY, COLOR_SPREAD, *PALETTE_SETTINGS)),
+        _entry(BeatRipple, 18, 160, effects=effects, settings=_schema(SPEED, WIDTH, DECAY, INTENSITY, *PALETTE_SETTINGS)),
+        _entry(DanceFloor, 18, 200, effects=effects, settings=_schema(SPEED, FREQUENCY, INTENSITY, *PALETTE_SETTINGS, MUSIC_REACTIVITY)),
+        _entry(ElectricStorm, 12, 120, effects=effects, settings=_schema(COUNT, FLASH_RATE, DECAY, INTENSITY, *PALETTE_SETTINGS)),
+        _entry(GlowRush, 16, 200, effects=effects, settings=_schema(SPEED, WIDTH, FREQUENCY, INTENSITY, *PALETTE_SETTINGS)),
+        _entry(HardBeat, 12, 100, effects=effects, settings=_schema(BEAT_SENSITIVITY, DECAY, DUTY_CYCLE, INTENSITY)),
+        _entry(ClubFlash, 12, 120, effects=effects, settings=_schema(BEAT_SENSITIVITY, FLASH_RATE, DUTY_CYCLE, INTENSITY, *PALETTE_SETTINGS)),
+        _entry(ColorBurst, 16, 180, effects=effects, settings=_schema(SPEED, SPREAD, DECAY, INTENSITY, *PALETTE_SETTINGS)),
+        _entry(DiscoComet, 14, 180, effects=effects, settings=_schema(SPEED, TAIL_LENGTH, DIRECTION, INTENSITY, *PALETTE_SETTINGS)),
+        _entry(RaveScanner, 12, 140, effects=effects, settings=_schema(SPEED, WIDTH, DIRECTION, INTENSITY, *PALETTE_SETTINGS)),
+        _entry(RedRaveSweep, 16, 180, effects=effects, settings=_schema(SPEED, WIDTH, RED_SWEEP_DUTY_CYCLE, INTENSITY)),
+        _entry(RedRaveChase, 16, 160, effects=effects, settings=_schema(SPEED, COUNT, RED_CHASE_DUTY_CYCLE, INTENSITY)),
+        _entry(RedBlackoutStrobe, 24, 120, effects=effects, settings=_schema(FLASH_RATE, DUTY_CYCLE, INTENSITY)),
+        _entry(NeonConfetti, 12, 150, effects=effects, settings=_schema(COUNT, SPREAD, FADE_TIME, INTENSITY, *PALETTE_SETTINGS)),
+        _entry(StrobeChase, 12, 120, effects=effects, settings=_schema(SPEED, COUNT, DUTY_CYCLE, INTENSITY, *PALETTE_SETTINGS)),
+        _entry(CenterBurst, 16, 160, effects=effects, settings=_schema(SPEED, WIDTH, INTENSITY, *PALETTE_SETTINGS, BEAT_SENSITIVITY)),
+        _entry(MirrorFlash, 14, 140, effects=effects, settings=_schema(WIDTH, DECAY, INTENSITY, *PALETTE_SETTINGS, BEAT_SENSITIVITY)),
+        _entry(SpectrumFlash, 16, 180, effects=effects, settings=_schema(SENSITIVITY, WIDTH, DECAY, INTENSITY, *PALETTE_SETTINGS)),
+        _entry(DropWave, 18, 180, effects=effects, settings=_schema(SPEED, WIDTH, DECAY, INTENSITY, *PALETTE_SETTINGS)),
     )
     return validate_animation_catalog(definitions)
 

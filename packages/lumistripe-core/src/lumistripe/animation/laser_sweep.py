@@ -30,26 +30,46 @@ class LaserSweep(Animation):
 
     def tick(self, frame: int, controller: Controller) -> None:
         max_pos = float(max(controller.length - 1, 0)) + 2.0
-        self.position += 1.2 * self.direction
+        travel = self.setting("direction", "bounce")
+        speed = 1.2 * (0.25 + self.setting("speed", 50) / 100.0 * 1.5)
+        direction = -1.0 if travel == "reverse" else (1.0 if travel == "forward" else self.direction)
+        self.position += speed * direction
         if self.position > max_pos:
-            self.position = -2.0
-            self.direction = 1.0
-        elif self.position < -2.0 and self.direction < 0.0:
-            self.position = max_pos
-            self.direction = -1.0
+            if travel == "bounce":
+                self.position = max_pos
+                self.direction = -1.0
+            else:
+                self.position = -2.0
+        elif self.position < -2.0:
+            if travel == "bounce":
+                self.position = -2.0
+                self.direction = 1.0
+            else:
+                self.position = max_pos
         hue = (frame * 8) % 256
-        _render_laser(controller, self.position, 2.0, hue, 0.9)
+        width = max(1.0, controller.length * self.setting("width", 30) / 100.0 * 0.14)
+        _render_laser(controller, self.position, width, hue, 0.9)
 
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
         reactive = AudioReactive.from_frame(audio)
         max_pos = float(max(controller.length - 1, 0)) + 2.0
-        if audio.beat:
+        if audio.beat and self.setting("direction", "bounce") == "bounce":
             self.direction *= -1.0
-        self.position += reactive.speed(0.6, 2.5) * self.direction
+        travel = self.setting("direction", "bounce")
+        direction = -1.0 if travel == "reverse" else (1.0 if travel == "forward" else self.direction)
+        self.position += reactive.speed(0.6, 2.5) * (0.25 + self.setting("speed", 50) / 100.0 * 1.5) * direction
         if self.position > max_pos:
-            self.position = -2.0
+            if travel == "bounce":
+                self.position = max_pos
+                self.direction = -1.0
+            else:
+                self.position = -2.0
         elif self.position < -2.0:
-            self.position = max_pos
+            if travel == "bounce":
+                self.position = -2.0
+                self.direction = 1.0
+            else:
+                self.position = max_pos
         hue = reactive.hue_shift(frame, 0.8)
-        width = 1.2 + reactive.high * 2.0
+        width = max(1.0, controller.length * self.setting("width", 30) / 100.0 * 0.14) + reactive.high * 2.0
         _render_laser(controller, self.position, width, hue, 0.9)

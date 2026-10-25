@@ -16,6 +16,7 @@ from lumistripe import (
     MusicFeatures,
     SwitchQuantization,
 )
+from lumistripe.animation.catalog import party_catalog
 from lumistripe_web.api import encode_preview_frame
 from lumistripe_web.api.routes import system as system_routes
 from lumistripe_web.app import build_parser, create_app, main
@@ -443,8 +444,15 @@ def test_animation_settings_api_validates_updates_persists_and_resets(
         assert defaults["direction"] == "bounce"
         assert defaults["tail_length"] == 8
         assert len(initial.json()["options"]) == 7
-        assert client.get("/api/animations/rainbow/settings").status_code == 422
+        assert client.get("/api/animations/rainbow/settings").status_code == 200
         assert client.get("/api/animations/not_registered/settings").status_code == 404
+
+        for definition in party_catalog():
+            response = client.get(f"/api/animations/{definition.name}/settings")
+            assert response.status_code == 200
+            assert {
+                option["id"] for option in response.json()["options"]
+            } == {option.id for option in definition.settings}
 
         invalid = dict(defaults, speed=101)
         assert client.put(
@@ -468,9 +476,18 @@ def test_animation_settings_api_validates_updates_persists_and_resets(
             "/api/animations/pulse/settings", json={"values": invalid_pulse}
         ).status_code == 422
 
+        fire = client.get("/api/animations/fire/settings").json()["values"]
+        fire_values = dict(fire, cooling=72, sparking=61)
+        updated_fire = client.put(
+            "/api/animations/fire/settings", json={"values": fire_values}
+        )
+        assert updated_fire.status_code == 200
+        assert updated_fire.json()["values"] == fire_values
+
     saved, warning = CalibrationSettingsStore(settings_path).load_all()
     assert warning is None
     assert saved.animation_settings["shared"]["comet"]["speed"] == 88
+    assert saved.animation_settings["shared"]["fire"]["cooling"] == 72
 
     restarted = create_app(
         RuntimeSettings(pixels=8, settings_file=settings_path), pairing_code="1234"
@@ -479,6 +496,8 @@ def test_animation_settings_api_validates_updates_persists_and_resets(
         assert client.post("/api/auth/pair", json={"code": "1234"}).status_code == 200
         restored = client.get("/api/animations/comet/settings").json()
         assert restored["values"]["speed"] == 88
+        restored_fire = client.get("/api/animations/fire/settings").json()
+        assert restored_fire["values"]["cooling"] == 72
         reset = client.post("/api/animations/comet/settings/reset")
         assert reset.status_code == 200
         assert reset.json()["values"] == defaults

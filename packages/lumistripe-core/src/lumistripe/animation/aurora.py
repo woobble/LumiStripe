@@ -20,9 +20,10 @@ class Aurora(Animation):
         return "aurora"
 
     def tick(self, frame: int, controller: Controller) -> None:
+        frequency = 0.5 + self.setting("frequency", 50) / 100.0
         for i in range(controller.length):
             pos = strip_ratio(i, controller.length)
-            phase = frame * 0.038 + pos * 7.5
+            phase = frame * 0.038 + pos * 7.5 * frequency
             curtain = (sin(phase) * 0.5 + 0.5) * 0.58 + (sin(phase * 0.55 + 1.4) * 0.5 + 0.5) * 0.22
             intensity = min(0.12 + curtain, 1.0)
             hue = int(132.0 + cos(phase * 0.75) * 24.0 + pos * 10.0)
@@ -32,13 +33,14 @@ class Aurora(Animation):
         reactive = AudioReactive.from_frame(audio)
         beat_glow = self.glow.step(reactive.accent, 0.045)
         speed = reactive.speed(0.028, 0.085)
+        frequency = 0.5 + self.setting("frequency", 50) / 100.0
         hue_offset = reactive.hue_shift(frame, 0.35)
         for i in range(controller.length):
             pos = strip_ratio(i, controller.length)
             local = reactive.band_window(audio, i, controller.length, span=1)
-            low_wave = sin(frame * speed + pos * 5.8 + reactive.low * 4.0)
-            mid_wave = sin(frame * (speed * 0.9) + pos * 8.5 + reactive.mid * 5.0)
-            high_wave = cos(frame * (speed * 1.7) - pos * 11.5 + reactive.high * 7.0)
+            low_wave = sin(frame * speed + pos * 5.8 * frequency + reactive.low * 4.0)
+            mid_wave = sin(frame * (speed * 0.9) + pos * 8.5 * frequency + reactive.mid * 5.0)
+            high_wave = cos(frame * (speed * 1.7) - pos * 11.5 * frequency + reactive.high * 7.0)
             curtain = (low_wave * 0.38 + mid_wave * 0.34 + high_wave * 0.28) * 0.5 + 0.5
             alpha = min(0.12 + curtain * 0.72 + beat_glow * 0.2, 1.0)
             hue = (hue_offset + 120 + int(pos * 34.0) + int(reactive.mid * 16.0) + int(local * 10.0)) % 256

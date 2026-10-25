@@ -11,10 +11,16 @@ from .reactive import AudioReactive, Decay
 
 
 def _render_dual_comets(
-    controller: Controller, phase: float, width: float, alpha: float, hue_a: int, hue_b: int
+    controller: Controller,
+    phase: float,
+    width: float,
+    alpha: float,
+    hue_a: int,
+    hue_b: int,
+    separation: float,
 ) -> None:
     max_pos = float(max(controller.length - 1, 0))
-    other = max_pos - phase
+    other = (phase + max_pos * separation) % max(max_pos + 1.0, 1.0)
     for i in range(controller.length):
         dist_a = abs(i - phase)
         dist_b = abs(i - other)
@@ -39,26 +45,30 @@ class DualComet(Animation):
         return "dual_comet"
 
     def tick(self, frame: int, controller: Controller) -> None:
-        self.phase += 0.7 * self.direction
+        speed = 0.7 * (0.25 + self.setting("speed", 50) / 100.0 * 1.5)
+        self.phase += speed * self.direction
         max_pos = float(max(controller.length - 1, 0))
         if self.phase >= max_pos or self.phase <= 0.0:
             self.direction *= -1.0
             self.phase = min(max(self.phase, 0.0), max_pos)
-        width = 5.0 + (frame % 50) * 0.02
-        _render_dual_comets(controller, self.phase, width, 0.85, 40, 220)
+        width = max(1.0, controller.length * self.setting("tail_length", 8) / 100.0)
+        separation = self.setting("separation", 50) / 100.0
+        _render_dual_comets(controller, self.phase, width, 0.85, 40, 220, separation)
 
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
         reactive = AudioReactive.from_frame(audio)
         self.burst.step(reactive.accent, 0.045)
         if audio.beat:
             self.direction *= -1.0
-        self.phase += reactive.speed(0.42, 2.1) * self.direction
+        speed = reactive.speed(0.42, 2.1) * (0.25 + self.setting("speed", 50) / 100.0 * 1.5)
+        self.phase += speed * self.direction
         max_pos = float(max(controller.length - 1, 0))
         if self.phase >= max_pos or self.phase <= 0.0:
             self.direction *= -1.0
             self.phase = min(max(self.phase, 0.0), max_pos)
-        width = 4.0 + reactive.high * 6.0
+        width = max(1.0, controller.length * self.setting("tail_length", 8) / 100.0)
         alpha = min(0.85 + reactive.beat_pulse(0.0, 0.15), 1.0)
         hue_a = 10 + int(reactive.low * 90.0)
         hue_b = 150 + int(reactive.high * 80.0)
-        _render_dual_comets(controller, self.phase, width, alpha, hue_a, hue_b)
+        separation = self.setting("separation", 50) / 100.0
+        _render_dual_comets(controller, self.phase, width, alpha, hue_a, hue_b, separation)

@@ -40,10 +40,14 @@ class LightningStrike(Effect):
     def tick(self, frame: int, controller: Controller) -> None:
         if frame % 45 < 3:
             self.flash.value = 1.0
-            self.strike_pos = (frame * 17) % max(controller.length, 1)
-            self.strike_len = 3 + (frame % 8)
+            length = max(controller.length, 1)
+            spread = self.setting("spread", 60) / 100.0
+            center = (length - 1) / 2.0
+            offset = ((frame * 17) % 101) / 100.0 * 2.0 - 1.0
+            self.strike_pos = max(0, min(length - 1, round(center + offset * center * spread)))
+            self.strike_len = max(2, round(length * self.setting("width", 30) / 100.0 * 0.12))
             self.hue = (frame * 50) % 256
-        flash_alpha = self.flash.step(0.0, 0.06)
+        flash_alpha = self.flash.step(0.0, 0.02 + self.setting("decay", 50) * 0.0008)
         all_flash = max(flash_alpha * 2.0 - 0.5, 0.0)
         for i in range(controller.length):
             dist = abs(i - self.strike_pos)
@@ -59,10 +63,17 @@ class LightningStrike(Effect):
         reactive = AudioReactive.from_frame(audio)
         if audio.beat:
             self.flash.value = min(self.flash.value + 0.8, 1.0)
-            self.strike_pos = self._rng.randint(0, max(controller.length - 1, 0))
-            self.strike_len = int(3 + reactive.drive() * 8 + reactive.shimmer() * 5)
+            length = max(controller.length, 1)
+            center = (length - 1) / 2.0
+            spread = self.setting("spread", 60) / 100.0
+            offset = self._rng.uniform(-1.0, 1.0)
+            self.strike_pos = max(0, min(length - 1, round(center + offset * center * spread)))
+            configured_width = max(2.0, length * self.setting("width", 30) / 100.0 * 0.12)
+            self.strike_len = int(configured_width + reactive.drive() * 4 + reactive.shimmer() * 3)
             self.hue = (190 - int(reactive.low * 40)) % 256
-        flash_alpha = self.flash.step(0.0, 0.035 + reactive.high * 0.035)
+        flash_alpha = self.flash.step(
+            0.0, 0.015 + self.setting("decay", 50) * 0.0004 + reactive.high * 0.025
+        )
         all_flash = max(flash_alpha * 2.0 - 0.5, 0.0)
         for i in range(controller.length):
             dist = abs(i - self.strike_pos)

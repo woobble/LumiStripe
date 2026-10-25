@@ -35,16 +35,17 @@ class CenterBurst(Effect):
         self, frame: int, controller: Controller, reactive: AudioReactive, *, beat: bool
     ) -> None:
         length = max(controller.length, 1)
+        speed_scale = 0.25 + self.setting("speed", 50) / 100.0 * 1.5
         if beat and (
             reactive.low > 0.22 or reactive.accent > 0.46 or reactive.rms > 0.5
         ):
             self.radius = 0.0
-            self.speed = 0.9 + reactive.accent * 2.2
-            self.width = 1.1 + reactive.accent * 3.6
+            self.speed = (0.9 + reactive.accent * 2.2) * speed_scale
+            self.width = max(1.0, length * self.setting("width", 30) / 100.0 * 0.1) + reactive.accent * 2.0
             self.hue_seed = frame * 23 + int(reactive.low * 80.0)
             self.flash.value = min(1.0, 0.35 + reactive.accent * 0.65)
         elif self.flash.value > 0.0:
-            self.speed = max(self.speed, 0.75 + reactive.drive() * 1.1)
+            self.speed = max(self.speed, (0.75 + reactive.drive() * 1.1) * speed_scale)
         else:
             self.radius += 0.3 + reactive.drive() * 0.4
 

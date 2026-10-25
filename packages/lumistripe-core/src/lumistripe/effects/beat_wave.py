@@ -32,11 +32,13 @@ class BeatWave(Effect):
 
     def tick_audio(self, frame: int, controller: Controller, audio: AudioFrame) -> None:
         reactive = AudioReactive.from_frame(audio)
+        speed_scale = 0.25 + self.setting("speed", 50) / 100.0 * 1.5
+        width = max(1.0, controller.length * self.setting("width", 30) / 100.0 * 0.14)
         if audio.beat:
             self._hue = (self._hue + 17) % 256
             wave = _Wave(
                 pos=0.0,
-                speed=0.5 + reactive.speed(0.1, 0.5) * (1.0 + reactive.accent * 0.5),
+                speed=(0.5 + reactive.speed(0.1, 0.5) * (1.0 + reactive.accent * 0.5)) * speed_scale,
                 strength=0.6 + reactive.accent * 0.4,
                 hue=self._hue,
             )
@@ -56,8 +58,8 @@ class BeatWave(Effect):
             combined = glow
             for w in self.waves:
                 dist = abs(i - w.pos)
-                if dist < 5.0:
-                    wave_alpha = w.strength * (1.0 - dist / 5.0)
+                if dist < width:
+                    wave_alpha = w.strength * (1.0 - dist / width)
                     combined = min(combined + wave_alpha, 1.0)
             if combined > 0.0:
                 controller.set_pixel(i, reactive.vivid(hue, combined))
