@@ -197,6 +197,30 @@ def test_zero_transition_duration_keeps_manual_selection_instant() -> None:
     assert engine.transition_active is False
 
 
+def test_transition_duration_updates_future_transitions_without_restarting_playback() -> None:
+    player = AnimationPlayer()
+    player.add(Red(), 20, 10)
+    player.add(Blue(), 80, 10)
+    engine = PlaybackEngine(player, PlaybackConfig(transition_duration_s=0.1))
+    stripe = Stripe(2)
+    engine.step(stripe, now_s=0.0)
+    engine.select_animation("blue", now_s=1.0)
+    engine.step(stripe, now_s=1.05)
+
+    engine.set_transition_duration(0.5)
+
+    assert engine.transition_active is True
+    assert engine.player.transition_ms == 500
+    engine.step(stripe, now_s=1.1)
+    np.testing.assert_array_equal(stripe.pixels()[0, :3], [0, 0, 255])
+    assert engine.transition_active is False
+
+    engine.select_animation("red", now_s=2.0)
+    engine.step(stripe, now_s=2.25)
+    np.testing.assert_array_equal(stripe.pixels()[0, :3], [127, 0, 127])
+    assert engine.transition_active is True
+
+
 def test_cycling_switch_uses_elapsed_transition_duration() -> None:
     player = AnimationPlayer()
     player.add(Red(), 20, 1)

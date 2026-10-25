@@ -48,6 +48,25 @@ describe("dashboardApi", () => {
     }))
   })
 
+  it("reads and saves transition settings", async () => {
+    fetchMock.mockReturnValueOnce(jsonResponse({ enabled: false, duration_ms: 850 }))
+    await expect(dashboardApi.getTransitionSettings()).resolves.toEqual({
+      enabled: false,
+      duration_ms: 850,
+    })
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/transitions/settings", expect.any(Object))
+
+    fetchMock.mockReturnValueOnce(jsonResponse({
+      ...initialState,
+      transition_settings: { enabled: true, duration_ms: 1250 },
+    }))
+    await dashboardApi.setTransitionSettings(true, 1250)
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/transitions/settings", expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ enabled: true, duration_ms: 1250 }),
+    }))
+  })
+
   it("uses typed sequence library endpoints and preserves server validation", async () => {
     const library = {
       sequences: [{
@@ -106,6 +125,7 @@ describe("dashboardApi", () => {
   it("defaults sequencer fields for older websocket payloads and rejects unknown fields", () => {
     const {
       sequencer_settings: _settings,
+      transition_settings: _transitions,
       sequence_library: _library,
       ...stateWithoutSequencerSettings
     } = initialState
@@ -125,6 +145,7 @@ describe("dashboardApi", () => {
       switch_quantization: "off",
       bars_per_phrase: 8,
     })
+    expect(parsed.transition_settings).toEqual({ enabled: true, duration_ms: 300 })
     expect(parsed.sequence_library).toEqual({
       sequences: [],
       active_sequence_id: null,

@@ -137,6 +137,12 @@ class _SequencerSettingsCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class _TransitionSettingsCommand:
+    enabled: bool
+    duration_ms: int
+
+
+@dataclass(frozen=True, slots=True)
 class _SequenceLibraryCommand:
     action: Literal["create", "update", "delete", "activate"]
     sequence_id: str | None = None
@@ -164,4 +170,5 @@ __all__ = [
     "_StripeTestCommand",
     "_StripeTopologyCommand",
     "_TargetCommand",
+    "_TransitionSettingsCommand",
 ]

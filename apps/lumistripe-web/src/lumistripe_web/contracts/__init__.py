@@ -78,6 +78,7 @@ from .stripes import (
     StripeTopologyRequest,
 )
 from .system import SystemStats, UpdateStatus
+from .transitions import TransitionSettingsRequest, TransitionSettingsResponse
 
 __all__ = [
     "AccessStatus",
@@ -140,5 +141,7 @@ __all__ = [
     "StripeTopology",
     "StripeTopologyRequest",
     "SystemStats",
+    "TransitionSettingsRequest",
+    "TransitionSettingsResponse",
     "UpdateStatus",
 ]

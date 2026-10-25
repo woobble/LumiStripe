@@ -20,6 +20,7 @@ from lumistripe import (
     PlaybackMode,
     Rgb,
     Stripe,
+    SwitchQuantization,
 )
 from lumistripe_web.runtime import (
     LumiStripeRuntime,
@@ -36,6 +37,7 @@ from lumistripe_web.settings import (
     StartupPlaybackSettings,
     StripeOutputSettings,
     StripeTopologySettings,
+    TransitionSettings,
 )
 
 
@@ -1140,6 +1142,87 @@ def test_independent_layout_accepts_targeted_playback_commands(tmp_path: Path) -
         runtime.select_animation(target, stripe_id="a").result(timeout=1)
         assert runtime._playbacks["a"][1].transition_active is True
         assert runtime._playbacks["b"][1].transition_active is False
+    finally:
+        runtime.stop()
+
+
+def test_transition_settings_apply_to_existing_and_future_independent_outputs(
+    tmp_path: Path,
+) -> None:
+    settings_path = tmp_path / "settings.json"
+    runtime = LumiStripeRuntime(RuntimeSettings(pixels=2, settings_file=settings_path))
+    runtime.start()
+    try:
+        topology = StripeTopologySettings(
+            layout="independent",
+            outputs=(
+                StripeOutputSettings(id="left", name="Left", pixels=2),
+                StripeOutputSettings(
+                    id="right", name="Right", pixels=2, spi_device="/dev/spidev1.0"
+                ),
+            ),
+        )
+        runtime.apply_stripe_topology(topology).result(timeout=1)
+        runtime.set_sequencer_settings(SwitchQuantization.BEAT, 8).result(timeout=1)
+        selected = {
+            stripe_id: engine.player.current_index()
+            for stripe_id, (_, engine) in runtime._playbacks.items()
+        }
+        coordinators = {
+            stripe_id: (engine.beat_clock_tracker, engine._sequence_coordinator)
+            for stripe_id, (_, engine) in runtime._playbacks.items()
+        }
+
+        state = runtime.set_transition_settings(True, 900).result(timeout=1)
+
+        assert state.mode is PlaybackMode.STATIC
+        assert state.transition_settings.enabled is True
+        assert state.transition_settings.duration_ms == 900
+        assert runtime.playback.player.transition_ms == 900
+        assert all(
+            engine.player.transition_ms == 900
+            for _, engine in runtime._playbacks.values()
+        )
+        assert runtime.playback.config.switch_quantization is SwitchQuantization.BEAT
+        assert all(
+            engine.config.switch_quantization is SwitchQuantization.BEAT
+            for _, engine in runtime._playbacks.values()
+        )
+        assert selected == {
+            stripe_id: engine.player.current_index()
+            for stripe_id, (_, engine) in runtime._playbacks.items()
+        }
+        assert coordinators == {
+            stripe_id: (engine.beat_clock_tracker, engine._sequence_coordinator)
+            for stripe_id, (_, engine) in runtime._playbacks.items()
+        }
+
+        updated_topology = StripeTopologySettings(
+            layout="independent",
+            outputs=(
+                topology.outputs[0],
+                StripeOutputSettings(
+                    id="new-right", name="New Right", pixels=2,
+                    spi_device="/dev/spidev1.0",
+                ),
+            ),
+        )
+        runtime.apply_stripe_topology(updated_topology).result(timeout=1)
+        assert runtime._playbacks["new-right"][1].player.transition_ms == 900
+
+        disabled = runtime.set_transition_settings(False, 900).result(timeout=1)
+        assert disabled.transition_settings.enabled is False
+        assert runtime.playback.player.transition_ms == 0
+        assert all(
+            engine.player.transition_ms == 0
+            for _, engine in runtime._playbacks.values()
+        )
+
+        saved, warning = CalibrationSettingsStore(settings_path).load_all()
+        assert warning is None
+        assert saved.transition_settings == TransitionSettings(
+            enabled=False, duration_ms=900
+        )
     finally:
         runtime.stop()
 

@@ -47,8 +47,8 @@ The runtime package is organized around this ownership boundary:
 
 The API package follows the same feature boundary:
 
-- `api/routes/`: system, control, stripes, sequencer, audio/Bluetooth, startup,
-  auth, and WebSocket routes
+- `api/routes/`: system, control, stripes, sequencer, transitions,
+  audio/Bluetooth, startup, auth, and WebSocket routes
 - `api/dependencies.py`: runtime lookup and command error mapping
 - `api/protocols/preview.py`: binary preview framing
 - `contracts/`: feature-oriented HTTP model namespaces
@@ -107,10 +107,20 @@ downbeat information. Phrase length is configurable to 4, 8, or 16 bars.
 The authenticated `GET` and `PUT /api/sequencer/settings` endpoints expose the
 shared sequencer settings. Updates enter the runtime worker command queue,
 apply to all outputs without restarting playback, discard pending switches
-from the previous grid, and persist in dashboard settings version 8. Version 7
-settings retain their sequencer choices and migrate with an empty sequence
-library; older settings receive the established defaults. Saved audio
-synchronization offsets remain intact.
+from the previous grid, and persist in dashboard settings version 9. Version 8
+settings retain their sequencer and sequence data. Version 7 retains sequencer
+choices and migrates with an empty sequence library; older settings receive
+the established defaults. Saved audio synchronization offsets remain intact.
+
+## Animation transition settings
+
+The authenticated `GET` and `PUT /api/transitions/settings` endpoints expose a
+global crossfade enable flag and duration from 100 to 1500 ms. Crossfades are
+enabled by default at 300 ms. Updates run through the runtime worker and apply
+to the shared and independent playback engines, including engines created after
+a topology change. They affect transitions started after the update without
+resetting current playback or beat and sequence scheduling. Settings files
+before version 9 receive the default transition settings during migration.
 
 Dashboard state reports per-output estimated beat, bar, and phrase positions,
 clock confidence, pending animation, remaining time to its switch, and whether

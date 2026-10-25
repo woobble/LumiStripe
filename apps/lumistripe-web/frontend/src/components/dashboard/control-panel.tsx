@@ -4,6 +4,7 @@ import { HexColorPicker } from "react-colorful"
 
 import { AnimationSheet } from "@/components/dashboard/animation-sheet"
 import { SequencerPanel } from "@/components/dashboard/sequencer-panel"
+import { TransitionSettingsPanel } from "@/components/dashboard/transition-settings-panel"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Slider } from "@/components/ui/slider"
@@ -290,6 +291,10 @@ export function ControlPanel({ controller }: { controller: DashboardController }
           )}
         </CardContent>
       </Card>
+      <TransitionSettingsPanel
+        controller={controller}
+        disabled={!state.running || pendingCommand !== null}
+      />
       <SequencerPanel
         state={state}
         target={target}

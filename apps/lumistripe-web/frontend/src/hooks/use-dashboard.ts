@@ -17,7 +17,7 @@ import {
 import { useWebSocketStream } from "@/hooks/use-websocket-stream"
 
 export type ConnectionStatus = "connecting" | "connected" | "reconnecting"
-export type CommandName = "mode" | "brightness" | "solidColor" | "animation" | "blackout" | "calibration" | "stripes" | "stripeTest" | "sequencer" | "sequence"
+export type CommandName = "mode" | "brightness" | "solidColor" | "animation" | "blackout" | "calibration" | "stripes" | "stripeTest" | "sequencer" | "transitions" | "sequence"
 export const dashboardStateQueryKey = ["dashboard-state"] as const
 export const animationsQueryKey = ["animations"] as const
 export const sequenceLibraryQueryKey = ["animation-sequences"] as const
@@ -188,6 +188,8 @@ export function useDashboard() {
       runCommand("blackout", () => dashboardApi.setBlackout(enabled, stripeId)),
     setSequencerSettings: (mode: SwitchQuantization, barsPerPhrase: 4 | 8 | 16) =>
       runCommand("sequencer", () => dashboardApi.setSequencerSettings(mode, barsPerPhrase)),
+    setTransitionSettings: (enabled: boolean, durationMs: number) =>
+      runCommand("transitions", () => dashboardApi.setTransitionSettings(enabled, durationMs)),
     createSequence: (sequence: SequenceCreateRequest) => runSequenceCommand({ operation: "create", sequence }),
     updateSequence: (sequenceId: string, sequence: SequenceDefinitionRequest) => runSequenceCommand({ operation: "update", sequenceId, sequence }),
     deleteSequence: (sequenceId: string) => runSequenceCommand({ operation: "delete", sequenceId }),

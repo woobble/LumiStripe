@@ -116,6 +116,20 @@ class SequencerSettingsResponse(BaseModel):
     bars_per_phrase: Literal[4, 8, 16] = 8
 
 
+class TransitionSettingsRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    enabled: bool
+    duration_ms: int = Field(ge=100, le=1500)
+
+
+class TransitionSettingsResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool = True
+    duration_ms: int = Field(default=300, ge=100, le=1500)
+
+
 class SequencerDiagnostics(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -223,6 +237,9 @@ class DashboardState(BaseModel):
     power_budget: PowerBudgetState = PowerBudgetState()
     sequencer_settings: SequencerSettingsResponse = Field(
         default_factory=SequencerSettingsResponse
+    )
+    transition_settings: TransitionSettingsResponse = Field(
+        default_factory=TransitionSettingsResponse
     )
     sequence_library: SequenceLibrarySummary = Field(
         default_factory=SequenceLibrarySummary

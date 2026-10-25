@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from math import isfinite
 
 from ..audio.timeline import MusicalTimelineConfig
 from ..color import Color, Rgb
@@ -82,8 +83,13 @@ class PlaybackConfig:
             raise TypeError("animation_sequence must be an AnimationSequence or None")
         if not 0.0 <= self.idle_brightness <= 1.0:
             raise ValueError("idle_brightness must be between zero and one")
-        if self.transition_duration_s < 0.0:
-            raise ValueError("transition_duration_s must not be negative")
+        if (
+            isinstance(self.transition_duration_s, bool)
+            or not isinstance(self.transition_duration_s, (int, float))
+            or not isfinite(self.transition_duration_s)
+            or self.transition_duration_s < 0.0
+        ):
+            raise ValueError("transition_duration_s must be a finite non-negative number")
         if not 0.0 <= self.dynamic_response <= 1.0:
             raise ValueError("dynamic_response must be between zero and one")
 

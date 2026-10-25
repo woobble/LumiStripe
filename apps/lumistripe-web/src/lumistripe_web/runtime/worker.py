@@ -105,6 +105,7 @@ from ..models import (
     StripeOutputConfig,
     StripePlaybackState,
     StripeTopology,
+    TransitionSettingsResponse,
 )
 from ..models import AudioCalibrationResult as AudioCalibrationResultModel
 from ..settings import (
@@ -113,6 +114,7 @@ from ..settings import (
     CalibrationSettingsStore,
     StartupPlaybackSettings,
     StripeTopologySettings,
+    TransitionSettings,
 )
 from ..spotify import (
     SpotifyBackend,
@@ -143,6 +145,7 @@ from .commands import (
     _StripeTestCommand,
     _StripeTopologyCommand,
     _TargetCommand,
+    _TransitionSettingsCommand,
 )
 from .outputs import OutputGateController
 from .playback_service import PlaybackPolicy, PlaybackPolicyError
@@ -349,6 +352,7 @@ class RuntimeWorker:
         )
         self._restore_last_state = loaded_settings.restore_last_state
         self._switch_quantization = loaded_settings.switch_quantization
+        self._transition_settings = loaded_settings.transition_settings
         self._bars_per_phrase = cast(
             Literal[4, 8, 16], loaded_settings.bars_per_phrase
         )
@@ -379,6 +383,11 @@ class RuntimeWorker:
             PlaybackConfig(
                 mode=PlaybackMode.STATIC,
                 switch_quantization=self._switch_quantization,
+                transition_duration_s=(
+                    self._transition_settings.duration_ms / 1000.0
+                    if self._transition_settings.enabled
+                    else 0.0
+                ),
                 musical_timeline=MusicalTimelineConfig(
                     bars_per_phrase=self._bars_per_phrase
                 ),
@@ -429,6 +438,10 @@ class RuntimeWorker:
             sequencer_settings=SequencerSettingsResponse(
                 switch_quantization=self._switch_quantization,
                 bars_per_phrase=self._bars_per_phrase,
+            ),
+            transition_settings=TransitionSettingsResponse(
+                enabled=self._transition_settings.enabled,
+                duration_ms=self._transition_settings.duration_ms,
             ),
             sequence_library=self._sequence_library_summary(),
         )
@@ -550,6 +563,9 @@ class RuntimeWorker:
 
     def sequencer_settings(self) -> SequencerSettingsResponse:
         return self.snapshot().sequencer_settings
+
+    def transition_settings(self) -> TransitionSettingsResponse:
+        return self.snapshot().transition_settings
 
     def animation_sequences(self) -> SequenceLibraryResponse:
         with self._snapshot_lock:
@@ -854,6 +870,17 @@ class RuntimeWorker:
             self._submit(
                 "sequencer_settings",
                 _SequencerSettingsCommand(switch_quantization, bars_per_phrase),
+            ),
+        )
+
+    def set_transition_settings(
+        self, enabled: bool, duration_ms: int
+    ) -> Future[DashboardState]:
+        return cast(
+            Future[DashboardState],
+            self._submit(
+                "transition_settings",
+                _TransitionSettingsCommand(enabled, duration_ms),
             ),
         )
 
@@ -1311,6 +1338,11 @@ class RuntimeWorker:
                     mode=self.playback.mode,
                     solid_color=self.playback.solid_color,
                     switch_quantization=self._switch_quantization,
+                    transition_duration_s=(
+                        self._transition_settings.duration_ms / 1000.0
+                        if self._transition_settings.enabled
+                        else 0.0
+                    ),
                     musical_timeline=MusicalTimelineConfig(
                         bars_per_phrase=self._bars_per_phrase
                     ),
@@ -1481,6 +1513,15 @@ class RuntimeWorker:
                 self._set_sequencer_settings(
                     sequencer_settings.switch_quantization,
                     sequencer_settings.bars_per_phrase,
+                )
+                result = self._publish(running=True)
+            elif command.name == "transition_settings":
+                transition_settings = _expect(
+                    command.value, _TransitionSettingsCommand
+                )
+                self._set_transition_settings(
+                    transition_settings.enabled,
+                    transition_settings.duration_ms,
                 )
                 result = self._publish(running=True)
             elif command.name == "sequence_library":
@@ -2354,6 +2395,39 @@ profile.audio_config(microphone=True),
         return SequencerSettingsResponse(
             switch_quantization=switch_quantization,
             bars_per_phrase=bars_per_phrase,
+        )
+
+    def _set_transition_settings(
+        self, enabled: bool, duration_ms: int
+    ) -> TransitionSettingsResponse:
+        if not isinstance(enabled, bool):
+            raise RuntimeCommandError("transition enabled must be a boolean")
+        if (
+            isinstance(duration_ms, bool)
+            or not isinstance(duration_ms, int)
+            or not 100 <= duration_ms <= 1500
+        ):
+            raise RuntimeCommandError("transition duration must be between 100 and 1500 ms")
+        updated = TransitionSettings(enabled=enabled, duration_ms=duration_ms)
+        if updated == self._transition_settings:
+            return TransitionSettingsResponse(
+                enabled=updated.enabled, duration_ms=updated.duration_ms
+            )
+
+        try:
+            with self._settings_io_lock:
+                self._settings_store.save_transition_settings(updated)
+        except OSError as exc:
+            raise RuntimeCommandError(
+                f"could not save transition settings: {exc}"
+            ) from exc
+
+        self._transition_settings = updated
+        duration_s = updated.duration_ms / 1000.0 if updated.enabled else 0.0
+        for engine in (self.playback, *(item for _, item in self._playbacks.values())):
+            engine.set_transition_duration(duration_s)
+        return TransitionSettingsResponse(
+            enabled=updated.enabled, duration_ms=updated.duration_ms
         )
 
     def _set_sequence_library(self, command: _SequenceLibraryCommand) -> None:
@@ -3242,6 +3316,10 @@ profile.audio_config(microphone=True),
             sequencer_settings=SequencerSettingsResponse(
                 switch_quantization=self._switch_quantization,
                 bars_per_phrase=self._bars_per_phrase,
+            ),
+            transition_settings=TransitionSettingsResponse(
+                enabled=self._transition_settings.enabled,
+                duration_ms=self._transition_settings.duration_ms,
             ),
             sequence_library=self._sequence_library_summary(),
             stripe_playback=self._stripe_playback_state(),

@@ -12,6 +12,7 @@ from .routes import (
     startup_router,
     stripes_router,
     system_router,
+    transitions_router,
     websocket_router,
 )
 
@@ -19,6 +20,7 @@ router = APIRouter()
 for feature_router in (
     auth_router,
     system_router,
+    transitions_router,
     control_router,
     sequencer_router,
     stripes_router,

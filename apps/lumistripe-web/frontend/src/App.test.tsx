@@ -342,7 +342,7 @@ describe("App", () => {
     const { container } = render(<App />, { wrapper: Router })
 
     expect(await screen.findByText(/aurora wave/i)).toBeInTheDocument()
-    expect(container.querySelectorAll("[data-slot=slider-thumb]")).toHaveLength(1)
+    expect(container.querySelectorAll("[data-slot=slider-thumb]")).toHaveLength(2)
     await user.click(screen.getByRole("button", { name: "Blackout" }))
 
     expect(await screen.findByRole("button", { name: "Restore lights" })).toBeInTheDocument()

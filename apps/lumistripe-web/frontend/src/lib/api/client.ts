@@ -10,6 +10,7 @@ import type {
   PlaybackMode,
   SpotifyControlAction,
   SwitchQuantization,
+  TransitionSettingsRequest,
   SequenceCreateRequest,
   SequenceDefinitionRequest,
   StripeTopology,
@@ -60,6 +61,8 @@ export type {
   SequencerDiagnostics,
   SequencerSettingsRequest,
   SequencerSettingsResponse,
+  TransitionSettingsRequest,
+  TransitionSettingsResponse,
   SpotifyControlAction,
   SpotifyStatusResponse,
   SpotifyTrackInfo,
@@ -73,6 +76,10 @@ const switchQuantizationSchema = z.enum(["off", "beat", "bar", "phrase"])
 const sequencerSettingsSchema = z.object({
   switch_quantization: switchQuantizationSchema,
   bars_per_phrase: z.union([z.literal(4), z.literal(8), z.literal(16)]),
+}).strict()
+const transitionSettingsSchema = z.object({
+  enabled: z.boolean(),
+  duration_ms: z.number().int().min(100).max(1500),
 }).strict()
 const sequencerDiagnosticsSchema = z.object({
   mode: switchQuantizationSchema,
@@ -258,6 +265,10 @@ const dashboardStateSchema = z.object({
   sequencer_settings: sequencerSettingsSchema.optional().default({
     switch_quantization: "off",
     bars_per_phrase: 8,
+  }),
+  transition_settings: transitionSettingsSchema.optional().default({
+    enabled: true,
+    duration_ms: 300,
   }),
   sequence_library: sequenceLibrarySummarySchema.optional().default({
     sequences: [],
@@ -705,6 +716,14 @@ export const dashboardApi = {
         bars_per_phrase: barsPerPhrase,
       }),
     }, dashboardStateSchema),
+  getTransitionSettings: () => request("/api/transitions/settings", undefined, transitionSettingsSchema),
+  setTransitionSettings: (enabled: boolean, durationMs: number) => {
+    const body: TransitionSettingsRequest = { enabled, duration_ms: durationMs }
+    return request("/api/transitions/settings", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }, dashboardStateSchema)
+  },
   setAudioSyncOffset: (offsetMs: number) =>
     request("/api/audio/sync-offset", {
       method: "PUT",

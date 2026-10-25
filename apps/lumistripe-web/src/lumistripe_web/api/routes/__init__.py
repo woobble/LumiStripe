@@ -8,6 +8,7 @@ from .sequencer import router as sequencer_router
 from .startup import router as startup_router
 from .stripes import router as stripes_router
 from .system import router as system_router
+from .transitions import router as transitions_router
 from .websocket import router as websocket_router
 
 __all__ = [
@@ -19,5 +20,6 @@ __all__ = [
     "startup_router",
     "stripes_router",
     "system_router",
+    "transitions_router",
     "websocket_router",
 ]

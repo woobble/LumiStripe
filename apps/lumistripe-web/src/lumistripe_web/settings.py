@@ -24,7 +24,7 @@ from lumistripe.playback import (
 )
 from lumistripe_app_support import build_audio_config
 
-SETTINGS_VERSION = 8
+SETTINGS_VERSION = 9
 MAX_SAVED_ANIMATION_SEQUENCES = 20
 PROFILE_NAMES = ("primary", "secondary")
 StripeLayout = Literal["mirrored", "continuous", "independent"]
@@ -52,6 +52,22 @@ class StartupPlaybackSettings:
             raise ValueError("startup solid_color must be a six-digit hex color")
         if isinstance(self.brightness, bool) or not 0.0 <= self.brightness <= 1.0:
             raise ValueError("startup brightness must be between 0 and 1")
+
+
+@dataclass(frozen=True, slots=True)
+class TransitionSettings:
+    enabled: bool = True
+    duration_ms: int = 300
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise TypeError("transition enabled must be a boolean")
+        if (
+            isinstance(self.duration_ms, bool)
+            or not isinstance(self.duration_ms, int)
+            or not 100 <= self.duration_ms <= 1500
+        ):
+            raise ValueError("transition duration must be between 100 and 1500 ms")
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,6 +291,7 @@ class DashboardSettings:
     remembered_playback: StartupPlaybackSettings = field(
         default_factory=StartupPlaybackSettings
     )
+    transition_settings: TransitionSettings = field(default_factory=TransitionSettings)
 
 
 class CalibrationSettingsStore:
@@ -302,7 +319,7 @@ class CalibrationSettingsStore:
             if not isinstance(payload, dict):
                 raise TypeError("settings must be an object")
             version = payload.get("version")
-            if version not in {1, 2, 3, 4, 5, 6, 7, SETTINGS_VERSION}:
+            if version not in {1, 2, 3, 4, 5, 6, 7, 8, SETTINGS_VERSION}:
                 raise ValueError(
                     f"expected settings version 1 through {SETTINGS_VERSION}"
                 )
@@ -329,7 +346,7 @@ class CalibrationSettingsStore:
                 except (TypeError, ValueError) as exc:
                     warnings.append(str(exc))
 
-        if payload.get("version") in {2, 3, 4, 5, 6, 7, SETTINGS_VERSION}:
+        if payload.get("version") in {2, 3, 4, 5, 6, 7, 8, SETTINGS_VERSION}:
             selected = payload.get("selected_audio_device")
             if selected is not None and not isinstance(selected, str):
                 warnings.append("selected_audio_device must be a string or null")
@@ -367,13 +384,13 @@ class CalibrationSettingsStore:
                     except (TypeError, ValueError) as exc:
                         warnings.append(str(exc))
 
-        if payload.get("version") in {3, 4, 5, 6, 7, SETTINGS_VERSION} and "stripes" in payload:
+        if payload.get("version") in {3, 4, 5, 6, 7, 8, SETTINGS_VERSION} and "stripes" in payload:
             try:
                 settings.stripe_topology = _decode_stripes(payload["stripes"])
             except (TypeError, ValueError) as exc:
                 warnings.append(str(exc))
 
-        if payload.get("version") in {4, 5, 6, 7, SETTINGS_VERSION}:
+        if payload.get("version") in {4, 5, 6, 7, 8, SETTINGS_VERSION}:
             restore = payload.get("restore_last_state", False)
             if not isinstance(restore, bool):
                 warnings.append("restore_last_state must be a boolean")
@@ -395,7 +412,7 @@ class CalibrationSettingsStore:
                 except (TypeError, ValueError) as exc:
                     warnings.append(str(exc))
 
-        if payload.get("version") in {6, 7, SETTINGS_VERSION}:
+        if payload.get("version") in {6, 7, 8, SETTINGS_VERSION}:
             encoded_offsets = payload.get("audio_sync_offsets_ms", {})
             if not isinstance(encoded_offsets, dict):
                 warnings.append("audio_sync_offsets_ms must be an object")
@@ -413,7 +430,7 @@ class CalibrationSettingsStore:
                     except (TypeError, ValueError) as exc:
                         warnings.append(str(exc))
 
-        if payload.get("version") in {7, SETTINGS_VERSION}:
+        if payload.get("version") in {7, 8, SETTINGS_VERSION}:
             encoded_quantization = payload.get("switch_quantization", "off")
             try:
                 settings.switch_quantization = SwitchQuantization(encoded_quantization)
@@ -430,10 +447,22 @@ class CalibrationSettingsStore:
             else:
                 settings.bars_per_phrase = encoded_bars
 
-        if payload.get("version") == SETTINGS_VERSION:
+        if payload.get("version") in {8, SETTINGS_VERSION}:
             settings.animation_sequences, settings.active_sequence_id = (
                 _decode_animation_sequences(payload, warnings)
             )
+
+        if payload.get("version") == SETTINGS_VERSION and "transition_settings" in payload:
+            encoded_transitions = payload["transition_settings"]
+            try:
+                if not isinstance(encoded_transitions, dict):
+                    raise TypeError("transition_settings must be an object")
+                settings.transition_settings = TransitionSettings(
+                    enabled=encoded_transitions.get("enabled", True),
+                    duration_ms=encoded_transitions.get("duration_ms", 300),
+                )
+            except (TypeError, ValueError) as exc:
+                warnings.append(str(exc))
 
         warning = None
         if warnings:
@@ -483,6 +512,11 @@ class CalibrationSettingsStore:
         settings, _ = self.load_all()
         settings.switch_quantization = switch_quantization
         settings.bars_per_phrase = bars_per_phrase
+        self.save_all(settings)
+
+    def save_transition_settings(self, transitions: TransitionSettings) -> None:
+        settings, _ = self.load_all()
+        settings.transition_settings = transitions
         self.save_all(settings)
 
     def save_animation_sequences(
@@ -575,6 +609,10 @@ class CalibrationSettingsStore:
                 "animation": settings.remembered_playback.animation,
                 "brightness": settings.remembered_playback.brightness,
                 "blackout": settings.remembered_playback.blackout,
+            },
+            "transition_settings": {
+                "enabled": settings.transition_settings.enabled,
+                "duration_ms": settings.transition_settings.duration_ms,
             },
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)

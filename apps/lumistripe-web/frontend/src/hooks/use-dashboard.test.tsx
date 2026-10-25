@@ -141,6 +141,39 @@ describe("useDashboard", () => {
     toastError.mockRestore()
   })
 
+  it("applies transition settings through the dashboard command state", async () => {
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path === "/api/animations") return jsonResponse({ items: animations })
+      if (path === "/api/sequencer/sequences") return jsonResponse({ sequences: [], active_sequence_id: null })
+      if (path === "/api/transitions/settings") {
+        expect(init?.method).toBe("PUT")
+        expect(init?.body).toBe(JSON.stringify({ enabled: false, duration_ms: 900 }))
+        return jsonResponse({
+          ...initialState,
+          revision: 2,
+          transition_settings: { enabled: false, duration_ms: 900 },
+        })
+      }
+      return jsonResponse(initialState)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const { result } = renderHook(() => useDashboard(), { wrapper })
+    await waitFor(() => expect(result.current.state?.revision).toBe(1))
+
+    let applied: boolean | undefined
+    await act(async () => {
+      applied = await result.current.setTransitionSettings(false, 900)
+    })
+
+    expect(applied).toBe(true)
+    expect(result.current.pendingCommand).toBeNull()
+    expect(result.current.state?.transition_settings).toEqual({
+      enabled: false,
+      duration_ms: 900,
+    })
+  })
+
   it("runs sequence API mutations through the dashboard command state and refreshes the library", async () => {
     const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
       const path = String(input)

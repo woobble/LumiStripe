@@ -1699,6 +1699,9 @@
               "supply_capacity_watts": 200.0
             }
           },
+          "transition_settings": {
+            "$ref": "#/components/schemas/TransitionSettingsResponse"
+          },
           "uptime_seconds": {
             "default": 0.0,
             "title": "Uptime Seconds",
@@ -3125,6 +3128,45 @@
           "sampled_at"
         ],
         "title": "SystemStats",
+        "type": "object"
+      },
+      "TransitionSettingsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "duration_ms": {
+            "maximum": 1500.0,
+            "minimum": 100.0,
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled",
+          "duration_ms"
+        ],
+        "title": "TransitionSettingsRequest",
+        "type": "object"
+      },
+      "TransitionSettingsResponse": {
+        "properties": {
+          "duration_ms": {
+            "default": 300,
+            "maximum": 1500.0,
+            "minimum": 100.0,
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "title": "TransitionSettingsResponse",
         "type": "object"
       },
       "UpdateStatus": {
@@ -5005,6 +5047,60 @@
           }
         },
         "summary": "Install Update"
+      }
+    },
+    "/api/transitions/settings": {
+      "get": {
+        "operationId": "get_transition_settings_api_transitions_settings_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransitionSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Transition Settings"
+      },
+      "put": {
+        "operationId": "set_transition_settings_api_transitions_settings_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransitionSettingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Transition Settings"
       }
     }
   }

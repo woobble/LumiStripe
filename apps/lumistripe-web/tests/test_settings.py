@@ -17,6 +17,7 @@ from lumistripe_web.settings import (
     StartupPlaybackSettings,
     StripeOutputSettings,
     StripeTopologySettings,
+    TransitionSettings,
 )
 
 
@@ -63,7 +64,7 @@ def test_settings_round_trip_both_profiles_atomically(tmp_path: Path) -> None:
     assert warning is None
     assert profiles["primary"] == ColorCorrection(255, 220, 180)
     assert profiles["secondary"] == ColorCorrection(200, 210, 220)
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 8
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 9
     assert not list(path.parent.glob("*.tmp"))
 
 
@@ -125,7 +126,7 @@ def test_power_budget_round_trip_and_legacy_defaults(tmp_path: Path) -> None:
     assert loaded.stripe_topology == topology
     assert topology.available_led_watts == 185.0
     assert topology.effective_power_budget_watts == 18.5
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 8
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 9
 
     path.write_text(
         json.dumps(
@@ -162,7 +163,7 @@ def test_audio_sync_offsets_persist_per_route_and_migrate_from_v5(
         "bluetooth|AA:BB|bluez_output": 100.0,
         "mic|USB Mic|analog_output": -35.0,
     }
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 8
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 9
 
     path.write_text(
         json.dumps({"version": 5, "selected_audio_device": "USB Mic"}),
@@ -251,6 +252,77 @@ def test_sequencer_settings_round_trip_preserves_audio_sync_offsets(
     assert settings.audio_sync_offsets_ms == {"mic|USB Mic|analog_output": -85.0}
 
 
+def test_transition_settings_default_round_trip_and_preserve_existing_settings(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.json"
+    store = CalibrationSettingsStore(path)
+    defaults, warning = store.load_all()
+
+    assert warning is None
+    assert defaults.transition_settings == TransitionSettings()
+
+    store.save_audio_sync_offset("mic|USB Mic|analog_output", -85.0)
+    store.save_transition_settings(TransitionSettings(enabled=False, duration_ms=850))
+    restored, warning = store.load_all()
+
+    assert warning is None
+    assert restored.transition_settings == TransitionSettings(
+        enabled=False, duration_ms=850
+    )
+    assert restored.audio_sync_offsets_ms == {"mic|USB Mic|analog_output": -85.0}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["version"] == 9
+    assert payload["transition_settings"] == {"enabled": False, "duration_ms": 850}
+
+
+def test_version_eight_settings_migrate_with_default_transitions(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 8,
+                "switch_quantization": "bar",
+                "bars_per_phrase": 16,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings, warning = CalibrationSettingsStore(path).load_all()
+
+    assert warning is None
+    assert settings.switch_quantization is SwitchQuantization.BAR
+    assert settings.bars_per_phrase == 16
+    assert settings.transition_settings == TransitionSettings()
+
+
+@pytest.mark.parametrize(
+    "transitions",
+    [
+        None,
+        {"enabled": "false", "duration_ms": 300},
+        {"enabled": True, "duration_ms": 99},
+        {"enabled": True, "duration_ms": 1501},
+        {"enabled": True, "duration_ms": 300.0},
+    ],
+)
+def test_invalid_transition_settings_fall_back_to_defaults(
+    tmp_path: Path, transitions: object
+) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps({"version": 9, "transition_settings": transitions}),
+        encoding="utf-8",
+    )
+
+    settings, warning = CalibrationSettingsStore(path).load_all()
+
+    assert settings.transition_settings == TransitionSettings()
+    assert warning is not None
+    assert "transition" in warning
+
+
 def test_animation_sequences_round_trip_and_version_seven_migration(
     tmp_path: Path,
 ) -> None:
@@ -290,7 +362,7 @@ def test_animation_sequences_round_trip_and_version_seven_migration(
     assert restarted.animation_sequences == (sequence,)
     assert restarted.active_sequence_id == sequence.id
     assert restarted.audio_sync_offsets_ms == {"mic|USB|out": -85.0}
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 8
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 9
 
 
 def test_invalid_saved_sequence_entries_are_skipped_individually(

@@ -351,6 +351,66 @@ def test_sequencer_settings_api_requires_pairing() -> None:
         assert client.get("/api/sequencer/settings").status_code == 200
 
 
+def test_transition_settings_api_validation_live_update_and_restart(
+    tmp_path: Path,
+) -> None:
+    settings_path = tmp_path / "settings.json"
+    app = create_app(
+        RuntimeSettings(pixels=8, settings_file=settings_path), pairing_code="1234"
+    )
+
+    with TestClient(app) as client:
+        assert client.get("/api/transitions/settings").status_code == 401
+        assert client.post("/api/auth/pair", json={"code": "1234"}).status_code == 200
+        assert client.get("/api/transitions/settings").json() == {
+            "enabled": True,
+            "duration_ms": 300,
+        }
+
+        before = client.get("/api/state").json()
+        assert client.put(
+            "/api/sequencer/settings",
+            json={"switch_quantization": "phrase", "bars_per_phrase": 16},
+        ).status_code == 200
+        applied = client.put(
+            "/api/transitions/settings",
+            json={"enabled": False, "duration_ms": 850},
+        )
+
+        assert applied.status_code == 200
+        payload = applied.json()
+        assert payload["transition_settings"] == {
+            "enabled": False,
+            "duration_ms": 850,
+        }
+        assert payload["mode"] == before["mode"]
+        assert payload["animation"] == before["animation"]
+        assert payload["sequencer_settings"] == {
+            "switch_quantization": "phrase",
+            "bars_per_phrase": 16,
+        }
+        for invalid in (
+            {"enabled": True, "duration_ms": 99},
+            {"enabled": True, "duration_ms": 1501},
+            {"enabled": "true", "duration_ms": 300},
+            {"enabled": True, "duration_ms": 300.5},
+            {"enabled": True, "duration_ms": 300, "extra": True},
+        ):
+            assert client.put("/api/transitions/settings", json=invalid).status_code == 422
+
+    saved, warning = CalibrationSettingsStore(settings_path).load_all()
+    assert warning is None
+    assert saved.transition_settings.enabled is False
+    assert saved.transition_settings.duration_ms == 850
+
+    restarted = create_app(RuntimeSettings(pixels=8, settings_file=settings_path))
+    with TestClient(restarted) as client:
+        assert client.get("/api/transitions/settings").json() == {
+            "enabled": False,
+            "duration_ms": 850,
+        }
+
+
 def test_animation_sequence_api_crud_validation_and_authentication(
     tmp_path: Path,
 ) -> None:

@@ -142,6 +142,15 @@ class PlaybackEngine:
     def effect_diagnostics(self, *, now_s: float | None = None) -> EffectSchedulerDiagnostics:
         return self.layered_renderer.diagnostics(now_s=now_s)
 
+    def set_transition_duration(self, duration_s: float) -> None:
+        """Set the duration used by transitions started from now on.
+
+        An in-progress transition retains its captured source and duration.
+        """
+
+        self.config = replace(self.config, transition_duration_s=duration_s)
+        self.player.transition_ms = int(self.config.transition_duration_s * 1000.0)
+
     @property
     def beat_clock_state(self) -> BeatClockState:
         return self._beat_clock_state

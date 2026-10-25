@@ -70,6 +70,10 @@ export const initialState: DashboardState = {
     switch_quantization: "off",
     bars_per_phrase: 8,
   },
+  transition_settings: {
+    enabled: true,
+    duration_ms: 300,
+  },
   sequence_library: {
     sequences: [],
     active_sequence_id: null,
