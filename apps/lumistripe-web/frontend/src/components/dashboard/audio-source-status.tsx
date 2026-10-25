@@ -7,13 +7,23 @@ import { useAudioStreamStatus } from "@/hooks/use-audio-stream-status"
 import type { AudioSettingsResponse } from "@/lib/api"
 import type { WebSocketStreamStatus } from "@/hooks/use-websocket-stream"
 
-export function LiveAudioSourceStatus({ settings }: { settings: AudioSettingsResponse }) {
+export function LiveAudioSourceStatus({
+  settings,
+  configuredAudioSource,
+  activeAudioSource,
+  audioMonitoring,
+}: {
+  settings: AudioSettingsResponse
+  configuredAudioSource?: string | null
+  activeAudioSource?: string | null
+  audioMonitoring?: boolean | null
+}) {
   const { fresh, connection } = useAudioStreamStatus()
   return (
     <AudioSourceStatus
-      configuredSource={settings.source}
-      activeSource={settings.active_source}
-      monitoring={settings.monitoring}
+      configuredSource={configuredAudioSource ?? settings.source}
+      activeSource={activeAudioSource ?? settings.active_source}
+      monitoring={audioMonitoring ?? settings.monitoring}
       connection={connection}
       fresh={fresh}
     />
@@ -50,7 +60,8 @@ export function AudioSourceStatus({
       </CardHeader>
       <CardContent className="grid gap-3 text-sm sm:grid-cols-2">
         <StatusItem label="Configured source" value={audioSourceLabel(configuredSource)} />
-        <StatusItem label="Active source" value={monitoring ? audioSourceLabel(activeSource) : "None"} />
+        <StatusItem label="Active source" value={activeSource && activeSource !== "off" ? audioSourceLabel(activeSource) : "None"} />
+        <StatusItem label="Audio monitor" value={monitoring ? "Running" : "Inactive"} />
         <StatusItem label="Stream connection" value={connectionLabel} />
         <div className="flex items-center justify-between gap-2 rounded-lg bg-white/[0.03] px-3 py-2">
           <span className="text-muted-foreground">Stream freshness</span>

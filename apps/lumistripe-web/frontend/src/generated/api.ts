@@ -1402,6 +1402,8 @@ export interface components {
         };
         /** DashboardState */
         DashboardState: {
+            /** Active Audio Source */
+            active_audio_source?: string | null;
             /**
              * Active Effects
              * @default []
@@ -1426,6 +1428,8 @@ export interface components {
              * @default inactive
              */
             audio_health: string;
+            /** Audio Monitoring */
+            audio_monitoring?: boolean | null;
             /**
              * Audio Status
              * @default No audio source active.
@@ -1462,6 +1466,8 @@ export interface components {
              * @default 0
              */
             command_queue_depth: number;
+            /** Configured Audio Source */
+            configured_audio_source?: string | null;
             /**
              * Diagnostic Issues
              * @default []

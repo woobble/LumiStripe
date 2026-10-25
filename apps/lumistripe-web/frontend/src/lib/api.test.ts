@@ -129,6 +129,9 @@ describe("dashboardApi", () => {
       sequences: [],
       active_sequence_id: null,
     })
+    expect(parsed.configured_audio_source).toBeUndefined()
+    expect(parsed.active_audio_source).toBeUndefined()
+    expect(parsed.audio_monitoring).toBeUndefined()
     expect(parsed.stripe_playback[0]?.sequence_playback).toEqual({
       selected_sequence_id: null,
       active: false,

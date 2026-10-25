@@ -86,6 +86,8 @@ const audioSettings = {
   source: "mic",
   active_source: "mic",
   monitoring: true,
+  sync_route: "mic|USB Mic|sink-main",
+  sync_offset_ms: -85,
   active_device: "2",
   fallback_device: "2",
   active_device_name: "USB Mic",
@@ -140,7 +142,10 @@ describe("App", () => {
   let pendingSpotifyControlResponse: Promise<Response> | null = null
   let spotifyStatusResponse = spotifyStatus
   let failAudioSourceChange = false
+  let failOutputVolume = false
   let currentBluetoothStatus: BluetoothStatusResponse = bluetoothStatus as unknown as BluetoothStatusResponse
+  let currentSyncRoute = audioSettings.sync_route
+  let currentSyncOffsets: Record<string, number> = {}
   const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
     const path = String(input)
     if (path === "/api/auth/status") {
@@ -148,7 +153,7 @@ describe("App", () => {
     }
     if (path === "/api/animations") return jsonResponse({ items: animations })
     if (path === "/api/audio/settings" || path === "/api/audio/settings/reset") {
-      return jsonResponse({ ...audioSettings, bluetooth: currentBluetoothStatus })
+      return jsonResponse({ ...audioSettings, bluetooth: currentBluetoothStatus, sync_route: currentSyncRoute, sync_offset_ms: currentSyncOffsets[currentSyncRoute] ?? 0 })
     }
     if (path === "/api/audio/bluetooth" || path === "/api/audio/bluetooth/connect") {
       return jsonResponse(currentBluetoothStatus)
@@ -163,9 +168,11 @@ describe("App", () => {
       const body = JSON.parse(String(init?.body)) as { selector: string }
       const output = currentBluetoothStatus.output_devices.find((device) => device.selector === body.selector)
       currentBluetoothStatus = { ...currentBluetoothStatus, default_sink: body.selector, output_volume: output?.volume ?? null }
+      currentSyncRoute = `mic|USB Mic|${body.selector}`
       return jsonResponse(currentBluetoothStatus)
     }
     if (path === "/api/audio/output/volume") {
+      if (failOutputVolume) return jsonResponse({ detail: "Output volume could not be applied." }, 503)
       const body = JSON.parse(String(init?.body)) as { selector: string; volume: number }
       currentBluetoothStatus = {
         ...currentBluetoothStatus,
@@ -185,7 +192,8 @@ describe("App", () => {
     }
     if (path === "/api/audio/sync-offset") {
       const body = JSON.parse(String(init?.body)) as { offset_ms: number }
-      return jsonResponse({ ...audioSettings, bluetooth: currentBluetoothStatus, sync_offset_ms: body.offset_ms })
+      currentSyncOffsets[currentSyncRoute] = body.offset_ms
+      return jsonResponse({ ...audioSettings, bluetooth: currentBluetoothStatus, sync_route: currentSyncRoute, sync_offset_ms: body.offset_ms })
     }
     if (path === "/api/audio/spotify/control") {
       if (pendingSpotifyControlResponse) return pendingSpotifyControlResponse
@@ -257,7 +265,10 @@ describe("App", () => {
     pendingSpotifyControlResponse = null
     spotifyStatusResponse = spotifyStatus
     failAudioSourceChange = false
+    failOutputVolume = false
     currentBluetoothStatus = bluetoothStatus as unknown as BluetoothStatusResponse
+    currentSyncRoute = audioSettings.sync_route
+    currentSyncOffsets = { "mic|USB Mic|sink-main": -85, "mic|USB Mic|sink-bt": 0 }
     fetchMock.mockClear()
     vi.stubGlobal("fetch", fetchMock)
     vi.stubGlobal("WebSocket", MockWebSocket)
@@ -489,8 +500,13 @@ describe("App", () => {
     await user.click(screen.getByRole("link", { name: "Setup" }))
     const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
     await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
+    expect(await screen.findByText("-85 ms")).toBeInTheDocument()
     await user.click(await screen.findByRole("combobox", { name: "Audio output device" }))
     await user.click(await screen.findByRole("option", { name: "Bluetooth Speaker · Bluetooth" }))
+
+    expect(await screen.findByText("Route: mic|USB Mic|sink-bt")).toBeInTheDocument()
+    expect(screen.getByText("0 ms")).toBeInTheDocument()
+    expect(screen.getByText("62%")).toBeInTheDocument()
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       "/api/audio/output",
@@ -520,6 +536,58 @@ describe("App", () => {
       "/api/audio/output/mute",
       expect.objectContaining({ method: "PUT", body: JSON.stringify({ selector: "sink-bt", muted: true }) }),
     ))
+  })
+
+  it("restores the confirmed output volume when applying a volume change fails", async () => {
+    const user = userEvent.setup()
+    currentBluetoothStatus = bluetoothStatusWithOutputs
+    failOutputVolume = true
+    render(<App />, { wrapper: Router })
+    await screen.findByText(/aurora wave/i)
+
+    await user.click(screen.getByRole("link", { name: "Setup" }))
+    const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
+    await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
+    await screen.findByText("Output volume")
+    const outputVolume = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="range"]'))[2]
+    expect(outputVolume).toBeDefined()
+    fireEvent.change(outputVolume!, { target: { value: "0.77" } })
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/audio/output/volume",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ selector: "sink-main", volume: 0.77 }) }),
+    ))
+    await waitFor(() => expect(screen.getByText("50%")).toBeInTheDocument())
+  })
+
+  it("updates active source from live dashboard state without settings polling", async () => {
+    const user = userEvent.setup()
+    render(<App />, { wrapper: Router })
+    await screen.findByText(/aurora wave/i)
+    await user.click(screen.getByRole("link", { name: "Audio" }))
+    await screen.findByText("Configured source")
+
+    act(() => MockWebSocket.instances[0].emit({
+      ...initialState,
+      revision: 2,
+      configured_audio_source: "auto",
+      active_audio_source: "bluetooth",
+      audio_monitoring: true,
+    }))
+    await screen.findByText("Configured source")
+    expect(screen.getByText("Configured source").parentElement).toHaveTextContent("Automatic")
+    expect(screen.getByText("Active source").parentElement).toHaveTextContent("Bluetooth input")
+
+    act(() => MockWebSocket.instances[0].emit({
+      ...initialState,
+      revision: 3,
+      configured_audio_source: "auto",
+      active_audio_source: "mic",
+      audio_monitoring: true,
+    }))
+    await screen.findByText("Active source")
+    expect(screen.getByText("Active source").parentElement).toHaveTextContent("Microphone")
+    expect(fetchMock.mock.calls.filter(([path]) => String(path) === "/api/audio/settings")).toHaveLength(1)
   })
 
   it("applies Spotify polling updates without changing the audio source draft", async () => {

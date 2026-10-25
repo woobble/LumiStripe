@@ -56,11 +56,20 @@ export function DashboardRoutes({
   return (
     <Routes>
       <Route path="/" element={<Suspense fallback={fallback}><ControlPanel controller={controller} /></Suspense>} />
-      <Route path="/audio" element={<Suspense fallback={fallback}><AudioStatusPanel audioStatus={controller.state?.audio_status ?? "Audio input status unavailable."} /></Suspense>} />
+      <Route path="/audio" element={<Suspense fallback={fallback}><AudioStatusPanel
+        audioStatus={controller.state?.audio_status ?? "Audio input status unavailable."}
+        configuredAudioSource={controller.state?.configured_audio_source}
+        activeAudioSource={controller.state?.active_audio_source}
+        audioMonitoring={controller.state?.audio_monitoring}
+      /></Suspense>} />
       <Route path="/setup" element={<Navigate to="/setup/stripes" replace />} />
       <Route path="/setup/stripes" element={<SetupGuard access={access}><Suspense fallback={fallback}><StripeManagementPanel controller={controller} /></Suspense></SetupGuard>} />
       <Route path="/setup/color" element={<SetupGuard access={access}><SetupPage><Suspense fallback={fallback}><CalibrationPanel controller={controller} /></Suspense></SetupPage></SetupGuard>} />
-      <Route path="/setup/audio" element={<SetupGuard access={access}><Suspense fallback={fallback}><AudioInputPanel /></Suspense></SetupGuard>} />
+      <Route path="/setup/audio" element={<SetupGuard access={access}><Suspense fallback={fallback}><AudioInputPanel
+        configuredAudioSource={controller.state?.configured_audio_source}
+        activeAudioSource={controller.state?.active_audio_source}
+        audioMonitoring={controller.state?.audio_monitoring}
+      /></Suspense></SetupGuard>} />
       <Route path="/setup/audio/tuning" element={<SetupGuard access={access}><Suspense fallback={fallback}><AudioTuningPanel /></Suspense></SetupGuard>} />
       <Route path="/setup/startup" element={<SetupGuard access={access}><Suspense fallback={fallback}><StartupPanel /></Suspense></SetupGuard>} />
       <Route path="/calibration" element={<Navigate to="/setup/color" replace />} />

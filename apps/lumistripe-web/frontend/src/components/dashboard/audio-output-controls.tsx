@@ -27,14 +27,33 @@ export function AudioOutputControls({
   busy: boolean
   onAction: (action: BluetoothAction, operation: () => Promise<BluetoothStatusResponse>) => Promise<BluetoothStatusResponse | null>
 }) {
-  const [volumeDraft, setVolumeDraft] = useState<number | null>(null)
   const selector = status?.default_sink ?? status?.output_devices[0]?.selector ?? ""
+  return <AudioOutputControlsForSelector key={selector} status={status} busy={busy} onAction={onAction} selector={selector} />
+}
+
+function AudioOutputControlsForSelector({
+  status,
+  busy,
+  onAction,
+  selector,
+}: {
+  status: BluetoothStatusResponse | null
+  busy: boolean
+  onAction: (action: BluetoothAction, operation: () => Promise<BluetoothStatusResponse>) => Promise<BluetoothStatusResponse | null>
+  selector: string
+}) {
+  const [volumeDraft, setVolumeDraft] = useState<number | null>(null)
   const selectedOutput = status?.output_devices.find((device) => device.selector === selector)
-  const volume = volumeDraft ?? status?.output_volume ?? 0
+  const confirmedVolume = selectedOutput?.volume ?? status?.output_volume ?? null
+  const volume = volumeDraft ?? confirmedVolume ?? 0
 
   const run = async (action: BluetoothAction, operation: () => Promise<BluetoothStatusResponse>) => {
-    const next = await onAction(action, operation)
-    if (next) setVolumeDraft(next.output_volume ?? null)
+    try {
+      const next = await onAction(action, operation)
+      setVolumeDraft(next?.output_volume ?? confirmedVolume)
+    } catch {
+      setVolumeDraft(confirmedVolume)
+    }
   }
 
   return (

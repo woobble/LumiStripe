@@ -1421,6 +1421,17 @@
       },
       "DashboardState": {
         "properties": {
+          "active_audio_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Audio Source"
+          },
           "active_effects": {
             "default": [],
             "items": {
@@ -1466,6 +1477,17 @@
             "title": "Audio Health",
             "type": "string"
           },
+          "audio_monitoring": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audio Monitoring"
+          },
           "audio_status": {
             "default": "No audio source active.",
             "title": "Audio Status",
@@ -1504,6 +1526,17 @@
             "default": 0,
             "title": "Command Queue Depth",
             "type": "integer"
+          },
+          "configured_audio_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configured Audio Source"
           },
           "diagnostic_issues": {
             "default": [],

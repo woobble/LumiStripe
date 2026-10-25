@@ -7,7 +7,17 @@ import { AudioSourceStatus } from "@/components/dashboard/audio-source-status"
 import type { AudioSettingsResponse } from "@/lib/api"
 import { dashboardApi } from "@/lib/api"
 
-function AudioStatusPanelView({ audioStatus }: { audioStatus: string }) {
+function AudioStatusPanelView({
+  audioStatus,
+  configuredAudioSource,
+  activeAudioSource,
+  audioMonitoring,
+}: {
+  audioStatus: string
+  configuredAudioSource?: string | null
+  activeAudioSource?: string | null
+  audioMonitoring?: boolean | null
+}) {
   const { telemetry, history, connection } = useAudioTelemetry()
   const [settings, setSettings] = useState<AudioSettingsResponse | null>(null)
 
@@ -34,9 +44,9 @@ function AudioStatusPanelView({ audioStatus }: { audioStatus: string }) {
       </div>
 
       <AudioSourceStatus
-        configuredSource={settings?.source}
-        activeSource={settings?.active_source}
-        monitoring={settings?.monitoring ?? false}
+        configuredSource={configuredAudioSource ?? settings?.source}
+        activeSource={activeAudioSource ?? settings?.active_source}
+        monitoring={audioMonitoring ?? settings?.monitoring ?? false}
         connection={connection}
         fresh={telemetry.fresh}
         statusMessage={audioStatus}

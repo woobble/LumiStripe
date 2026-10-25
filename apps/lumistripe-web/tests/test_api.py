@@ -39,6 +39,9 @@ def test_control_api_round_trip() -> None:
         assert initial.status_code == 200
         assert initial.json()["runtime"] == "simulation"
         assert initial.json()["running"] is True
+        assert initial.json()["configured_audio_source"] is not None
+        assert initial.json()["active_audio_source"] == "demo"
+        assert initial.json()["audio_monitoring"] is False
         assert initial.json()["application_version"]
         assert initial.json()["uptime_seconds"] >= 0
         assert "frame_rate" in initial.json()
@@ -872,6 +875,10 @@ def test_audio_source_and_bluetooth_api(
         assert demo.status_code == 200
         assert demo.json()["source"] == "demo"
         assert demo.json()["active_source"] == "demo"
+        demo_state = client.get("/api/state").json()
+        assert demo_state["configured_audio_source"] == "demo"
+        assert demo_state["active_audio_source"] == "demo"
+        assert demo_state["audio_monitoring"] is False
 
         spotify_source = client.put("/api/audio/source", json={"source": "spotify"})
         assert spotify_source.status_code == 200
@@ -1017,6 +1024,9 @@ def test_websocket_sends_initial_and_changed_state() -> None:
     with TestClient(app) as client, client.websocket_connect("/ws/state") as websocket:
         initial = websocket.receive_json()
         assert initial["running"] is True
+        assert initial["configured_audio_source"] is not None
+        assert initial["active_audio_source"] == "demo"
+        assert initial["audio_monitoring"] is False
 
         response = client.put("/api/brightness", json={"brightness": 0.25})
         assert response.status_code == 200

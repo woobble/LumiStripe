@@ -200,6 +200,9 @@ class DashboardState(BaseModel):
     music_gate: str = "calm"
     bpm: float = 0.0
     audio_status: str = "No audio source active."
+    configured_audio_source: str | None = None
+    active_audio_source: str | None = None
+    audio_monitoring: bool | None = None
     active_effects: tuple[str, ...] = ()
     uptime_seconds: float = 0.0
     frame_rate: float = 0.0

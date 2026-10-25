@@ -14,7 +14,15 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { toast } from "sonner"
 
-function AudioInputPanelView() {
+function AudioInputPanelView({
+  configuredAudioSource,
+  activeAudioSource,
+  audioMonitoring,
+}: {
+  configuredAudioSource?: string | null
+  activeAudioSource?: string | null
+  audioMonitoring?: boolean | null
+}) {
   const [settings, setSettings] = useState<AudioSettingsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -153,11 +161,17 @@ function AudioInputPanelView() {
     <AudioSetupPage>
       {loading && !settings ? <Skeleton className="h-56 rounded-xl" /> : settings ? (
         <div className="space-y-4">
-          <LiveAudioSourceStatus settings={settings} />
+          <LiveAudioSourceStatus
+            settings={settings}
+            configuredAudioSource={configuredAudioSource}
+            activeAudioSource={activeAudioSource}
+            audioMonitoring={audioMonitoring}
+          />
           <AudioSourceControls settings={settings} onSave={saveSource} />
           <SpotifyControls initialStatus={settings.spotify} />
           <AudioOutputControls status={bluetooth} busy={bluetoothBusy} onAction={runOutputAction} />
           <AudioSyncControls
+            key={settings.sync_route}
             settings={settings}
             calibrationRunning={calibrationRunning}
             onStartCalibration={() => void startSyncCalibration()}
