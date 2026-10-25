@@ -2468,6 +2468,8 @@ profile.audio_config(microphone=True),
                     raise
             except RuntimeError as exc:
                 raise RuntimeCommandError(str(exc)) from exc
+            for _, playback in self._target_playbacks(None):
+                playback.cancel_transition()
             self._sync_calibration_player = player
             self._sync_calibration_start_s = player.start_at_monotonic
             self._sync_calibration_until_s = player.start_at_monotonic + 45.0
@@ -2695,6 +2697,8 @@ profile.audio_config(microphone=True),
             original_blackout=self._controller.blackout,
             last_activity_at=time.monotonic(),
         )
+        for _, playback in self._target_playbacks(None):
+            playback.cancel_transition()
         if session.original_blackout:
             self._controller.set_blackout(False)
         self._calibration = session

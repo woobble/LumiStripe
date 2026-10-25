@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -64,9 +65,13 @@ class AnimationPlayer:
     transition_ms: int = 0
     _audio_snapshot: Callable[[], AudioFrame] | None = None
     _transition_duration_ms: int = 0
-    _transition_elapsed_ms: int = 0
+    _transition_started_at_s: float | None = None
     _transition_source: Any = None
     _transition_buffer: Any = None
+    _transition_source_float: Any = None
+    _transition_target_float: Any = None
+    _transition_work_float: Any = None
+    _transition_output: Any = None
 
     def add(self, animation: Animation, frame_ms: int, frames_per_cycle: int) -> None:
         self.animations.append(
@@ -117,6 +122,8 @@ class AnimationPlayer:
         *,
         audio_frame: AudioFrame | None = None,
         flush: bool = True,
+        now_s: float | None = None,
+        transition_external: bool = False,
     ) -> float:
         if not self.animations:
             return 0.05
@@ -131,14 +138,11 @@ class AnimationPlayer:
             audio_frame = None
         entry = self.animations[self.index]
         target = controller
-        if self.transition_active:
+        if self.transition_active and not transition_external:
             from ..stripe import Stripe
 
-            if (
-                self._transition_source is None
-                or self._transition_source.shape != controller.pixels().shape
-            ):
-                self._transition_source = controller.pixels().copy()
+            if self._transition_source is None:
+                self.capture_transition_source(controller.pixels())
             if (
                 self._transition_buffer is None
                 or self._transition_buffer.length != controller.length
@@ -150,8 +154,14 @@ class AnimationPlayer:
             entry.animation.tick(self.frame, bright)
         else:
             entry.animation.tick_audio(self.frame, bright, audio_frame)
-        if self.transition_active:
-            self._write_transition(controller, entry.frame_ms, flush=flush)
+        if self.transition_active and not transition_external:
+            assert self._transition_buffer is not None
+            self.apply_transition(
+                controller,
+                now_s=now_s,
+                flush=flush,
+                target_pixels=self._transition_buffer.pixels(),
+            )
         elif flush:
             controller.flush()
         self.frame += 1
@@ -163,11 +173,19 @@ class AnimationPlayer:
 
     @property
     def transition_progress(self) -> float:
+        return self.transition_progress_at()
+
+    def transition_progress_at(self, now_s: float | None = None) -> float:
         if not self.transition_active:
             return 1.0
+        started_at = self._transition_started_at_s
+        if started_at is None:
+            return 0.0
+        now = time.monotonic() if now_s is None else now_s
         return min(
             1.0,
-            self._transition_elapsed_ms / max(self._transition_duration_ms, 1),
+            max(0.0, now - started_at) * 1000.0
+            / max(self._transition_duration_ms, 1),
         )
 
     def set_index(
@@ -176,6 +194,7 @@ class AnimationPlayer:
         *,
         transition_ms: int | None = None,
         restart: bool = True,
+        now_s: float | None = None,
     ) -> None:
         next_index = min(max(index, 0), max(len(self.animations) - 1, 0))
         changed = next_index != self.index
@@ -185,7 +204,7 @@ class AnimationPlayer:
             self.animations[self.index].restart()
         duration = self.transition_ms if transition_ms is None else transition_ms
         if changed and duration > 0:
-            self.begin_transition(duration_ms=duration)
+            self.begin_transition(duration_ms=duration, now_s=now_s)
         else:
             self.cancel_transition()
 
@@ -199,50 +218,86 @@ class AnimationPlayer:
             return
         self.set_index(len(self.animations) - 1 if self.index == 0 else self.index - 1)
 
-    def begin_transition(self, *, duration_ms: int, source: Any = None) -> None:
+    def begin_transition(
+        self,
+        *,
+        duration_ms: int,
+        source: Any = None,
+        now_s: float | None = None,
+    ) -> None:
         duration_ms = max(int(duration_ms), 0)
         if duration_ms == 0:
             self.cancel_transition()
             return
         self._transition_duration_ms = duration_ms
-        self._transition_elapsed_ms = 0
-        self._transition_source = (
-            None if source is None else np.asarray(source, dtype=np.uint8).copy()
-        )
-        self._transition_buffer = None
+        self._transition_started_at_s = time.monotonic() if now_s is None else now_s
+        self._transition_source = None
+        if source is not None:
+            self.capture_transition_source(source)
 
     def cancel_transition(self) -> None:
         self._transition_duration_ms = 0
-        self._transition_elapsed_ms = 0
+        self._transition_started_at_s = None
         self._transition_source = None
-        self._transition_buffer = None
+
+    def capture_transition_source(self, source: Any) -> None:
+        pixels = np.asarray(source, dtype=np.uint8)
+        if self._transition_source is None or self._transition_source.shape != pixels.shape:
+            self._transition_source = np.empty_like(pixels)
+        np.copyto(self._transition_source, pixels)
+
+    def ensure_transition_source(self, source: Any) -> None:
+        if self._transition_source is None:
+            self.capture_transition_source(source)
+
+    def apply_transition(
+        self,
+        controller: Controller,
+        *,
+        now_s: float | None = None,
+        flush: bool = False,
+        target_pixels: Any = None,
+    ) -> None:
+        if not self.transition_active:
+            if flush:
+                controller.flush()
+            return
+        target = controller.pixels() if target_pixels is None else target_pixels
+        if self._transition_source is None or self._transition_source.shape != target.shape:
+            self.capture_transition_source(target)
+        assert self._transition_source is not None
+        shape = target.shape
+        if (
+            self._transition_source_float is None
+            or self._transition_source_float.shape != shape
+        ):
+            self._transition_source_float = np.empty(shape, dtype=np.float32)
+            self._transition_target_float = np.empty(shape, dtype=np.float32)
+            self._transition_work_float = np.empty(shape, dtype=np.float32)
+            self._transition_output = np.empty(shape, dtype=np.uint8)
+        np.copyto(self._transition_source_float, self._transition_source)
+        np.copyto(self._transition_target_float, target)
+        amount = self.transition_progress_at(now_s)
+        np.multiply(self._transition_source_float, 1.0 - amount, out=self._transition_work_float)
+        np.multiply(self._transition_target_float, amount, out=self._transition_target_float)
+        np.add(
+            self._transition_work_float,
+            self._transition_target_float,
+            out=self._transition_work_float,
+        )
+        np.clip(self._transition_work_float, 0.0, 255.0, out=self._transition_work_float)
+        np.copyto(self._transition_output, self._transition_work_float, casting="unsafe")
+        controller.set_pixels(self._transition_output)
+        if flush:
+            controller.flush()
+        if amount >= 1.0:
+            self.cancel_transition()
 
     def fresh_animation(self, name: str) -> Animation | None:
         index = self.index_of(name)
         if index is None:
             return None
         return self.animations[index].fresh_animation()
-
-    def _write_transition(
-        self, controller: Controller, frame_ms: int, *, flush: bool = True
-    ) -> None:
-        assert self._transition_source is not None
-        assert self._transition_buffer is not None
-        self._transition_elapsed_ms = min(
-            self._transition_elapsed_ms + frame_ms,
-            self._transition_duration_ms,
-        )
-        amount = self._transition_elapsed_ms / max(self._transition_duration_ms, 1)
-        source = self._transition_source.astype(np.float32)
-        target = self._transition_buffer.pixels().astype(np.float32)
-        blended = np.clip(source * (1.0 - amount) + target * amount, 0.0, 255.0).astype(
-            np.uint8
-        )
-        controller.set_pixels(blended)
-        if flush:
-            controller.flush()
-        if amount >= 1.0:
-            self.cancel_transition()
 
     def current_index(self) -> int:
         return self.index

@@ -7,6 +7,8 @@ from dataclasses import dataclass, field, replace
 from math import exp
 from random import Random
 
+import numpy as np
+
 from ..animation.base import AnimationPlayer
 from ..animation.catalog import animation_catalog, dynamic_sequence_eligible
 from ..audio.beat import BeatClockTracker
@@ -87,6 +89,7 @@ class PlaybackEngine:
     _quantized_switcher: QuantizedSwitchCoordinator = field(init=False)
     _sequence_coordinator: AnimationSequenceCoordinator = field(init=False)
     sync_offset_s: float = field(init=False, default=0.0)
+    _last_rendered_frame: np.ndarray | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         self.mode = self.config.mode
@@ -285,25 +288,66 @@ class PlaybackEngine:
             self._quantized_switcher.reset()
             self._sequence_coordinator.reset_session()
 
-    def select_animation(self, name: str) -> None:
+    def select_animation(self, name: str, *, now_s: float | None = None) -> None:
         index = self.player.index_of(name)
         if index is None:
             raise ValueError(f"unknown animation: {name}")
-        self.player.set_index(index, transition_ms=0)
-        self.set_mode(PlaybackMode.STATIC)
+        now = time.monotonic() if now_s is None else now_s
+        self.set_mode(PlaybackMode.STATIC, now_s=now)
+        self._set_animation_index(index, now_s=now)
 
-    def next_animation(self) -> None:
-        self.player.set_index(
+    def next_animation(self, *, now_s: float | None = None) -> None:
+        now = time.monotonic() if now_s is None else now_s
+        self.set_mode(PlaybackMode.STATIC, now_s=now)
+        self._set_animation_index(
             (self.player.current_index() + 1) % max(len(self.player.animations), 1),
-            transition_ms=0,
+            now_s=now,
         )
-        self.set_mode(PlaybackMode.STATIC)
 
-    def previous_animation(self) -> None:
+    def previous_animation(self, *, now_s: float | None = None) -> None:
+        now = time.monotonic() if now_s is None else now_s
         current = self.player.current_index()
         previous = len(self.player.animations) - 1 if current == 0 else current - 1
-        self.player.set_index(previous, transition_ms=0)
-        self.set_mode(PlaybackMode.STATIC)
+        self.set_mode(PlaybackMode.STATIC, now_s=now)
+        self._set_animation_index(previous, now_s=now)
+
+    @property
+    def transition_active(self) -> bool:
+        return self.player.transition_active
+
+    def cancel_transition(self) -> None:
+        self.player.cancel_transition()
+
+    def _set_animation_index(self, index: int, *, now_s: float) -> bool:
+        previous = self.player.current_index()
+        self.player.set_index(index, transition_ms=0, now_s=now_s)
+        if index == previous:
+            return False
+        self._begin_transition(now_s=now_s)
+        return True
+
+    def _begin_transition(
+        self,
+        *,
+        now_s: float,
+        source: np.ndarray | None = None,
+    ) -> None:
+        if source is None:
+            source = self._last_rendered_frame
+        self.player.begin_transition(
+            duration_ms=self.player.transition_ms,
+            source=source,
+            now_s=now_s,
+        )
+
+    def _remember_rendered_frame(self, controller: Controller) -> None:
+        pixels = controller.pixels()
+        if (
+            self._last_rendered_frame is None
+            or self._last_rendered_frame.shape != pixels.shape
+        ):
+            self._last_rendered_frame = np.empty_like(pixels)
+        np.copyto(self._last_rendered_frame, pixels)
 
     def step(
         self,
@@ -330,7 +374,7 @@ class PlaybackEngine:
             self._cycle_started_at_s = now
 
         if self.mode is PlaybackMode.CYCLING and self._cycling_due(now):
-            self._cycle_next()
+            self._cycle_next(now_s=now)
             self._cycle_started_at_s = now
 
         current_name = self.player.name_at(self.player.current_index())
@@ -344,6 +388,8 @@ class PlaybackEngine:
             self.last_playback_decision = decision
             self.render_adapter.render_solid(build_render_plan(decision, flush=flush), controller)
             self.player.audio_enabled = False
+            self.player.cancel_transition()
+            self._remember_rendered_frame(controller)
             return 0.05
 
         if self.mode is PlaybackMode.DYNAMIC:
@@ -381,6 +427,7 @@ class PlaybackEngine:
                         controller,
                     )
                     self._idle_rendered = True
+                self._remember_rendered_frame(controller)
                 return 0.05
 
             if not was_active:
@@ -419,12 +466,7 @@ class PlaybackEngine:
                             f"configured sequence animation disappeared: {sequence_animation}"
                         )
                     if target_index != self.player.current_index():
-                        source = controller.pixels()
-                        self.player.set_index(target_index, transition_ms=0)
-                        self.player.begin_transition(
-                            duration_ms=self.player.transition_ms,
-                            source=source,
-                        )
+                        self._set_animation_index(target_index, now_s=now)
                         switched_this_step = True
                 sequence_controls_playback = (
                     self._sequence_coordinator.controls_playback
@@ -443,28 +485,37 @@ class PlaybackEngine:
                 if not was_active:
                     # Keep activation responsive when automatic Dynamic mode
                     # starts without a configured custom sequence.
-                    self.last_decision = self.dynamic_selector.update(
+                    self.last_decision = self.dynamic_selector.propose(
                         self.player,
                         features,
                         now_s=now,
                         quiet=False,
                         force_switch=True,
                     )
-                    switched_this_step = self.last_decision.should_switch
+                    switched_this_step = self.dynamic_selector.commit(
+                        self.player,
+                        self.last_decision,
+                        now_s=now,
+                        transition_ms=0,
+                    )
+                    if switched_this_step:
+                        self._begin_transition(now_s=now)
                 elif self.config.switch_quantization is SwitchQuantization.OFF:
-                    self.last_decision = self.dynamic_selector.update(
+                    self.last_decision = self.dynamic_selector.propose(
                         self.player,
                         features,
                         now_s=now,
                         quiet=False,
                         force_switch=False,
                     )
-                    switched_this_step = self.last_decision.should_switch
+                    switched_this_step = self.dynamic_selector.commit(
+                        self.player,
+                        self.last_decision,
+                        now_s=now,
+                        transition_ms=0,
+                    )
                     if switched_this_step:
-                        self.player.begin_transition(
-                            duration_ms=self.player.transition_ms,
-                            source=controller.pixels(),
-                        )
+                        self._begin_transition(now_s=now)
                 else:
                     self.last_decision = self.dynamic_selector.propose(
                         self.player,
@@ -478,10 +529,9 @@ class PlaybackEngine:
                         self._musical_timeline_state,
                         now_s=now,
                         sync_offset_s=self.sync_offset_s,
-                        transition_active=self.player.transition_active,
+                        transition_active=self.transition_active,
                     )
                     if due_decision is not None:
-                        source = controller.pixels()
                         switched_this_step = self.dynamic_selector.commit(
                             self.player,
                             due_decision,
@@ -489,26 +539,23 @@ class PlaybackEngine:
                             transition_ms=0,
                         )
                         if switched_this_step:
-                            self.player.begin_transition(
-                                duration_ms=self.player.transition_ms,
-                                source=source,
-                            )
+                            self._begin_transition(now_s=now)
             active_snapshot = snapshot or AudioSnapshot.silence()
             active_snapshot = replace(
                 active_snapshot,
                 frame=self.reactive_smoother.update(active_snapshot.frame),
             )
-            if not was_active and not sequence_controls_playback:
-                if not switched_this_step:
-                    self.player.set_index(
-                        self.player.current_index(),
-                        transition_ms=0,
-                        restart=True,
-                    )
-                self.player.begin_transition(
-                    duration_ms=self.player.transition_ms,
-                    source=controller.pixels(),
+            if (
+                not was_active
+                and not sequence_controls_playback
+                and not switched_this_step
+            ):
+                self.player.set_index(
+                    self.player.current_index(),
+                    transition_ms=0,
+                    restart=True,
                 )
+                self._begin_transition(now_s=now)
             decision = decide_playback(
                 self.mode,
                 animation_name=self.player.name_at(self.player.current_index()),
@@ -525,7 +572,7 @@ class PlaybackEngine:
             )
             self.last_playback_decision = decision
             self.player.audio_enabled = plan.decision.audio_enabled
-            return self.layered_renderer.render(
+            delay = self.layered_renderer.render(
                 self.player,
                 controller,
                 plan.snapshot or active_snapshot,
@@ -534,6 +581,8 @@ class PlaybackEngine:
                 sync_offset_s=self.sync_offset_s,
                 structure_state=self._music_structure_state,
             )
+            self._remember_rendered_frame(controller)
+            return delay
 
         audio_frame = None
         if self.music_recognition_enabled and snapshot is not None and not snapshot.silence:
@@ -547,7 +596,14 @@ class PlaybackEngine:
         plan = build_render_plan(decision, snapshot=snapshot, flush=flush)
         self.last_playback_decision = decision
         self.player.audio_enabled = plan.decision.audio_enabled
-        return self.player.step(controller, audio_frame=audio_frame, flush=plan.flush)
+        delay = self.player.step(
+            controller,
+            audio_frame=audio_frame,
+            flush=plan.flush,
+            now_s=now,
+        )
+        self._remember_rendered_frame(controller)
+        return delay
 
     def _cycling_due(self, now_s: float) -> bool:
         if not self.player.animations:
@@ -557,21 +613,21 @@ class PlaybackEngine:
             return now_s - started_at >= self.config.cycling.interval_s
         return self.player.frame >= self.player.animations[self.player.current_index()].frames_per_cycle
 
-    def _cycle_next(self) -> None:
+    def _cycle_next(self, *, now_s: float) -> None:
         eligible = self.player.automatic_indices()
         if not eligible:
             return
         current = self.player.current_index()
         if self.config.cycling.order.value == "shuffle" and len(eligible) > 1:
             choices = [index for index in eligible if index != current]
-            self.player.set_index(self._rng.choice(choices))
+            self._set_animation_index(self._rng.choice(choices), now_s=now_s)
             return
         try:
             position = eligible.index(current)
         except ValueError:
-            self.player.set_index(eligible[0])
+            self._set_animation_index(eligible[0], now_s=now_s)
             return
-        self.player.set_index(eligible[(position + 1) % len(eligible)])
+        self._set_animation_index(eligible[(position + 1) % len(eligible)], now_s=now_s)
 
 
 def demo_snapshot(frame: int, *, now_s: float | None = None) -> AudioSnapshot:

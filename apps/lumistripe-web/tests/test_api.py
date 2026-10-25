@@ -736,12 +736,19 @@ def test_audio_settings_api_and_telemetry_websocket(
         assert synced.json()["sync_offset_ms"] == 100
         assert client.put("/api/audio/sync-offset", json={"offset_ms": 501}).status_code == 422
 
+        runtime = app.state.runtime
+        current = runtime.snapshot().animation
+        target = next(item.name for item in runtime.animations() if item.name != current)
+        runtime.select_animation(target).result(timeout=1)
+        assert runtime.playback.transition_active is True
+
         calibration = client.post(
             "/api/audio/sync-calibration", json={"active": True}
         )
         assert calibration.status_code == 200
         assert calibration.json()["start_at_ms"] is None
         assert calibration.json()["sync_offset_ms"] == 100
+        assert runtime.playback.transition_active is False
         with client.websocket_connect("/ws/audio") as websocket:
             calibration_telemetry = websocket.receive_json()
             if calibration_telemetry["calibration_output_callback_count"] == 0:

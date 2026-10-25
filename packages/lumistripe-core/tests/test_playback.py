@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import numpy as np
 import pytest
 from lumistripe import (
+    Animation,
     AudioFrame,
     AudioSnapshot,
     CycleOrder,
@@ -21,6 +23,7 @@ from lumistripe import (
 )
 from lumistripe.animation import AnimationPlayer
 from lumistripe.audio import BeatEvent, MusicalTimelineConfig, MusicStructurePhase
+from lumistripe.controller import Controller
 
 
 class CountingStripe(Stripe):
@@ -31,6 +34,33 @@ class CountingStripe(Stripe):
     def flush(self) -> None:
         self.flush_calls += 1
         super().flush()
+
+
+class Red(Animation):
+    @property
+    def name(self) -> str:
+        return "red"
+
+    def tick(self, frame: int, controller: Controller) -> None:
+        controller.fill(Rgb(255, 0, 0))
+
+
+class Blue(Animation):
+    @property
+    def name(self) -> str:
+        return "blue"
+
+    def tick(self, frame: int, controller: Controller) -> None:
+        controller.fill(Rgb(0, 0, 255))
+
+
+class Green(Animation):
+    @property
+    def name(self) -> str:
+        return "green"
+
+    def tick(self, frame: int, controller: Controller) -> None:
+        controller.fill(Rgb(0, 255, 0))
 
 
 def _active_snapshot() -> AudioSnapshot:
@@ -132,6 +162,82 @@ def test_manual_selection_switches_to_static() -> None:
 
     assert engine.mode is PlaybackMode.STATIC
     assert engine.player.name_at(engine.player.current_index()) == "pulse"
+
+
+def test_manual_selection_crossfades_from_the_last_rendered_frame() -> None:
+    player = AnimationPlayer()
+    player.add(Red(), 20, 10)
+    player.add(Blue(), 80, 10)
+    engine = PlaybackEngine(player, PlaybackConfig(transition_duration_s=0.1))
+    stripe = Stripe(2)
+    engine.step(stripe, now_s=0.0)
+
+    engine.select_animation("blue", now_s=1.0)
+    engine.step(stripe, now_s=1.05)
+
+    np.testing.assert_array_equal(stripe.pixels()[0, :3], [127, 0, 127])
+    assert engine.transition_active is True
+    engine.step(stripe, now_s=1.1)
+    np.testing.assert_array_equal(stripe.pixels()[0, :3], [0, 0, 255])
+    assert engine.transition_active is False
+
+
+def test_zero_transition_duration_keeps_manual_selection_instant() -> None:
+    player = AnimationPlayer()
+    player.add(Red(), 20, 10)
+    player.add(Blue(), 80, 10)
+    engine = PlaybackEngine(player, PlaybackConfig(transition_duration_s=0.0))
+    stripe = Stripe(2)
+    engine.step(stripe, now_s=0.0)
+
+    engine.select_animation("blue", now_s=1.0)
+    engine.step(stripe, now_s=1.01)
+
+    np.testing.assert_array_equal(stripe.pixels()[0, :3], [0, 0, 255])
+    assert engine.transition_active is False
+
+
+def test_cycling_switch_uses_elapsed_transition_duration() -> None:
+    player = AnimationPlayer()
+    player.add(Red(), 20, 1)
+    player.add(Blue(), 80, 10)
+    engine = PlaybackEngine(
+        player,
+        PlaybackConfig(mode=PlaybackMode.CYCLING, transition_duration_s=0.1),
+    )
+    stripe = Stripe(2)
+    engine.step(stripe, now_s=0.0)
+
+    engine.step(stripe, now_s=1.0)
+    assert player.name_at(player.current_index()) == "blue"
+    engine.step(stripe, now_s=1.05)
+
+    np.testing.assert_array_equal(stripe.pixels()[0, :3], [127, 0, 127])
+    assert engine.transition_active is True
+
+
+def test_independent_playback_engines_keep_transition_sources_separate() -> None:
+    left_player = AnimationPlayer()
+    left_player.add(Red(), 20, 10)
+    left_player.add(Blue(), 80, 10)
+    right_player = AnimationPlayer()
+    right_player.add(Green(), 20, 10)
+    right_player.add(Blue(), 80, 10)
+    config = PlaybackConfig(transition_duration_s=0.1)
+    left = PlaybackEngine(left_player, config)
+    right = PlaybackEngine(right_player, config)
+    left_stripe = Stripe(1)
+    right_stripe = Stripe(1)
+    left.step(left_stripe, now_s=0.0)
+    right.step(right_stripe, now_s=0.0)
+
+    left.select_animation("blue", now_s=1.0)
+    right.select_animation("blue", now_s=1.0)
+    left.step(left_stripe, now_s=1.05)
+    right.step(right_stripe, now_s=1.05)
+
+    np.testing.assert_array_equal(left_stripe.pixels()[0, :3], [127, 0, 127])
+    np.testing.assert_array_equal(right_stripe.pixels()[0, :3], [0, 127, 127])
 
 
 def test_cycling_uses_authored_duration_and_skips_utility() -> None:

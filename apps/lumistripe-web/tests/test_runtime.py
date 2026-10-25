@@ -664,6 +664,63 @@ def test_select_animation_switches_to_static() -> None:
         runtime.stop()
 
 
+def test_blackout_and_shutdown_are_immediate_during_animation_transition() -> None:
+    stripe = TrackingStripe(8)
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(pixels=8),
+        controller_factory=lambda settings: stripe,
+    )
+    runtime.start()
+    try:
+        current = runtime.snapshot().animation
+        target = next(item.name for item in runtime.animations() if item.name != current)
+        runtime.select_animation(target).result(timeout=1)
+        assert runtime.playback.transition_active is True
+
+        flushes_before_blackout = stripe.force_flush_count
+        state = runtime.set_blackout(True).result(timeout=1)
+        assert state.blackout is True
+        assert stripe.force_flush_count == flushes_before_blackout + 1
+        assert runtime.playback.transition_active is True
+    finally:
+        runtime.stop()
+
+    assert stripe.force_flush_count >= 2
+    np.testing.assert_array_equal(
+        stripe.pixels(), np.tile(np.array([0, 0, 0, 255], dtype=np.uint8), (8, 1))
+    )
+
+
+def test_color_calibration_renders_immediately_during_animation_transition() -> None:
+    stripe = TrackingStripe(4)
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(pixels=4),
+        controller_factory=lambda settings: stripe,
+    )
+    started = None
+    runtime.start()
+    try:
+        current = runtime.snapshot().animation
+        target = next(item.name for item in runtime.animations() if item.name != current)
+        runtime.select_animation(target).result(timeout=1)
+        assert runtime.playback.transition_active is True
+
+        flushes_before_calibration = stripe.force_flush_count
+        started = runtime.start_calibration(0).result(timeout=1)
+
+        assert started.state.calibration.active is True
+        assert runtime.playback.transition_active is False
+        assert stripe.force_flush_count == flushes_before_calibration + 1
+        np.testing.assert_array_equal(stripe.pixels()[0], [255, 255, 255, 255])
+    finally:
+        if started is not None and runtime.snapshot().calibration.active:
+            runtime.finish_calibration(
+                started.session_id,
+                save=False,
+            ).result(timeout=1)
+        runtime.stop()
+
+
 def test_set_solid_color_selects_solid_mode_and_publishes_color() -> None:
     stripe = TrackingStripe(4)
     runtime = LumiStripeRuntime(
@@ -1076,6 +1133,13 @@ def test_independent_layout_accepts_targeted_playback_commands(tmp_path: Path) -
         playback = {item.stripe_id: item for item in state.stripe_playback}
         assert playback["a"].brightness == 1.0
         assert playback["b"].brightness == 0.25
+
+        target = next(
+            item.name for item in runtime.animations() if item.name != playback["a"].animation
+        )
+        runtime.select_animation(target, stripe_id="a").result(timeout=1)
+        assert runtime._playbacks["a"][1].transition_active is True
+        assert runtime._playbacks["b"][1].transition_active is False
     finally:
         runtime.stop()
 

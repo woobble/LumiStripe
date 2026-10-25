@@ -20,6 +20,7 @@ from lumistripe import (
     MusicFeatures,
     PixelExplosion,
     Rgb,
+    Rgba,
     Stripe,
     animation_metadata,
 )
@@ -27,6 +28,7 @@ from lumistripe.audio import MusicStructurePhase, MusicStructureState
 from lumistripe.audio.types import BeatClockState, BeatEvent
 from lumistripe.controller import Controller
 from lumistripe.effects import BeatWave
+from lumistripe.effects.layers import ActiveEffect, EffectDefinition
 
 
 @dataclass(slots=True)
@@ -47,6 +49,16 @@ class Blue(Animation):
 
     def tick(self, frame: int, controller: Controller) -> None:
         controller.fill(Rgb(0, 0, 255))
+
+
+@dataclass(slots=True)
+class GreenEffect(Effect):
+    @property
+    def name(self) -> str:
+        return "green_effect"
+
+    def tick(self, frame: int, controller: Controller) -> None:
+        controller.fill(Rgba(0, 255, 0, 1.0))
 
 
 def _event_snapshot() -> AudioSnapshot:
@@ -716,20 +728,86 @@ def test_player_crossfades_automatic_switches() -> None:
     player.add(Red(), 50, 10)
     player.add(Blue(), 50, 10)
     stripe = Stripe(4)
-    player.step(stripe)
+    player.step(stripe, now_s=0.0)
 
-    player.set_index(1)
-    assert player.transition_progress == pytest.approx(0.0)
-    player.step(stripe)
-    assert player.transition_progress == pytest.approx(0.5)
+    player.set_index(1, now_s=1.0)
+    assert player.transition_progress_at(1.0) == pytest.approx(0.0)
+    player.step(stripe, now_s=1.0)
+    player.step(stripe, now_s=1.05)
+    assert player.transition_progress_at(1.05) == pytest.approx(0.5)
     midpoint = stripe.pixels()[0, :3].copy()
-    player.step(stripe)
-    assert player.transition_progress == pytest.approx(1.0)
+    player.step(stripe, now_s=1.1)
+    assert player.transition_progress_at(1.1) == pytest.approx(1.0)
 
     assert 110 <= int(midpoint[0]) <= 140
     assert midpoint[1] == 0
     assert 110 <= int(midpoint[2]) <= 140
     np.testing.assert_array_equal(stripe.pixels()[:, :3], [[0, 0, 255]] * 4)
+
+
+def test_interrupted_transition_starts_from_currently_visible_frame() -> None:
+    player = AnimationPlayer(transition_ms=100)
+    player.add(Red(), 50, 10)
+    player.add(Blue(), 50, 10)
+    player.add(Red(), 50, 10)
+    stripe = Stripe(2)
+    player.step(stripe, now_s=0.0)
+
+    player.set_index(1, now_s=1.0)
+    player.step(stripe, now_s=1.05)
+    visible = stripe.pixels().copy()
+
+    player.set_index(2, now_s=1.06)
+    player.step(stripe, now_s=1.06)
+
+    np.testing.assert_array_equal(stripe.pixels(), visible)
+    assert player.transition_progress_at(1.06) == pytest.approx(0.0)
+
+
+def test_transition_progress_uses_elapsed_time_across_irregular_frames() -> None:
+    player = AnimationPlayer(transition_ms=200)
+    player.add(Red(), 20, 10)
+    player.add(Blue(), 80, 10)
+    stripe = Stripe(1)
+    player.step(stripe, now_s=2.0)
+    player.set_index(1, now_s=3.0)
+
+    player.step(stripe, now_s=3.03)
+    assert player.transition_progress_at(3.03) == pytest.approx(0.15)
+    player.step(stripe, now_s=3.17)
+    assert player.transition_progress_at(3.17) == pytest.approx(0.85)
+    player.step(stripe, now_s=3.2)
+
+    np.testing.assert_array_equal(stripe.pixels()[0, :3], [0, 0, 255])
+
+
+def test_layered_renderer_crossfades_after_composing_the_incoming_frame() -> None:
+    player = AnimationPlayer(transition_ms=100)
+    player.add(Red(), 50, 10)
+    player.add(Blue(), 50, 10)
+    stripe = Stripe(2)
+    renderer = LayeredRenderer(EffectScheduler(EffectSchedulerConfig(seed=1)))
+    quiet = AudioSnapshot.from_parts(
+        AudioFrame(), MusicFeatures(musical_impact=1.0)
+    )
+
+    renderer.render(player, stripe, quiet, now_s=0.0)
+    renderer.scheduler.active.append(
+        ActiveEffect(
+            EffectDefinition("green_effect", EffectCategory.ACCENT, 1.0, 1.0),
+            GreenEffect(),
+            0.01,
+            AudioFrame(),
+        )
+    )
+    renderer.render(player, stripe, quiet, now_s=0.01)
+    np.testing.assert_array_equal(stripe.pixels()[0, :3], [255, 191, 0])
+
+    player.set_index(1, transition_ms=0)
+    player.begin_transition(duration_ms=100, source=stripe.pixels(), now_s=1.0)
+    renderer.render(player, stripe, quiet, now_s=1.05)
+
+    np.testing.assert_array_equal(stripe.pixels()[0, :3], [127, 95, 127])
 
 
 def test_reselection_replaces_stateful_animation_instance() -> None:

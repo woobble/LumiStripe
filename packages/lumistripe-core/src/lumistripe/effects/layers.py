@@ -883,8 +883,15 @@ class LayeredRenderer:
 
         transitioning = player.transition_active
         if transitioning:
+            player.ensure_transition_source(controller.pixels())
             self.scheduler.clear_active()
-        delay = player.step(self._base_buffer, audio_frame=snapshot.frame, flush=False)
+        delay = player.step(
+            self._base_buffer,
+            audio_frame=snapshot.frame,
+            flush=False,
+            now_s=now_s,
+            transition_external=True,
+        )
         self.scheduler.update(
             player,
             snapshot,
@@ -938,6 +945,8 @@ class LayeredRenderer:
         output[:, :3] = np.clip(composed * 255.0, 0.0, 255.0).astype(np.uint8)
         output[:, 3] = 255
         controller.set_pixels(output)
+        if player.transition_active:
+            player.apply_transition(controller, now_s=now_s)
         if flush:
             controller.flush()
         return delay

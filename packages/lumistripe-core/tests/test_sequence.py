@@ -403,7 +403,7 @@ def _active_snapshot(sequence: int, timestamp: float) -> AudioSnapshot:
     )
 
 
-def test_dynamic_sequence_overrides_selector_and_uses_player_crossfade() -> None:
+def test_dynamic_sequence_overrides_selector_and_uses_elapsed_crossfade() -> None:
     sequence = AnimationSequence(
         "short",
         "Short",
@@ -427,7 +427,7 @@ def test_dynamic_sequence_overrides_selector_and_uses_player_crossfade() -> None
     assert engine.player.name_at(engine.player.current_index()) == "pulse"
     assert engine.sequence_playback_state.active is True
     assert engine.sequence_playback_state.current_step_index == 0
-    assert engine.player.transition_active is True
+    assert engine.player.transition_active is False
     assert engine.dynamic_selector.recent_names == []
 
     engine.step(stripe, snapshot=_active_snapshot(13, 6.0), now_s=6.0)
