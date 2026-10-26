@@ -235,7 +235,11 @@ def _key_management(security: str, password: str) -> str | None:
         raise NetworkOperationError(
             "unsupported", "This network security type is not supported."
         )
-    if "WPA3" in upper or "SAE" in upper:
+    if "WPA2" in upper and ("WPA3" in upper or "SAE" in upper):
+        # NetworkManager's wpa-psk mode supports WPA2/WPA3 Personal transition
+        # networks and lets WPA2-only adapters connect through the WPA2 path.
+        key_management = "wpa-psk"
+    elif "WPA3" in upper or "SAE" in upper:
         key_management = "sae"
     elif "WPA" in upper:
         key_management = "wpa-psk"
@@ -392,7 +396,8 @@ def _connect(payload: dict[str, Any]) -> dict[str, Any]:
             pass
         profile_path.unlink(missing_ok=True)
         raise NetworkOperationError(
-            "connection_failed", "Could not connect to that Wi-Fi network. Check the password and try again."
+            "connection_failed",
+            "Could not connect to that Wi-Fi network. Check the password, router security mode, and adapter compatibility.",
         ) from exc
 
     return {
