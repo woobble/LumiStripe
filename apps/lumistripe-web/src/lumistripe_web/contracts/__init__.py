@@ -60,6 +60,15 @@ from .control import (
     CalibrationUpdateRequest,
     ModeRequest,
 )
+from .network import (
+    NetworkAdapterInfo,
+    NetworkStatusResponse,
+    WifiConnectRequest,
+    WifiConnectResponse,
+    WifiNetworkInfo,
+    WifiScanRequest,
+    WifiScanResponse,
+)
 from .sequencer import (
     AnimationSequenceContract,
     AnimationSequenceStepContract,
@@ -129,6 +138,8 @@ __all__ = [
     "DashboardState",
     "DiagnosticIssue",
     "ModeRequest",
+    "NetworkAdapterInfo",
+    "NetworkStatusResponse",
     "PairingRequest",
     "RuntimeKind",
     "SequenceActiveRequest",
@@ -152,4 +163,9 @@ __all__ = [
     "TransitionSettingsRequest",
     "TransitionSettingsResponse",
     "UpdateStatus",
+    "WifiConnectRequest",
+    "WifiConnectResponse",
+    "WifiNetworkInfo",
+    "WifiScanRequest",
+    "WifiScanResponse",
 ]

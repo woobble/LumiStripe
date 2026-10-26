@@ -8,10 +8,14 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from .api import router
 from .auth import SESSION_COOKIE, PairingAuth
+from .networking import NetworkManagerService
 from .runtime import LumiStripeRuntime, RuntimeSettings
 from .system_stats import SystemStatsCollector
 
@@ -27,6 +31,7 @@ def create_app(
     update_state_file: Path | None = None,
     project_dir: Path | None = None,
     system_stats_collector: SystemStatsCollector | None = None,
+    network_service: NetworkManagerService | None = None,
 ) -> FastAPI:
     resolved_settings = settings or RuntimeSettings()
 
@@ -57,6 +62,21 @@ def create_app(
         os.environ.get("LUMI_PROJECT_DIR", Path(__file__).resolve().parents[4])
     )
     app.state.system_stats_collector = system_stats_collector or SystemStatsCollector()
+    app.state.network_service = network_service or NetworkManagerService()
+
+    @app.exception_handler(RequestValidationError)
+    async def hide_network_password_validation_input(
+        request: Request, exc: RequestValidationError
+    ):
+        if request.url.path == "/api/network/connect":
+            errors = [
+                {key: value for key, value in error.items() if key != "input"}
+                for error in exc.errors()
+            ]
+            return JSONResponse(
+                jsonable_encoder({"detail": errors}), status_code=422
+            )
+        return await request_validation_exception_handler(request, exc)
 
     @app.middleware("http")
     async def require_pairing(request: Request, call_next):

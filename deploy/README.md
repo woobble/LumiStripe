@@ -32,7 +32,8 @@ The installer provisions the complete appliance: Debian/Raspberry Pi OS
 packages and native
 build tools, the service user and GPIO/SPI/audio permissions, Raspberry Pi SPI,
 uv 0.13.0 with managed Python 3.12, the native audio, GPIO, and SPI extensions,
-Bun, locked Python and frontend dependencies, the frontend production build,
+Bun, NetworkManager and Wi-Fi adapter tools, locked Python and frontend
+dependencies, the frontend production build,
 and the Bluetooth/WirePlumber configuration. It installs the official Spotify
 Soloist binary when configured, plus a local mkcert CA and HTTPS certificate,
 Nginx, and the required systemd services. Without a Spotify key the Spotify
@@ -65,6 +66,21 @@ empty, the installer recreates the certificate and key using the existing CA.
 The generated CA is stored at the service
 user's mkcert CA path and must be installed/trusted on each phone or PC that
 opens the HTTPS dashboard.
+
+## Connect the internet Wi-Fi adapter
+
+Open Setup → Network in the dashboard to select a Wi-Fi adapter, scan for
+nearby open or WPA personal networks, and connect. NetworkManager stores the
+profile and reconnects automatically. Adapters currently running as access
+points are marked as hotspots and cannot be used for an internet connection,
+so the internal LumiStripe hotspot stays available to dashboard clients.
+
+The installer provides NetworkManager, `iw`, and a root-owned helper that
+accepts requests only from the paired dashboard service. Passwords are sent to
+the helper over standard input and are stored only in NetworkManager's
+system-managed connection profile. After updating an existing appliance to a
+version that adds this feature, rerun `sudo ./deploy/install.sh` once to
+install the helper permission and adapter tools.
 
 ## Systemd updates
 

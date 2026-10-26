@@ -635,6 +635,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/network/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Connect Wifi */
+        post: operations["connect_wifi_api_network_connect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/network/scan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Scan Wifi */
+        post: operations["scan_wifi_api_network_scan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/network/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Network Status */
+        get: operations["network_status_api_network_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/sequencer/active": {
         parameters: {
             query?: never;
@@ -1729,6 +1780,35 @@ export interface components {
             /** Stripe Id */
             stripe_id?: string | null;
         };
+        /** NetworkAdapterInfo */
+        NetworkAdapterInfo: {
+            /** Connectable */
+            connectable: boolean;
+            /** Connection */
+            connection?: string | null;
+            /** Current Ssid */
+            current_ssid?: string | null;
+            /** Hotspot */
+            hotspot: boolean | null;
+            /** Interface */
+            interface: string;
+            /** Reason */
+            reason?: string | null;
+            /** State */
+            state: string;
+        };
+        /** NetworkStatusResponse */
+        NetworkStatusResponse: {
+            /**
+             * Adapters
+             * @default []
+             */
+            adapters: components["schemas"]["NetworkAdapterInfo"][];
+            /** Error */
+            error?: string | null;
+            /** Manager Available */
+            manager_available: boolean;
+        };
         /** PairingRequest */
         PairingRequest: {
             /** Code */
@@ -2360,6 +2440,54 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /** WifiConnectRequest */
+        WifiConnectRequest: {
+            /** Interface */
+            interface: string;
+            /**
+             * Password
+             * Format: password
+             * @default
+             */
+            password: string;
+            /** Ssid */
+            ssid: string;
+        };
+        /** WifiConnectResponse */
+        WifiConnectResponse: {
+            /** Connected */
+            connected: boolean;
+            /** Interface */
+            interface: string;
+            /** Ssid */
+            ssid: string;
+        };
+        /** WifiNetworkInfo */
+        WifiNetworkInfo: {
+            /** Secured */
+            secured: boolean;
+            /** Security */
+            security: string;
+            /** Signal */
+            signal: number;
+            /** Ssid */
+            ssid: string;
+        };
+        /** WifiScanRequest */
+        WifiScanRequest: {
+            /** Interface */
+            interface: string;
+        };
+        /** WifiScanResponse */
+        WifiScanResponse: {
+            /** Interface */
+            interface: string;
+            /**
+             * Networks
+             * @default []
+             */
+            networks: components["schemas"]["WifiNetworkInfo"][];
         };
     };
     responses: never;
@@ -3553,6 +3681,92 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    connect_wifi_api_network_connect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WifiConnectRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WifiConnectResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    scan_wifi_api_network_scan_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WifiScanRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WifiScanResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    network_status_api_network_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetworkStatusResponse"];
                 };
             };
         };

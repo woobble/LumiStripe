@@ -7,6 +7,9 @@ import type {
   BluetoothStatusResponse,
   CalibrationPattern,
   DashboardState,
+  NetworkStatusResponse,
+  WifiConnectResponse,
+  WifiScanResponse,
   PlaybackMode,
   SpotifyControlAction,
   SwitchQuantization,
@@ -40,6 +43,11 @@ export type {
   BluetoothDeviceRole,
   BluetoothOperation,
   BluetoothStatusResponse,
+  NetworkAdapterInfo,
+  NetworkStatusResponse,
+  WifiConnectResponse,
+  WifiNetworkInfo,
+  WifiScanResponse,
   CalibrationPattern,
   CalibrationSessionResponse,
   CalibrationStatus,
@@ -411,6 +419,37 @@ function parseBluetoothStatus(value: unknown): BluetoothStatusResponse {
     operation_state: parsed.operation_state ?? "idle",
   }
 }
+
+const networkStatusSchema = z.object({
+  manager_available: z.boolean(),
+  error: z.string().nullable(),
+  adapters: z.array(z.object({
+    interface: z.string(),
+    state: z.string(),
+    connection: z.string().nullable(),
+    current_ssid: z.string().nullable(),
+    hotspot: z.boolean().nullable(),
+    connectable: z.boolean(),
+    reason: z.string().nullable(),
+  }).strict()),
+}).strict()
+
+const wifiScanSchema = z.object({
+  interface: z.string(),
+  networks: z.array(z.object({
+    ssid: z.string(),
+    security: z.string(),
+    signal: z.number().int().min(0).max(100),
+    secured: z.boolean(),
+  }).strict()),
+}).strict()
+
+const wifiConnectSchema = z.object({
+  interface: z.string(),
+  ssid: z.string(),
+  connected: z.boolean(),
+}).strict()
+
 const audioTuningSchema = z.object({
   target_level: z.number(),
   hardware_gain_target: z.number().nullable().optional(),
@@ -821,6 +860,15 @@ export const dashboardApi = {
   connectBluetooth: (address: string, role?: BluetoothDeviceRole) => request("/api/audio/bluetooth/connect", { method: "POST", body: JSON.stringify({ address, ...(role ? { role } : {}) }) }, parseBluetoothStatus),
   disconnectBluetooth: (address: string) => request("/api/audio/bluetooth/disconnect", { method: "POST", body: JSON.stringify({ address }) }, parseBluetoothStatus),
   forgetBluetooth: (address: string) => request("/api/audio/bluetooth/forget", { method: "POST", body: JSON.stringify({ address }) }, parseBluetoothStatus),
+  getNetworkStatus: (signal?: AbortSignal) => request("/api/network/status", signal ? { signal } : undefined, networkStatusSchema) as Promise<NetworkStatusResponse>,
+  scanWifi: (interfaceName: string) => request("/api/network/scan", {
+    method: "POST",
+    body: JSON.stringify({ interface: interfaceName }),
+  }, wifiScanSchema) as Promise<WifiScanResponse>,
+  connectWifi: (interfaceName: string, ssid: string, password: string) => request("/api/network/connect", {
+    method: "POST",
+    body: JSON.stringify({ interface: interfaceName, ssid, password }),
+  }, wifiConnectSchema) as Promise<WifiConnectResponse>,
   setAudioOutput: (selector: string) => request("/api/audio/output", { method: "PUT", body: JSON.stringify({ selector }) }, parseBluetoothStatus),
   setAudioOutputVolume: (selector: string, volume: number) => request("/api/audio/output/volume", { method: "PUT", body: JSON.stringify({ selector, volume }) }, parseBluetoothStatus),
   setAudioOutputMute: (selector: string, muted: boolean) => request("/api/audio/output/mute", { method: "PUT", body: JSON.stringify({ selector, muted }) }, parseBluetoothStatus),

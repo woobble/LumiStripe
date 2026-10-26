@@ -22,6 +22,9 @@ UPDATE_CHECK_TIMER_FILE=/etc/systemd/system/lumistripe-update-check.timer
 UPDATE_SUDOERS_FILE=/etc/sudoers.d/lumistripe-update
 UPDATE_TRIGGER_FILE=/usr/local/sbin/lumistripe-update-trigger
 UPDATE_LIBEXEC_DIR=/usr/local/libexec/lumistripe/deploy
+NETWORK_SUDOERS_FILE=/etc/sudoers.d/lumistripe-network
+NETWORK_HELPER_FILE=/usr/local/sbin/lumistripe-network
+NETWORK_LIBEXEC_DIR=/usr/local/libexec/lumistripe/network
 SOLOIST_BIN=/usr/local/bin/soloist
 STATE_DIR=/var/lib/lumistripe
 STATE_FILE="$STATE_DIR/install-state"
@@ -198,7 +201,10 @@ remove_file "$UPDATE_CHECK_SERVICE_FILE"
 remove_file "$UPDATE_CHECK_TIMER_FILE"
 remove_file "$UPDATE_SUDOERS_FILE"
 remove_file "$UPDATE_TRIGGER_FILE"
+remove_file "$NETWORK_SUDOERS_FILE"
+remove_file "$NETWORK_HELPER_FILE"
 remove_directory "$UPDATE_LIBEXEC_DIR"
+remove_directory "$NETWORK_LIBEXEC_DIR"
 rmdir /usr/local/libexec/lumistripe 2>/dev/null || true
 systemctl daemon-reload
 

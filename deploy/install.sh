@@ -84,6 +84,9 @@ for required_file in \
   "$PROJECT_DIR/deploy/90-lumistripe-spotify.conf" \
   "$PROJECT_DIR/deploy/lumistripe-web.env.example" \
   "$PROJECT_DIR/deploy/lumistripe-spotify.env.example" \
+  "$PROJECT_DIR/deploy/lumistripe_network.py" \
+  "$PROJECT_DIR/deploy/lumistripe-network" \
+  "$PROJECT_DIR/deploy/lumistripe-network.sudoers" \
   "$PROJECT_DIR/deploy/nginx/led-controller.conf" \
   "$PROJECT_DIR/deploy/tls.sh"; do
   [[ -f "$required_file" ]] || {
@@ -134,6 +137,8 @@ install_system_packages() {
     libasound2-plugins
     libportaudio2
     libasound2-dev
+    network-manager
+    iw
     libgpiod-dev
     nginx
     libnss3-tools

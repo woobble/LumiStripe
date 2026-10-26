@@ -37,6 +37,10 @@ const StartupPanel = lazy(async () => {
   const module = await import("@/components/dashboard/startup-panel")
   return { default: module.StartupPanel }
 })
+const NetworkSetupPage = lazy(async () => {
+  const module = await import("@/components/dashboard/network-setup-page")
+  return { default: module.NetworkSetupPage }
+})
 const StatusPanel = lazy(async () => {
   const module = await import("@/components/dashboard/status-panel")
   return { default: module.StatusPanel }
@@ -85,6 +89,7 @@ export function DashboardRoutes({
         <Route path="sync" element={<Suspense fallback={fallback}><AudioSyncPage /></Suspense>} />
       </Route>
       <Route path="/setup/startup" element={<SetupGuard access={access}><Suspense fallback={fallback}><StartupPanel /></Suspense></SetupGuard>} />
+      <Route path="/setup/network" element={<SetupGuard access={access}><Suspense fallback={fallback}><NetworkSetupPage /></Suspense></SetupGuard>} />
       <Route path="/calibration" element={<Navigate to="/setup/color" replace />} />
       <Route path="/diagnostics" element={<Suspense fallback={fallback}><StatusPanel controller={controller} onLogout={access.required && access.authenticated ? access.logout : undefined} /></Suspense>} />
       <Route path="*" element={<Navigate to="/" replace />} />

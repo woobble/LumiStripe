@@ -9,6 +9,7 @@ from .routes import (
     auth_router,
     bluetooth_router,
     control_router,
+    network_router,
     sequencer_router,
     startup_router,
     stripes_router,
@@ -28,6 +29,7 @@ for feature_router in (
     stripes_router,
     audio_router,
     bluetooth_router,
+    network_router,
     startup_router,
     websocket_router,
 ):

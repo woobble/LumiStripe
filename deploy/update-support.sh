@@ -2,6 +2,7 @@
 
 # Shared systemd updater installation for install.sh and update.sh.
 UPDATE_LIBEXEC_DIR=/usr/local/libexec/lumistripe/deploy
+NETWORK_LIBEXEC_DIR=/usr/local/libexec/lumistripe/network
 
 install_update_support() {
   local rendered_dir
@@ -28,6 +29,7 @@ install_update_support() {
   project_replacement="$(printf '%s' "$PROJECT_DIR" | sed 's/[&|\\]/\\&/g')"
 
   install -d -o root -g root -m 755 "$UPDATE_LIBEXEC_DIR"
+  install -d -o root -g root -m 755 "$NETWORK_LIBEXEC_DIR"
   for template in \
     update.sh update_state.py update-support.sh tls.sh \
     lumistripe-web.service lumistripe-spotify.service \
@@ -41,6 +43,26 @@ install_update_support() {
     install -o root -g root -m "$mode" \
       "$PROJECT_DIR/deploy/$template" "$UPDATE_LIBEXEC_DIR/$template"
   done
+
+  install -o root -g root -m 644 \
+    "$PROJECT_DIR/deploy/lumistripe_network.py" \
+    "$NETWORK_LIBEXEC_DIR/lumistripe_network.py"
+  install -o root -g root -m 755 \
+    "$PROJECT_DIR/deploy/lumistripe-network" \
+    /usr/local/sbin/lumistripe-network
+  sed \
+    -e "s|@LUMI_SERVICE_USER@|$user_replacement|g" \
+    "$PROJECT_DIR/deploy/lumistripe-network.sudoers" \
+    > "$rendered_dir/lumistripe-network.sudoers"
+  chmod 440 "$rendered_dir/lumistripe-network.sudoers"
+  if ! visudo -cf "$rendered_dir/lumistripe-network.sudoers" >/dev/null; then
+    rm -rf -- "$rendered_dir"
+    echo "The LumiStripe network permission did not pass visudo validation." >&2
+    return 1
+  fi
+  install -o root -g root -m 440 \
+    "$rendered_dir/lumistripe-network.sudoers" \
+    /etc/sudoers.d/lumistripe-network
 
   for template in lumistripe-update-check.service lumistripe-update.service; do
     rendered_file="$rendered_dir/$template"

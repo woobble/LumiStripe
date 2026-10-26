@@ -9,13 +9,14 @@ export function SetupPage({ children, ...props }: ComponentProps<"div">) {
     <div {...props} className={cn("space-y-4 pb-4", props.className)}>
       <div>
         <h2 className="text-lg font-semibold">Setup</h2>
-        <p className="text-sm text-muted-foreground">Configure hardware, audio, color, and startup behavior.</p>
+        <p className="text-sm text-muted-foreground">Configure hardware, audio, network, color, and startup behavior.</p>
       </div>
-      <nav className="grid grid-cols-4 rounded-xl border border-white/5 bg-white/[0.03] p-1" aria-label="Setup sections">
+      <nav className="grid grid-cols-5 rounded-xl border border-white/5 bg-white/[0.03] p-1" aria-label="Setup sections">
         <GuardedNavLink to="/setup/stripes" className={({ isActive }) => cn("grid h-11 place-items-center rounded-lg text-sm text-muted-foreground", isActive && "bg-background text-foreground shadow-sm")}>Stripes</GuardedNavLink>
         <GuardedNavLink to="/setup/color" className={({ isActive }) => cn("grid h-11 place-items-center rounded-lg text-sm text-muted-foreground", isActive && "bg-background text-foreground shadow-sm")}>Color</GuardedNavLink>
         <GuardedNavLink to="/setup/audio" className={({ isActive }) => cn("grid h-11 place-items-center rounded-lg text-sm text-muted-foreground", isActive && "bg-background text-foreground shadow-sm")}>Audio</GuardedNavLink>
         <GuardedNavLink to="/setup/startup" className={({ isActive }) => cn("grid h-11 place-items-center rounded-lg text-sm text-muted-foreground", isActive && "bg-background text-foreground shadow-sm")}>Startup</GuardedNavLink>
+        <GuardedNavLink to="/setup/network" className={({ isActive }) => cn("grid h-11 place-items-center rounded-lg text-sm text-muted-foreground", isActive && "bg-background text-foreground shadow-sm")}>Network</GuardedNavLink>
       </nav>
       {children}
     </div>

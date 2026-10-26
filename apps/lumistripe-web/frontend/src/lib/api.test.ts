@@ -68,6 +68,47 @@ describe("dashboardApi", () => {
     }))
   })
 
+  it("uses strict typed Wi-Fi network endpoints", async () => {
+    const networkStatus = {
+      manager_available: true,
+      error: null,
+      adapters: [{
+        interface: "wlan1",
+        state: "disconnected",
+        connection: null,
+        current_ssid: null,
+        hotspot: false,
+        connectable: true,
+        reason: null,
+      }],
+    }
+    fetchMock.mockReturnValueOnce(jsonResponse(networkStatus))
+    await expect(dashboardApi.getNetworkStatus()).resolves.toEqual(networkStatus)
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/network/status", expect.any(Object))
+
+    const networkScan = {
+      interface: "wlan1",
+      networks: [{ ssid: "Guest", security: "Open", signal: 55, secured: false }],
+    }
+    fetchMock.mockReturnValueOnce(jsonResponse(networkScan))
+    await expect(dashboardApi.scanWifi("wlan1")).resolves.toEqual(networkScan)
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/network/scan", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ interface: "wlan1" }),
+    }))
+
+    const connected = { interface: "wlan1", ssid: "Guest", connected: true }
+    fetchMock.mockReturnValueOnce(jsonResponse(connected))
+    await expect(dashboardApi.connectWifi("wlan1", "Guest", "")).resolves.toEqual(connected)
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/network/connect", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ interface: "wlan1", ssid: "Guest", password: "" }),
+    }))
+
+    fetchMock.mockReturnValueOnce(jsonResponse({ ...networkStatus, unexpected: true }))
+    await expect(dashboardApi.getNetworkStatus()).rejects.toThrow()
+  })
+
   it("uses typed sequence library endpoints and preserves server validation", async () => {
     const library = {
       sequences: [{

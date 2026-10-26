@@ -2046,6 +2046,106 @@
         "title": "ModeRequest",
         "type": "object"
       },
+      "NetworkAdapterInfo": {
+        "properties": {
+          "connectable": {
+            "title": "Connectable",
+            "type": "boolean"
+          },
+          "connection": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection"
+          },
+          "current_ssid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Ssid"
+          },
+          "hotspot": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hotspot"
+          },
+          "interface": {
+            "title": "Interface",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interface",
+          "state",
+          "hotspot",
+          "connectable"
+        ],
+        "title": "NetworkAdapterInfo",
+        "type": "object"
+      },
+      "NetworkStatusResponse": {
+        "properties": {
+          "adapters": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/NetworkAdapterInfo"
+            },
+            "title": "Adapters",
+            "type": "array"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "manager_available": {
+            "title": "Manager Available",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "manager_available"
+        ],
+        "title": "NetworkStatusResponse",
+        "type": "object"
+      },
       "PairingRequest": {
         "properties": {
           "code": {
@@ -3596,6 +3696,127 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "WifiConnectRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "interface": {
+            "maxLength": 15,
+            "minLength": 1,
+            "title": "Interface",
+            "type": "string"
+          },
+          "password": {
+            "default": "",
+            "format": "password",
+            "maxLength": 63,
+            "title": "Password",
+            "type": "string",
+            "writeOnly": true
+          },
+          "ssid": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Ssid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interface",
+          "ssid"
+        ],
+        "title": "WifiConnectRequest",
+        "type": "object"
+      },
+      "WifiConnectResponse": {
+        "properties": {
+          "connected": {
+            "title": "Connected",
+            "type": "boolean"
+          },
+          "interface": {
+            "title": "Interface",
+            "type": "string"
+          },
+          "ssid": {
+            "title": "Ssid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interface",
+          "ssid",
+          "connected"
+        ],
+        "title": "WifiConnectResponse",
+        "type": "object"
+      },
+      "WifiNetworkInfo": {
+        "properties": {
+          "secured": {
+            "title": "Secured",
+            "type": "boolean"
+          },
+          "security": {
+            "title": "Security",
+            "type": "string"
+          },
+          "signal": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Signal",
+            "type": "integer"
+          },
+          "ssid": {
+            "title": "Ssid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ssid",
+          "security",
+          "signal",
+          "secured"
+        ],
+        "title": "WifiNetworkInfo",
+        "type": "object"
+      },
+      "WifiScanRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "interface": {
+            "maxLength": 15,
+            "minLength": 1,
+            "title": "Interface",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interface"
+        ],
+        "title": "WifiScanRequest",
+        "type": "object"
+      },
+      "WifiScanResponse": {
+        "properties": {
+          "interface": {
+            "title": "Interface",
+            "type": "string"
+          },
+          "networks": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/WifiNetworkInfo"
+            },
+            "title": "Networks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "interface"
+        ],
+        "title": "WifiScanResponse",
+        "type": "object"
       }
     }
   },
@@ -5009,6 +5230,100 @@
           }
         },
         "summary": "Set Mode"
+      }
+    },
+    "/api/network/connect": {
+      "post": {
+        "operationId": "connect_wifi_api_network_connect_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WifiConnectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WifiConnectResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Connect Wifi"
+      }
+    },
+    "/api/network/scan": {
+      "post": {
+        "operationId": "scan_wifi_api_network_scan_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WifiScanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WifiScanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Scan Wifi"
+      }
+    },
+    "/api/network/status": {
+      "get": {
+        "operationId": "network_status_api_network_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NetworkStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Network Status"
       }
     },
     "/api/sequencer/active": {
