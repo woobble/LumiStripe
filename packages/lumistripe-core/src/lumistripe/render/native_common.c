@@ -255,9 +255,18 @@ void catalog_palette_hsl_to_rgb(double hue, double saturation,
         *blue = (uint8_t)custom_rgb;
         return;
     }
-    if (palette == 1)
-        hue = (double)neon_hues[((int)floor(hue / 45.0) % 7 + 7) % 7];
-    else if (palette == 2)
-        hue = (double)fire_hues[((int)floor(hue / 55.0) % 5 + 5) % 5];
+    /* Reduce in floating point before converting: callers can supply any
+       finite hue, and converting an out-of-range double to int is undefined. */
+    if (palette == 1) {
+        double slot = fmod(floor(fmod(hue / 45.0, 7.0)), 7.0);
+        if (slot < 0.0)
+            slot += 7.0;
+        hue = (double)neon_hues[(int)slot];
+    } else if (palette == 2) {
+        double slot = fmod(floor(fmod(hue / 55.0, 5.0)), 5.0);
+        if (slot < 0.0)
+            slot += 5.0;
+        hue = (double)fire_hues[(int)slot];
+    }
     hsl_to_rgb(hue, saturation, lightness, red, green, blue);
 }

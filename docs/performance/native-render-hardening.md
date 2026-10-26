@@ -159,10 +159,36 @@ CPU-frequency or thermal study.
   long-duration RSS stability, physical zone mapping, and appliance frame
   deadlines remain unmeasured.
 
-The expanded checks cover the state-array and geometry entry points identified
-during this pass, but do not constitute a formal proof of every C scalar's
-domain or every CPython reference path. In particular, extreme finite values
-for several legacy scalar parameters and Python C API allocation-failure paths
-still need targeted per-kernel cases before treating the native interface as
-fully adversarially verified. No public API or supported animation output was
-intentionally changed.
+## Remaining native safety audit
+
+The machine-readable entry inventory is
+[`native-render-safety-audit.json`](native-render-safety-audit.json). It lists
+all 51 methods registered by the four native method tables. Source inspection
+and targeted fixes in this pass addressed extreme palette hue conversion,
+ElectricStorm geometry casts, and signed frame/index products in reactive
+kernels. The full core suite confirms normal rendering parity after these
+changes.
+
+The final validation on x86-64 Python 3.12 was: full native core suite **6,164
+passed, 168 skipped**; focused kernel/catalog/SpectrumFlash parity **2,720
+passed, 168 skipped**; targeted UBSan **4 passed**; targeted ASan **4 passed**
+with leak detection disabled; and isolated no-render playback/render tests
+**228 passed, 31 native-only skipped**. The native extension exports 51
+functions. Ruff, core mypy, and `git diff --check` pass.
+
+GCC `-fanalyzer` built the extension and reported no warnings in project C
+sources; its warnings were confined to NumPy's C API headers.
+
+Preloading ASan into the `uv` launcher crashed inside its jemalloc before Python
+started. Preloading ASan into the project Python directly succeeded. The ASan
+result therefore covers only those selected Python tests and does not include
+Python reference leak detection. No ARM64 or physical hardware validation was
+performed.
+
+This audit is still marked incomplete: per-expression proofs are outstanding
+for all scalar conversions and signed/unsigned arithmetic across every entry,
+allocation-failure injection was not performed for Python reference paths, and
+the full invalid-input matrix was not executed separately for each method.
+Sanitizers exercise selected boundary cases only. The inventory records these
+remaining risks for each entry rather than implying sanitizer coverage proves
+memory safety. No Raspberry Pi or physical-output tests ran.

@@ -566,12 +566,12 @@ PyObject *render_beat_explosion_into(PyObject *module, PyObject *args) {
                                      (width + high * 2.0), 0.0);
             const double ambient = fmax(1.0 - dist / fmax(center, 1.0), 0.0) * 0.08;
             alpha = fmin(ambient + ring * (0.15 + hit * 0.75), 1.0);
-            hue = (10 + (int)(low * 30.0) + frame * 2) % 256;
+            hue = (int)((10 + (int)(low * 30.0) + (int64_t)frame * 2) % 256);
             lightness = (int)(50.0 + mid * 15.0 + hit * 15.0);
         } else {
             const double ring = fmax(1.0 - fabs(dist - radius) / width, 0.0);
             alpha = ring * ((frame % 30) < 3 ? 0.9 : 0.0);
-            hue = (frame * 4 + (int)index * 2) % 256;
+            hue = (int)(((int64_t)frame * 4 + (int64_t)(index % 128) * 2) % 256);
             lightness = 55;
         }
         uint8_t red, green, blue;
@@ -732,7 +732,9 @@ PyObject *render_strobe_chase_into(PyObject *module, PyObject *args) {
     static const int club_hues[7] = {330, 18, 48, 126, 190, 224, 286};
     static const int warm_hues[4] = {0, 20, 38, 320};
     if (flash_active) {
-        const int warm_index = (int)((hue + frame) % 4);
+        int warm_index = (int)(((int64_t)hue + (int64_t)(frame % 4)) % 4);
+        if (warm_index < 0)
+            warm_index += 4;
         uint8_t red, green, blue;
         palette_hsl_to_rgb((double)warm_hues[warm_index], 100.0, 60.0,
                            palette, custom_rgb, &red, &green, &blue);
@@ -758,7 +760,7 @@ PyObject *render_strobe_chase_into(PyObject *module, PyObject *args) {
         const double chase = fmax(1.0 - distance / 1.2, 0.0);
         if (chase <= 0.01)
             continue;
-        const int hue_index = (hue + (int)index * 11) % 7;
+        const int hue_index = (hue + (int)(index % 7) * 11) % 7;
         uint8_t red, green, blue;
         palette_hsl_to_rgb((double)club_hues[hue_index], 100.0, 58.0,
                            palette, custom_rgb, &red, &green, &blue);
@@ -1211,6 +1213,17 @@ PyObject *render_electric_storm_into(PyObject *module, PyObject *args) {
     const npy_intp count = PyArray_DIM(destination, 0);
     const npy_intp streak_count = PyArray_DIM(geometry, 0);
     const double *streaks = (const double *)PyArray_DATA(geometry);
+    for (npy_intp s = 0; s < streak_count; s++) {
+        const double pos = streaks[s * 4];
+        const double run = streaks[s * 4 + 1];
+        const double alpha = streaks[s * 4 + 3];
+        if (pos < 0.0 || pos > (double)INT_MAX || run < 0.0 ||
+            run > (double)INT_MAX || alpha < 0.0 || alpha > 1.0) {
+            PyErr_SetString(PyExc_ValueError,
+                            "ElectricStorm geometry is outside the supported range");
+            return NULL;
+        }
+    }
     uint8_t *pixels = (uint8_t *)PyArray_DATA(destination);
     uint8_t clear_r = 0u, clear_g = 0u, clear_b = 0u;
     if (palette == 1 || palette == 2) clear_r = clear_g = clear_b = 91u;
@@ -1230,13 +1243,13 @@ PyObject *render_electric_storm_into(PyObject *module, PyObject *args) {
     }
     for (npy_intp s = 0; s < streak_count; s++) {
         const double pos = streaks[s * 4];
-        const int length = (int)streaks[s * 4 + 1];
+        const npy_intp length = (npy_intp)streaks[s * 4 + 1];
         const double hue = streaks[s * 4 + 2];
         const double alpha = streaks[s * 4 + 3];
         uint8_t red, green, blue;
         catalog_palette_hsl_to_rgb(hue, 90.0, 75.0, palette, custom_rgb, &red, &green, &blue);
-        for (int j = 0; j < length; j++) {
-            const int pixel = (int)pos - j;
+        for (npy_intp j = 0; j < length; j++) {
+            const npy_intp pixel = (npy_intp)pos - j;
             if (pixel < 0 || pixel >= count) continue;
             const double intensity = 1.0 - (double)j / (double)(length > 1 ? length : 1);
             const size_t offset = (size_t)pixel * 4u;

@@ -99,11 +99,31 @@ def test_native_kernels_reject_partially_overlapping_buffers() -> None:
         native.apply_alpha_scale_into(
             source, corrected_storage[:5], corrected_storage[1:], 0.5
         )
-
     with pytest.raises(ValueError, match="overlap"):
         native.composite_screen_rgba_into(
             storage[:4], storage[1:], 1.0, None, 0.0, None, 0.0
         )
+
+
+@pytest.mark.skipif(kernels._native_module is None, reason="render extension is not built")
+def test_native_electric_storm_rejects_unsafe_geometry() -> None:
+    native = kernels._native_module
+    assert native is not None
+    destination = np.empty((8, 4), dtype=np.uint8)
+    for invalid in (np.inf, -1.0, float(2**31)):
+        geometry = np.array([[1.0, invalid, 1e300, 0.5]], dtype=np.float64)
+        with pytest.raises(ValueError):
+            native.render_electric_storm_into(destination, geometry, 0.5, 1.0, 1, 0)
+
+
+@pytest.mark.skipif(kernels._native_module is None, reason="render extension is not built")
+def test_native_electric_storm_accepts_large_finite_palette_hue() -> None:
+    native = kernels._native_module
+    assert native is not None
+    destination = np.empty((8, 4), dtype=np.uint8)
+    geometry = np.array([[7.0, 1.0, 1e300, 0.5]], dtype=np.float64)
+    native.render_electric_storm_into(destination, geometry, 0.5, 1.0, 1, 0)
+    assert destination.shape == (8, 4)
 
 
 @pytest.mark.skipif(kernels._native_module is None, reason="render extension is not built")
