@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import importlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -173,7 +174,15 @@ class SPIStripe(Stripe):
             device.max_speed_hz = config.speed_hz
             device.bits_per_word = 8
             device.lsbfirst = False
-            device.no_cs = True
+            try:
+                device.no_cs = True
+            except OSError as exc:
+                # Some Raspberry Pi 5 DesignWare SPI drivers reject SPI_NO_CS
+                # with EINVAL. LumiStripe sends data over MOSI and does not use
+                # the chip-select pin, so the controller's default CS behavior
+                # is safe when disabling CS is unsupported.
+                if exc.errno != errno.EINVAL:
+                    raise
         except OSError as exc:
             device.close()
             raise RuntimeError(
