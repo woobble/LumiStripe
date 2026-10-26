@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..audio import AudioFrame
+from ..buffers import PixelBuffer
 from ..color import Rgb
 from ..controller import Controller
+from ..render import native_solid_render_available, render_solid_rgba_into
 from .base import Animation
 from .reactive import AudioReactive
 
@@ -119,6 +121,8 @@ class RedRaveChase(Animation):
 class RedBlackoutStrobe(Animation):
     """Short, pure-red flashes separated by complete blackouts."""
 
+    native_render_enabled = True
+
     flash_frames: int = 0
     _last_beat_frame: int = -10_000
 
@@ -141,6 +145,31 @@ class RedBlackoutStrobe(Animation):
         on = self.flash_frames > 0
         self.flash_frames = max(self.flash_frames - 1, 0)
         self._paint(controller, on=on)
+
+    def _render_native(
+        self,
+        frame: int,
+        destination: PixelBuffer,
+        audio: AudioFrame | None,
+        brightness: float,
+    ) -> bool:
+        if not native_solid_render_available():
+            return False
+        if audio is None:
+            period = max(2, round(20 - self.setting("flash_rate", 50) * 0.2))
+            on_frames = max(1, round(period * self.setting("duty_cycle", 30) / 100.0))
+            on = frame % period < on_frames
+        else:
+            min_gap = max(1, round(20 - self.setting("flash_rate", 50) * 0.2))
+            if audio.beat and frame - self._last_beat_frame >= min_gap:
+                self._last_beat_frame = frame
+                self.flash_frames = max(
+                    1, round(5 * self.setting("duty_cycle", 30) / 100.0)
+                )
+            on = self.flash_frames > 0
+            self.flash_frames = max(self.flash_frames - 1, 0)
+        rgba = self._native_rgba(RED, brightness) if on else (0, 0, 0, 255)
+        return render_solid_rgba_into(destination, rgba)
 
     @staticmethod
     def _paint(controller: Controller, *, on: bool) -> None:

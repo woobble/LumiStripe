@@ -175,6 +175,161 @@ def render_tunnel_rings_into(
     return True
 
 
+def native_spectrum_flash_available() -> bool:
+    """Return whether the loaded extension exposes the SpectrumFlash kernel."""
+
+    return _native_module is not None and hasattr(
+        _native_module, "render_spectrum_flash_into"
+    )
+
+
+def render_spectrum_flash_into(
+    destination: PixelArray,
+    bands: tuple[float, ...],
+    width: float,
+    hue_phase: float,
+    flash: float,
+    brightness: float,
+    palette: int,
+    custom_rgb: int,
+) -> bool:
+    """Render SpectrumFlash pixels into a reusable RGBA buffer."""
+
+    if not native_spectrum_flash_available():
+        return False
+    _validate_rgba_source(destination, "destination")
+    if not destination.flags.writeable:
+        raise ValueError("destination must be writable")
+    if len(bands) != 8:
+        raise ValueError("bands must contain exactly eight values")
+    if not np.isfinite((width, hue_phase, flash, brightness)).all():
+        raise ValueError("render parameters must be finite")
+    if width < 0.0 or not 0.0 <= brightness <= 1.0:
+        raise ValueError("width must be non-negative and brightness between zero and one")
+    if palette not in (0, 1, 2, 3) or not 0 <= custom_rgb <= 0xFFFFFF:
+        raise ValueError("palette or custom color is invalid")
+    assert _native_module is not None
+    _native_module.render_spectrum_flash_into(
+        destination, bands, width, hue_phase, flash, brightness, palette, custom_rgb
+    )
+    return True
+
+
+def native_solid_render_available() -> bool:
+    return _native_module is not None and hasattr(_native_module, "render_solid_rgba_into")
+
+
+def native_halves_render_available() -> bool:
+    return _native_module is not None and hasattr(_native_module, "render_halves_rgba_into")
+
+
+def render_solid_rgba_into(destination: PixelArray, rgba: tuple[int, int, int, int]) -> bool:
+    if not native_solid_render_available():
+        return False
+    _validate_rgba_source(destination, "destination")
+    if not destination.flags.writeable:
+        raise ValueError("destination must be writable")
+    if len(rgba) != 4 or any(not 0 <= int(channel) <= 255 for channel in rgba):
+        raise ValueError("rgba must contain four channels between zero and 255")
+    assert _native_module is not None
+    _native_module.render_solid_rgba_into(destination, *(int(channel) for channel in rgba))
+    return True
+
+
+def render_halves_rgba_into(
+    destination: PixelArray,
+    left: tuple[int, int, int, int],
+    right: tuple[int, int, int, int],
+) -> bool:
+    if _native_module is None or not hasattr(_native_module, "render_halves_rgba_into"):
+        return False
+    _validate_rgba_source(destination, "destination")
+    if not destination.flags.writeable:
+        raise ValueError("destination must be writable")
+    if any(
+        len(color) != 4 or any(not 0 <= int(channel) <= 255 for channel in color)
+        for color in (left, right)
+    ):
+        raise ValueError("colors must contain four channels between zero and 255")
+    assert _native_module is not None
+    _native_module.render_halves_rgba_into(
+        destination, *(int(channel) for channel in (*left, *right))
+    )
+    return True
+
+
+def native_comet_storm_available() -> bool:
+    return _native_module is not None and hasattr(
+        _native_module, "render_comet_storm_into"
+    )
+
+
+def render_comet_storm_into(
+    destination: PixelArray,
+    geometry: npt.NDArray[np.float64],
+    brightness: float,
+    palette: int,
+    custom_rgb: int,
+) -> bool:
+    if not native_comet_storm_available():
+        return False
+    _validate_rgba_source(destination, "destination")
+    if not destination.flags.writeable:
+        raise ValueError("destination must be writable")
+    if geometry.dtype != np.float64 or geometry.ndim != 2 or geometry.shape[1] != 4:
+        raise ValueError("geometry must be a float64 array of shape (n, 4)")
+    if not geometry.flags.c_contiguous or not geometry.flags.aligned:
+        raise ValueError("geometry must be aligned and C-contiguous")
+    if not np.isfinite(brightness) or not 0.0 <= brightness <= 1.0:
+        raise ValueError("brightness must be finite and between zero and one")
+    if palette not in (0, 1, 2, 3) or not 0 <= custom_rgb <= 0xFFFFFF:
+        raise ValueError("palette or custom color is invalid")
+    assert _native_module is not None
+    _native_module.render_comet_storm_into(
+        destination, geometry, brightness, palette, custom_rgb
+    )
+    return True
+
+
+def native_twinkle_available() -> bool:
+    return _native_module is not None and hasattr(_native_module, "render_twinkle_into")
+
+
+def render_twinkle_into(
+    destination: PixelArray,
+    levels: npt.NDArray[np.float32],
+    hues: npt.NDArray[np.int16],
+    frame: int,
+    radius: int,
+    bloom: float,
+    brightness: float,
+    palette: int,
+    custom_rgb: int,
+) -> bool:
+    if not native_twinkle_available():
+        return False
+    _validate_rgba_source(destination, "destination")
+    if not destination.flags.writeable:
+        raise ValueError("destination must be writable")
+    if levels.dtype != np.float32 or levels.shape != (destination.shape[0],):
+        raise ValueError("levels must be a float32 array matching destination length")
+    if hues.dtype != np.int16 or hues.shape != (destination.shape[0],):
+        raise ValueError("hues must be an int16 array matching destination length")
+    if not levels.flags.c_contiguous or not hues.flags.c_contiguous:
+        raise ValueError("levels and hues must be contiguous")
+    if radius < 0 or not np.isfinite((bloom, brightness)).all():
+        raise ValueError("radius must be non-negative and parameters finite")
+    if not 0.0 <= brightness <= 1.0 or palette not in (0, 1, 2, 3):
+        raise ValueError("brightness or palette is invalid")
+    if not 0 <= custom_rgb <= 0xFFFFFF:
+        raise ValueError("custom color is invalid")
+    assert _native_module is not None
+    _native_module.render_twinkle_into(
+        destination, levels, hues, frame, radius, bloom, brightness, palette, custom_rgb
+    )
+    return True
+
+
 def _composite_screen_rgba_numpy(
     base: PixelArray,
     destination: PixelArray,
@@ -258,6 +413,16 @@ __all__ = [
     "apply_alpha_scale_into",
     "composite_screen_rgba_into",
     "correct_rgba_into",
+    "native_halves_render_available",
+    "native_comet_storm_available",
+    "native_solid_render_available",
+    "native_twinkle_available",
+    "native_spectrum_flash_available",
     "native_tunnel_rings_available",
+    "render_halves_rgba_into",
+    "render_comet_storm_into",
+    "render_twinkle_into",
+    "render_solid_rgba_into",
+    "render_spectrum_flash_into",
     "render_tunnel_rings_into",
 ]

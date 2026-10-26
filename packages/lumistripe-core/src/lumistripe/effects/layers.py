@@ -915,11 +915,15 @@ class LayeredRenderer:
             audio = active.trigger_frame if active.frame == 0 else snapshot.frame
             configured_audio = active.animation.effective_audio(audio)
             effect_frame = active.animation.effective_frame(active.frame)
-            rendered = active.animation._render_native(
-                effect_frame,
-                buffer.pixels(),
-                configured_audio,
-                player.brightness,
+            rendered = (
+                active.animation._render_native(
+                    effect_frame,
+                    buffer.pixels(),
+                    configured_audio,
+                    player.brightness,
+                )
+                if active.animation.native_render_enabled
+                else False
             )
             if not rendered:
                 buffer.fill(_TRANSPARENT)

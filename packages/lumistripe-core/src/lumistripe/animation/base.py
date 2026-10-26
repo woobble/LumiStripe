@@ -12,6 +12,7 @@ from typing import Any, TypeVar, cast
 import numpy as np
 
 from ..audio.types import AudioFrame, BandTuple
+from ..buffers import PixelBuffer
 from ..color import Color, Hsl, Hsla, Rgba
 from ..controller import BrightnessController, Controller
 
@@ -19,6 +20,19 @@ _SettingValue = TypeVar("_SettingValue")
 
 
 class Animation(ABC):
+    native_render_enabled = False
+
+    def _render_native(
+        self,
+        frame: int,
+        destination: PixelBuffer,
+        audio: AudioFrame | None,
+        brightness: float,
+    ) -> bool:
+        """Render with an optional native kernel, returning whether it handled the frame."""
+
+        return False
+
     def configure(self, values: Mapping[str, object]) -> None:
         """Store validated configuration separately from renderer state."""
 
@@ -94,6 +108,46 @@ class Animation(ABC):
             else float(configuration.get("intensity", 100)) / 100.0
         )
         return brightness * intensity
+
+    def _native_rgba(self, color: Color, brightness: float) -> tuple[int, int, int, int]:
+        """Apply controller palette and brightness semantics to one native pixel."""
+
+        red, green, blue, alpha = color.to_rgba()
+        output_brightness = max(0.0, min(1.0, float(self._output_brightness(brightness))))
+        mapped: Color = Rgba(red, green, blue, alpha * output_brightness)
+        configuration = getattr(self, "_animation_configuration", {})
+        palette = configuration.get("palette", "rainbow")
+        typed_settings = getattr(self, "settings", None)
+        if palette != "rainbow" and not hasattr(typed_settings, "palette"):
+            custom_color = cast(str, configuration.get("custom_color", "#7C3AED"))
+            if palette == "custom":
+                value = int(custom_color[1:], 16)
+                mapped = Rgba(
+                    (value >> 16) & 0xFF,
+                    (value >> 8) & 0xFF,
+                    value & 0xFF,
+                    mapped.to_rgba()[3],
+                )
+            else:
+                mapped_red, mapped_green, mapped_blue, mapped_alpha = mapped.to_rgba()
+                hue, saturation_value, hsv_value = rgb_to_hsv(
+                    mapped_red / 255.0, mapped_green / 255.0, mapped_blue / 255.0
+                )
+                hue *= 360.0
+                saturation = int(saturation_value * 100.0)
+                lightness = int(36.0 + hsv_value * 24.0)
+                from .palettes import palette_color
+
+                mapped = palette_color(
+                    cast(str, palette),
+                    hue,
+                    alpha=mapped_alpha,
+                    custom_color=custom_color,
+                    lightness=lightness,
+                    saturation=saturation,
+                )
+        channels = mapped.as_rgba_array()
+        return tuple(int(channel) for channel in channels)  # type: ignore[return-value]
 
     @property
     @abstractmethod
@@ -347,17 +401,24 @@ class AnimationPlayer:
             ):
                 self._transition_buffer = Stripe(controller.length)
             target = self._transition_buffer
-        bright = entry.animation.output_controller(target, self.brightness)
-        if audio_frame is None:
-            entry.animation.tick(animation_frame, bright)
-        else:
-            configured_audio = entry.animation.effective_audio(audio_frame)
+        configured_audio = (
+            None
+            if audio_frame is None
+            else entry.animation.effective_audio(audio_frame)
+        )
+        rendered = (
+            entry.animation._render_native(
+                animation_frame, target.pixels(), configured_audio, self.brightness
+            )
+            if entry.animation.native_render_enabled
+            else False
+        )
+        if not rendered:
+            bright = entry.animation.output_controller(target, self.brightness)
             if configured_audio is None:
                 entry.animation.tick(animation_frame, bright)
             else:
-                entry.animation.tick_audio(
-                    animation_frame, bright, configured_audio
-                )
+                entry.animation.tick_audio(animation_frame, bright, configured_audio)
         if self.transition_active and not transition_external:
             assert self._transition_buffer is not None
             self.apply_transition(

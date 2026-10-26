@@ -42,6 +42,8 @@ def _render_ring(
 
 @dataclass(slots=True)
 class BeatTunnel(Effect):
+    native_render_enabled = True
+
     radius: float = 0.0
     direction: float = 1.0
     pulse: Decay = field(default_factory=Decay)
