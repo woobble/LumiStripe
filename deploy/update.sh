@@ -10,6 +10,7 @@ PROJECT_DIR="${LUMI_PROJECT_DIR:-$(cd -- "$SCRIPT_DIR/.." && pwd -P)}"
 PROJECT_USER="${LUMI_SERVICE_USER:-${SUDO_USER:-}}"
 PYTHON_VERSION="${LUMI_PYTHON_VERSION:-3.12}"
 UV_VERSION="${LUMI_UV_VERSION:-0.13.0}"
+# Preserve newer installs; UV_VERSION is the minimum supported version.
 TARGET_REF="${1:-refs/remotes/lumistripe-upstream/main}"
 LOCK_FILE=/run/lock/lumistripe-update.lock
 SERVICE_FILE=/etc/systemd/system/lumistripe-web.service
@@ -83,13 +84,13 @@ as_user_with_env() {
 ensure_uv_version() {
   local installed_uv_version
   installed_uv_version="$(as_user "$UV_BIN" --version 2>/dev/null | awk '{ print $2 }' || true)"
-  if [[ "$installed_uv_version" != "$UV_VERSION" ]]; then
-    echo "Updating uv to $UV_VERSION for $PROJECT_USER..."
+  if ! uv_version_at_least "$installed_uv_version" "$UV_VERSION"; then
+    echo "Updating uv to at least $UV_VERSION for $PROJECT_USER..."
     as_user "$UV_BIN" self update "$UV_VERSION"
     installed_uv_version="$(as_user "$UV_BIN" --version 2>/dev/null | awk '{ print $2 }' || true)"
   fi
-  [[ "$installed_uv_version" == "$UV_VERSION" ]] || {
-    echo "Expected uv $UV_VERSION at $UV_BIN; found ${installed_uv_version:-no usable uv binary}." >&2
+  uv_version_at_least "$installed_uv_version" "$UV_VERSION" || {
+    echo "Expected uv $UV_VERSION or newer at $UV_BIN; found ${installed_uv_version:-no usable uv binary}." >&2
     return 1
   }
 }

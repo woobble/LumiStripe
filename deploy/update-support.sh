@@ -4,6 +4,13 @@
 UPDATE_LIBEXEC_DIR=/usr/local/libexec/lumistripe/deploy
 NETWORK_LIBEXEC_DIR=/usr/local/libexec/lumistripe/network
 
+uv_version_at_least() {
+  local installed_version="$1"
+  local minimum_version="$2"
+  [[ -n "$installed_version" && -n "$minimum_version" ]] || return 1
+  [[ "$(printf '%s\n' "$minimum_version" "$installed_version" | sort -V | tail -n 1)" == "$installed_version" ]]
+}
+
 install_update_support() {
   local rendered_dir
   local rendered_file

@@ -11,6 +11,7 @@ PROJECT_DIR="${LUMI_PROJECT_DIR:-$(cd -- "$SCRIPT_DIR/.." && pwd -P)}"
 SERVICE_USER="${LUMI_SERVICE_USER:-${SUDO_USER:-}}"
 PYTHON_VERSION="${LUMI_PYTHON_VERSION:-3.12}"
 UV_VERSION="${LUMI_UV_VERSION:-0.13.0}"
+# The standalone installer may provide a newer version; UV_VERSION is a floor.
 
 ENV_DIR=/etc/lumistripe
 ENV_FILE="$ENV_DIR/lumistripe-web.env"
@@ -264,14 +265,13 @@ install_toolchains() {
   if [[ -x "$UV_BIN" ]]; then
     installed_uv_version="$(as_user "$UV_BIN" --version 2>/dev/null | awk '{ print $2 }' || true)"
   fi
-  if [[ "$installed_uv_version" != "$UV_VERSION" ]]; then
-    echo "Installing uv $UV_VERSION for $SERVICE_USER..."
-    download_and_run_as_user \
-      "https://astral.sh/uv/install.sh" /bin/sh "UV_VERSION=$UV_VERSION"
+  if ! uv_version_at_least "$installed_uv_version" "$UV_VERSION"; then
+    echo "Installing uv $UV_VERSION or newer for $SERVICE_USER..."
+    download_and_run_as_user "https://astral.sh/uv/install.sh" /bin/sh
+    installed_uv_version="$(as_user "$UV_BIN" --version 2>/dev/null | awk '{ print $2 }' || true)"
   fi
-  installed_uv_version="$(as_user "$UV_BIN" --version 2>/dev/null | awk '{ print $2 }' || true)"
-  [[ "$installed_uv_version" == "$UV_VERSION" ]] || {
-    echo "Expected uv $UV_VERSION at $UV_BIN; found ${installed_uv_version:-no usable uv binary}." >&2
+  uv_version_at_least "$installed_uv_version" "$UV_VERSION" || {
+    echo "Expected uv $UV_VERSION or newer at $UV_BIN; found ${installed_uv_version:-no usable uv binary}." >&2
     exit 1
   }
 
