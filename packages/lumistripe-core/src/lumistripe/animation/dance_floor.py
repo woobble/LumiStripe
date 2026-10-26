@@ -3,14 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..audio import AudioFrame
+from ..buffers import PixelBuffer
 from ..color import Hsla
 from ..controller import Controller
+from ..render import native_dance_floor_available, render_dance_floor_into
 from .base import Animation
 from .reactive import AudioReactive
 
 
 @dataclass(slots=True)
 class DanceFloor(Animation):
+    native_render_enabled = True
     @property
     def name(self) -> str:
         return "dance_floor"
@@ -37,3 +40,39 @@ class DanceFloor(Animation):
             alpha = 0.6 + reactive.drive() * 0.4 + beat_boost * 0.3
             for i in range(seg * segment_width, min((seg + 1) * segment_width, controller.length)):
                 controller.set_pixel(i, Hsla(hue, 100, light, min(alpha, 1.0)))
+
+    def _render_native(
+        self,
+        frame: int,
+        destination: PixelBuffer,
+        audio: AudioFrame | None,
+        brightness: float,
+    ) -> bool:
+        if not native_dance_floor_available():
+            return False
+        frequency = self.setting("frequency", 50)
+        segment_width = max(2, round(16 - frequency * 0.16))
+        if audio is None:
+            hue_shift = mid = high = drive = beat_boost = 0.0
+        else:
+            reactive = AudioReactive.from_frame(audio)
+            hue_shift = float(reactive.hue_shift(frame, 0.15))
+            mid = reactive.mid
+            high = reactive.high
+            drive = reactive.drive()
+            beat_boost = reactive.accent if audio.beat else 0.0
+        return render_dance_floor_into(
+            destination,
+            frame,
+            segment_width,
+            float(frequency),
+            audio is not None,
+            hue_shift,
+            mid,
+            high,
+            drive,
+            beat_boost,
+            max(0.0, min(1.0, float(brightness))),
+            str(self.setting("palette", "rainbow")),
+            str(self.setting("custom_color", "#7C3AED")),
+        )

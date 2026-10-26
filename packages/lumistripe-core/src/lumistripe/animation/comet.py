@@ -5,8 +5,10 @@ from dataclasses import dataclass, field
 from typing import Literal, cast
 
 from ..audio import AudioFrame
+from ..buffers import PixelBuffer
 from ..color import Hsla
 from ..controller import Controller
+from ..render import native_comet_available, render_comet_into
 from .base import Animation
 from .club_utils import trail_profile
 from .palettes import palette_color
@@ -26,6 +28,7 @@ class CometSettings:
 
 @dataclass(slots=True)
 class Comet(Animation):
+    native_render_enabled = True
     position: float = 0.0
     _motion_direction: float = 1.0
     settings: CometSettings = field(default_factory=CometSettings)
@@ -132,6 +135,51 @@ class Comet(Animation):
             elif self.position <= 0.0:
                 self.position = 0.0
                 self._motion_direction = 1.0
+
+    def _render_native(
+        self,
+        frame: int,
+        destination: PixelBuffer,
+        audio: AudioFrame | None,
+        brightness: float,
+    ) -> bool:
+        if not native_comet_available():
+            return False
+        length = int(destination.shape[0])
+        max_position = float(max(length - 1, 0))
+        reactivity = self.settings.music_reactivity / 100.0 if audio else 0.0
+        speed = 0.25 + self.settings.speed / 100.0 * 1.5
+        reactive = AudioReactive.from_frame(audio) if audio is not None and reactivity > 0 else None
+        if reactive is not None:
+            audio_speed = 0.72 + reactive.drive() * 0.65 + reactive.accent * 0.45
+            speed *= 1.0 + (audio_speed - 1.0) * reactivity
+            if (
+                self.settings.direction == "bounce"
+                and audio is not None
+                and audio.beat
+                and reactive.accent > 0.45
+                and reactive.low > 0.3
+            ):
+                self._motion_direction *= -1.0
+        self._advance(speed, max_position)
+        tail = max(1.0, max(length - 1, 0) * self.settings.tail_length / 100.0)
+        shimmer = 0.0
+        hue = float((frame * 3) % 360)
+        if reactive is not None:
+            tail *= 1.0 + reactivity * (reactive.high * 0.7 - 0.15)
+            shimmer = reactivity * (reactive.accent * 0.25 + reactive.rms * 0.1)
+            hue += reactivity * reactive.hue_shift(frame, 0.2) * 360.0 / 256.0
+        return render_comet_into(
+            destination,
+            self.position,
+            max(0.001, tail),
+            shimmer,
+            hue,
+            self.settings.intensity / 100.0,
+            max(0.0, min(1.0, float(brightness))),
+            self.settings.palette,
+            self.settings.custom_color,
+        )
 
 
 __all__ = ["Comet", "CometSettings"]

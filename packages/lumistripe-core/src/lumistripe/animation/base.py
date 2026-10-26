@@ -15,12 +15,14 @@ from ..audio.types import AudioFrame, BandTuple
 from ..buffers import PixelBuffer
 from ..color import Color, Hsl, Hsla, Rgba
 from ..controller import BrightnessController, Controller
+from ..render import NATIVE_RENDER_MIN_PIXELS, native_render_dispatch_enabled
 
 _SettingValue = TypeVar("_SettingValue")
 
 
 class Animation(ABC):
     native_render_enabled = False
+    native_render_min_pixels = NATIVE_RENDER_MIN_PIXELS
 
     def _render_native(
         self,
@@ -411,6 +413,9 @@ class AnimationPlayer:
                 animation_frame, target.pixels(), configured_audio, self.brightness
             )
             if entry.animation.native_render_enabled
+            and native_render_dispatch_enabled(
+                target.length, entry.animation.native_render_min_pixels
+            )
             else False
         )
         if not rendered:

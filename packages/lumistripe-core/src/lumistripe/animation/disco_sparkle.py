@@ -5,14 +5,17 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ..audio import AudioFrame
+from ..buffers import PixelBuffer
 from ..color import Hsl, Rgba
 from ..controller import Controller
+from ..render import native_disco_sparkle_available, render_disco_sparkle_into
 from .base import Animation
 from .reactive import AudioReactive
 
 
 @dataclass(slots=True)
 class DiscoSparkle(Animation):
+    native_render_enabled = True
     _intensities: np.ndarray = field(init=False)
 
     def __post_init__(self) -> None:
@@ -60,3 +63,53 @@ class DiscoSparkle(Animation):
                 controller.set_pixel(i, Hsl(hue, 100, lightness))
             else:
                 controller.set_pixel(i, Rgba(0, 0, 0, 0.0))
+
+    def _render_native(
+        self,
+        frame: int,
+        destination: PixelBuffer,
+        audio: AudioFrame | None,
+        brightness: float,
+    ) -> bool:
+        if not native_disco_sparkle_available():
+            return False
+        if len(self._intensities) != destination.shape[0]:
+            self._intensities = np.zeros(destination.shape[0], dtype=np.float32)
+        fade = self.setting("fade_time", 50) / 100.0
+        density_setting = self.setting("density", 40) / 100.0
+        variation = self.setting("variation", 50) / 100.0
+        if audio is None:
+            audio_mode = False
+            density = 5 + int(density_setting * 65.0)
+            accent_trigger = False
+            decay = 0.65 + fade * 0.4
+            hue_rate = 3.0
+            pulse = 0.0
+        else:
+            reactive = AudioReactive.from_frame(audio)
+            audio_mode = True
+            density = int(
+                4.0
+                + density_setting * 35.0
+                + reactive.drive() * 38.0
+                + reactive.shimmer() * 22.0
+            )
+            accent_trigger = reactive.accent > 0.5
+            decay = 0.58 + fade * 0.27 + reactive.high * 0.12
+            hue_rate = reactive.speed(0.1, 0.6)
+            pulse = reactive.pulse(0.0, 10.0)
+        return render_disco_sparkle_into(
+            destination,
+            self._intensities,
+            frame,
+            audio_mode,
+            density,
+            accent_trigger,
+            float(decay),
+            float(variation),
+            float(hue_rate),
+            float(pulse),
+            max(0.0, min(1.0, float(self._output_brightness(brightness)))),
+            str(self.setting("palette", "rainbow")),
+            str(self.setting("custom_color", "#7C3AED")),
+        )

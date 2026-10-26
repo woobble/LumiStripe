@@ -12,7 +12,11 @@ from ..audio.structure import MusicStructurePhase, MusicStructureState
 from ..audio.types import AudioFrame, AudioSnapshot, BeatClockState, BeatEvent
 from ..color import Rgba
 from ..controller import Controller
-from ..render import composite_screen_rgba_into
+from ..render import (
+    NATIVE_RENDER_MIN_PIXELS,
+    composite_screen_rgba_into,
+    native_render_dispatch_enabled,
+)
 from ..stripe import Stripe
 from .base import Effect
 
@@ -923,6 +927,14 @@ class LayeredRenderer:
                     player.brightness,
                 )
                 if active.animation.native_render_enabled
+                and native_render_dispatch_enabled(
+                    buffer.length,
+                    getattr(
+                        active.animation,
+                        "native_render_min_pixels",
+                        NATIVE_RENDER_MIN_PIXELS,
+                    ),
+                )
                 else False
             )
             if not rendered:

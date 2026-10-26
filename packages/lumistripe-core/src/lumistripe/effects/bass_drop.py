@@ -4,13 +4,17 @@ from dataclasses import dataclass, field
 
 from ..animation.reactive import AudioReactive, Decay
 from ..audio import AudioFrame
+from ..buffers import PixelBuffer
 from ..color import Rgba
 from ..controller import Controller
+from ..render import native_solid_render_available, render_solid_rgba_into
 from .base import Effect
 
 
 @dataclass(slots=True)
 class BassDrop(Effect):
+    native_render_enabled = True
+
     charge: float = 0.0
     flash: Decay = field(default_factory=Decay)
 
@@ -66,3 +70,63 @@ class BassDrop(Effect):
         )
         for i in range(controller.length):
             controller.set_pixel(i, color)
+
+    def _render_native(
+        self,
+        frame: int,
+        destination: PixelBuffer,
+        audio: AudioFrame | None,
+        brightness: float,
+    ) -> bool:
+        if not native_solid_render_available():
+            return False
+        if audio is None:
+            speed = 0.25 + self.setting("speed", 50) / 100.0 * 1.5
+            period = max(16, round(100 - self.setting("speed", 50) * 0.8))
+            self.charge = min(self.charge + 0.008 * speed, 1.0)
+            if frame % period < 2:
+                self.flash.value = 1.0
+                self.charge = 0.0
+            self.flash.step(0.0, 0.01 + self.setting("decay", 50) * 0.0005)
+            tension = self.charge
+            preview = (frame % 30) / 30.0 if tension > 0.6 else 0.0
+            alpha = max(preview * tension * 0.4, self.flash.value)
+            hue = (frame * 3) % 256
+            color = (
+                Rgba(hue, int(200 - hue * 0.5), int(255 - hue * 0.3), alpha)
+                if alpha > 0.0
+                else Rgba(0, 0, 0, 0.0)
+            )
+        else:
+            reactive = AudioReactive.from_frame(audio)
+            speed = 0.25 + self.setting("speed", 50) / 100.0 * 1.5
+            decay = 0.01 + self.setting("decay", 50) * 0.0005
+            flash = self.flash.step(reactive.accent, decay)
+            if reactive.drop_hit(
+                beat=audio.beat, low_threshold=0.3, accent_threshold=0.7
+            ):
+                self.flash.value = 1.0
+                self.charge = 0.0
+            self.charge = min(
+                self.charge + (0.006 + reactive.low * 0.012) * speed, 1.0
+            )
+            if audio.beat and self.charge < 0.3:
+                self.charge = 0.0
+            tension = self.charge
+            preview = reactive.rms * 0.3 + reactive.mid * 0.3 if tension > 0.6 else 0.0
+            alpha = max(preview * tension * 0.4, flash)
+            hue = int(20 + reactive.low * 30) % 256
+            color_brightness = min(1.0, flash * 2.0 + tension * 0.3)
+            color = (
+                Rgba(
+                    hue,
+                    int(color_brightness * 200),
+                    int(color_brightness * (255 - hue * 0.3)),
+                    min(alpha * 2.0, 1.0),
+                )
+                if alpha > 0.0
+                else Rgba(0, 0, 0, 0.0)
+            )
+        return render_solid_rgba_into(
+            destination, self._native_rgba(color, brightness)
+        )

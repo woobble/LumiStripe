@@ -6,7 +6,9 @@ from math import cos, pi, sin
 from typing import Literal, cast
 
 from ..audio import AudioFrame
+from ..buffers import PixelBuffer
 from ..controller import Controller
+from ..render import native_pulse_available, render_pulse_into
 from .base import Animation
 from .palettes import palette_color
 from .reactive import AudioReactive
@@ -25,6 +27,7 @@ class PulseSettings:
 
 @dataclass(slots=True)
 class Pulse(Animation):
+    native_render_enabled = True
     _pulse: float = 0.0
     _hue: int = 0
     settings: PulseSettings = PulseSettings()
@@ -121,6 +124,59 @@ class Pulse(Animation):
                     saturation=82,
                 ),
             )
+
+    def _render_native(
+        self,
+        frame: int,
+        destination: PixelBuffer,
+        audio: AudioFrame | None,
+        brightness: float,
+    ) -> bool:
+        if not native_pulse_available():
+            return False
+        period = max(30, round(240 - self.settings.speed * 2.4))
+        phase = (frame % period) / period
+        normalized = sin(phase * pi * 2.0) * 0.5 + 0.5
+        if self.settings.pulse_curve == "smoothstep":
+            normalized = normalized * normalized * (3.0 - 2.0 * normalized)
+        elif self.settings.pulse_curve == "sharp":
+            normalized = normalized**2.4
+        else:
+            normalized = normalized**1.2
+        minimum = self.settings.minimum_intensity / 100.0
+        maximum = self.settings.maximum_intensity / 100.0
+        intensity = minimum + normalized * (maximum - minimum)
+        reactivity = self.settings.music_reactivity / 100.0 if audio else 0.0
+        if audio is not None and reactivity > 0.0:
+            reactive = AudioReactive.from_frame(audio)
+            if audio.beat:
+                self._pulse = min(
+                    1.0, self._pulse + (0.55 + reactive.accent * 0.35) * reactivity
+                )
+                self._hue = (
+                    self._hue + int((23.0 + reactive.mid * 18.0) * reactivity)
+                ) % 256
+            self._pulse = max(
+                self._pulse * (1.0 - 0.08 * reactivity),
+                reactive.beat_pulse(0.0, 0.18) * reactivity,
+            )
+            self._hue = (
+                self._hue + int(reactive.low * 1.5 * reactivity)
+            ) % 256
+            intensity = max(
+                intensity,
+                min(maximum, minimum + self._pulse * (maximum - minimum)),
+            )
+        hue = (frame * 2 + int(normalized * 18.0) + int(self._hue * reactivity)) % 256
+        return render_pulse_into(
+            destination,
+            float(phase),
+            int(hue),
+            max(0.0, min(maximum, float(intensity))),
+            max(0.0, min(1.0, float(self._output_brightness(brightness)))),
+            self.settings.palette,
+            self.settings.custom_color,
+        )
 
 
 __all__ = ["Pulse", "PulseSettings"]

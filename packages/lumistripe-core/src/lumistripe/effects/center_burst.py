@@ -5,12 +5,16 @@ from dataclasses import dataclass, field
 from ..animation.club_utils import burst_profile, club_color
 from ..animation.reactive import AudioReactive, Decay
 from ..audio import AudioFrame
+from ..buffers import PixelBuffer
 from ..controller import Controller
+from ..render import native_center_burst_available, render_center_burst_into
 from .base import Effect
 
 
 @dataclass(slots=True)
 class CenterBurst(Effect):
+    native_render_enabled = True
+
     radius: float = 0.0
     speed: float = 0.0
     width: float = 1.4
@@ -61,3 +65,55 @@ class CenterBurst(Effect):
                 controller.set_pixel(
                     index, club_color(self.hue_seed + index, alpha=alpha, lightness=60)
                 )
+
+    def _render_native(
+        self,
+        frame: int,
+        destination: PixelBuffer,
+        audio: AudioFrame | None,
+        brightness: float,
+    ) -> bool:
+        if not native_center_burst_available():
+            return False
+        reactive = AudioReactive.from_frame(
+            audio
+            if audio is not None
+            else AudioFrame(
+                rms=0.18,
+                bands=(0.18, 0.2, 0.22, 0.2, 0.16, 0.14, 0.12, 0.1),
+            )
+        )
+        length = max(int(destination.shape[0]), 1)
+        speed_scale = 0.25 + float(self.setting("speed", 50)) / 100.0 * 1.5
+        beat = frame % 32 == 0 if audio is None else audio.beat
+        if beat and (
+            reactive.low > 0.22 or reactive.accent > 0.46 or reactive.rms > 0.5
+        ):
+            self.radius = 0.0
+            self.speed = (0.9 + reactive.accent * 2.2) * speed_scale
+            self.width = max(
+                1.0,
+                length * float(self.setting("width", 30)) / 100.0 * 0.1,
+            ) + reactive.accent * 2.0
+            self.hue_seed = frame * 23 + int(reactive.low * 80.0)
+            self.flash.value = min(1.0, 0.35 + reactive.accent * 0.65)
+        elif self.flash.value > 0.0:
+            self.speed = max(
+                self.speed,
+                (0.75 + reactive.drive() * 1.1) * speed_scale,
+            )
+        else:
+            self.radius += 0.3 + reactive.drive() * 0.4
+        self.radius += self.speed
+        flash = self.flash.step(0.0, 0.08)
+        return render_center_burst_into(
+            destination,
+            self.hue_seed,
+            (length - 1) / 2.0,
+            self.radius,
+            max(self.width, 1.0),
+            flash,
+            max(0.0, min(1.0, float(self._output_brightness(brightness)))),
+            str(self.setting("palette", "rainbow")),
+            str(self.setting("custom_color", "#7C3AED")),
+        )

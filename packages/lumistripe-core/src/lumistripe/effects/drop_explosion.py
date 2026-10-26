@@ -4,13 +4,17 @@ from dataclasses import dataclass, field
 
 from ..animation.reactive import AudioReactive, Decay
 from ..audio import AudioFrame
+from ..buffers import PixelBuffer
 from ..color import Rgba
 from ..controller import Controller
+from ..render import native_drop_explosion_available, render_drop_explosion_into
 from .base import Effect
 
 
 @dataclass(slots=True)
 class DropExplosion(Effect):
+    native_render_enabled = True
+
     charge: float = 0.0
     flash: Decay = field(default_factory=Decay)
 
@@ -79,3 +83,61 @@ class DropExplosion(Effect):
                 controller.set_pixel(i, Rgba(20, 8, 3, alpha))
             else:
                 controller.set_pixel(i, Rgba(0, 0, 0, 0.0))
+
+    def _render_native(
+        self,
+        frame: int,
+        destination: PixelBuffer,
+        audio: AudioFrame | None,
+        brightness: float,
+    ) -> bool:
+        if not native_drop_explosion_available():
+            return False
+        if audio is None:
+            speed = 0.25 + self.setting("speed", 50) / 100.0 * 1.5
+            period = max(12, round(80 - (self.setting("speed", 50) - 50) * 0.8))
+            on_frames = max(1, round(period * self.setting("duty_cycle", 30) / 800.0))
+            self.charge = min(self.charge + 0.006 * speed, 1.0)
+            if frame % period < on_frames:
+                self.flash.value = 1.0
+                self.charge = 0.0
+            tension = self.charge
+            preview = (frame % 20) / 20.0 if tension > 0.7 else 0.0
+            flash_alpha = self.flash.step(0.0, self.setting("decay", 50) * 0.0001)
+            low = high = 0.0
+            audio_mode = False
+        else:
+            reactive = AudioReactive.from_frame(audio)
+            speed = 0.25 + self.setting("speed", 50) / 100.0 * 1.5
+            bass_energy = (audio.bands[0] + audio.bands[1]) * 0.5
+            if audio.beat and bass_energy > 0.35:
+                self.flash.value = 1.0
+                self.charge = 0.0
+            self.charge = min(
+                self.charge
+                + (0.004 + reactive.low * 0.014 + reactive.mid * 0.006) * speed,
+                1.0,
+            )
+            tension = self.charge
+            release = (
+                0.015
+                + self.setting("decay", 50) * 0.0005
+                + (100 - self.setting("duty_cycle", 30)) * 0.0001
+            )
+            flash_alpha = self.flash.step(0.0, release)
+            preview = (
+                reactive.mid * 0.3 + reactive.rms * 0.2 if tension > 0.65 else 0.0
+            )
+            low, high = reactive.low, reactive.high
+            audio_mode = True
+        return render_drop_explosion_into(
+            destination,
+            frame,
+            flash_alpha,
+            tension,
+            preview,
+            audio_mode=audio_mode,
+            low=low,
+            high=high,
+            brightness=max(0.0, min(1.0, float(self._output_brightness(brightness)))),
+        )

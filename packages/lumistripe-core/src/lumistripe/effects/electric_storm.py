@@ -3,10 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from random import Random
 
+import numpy as np
+
 from ..animation.reactive import AudioReactive, Decay
 from ..audio import AudioFrame
+from ..buffers import PixelBuffer
 from ..color import Hsla, Rgba
 from ..controller import Controller
+from ..render import native_electric_storm_available, render_electric_storm_into
 from .base import Effect
 
 
@@ -21,6 +25,7 @@ class _Streak:
 
 @dataclass(slots=True)
 class ElectricStorm(Effect):
+    native_render_enabled = True
     streaks: list[_Streak] = field(default_factory=list)
     flash: Decay = field(default_factory=Decay)
     _rng: Random = field(default_factory=Random)
@@ -106,3 +111,70 @@ class ElectricStorm(Effect):
                     controller.set_pixel(
                         p, Hsla(s.hue, 90, 75, intensity * s.alpha.value)
                     )
+
+    def _render_native(
+        self,
+        frame: int,
+        destination: PixelBuffer,
+        audio: AudioFrame | None,
+        brightness: float,
+    ) -> bool:
+        if not native_electric_storm_available():
+            return False
+        if self.setting("palette", "rainbow") != "rainbow":
+            return False
+        length = int(destination.shape[0])
+        count = int(self.setting("count", 4))
+        decay = 0.02 + float(self.setting("decay", 50)) * 0.0012
+        if audio is None:
+            flash_rate = int(self.setting("flash_rate", 50))
+            spawn_period = max(1, round(8 - count))
+            if frame % spawn_period < 1 and len(self.streaks) < count:
+                self.streaks.append(_Streak(
+                    pos=self._rng.randint(0, max(length - 1, 0)),
+                    length=2 + self._rng.randint(0, 4),
+                    speed=1.0 + self._rng.random() * 2.0,
+                    hue=200 + self._rng.randint(-30, 30),
+                    alpha=Decay(0.8 + self._rng.random() * 0.2),
+                ))
+            flash_period = max(4, round(60 - flash_rate * 0.6))
+            if frame % flash_period < max(1, round(flash_period * flash_rate / 100.0 * 0.08)):
+                self.flash.value = 1.0
+            flash_alpha = self.flash.step(0.0, decay)
+            flash_strength = flash_alpha * 0.4 if flash_alpha > 0.1 else 0.0
+        else:
+            reactive = AudioReactive.from_frame(audio)
+            flash_decay = decay + reactive.high * 0.02
+            self.flash.step(reactive.accent, flash_decay)
+            if audio.beat:
+                self.flash.value = min(self.flash.value + 0.5, 1.0)
+            max_streaks = min(count, int(1 + reactive.drive() * count + reactive.shimmer() * 2))
+            should_spawn = reactive.accent > 0.3 or self._rng.random() < 0.15
+            if len(self.streaks) < min(max_streaks, 8) and should_spawn:
+                self.streaks.append(_Streak(
+                    pos=self._rng.randint(0, max(length - 1, 0)),
+                    length=2 + int(reactive.high * 6),
+                    speed=0.8 + reactive.speed(0.5, 3.0),
+                    hue=180 + int(reactive.low * 60) + self._rng.randint(-20, 20),
+                    alpha=Decay(0.6 + reactive.accent * 0.4),
+                ))
+            flash_alpha = self.flash.step(0.0, flash_decay)
+            flash_strength = flash_alpha * 0.3 if flash_alpha > 0.05 else 0.0
+        active: list[_Streak] = []
+        for streak in self.streaks:
+            streak.pos += streak.speed
+            streak.alpha.step(0.0, decay if audio is None else decay + reactive.high * 0.02)
+            if streak.alpha.value >= 0.01 and streak.pos < length + 2.0:
+                active.append(streak)
+        self.streaks = active
+        geometry = np.empty((len(active), 4), dtype=np.float64)
+        for index, streak in enumerate(active):
+            geometry[index] = (streak.pos, streak.length, streak.hue, streak.alpha.value)
+        palette_name = str(self.setting("palette", "rainbow"))
+        palette = {"rainbow": 0, "neon": 1, "fire": 2, "custom": 3}.get(palette_name, 0)
+        custom = str(self.setting("custom_color", "#7C3AED")).lstrip("#")
+        custom_rgb = int(custom, 16) if len(custom) == 6 else 0x7C3AED
+        return render_electric_storm_into(
+            destination, geometry, flash_strength,
+            float(self._output_brightness(brightness)), palette, custom_rgb,
+        )

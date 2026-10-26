@@ -5,8 +5,10 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ..audio import AudioFrame
+from ..buffers import PixelBuffer
 from ..color import Hsla, Rgba
 from ..controller import Controller
+from ..render import native_neon_storm_available, render_neon_storm_into
 from .base import Animation
 from .reactive import AudioReactive
 
@@ -15,6 +17,7 @@ _PALETTE = [(0, 100, 60), (200, 100, 55), (120, 100, 50), (300, 100, 60), (50, 1
 
 @dataclass(slots=True)
 class NeonStorm(Animation):
+    native_render_enabled = True
     levels: np.ndarray = field(init=False, repr=False)
     hues: np.ndarray = field(init=False, repr=False)
     streak_positions: list[float] = field(default_factory=list)
@@ -84,3 +87,57 @@ class NeonStorm(Animation):
             palette_index = int(self.hues[index]) if particle >= streak else streak_seed
             hue, sat, light = _PALETTE[palette_index % len(_PALETTE)]
             controller.set_pixel(index, Hsla(hue, sat, light, alpha))
+
+    def _render_native(
+        self,
+        frame: int,
+        destination: PixelBuffer,
+        audio: AudioFrame | None,
+        brightness: float,
+    ) -> bool:
+        if not native_neon_storm_available():
+            return False
+        if self.setting("palette", "rainbow") != "rainbow":
+            return False
+        length = int(destination.shape[0])
+        if len(self.levels) != length:
+            self.levels = np.zeros(length, dtype=np.float32)
+            self.hues = np.zeros(length, dtype=np.int16)
+            self.streak_positions.clear()
+        reactive = AudioReactive.from_frame(
+            audio
+            if audio is not None
+            else AudioFrame(rms=0.22, bands=(0.65, 0.6, 0.2, 0.18, 0.16, 0.18, 0.22, 0.24))
+        )
+        decay = float(self.setting("decay", 50)) / 100.0
+        speed_scale = 0.25 + float(self.setting("speed", 50)) / 100.0 * 1.5
+        self.levels *= 0.66 + decay * 0.32
+        count = int(self.setting("count", 4))
+        streak_count = min(count, 1 + int(reactive.low * count))
+        while len(self.streak_positions) < streak_count:
+            self.streak_positions.append((len(self.streak_positions) + 1) * length / (streak_count + 1))
+        self.streak_positions = self.streak_positions[:streak_count]
+        for index in range(streak_count):
+            speed = (0.35 + index * 0.18 + reactive.drive() * 1.1 + reactive.high * 0.5) * speed_scale
+            self.streak_positions[index] = (self.streak_positions[index] + speed) % max(length, 1)
+        threshold = int((0.006 + reactive.drive() * 0.018 + reactive.shimmer() * 0.016 + reactive.accent * 0.035) * 10_000.0)
+        for index in range(length):
+            seed = (frame * 48271 + index * 63689) & 0xFFFFFFFF
+            if seed % 10_000 < threshold:
+                self.levels[index] = min(1.0, float(self.levels[index]) + 0.55)
+                self.hues[index] = (seed // 100) % len(_PALETTE)
+        positions = np.ascontiguousarray(self.streak_positions, dtype=np.float64)
+        palette_name = str(self.setting("palette", "rainbow"))
+        palette = {"rainbow": 0, "neon": 1, "fire": 2, "custom": 3}.get(palette_name, 0)
+        custom = str(self.setting("custom_color", "#7C3AED")).lstrip("#")
+        custom_rgb = int(custom, 16) if len(custom) == 6 else 0x7C3AED
+        return render_neon_storm_into(
+            destination,
+            self.levels,
+            self.hues,
+            positions,
+            reactive.drive(),
+            float(self._output_brightness(brightness)),
+            palette,
+            custom_rgb,
+        )

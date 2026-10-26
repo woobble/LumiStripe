@@ -4,8 +4,10 @@ from dataclasses import dataclass, field
 from math import cos, sin
 
 from ..audio import AudioFrame
+from ..buffers import PixelBuffer
 from ..color import Hsla
 from ..controller import Controller
+from ..render import native_aurora_available, render_aurora_into
 from .base import Animation
 from .club_utils import strip_ratio
 from .reactive import AudioReactive, Decay
@@ -13,6 +15,8 @@ from .reactive import AudioReactive, Decay
 
 @dataclass(slots=True)
 class Aurora(Animation):
+    native_render_enabled = True
+
     glow: Decay = field(default_factory=Decay)
 
     @property
@@ -46,3 +50,39 @@ class Aurora(Animation):
             hue = (hue_offset + 120 + int(pos * 34.0) + int(reactive.mid * 16.0) + int(local * 10.0)) % 256
             light = min(int(50.0 + reactive.high * 12.0 + local * 8.0 + beat_glow * 8.0), 68)
             controller.set_pixel(i, reactive.accent_color(hue, 90, light, alpha))
+
+    def _render_native(
+        self,
+        frame: int,
+        destination: PixelBuffer,
+        audio: AudioFrame | None,
+        brightness: float,
+    ) -> bool:
+        if not native_aurora_available():
+            return False
+        frequency = 0.5 + self.setting("frequency", 50) / 100.0
+        bands = None
+        speed = low = mid = high = beat_glow = 0.0
+        hue_offset = 0
+        if audio is not None:
+            reactive = AudioReactive.from_frame(audio)
+            beat_glow = self.glow.step(reactive.accent, 0.045)
+            speed = reactive.speed(0.028, 0.085)
+            hue_offset = reactive.hue_shift(frame, 0.35)
+            low, mid, high = reactive.low, reactive.mid, reactive.high
+            bands = audio.bands
+        return render_aurora_into(
+            destination,
+            frame,
+            bands,
+            float(frequency),
+            float(speed),
+            float(low),
+            float(mid),
+            float(high),
+            float(beat_glow),
+            hue_offset,
+            max(0.0, min(1.0, float(self._output_brightness(brightness)))),
+            str(self.setting("palette", "rainbow")),
+            str(self.setting("custom_color", "#7C3AED")),
+        )

@@ -4,14 +4,18 @@ from dataclasses import dataclass, field
 from math import sin
 
 from ..audio import AudioFrame
+from ..buffers import PixelBuffer
 from ..color import Hsla, Rgba
 from ..controller import Controller
+from ..render import native_peak_mirror_available, render_peak_mirror_into
 from .base import Animation
 from .reactive import AudioReactive, Decay
 
 
 @dataclass(slots=True)
 class PeakMirror(Animation):
+    native_render_enabled = True
+
     peaks: list[Decay] = field(default_factory=lambda: [Decay() for _ in range(8)])
     _center_flash: float = 0.0
 
@@ -70,3 +74,47 @@ class PeakMirror(Animation):
             lightness = min(48.0 + level * 12.0 + beat_glow * 6.0, 66.0)
             alpha = min(0.08 + level * 0.9, 1.0)
             controller.set_pixel(i, Hsla(hue, 100, lightness, alpha))
+
+    def _render_native(
+        self,
+        frame: int,
+        destination: PixelBuffer,
+        audio: AudioFrame | None,
+        brightness: float,
+    ) -> bool:
+        if not native_peak_mirror_available():
+            return False
+        if audio is None:
+            levels = tuple(
+                0.14 + (sin(frame * 0.08 + band * 0.7) * 0.5 + 0.5) * 0.38
+                for band in range(8)
+            )
+            hue_shift = int(frame * 0.4) % 360
+        else:
+            reactive = AudioReactive.from_frame(audio)
+            decay_rate = 0.04 + self.setting("decay", 50) * 0.0022 + reactive.high * 0.08
+            raw = [
+                peak.step(audio.bands[band], decay_rate)
+                for band, peak in enumerate(self.peaks)
+            ]
+            if audio.beat:
+                self._center_flash = max(
+                    self._center_flash, reactive.beat_pulse(0.0, 0.95)
+                )
+                raw = [min(value + reactive.accent * 0.45, 1.0) for value in raw]
+            levels = tuple(raw)
+            hue_shift = reactive.hue_shift(frame, 0.4) % 360
+        width = max(1.0, destination.shape[0] * self.setting("width", 30) / 100.0 * 0.08)
+        rendered = render_peak_mirror_into(
+            destination,
+            levels,
+            self._center_flash,
+            hue_shift,
+            width,
+            max(0.0, min(1.0, float(self._output_brightness(brightness)))),
+            str(self.setting("palette", "rainbow")),
+            str(self.setting("custom_color", "#7C3AED")),
+        )
+        if rendered and audio is not None:
+            self._center_flash *= 0.92
+        return rendered

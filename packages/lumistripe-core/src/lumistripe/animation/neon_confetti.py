@@ -5,7 +5,9 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ..audio import AudioFrame
+from ..buffers import PixelBuffer
 from ..controller import Controller
+from ..render import native_neon_confetti_available, render_neon_confetti_into
 from .base import Animation
 from .club_utils import neon_color
 from .reactive import AudioReactive
@@ -13,6 +15,8 @@ from .reactive import AudioReactive
 
 @dataclass(slots=True)
 class NeonConfetti(Animation):
+    native_render_enabled = True
+
     levels: np.ndarray = field(init=False, repr=False)
     hues: np.ndarray = field(init=False, repr=False)
 
@@ -64,3 +68,52 @@ class NeonConfetti(Animation):
                     index,
                     neon_color(int(self.hues[index]), alpha=alpha, lightness=64),
                 )
+
+    def _render_native(
+        self,
+        frame: int,
+        destination: PixelBuffer,
+        audio: AudioFrame | None,
+        brightness: float,
+    ) -> bool:
+        if not native_neon_confetti_available():
+            return False
+        length = int(destination.shape[0])
+        if len(self.levels) != length:
+            self.levels = np.zeros(length, dtype=np.float32)
+            self.hues = np.zeros(length, dtype=np.int16)
+        reactive = AudioReactive.from_frame(
+            audio
+            if audio is not None
+            else AudioFrame(
+                rms=0.16,
+                bands=(0.1, 0.12, 0.12, 0.14, 0.12, 0.16, 0.18, 0.2),
+            )
+        )
+        fade = float(self.setting("fade_time", 50)) / 100.0
+        count = float(self.setting("count", 4))
+        spread = float(self.setting("spread", 60)) / 100.0
+        fade_multiplier = max(0.7, 0.68 + fade * 0.28 - reactive.high * 0.02)
+        spawn_threshold = int(
+            (
+                0.002
+                + count * 0.003
+                + reactive.drive() * 0.018
+                + reactive.shimmer() * 0.012
+                + reactive.accent * 0.03
+            )
+            * 10_000.0
+        )
+        return render_neon_confetti_into(
+            destination,
+            self.levels,
+            self.hues,
+            frame,
+            fade_multiplier,
+            float(spawn_threshold),
+            reactive.high,
+            spread,
+            max(0.0, min(1.0, float(self._output_brightness(brightness)))),
+            str(self.setting("palette", "rainbow")),
+            str(self.setting("custom_color", "#7C3AED")),
+        )

@@ -5,12 +5,16 @@ from dataclasses import dataclass, field
 from ..animation.club_utils import club_color, mirrored_index, warm_flash
 from ..animation.reactive import AudioReactive, Decay
 from ..audio import AudioFrame
+from ..buffers import PixelBuffer
 from ..controller import Controller
+from ..render import native_mirror_flash_available, render_mirror_flash_into
 from .base import Effect
 
 
 @dataclass(slots=True)
 class MirrorFlash(Effect):
+    native_render_enabled = True
+
     flash: Decay = field(default_factory=Decay)
     alternate: int = 0
     hue_seed: int = 0
@@ -64,3 +68,48 @@ class MirrorFlash(Effect):
                     if self.alternate == 0
                     else warm_flash(hue + 11, alpha=min(1.0, 0.14 + intensity * 0.86)),
                 )
+
+    def _render_native(
+        self,
+        frame: int,
+        destination: PixelBuffer,
+        audio: AudioFrame | None,
+        brightness: float,
+    ) -> bool:
+        if not native_mirror_flash_available():
+            return False
+        reactive = AudioReactive.from_frame(
+            audio
+            if audio is not None
+            else AudioFrame(
+                rms=0.16,
+                bands=(0.16, 0.14, 0.14, 0.16, 0.14, 0.12, 0.1, 0.08),
+            )
+        )
+        length = max(int(destination.shape[0]), 1)
+        beat = frame % 17 == 0 if audio is None else audio.beat
+        if beat and (
+            reactive.low > 0.2 or reactive.accent > 0.42 or reactive.rms > 0.4
+        ):
+            self.flash.value = min(1.0, 0.34 + reactive.accent * 0.66)
+            self.hue_seed = frame * 31 + int(reactive.mid * 60.0)
+            self.alternate = 1 - self.alternate
+        decay = float(self.setting("decay", 50)) / 100.0
+        flash = self.flash.step(0.0, 0.02 + decay * 0.16)
+        center = (length - 1) / 2.0
+        width = float(self.setting("width", 30)) / 100.0
+        span = max(
+            1.0,
+            center * (0.2 + width * 0.8) * (0.3 + reactive.drive() * 0.7),
+        )
+        return render_mirror_flash_into(
+            destination,
+            self.hue_seed,
+            self.alternate,
+            center,
+            span,
+            flash,
+            max(0.0, min(1.0, float(self._output_brightness(brightness)))),
+            str(self.setting("palette", "rainbow")),
+            str(self.setting("custom_color", "#7C3AED")),
+        )

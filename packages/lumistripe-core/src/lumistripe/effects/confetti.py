@@ -6,13 +6,17 @@ import numpy as np
 
 from ..animation.reactive import AudioReactive
 from ..audio import AudioFrame
+from ..buffers import PixelBuffer
 from ..color import Hsla, Rgba
 from ..controller import Controller
+from ..render import native_confetti_available, render_confetti_into
 from .base import Effect
 
 
 @dataclass(slots=True)
 class Confetti(Effect):
+    native_render_enabled = True
+
     intensities: np.ndarray = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -80,3 +84,55 @@ class Confetti(Effect):
                 controller.set_pixel(i, Hsla(hue, 100, light, alpha))
             else:
                 controller.set_pixel(i, Rgba(0, 0, 0, 0.0))
+
+    def _render_native(
+        self,
+        frame: int,
+        destination: PixelBuffer,
+        audio: AudioFrame | None,
+        brightness: float,
+    ) -> bool:
+        if not native_confetti_available():
+            return False
+        length = destination.shape[0]
+        if len(self.intensities) != length:
+            self.intensities = np.zeros(length, dtype=np.float32)
+        fade = float(self.setting("fade_time", 50)) / 100.0
+        spread = float(self.setting("spread", 60)) / 100.0
+        bands = None
+        density = 0
+        addition = 0.45
+        accent = high = bloom = 0.0
+        hue_shift = 0
+        trigger_rate = 4.0 + self.setting("count", 4) * 3.0
+        if audio is not None:
+            reactive = AudioReactive.from_frame(audio)
+            bands = audio.bands
+            density = int(
+                4.0
+                + self.setting("count", 4) * 2.0
+                + reactive.drive() * 36.0
+                + reactive.shimmer() * 22.0
+            )
+            addition = 0.4 + reactive.high * 0.15
+            accent, high = reactive.accent, reactive.high
+            bloom = reactive.beat_pulse(0.0, 0.45)
+            hue_shift = reactive.hue_shift(frame, 0.25)
+        return render_confetti_into(
+            destination,
+            self.intensities,
+            frame,
+            bands,
+            fade,
+            spread,
+            float(trigger_rate),
+            density,
+            float(addition),
+            float(accent),
+            float(high),
+            float(bloom),
+            hue_shift,
+            max(0.0, min(1.0, float(self._output_brightness(brightness)))),
+            str(self.setting("palette", "rainbow")),
+            str(self.setting("custom_color", "#7C3AED")),
+        )

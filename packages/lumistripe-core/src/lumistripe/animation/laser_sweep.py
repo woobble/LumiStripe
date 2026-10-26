@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..audio import AudioFrame
+from ..buffers import PixelBuffer
 from ..color import Hsla, Rgba
 from ..controller import Controller
+from ..render import native_laser_sweep_available, render_laser_sweep_into
 from .base import Animation
 from .reactive import AudioReactive
 
@@ -21,6 +23,8 @@ def _render_laser(controller: Controller, position: float, width: float, hue: in
 
 @dataclass(slots=True)
 class LaserSweep(Animation):
+    native_render_enabled = True
+
     position: float = -2.0
     direction: float = 1.0
 
@@ -73,3 +77,55 @@ class LaserSweep(Animation):
         hue = reactive.hue_shift(frame, 0.8)
         width = max(1.0, controller.length * self.setting("width", 30) / 100.0 * 0.14) + reactive.high * 2.0
         _render_laser(controller, self.position, width, hue, 0.9)
+
+    def _render_native(
+        self,
+        frame: int,
+        destination: PixelBuffer,
+        audio: AudioFrame | None,
+        brightness: float,
+    ) -> bool:
+        if not native_laser_sweep_available():
+            return False
+        length = destination.shape[0]
+        max_pos = float(max(length - 1, 0)) + 2.0
+        travel = self.setting("direction", "bounce")
+        if audio is None:
+            speed = 1.2 * (0.25 + self.setting("speed", 50) / 100.0 * 1.5)
+            direction = -1.0 if travel == "reverse" else (1.0 if travel == "forward" else self.direction)
+            self.position += speed * direction
+            hue = (frame * 8) % 256
+            alpha = 0.9
+            extra_width = 0.0
+        else:
+            reactive = AudioReactive.from_frame(audio)
+            if audio.beat and travel == "bounce":
+                self.direction *= -1.0
+            direction = -1.0 if travel == "reverse" else (1.0 if travel == "forward" else self.direction)
+            self.position += reactive.speed(0.6, 2.5) * (0.25 + self.setting("speed", 50) / 100.0 * 1.5) * direction
+            hue = reactive.hue_shift(frame, 0.8)
+            alpha = 0.9
+            extra_width = reactive.high * 2.0
+        if self.position > max_pos:
+            if travel == "bounce":
+                self.position = max_pos
+                self.direction = -1.0
+            else:
+                self.position = -2.0
+        elif self.position < -2.0:
+            if travel == "bounce":
+                self.position = -2.0
+                self.direction = 1.0
+            else:
+                self.position = max_pos
+        width = max(1.0, length * self.setting("width", 30) / 100.0 * 0.14) + extra_width
+        return render_laser_sweep_into(
+            destination,
+            self.position,
+            width,
+            hue,
+            alpha,
+            max(0.0, min(1.0, float(self._output_brightness(brightness)))),
+            str(self.setting("palette", "rainbow")),
+            str(self.setting("custom_color", "#7C3AED")),
+        )

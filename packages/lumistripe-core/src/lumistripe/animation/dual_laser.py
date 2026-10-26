@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..audio import AudioFrame
+from ..buffers import PixelBuffer
 from ..color import Hsla
 from ..controller import Controller
+from ..render import native_dual_laser_available, render_dual_laser_into
 from .base import Animation
 from .reactive import AudioReactive, Decay
 
@@ -26,6 +28,8 @@ def _render_beam(controller: Controller, beam: _Beam, width: float, alpha: float
 
 @dataclass(slots=True)
 class DualLaser(Animation):
+    native_render_enabled = True
+
     beam_a: _Beam = field(default_factory=lambda: _Beam(position=-2.0, direction=1.0, hue=0))
     beam_b: _Beam = field(default_factory=lambda: _Beam(position=-2.0, direction=1.0, hue=200))
     burst: Decay = field(default_factory=Decay)
@@ -76,3 +80,73 @@ class DualLaser(Animation):
         controller.clear()
         _render_beam(controller, self.beam_a, width, alpha)
         _render_beam(controller, self.beam_b, width, alpha)
+
+    def _render_native(
+        self,
+        frame: int,
+        destination: PixelBuffer,
+        audio: AudioFrame | None,
+        brightness: float,
+    ) -> bool:
+        if not native_dual_laser_available():
+            return False
+        length = int(destination.shape[0])
+        max_pos = float(max(length - 1, 0))
+        if audio is None:
+            speed = 1.5 * (
+                0.25 + float(self.setting("speed", 50)) / 100.0 * 1.5
+            )
+            for beam in (self.beam_a, self.beam_b):
+                beam.position += speed * beam.direction
+                if beam.position > max_pos + 2.0:
+                    beam.position = -2.0
+                elif beam.position < -2.0:
+                    beam.position = max_pos + 2.0
+            self.beam_a.hue = (frame * 5) % 256
+            self.beam_b.hue = (self.beam_a.hue + 140) % 256
+            separation = float(self.setting("separation", 50)) / 100.0
+            self.beam_b.position = (
+                self.beam_a.position + max_pos * separation
+            ) % max(length, 1)
+            width = max(
+                1.0,
+                length * float(self.setting("width", 30)) / 100.0 * 0.14,
+            )
+            alpha = 0.9
+        else:
+            reactive = AudioReactive.from_frame(audio)
+            if audio.beat:
+                self.beam_a.direction *= -1.0
+                self.beam_b.direction *= -1.0
+                self.burst.value = 1.0
+            speed_scale = 0.25 + float(self.setting("speed", 50)) / 100.0 * 1.5
+            for beam in (self.beam_a, self.beam_b):
+                beam.position += reactive.speed(0.6, 2.5) * speed_scale * beam.direction
+                if beam.position > max_pos + 2.0:
+                    beam.position = -2.0
+                elif beam.position < -2.0:
+                    beam.position = max_pos + 2.0
+            self.beam_a.hue = reactive.hue_shift(frame, 0.6)
+            self.beam_b.hue = (self.beam_a.hue + 140) % 256
+            separation = float(self.setting("separation", 50)) / 100.0
+            self.beam_b.position = (
+                self.beam_a.position + max_pos * separation
+            ) % max(length, 1)
+            burst_alpha = self.burst.step(0.0, 0.06)
+            width = max(
+                1.0,
+                length * float(self.setting("width", 30)) / 100.0 * 0.14,
+            ) + reactive.high * 2.5 + burst_alpha * 3.0
+            alpha = 0.7 + burst_alpha * 0.3
+        return render_dual_laser_into(
+            destination,
+            self.beam_a.position,
+            self.beam_b.position,
+            width,
+            alpha,
+            max(0.0, min(1.0, float(self._output_brightness(brightness)))),
+            self.beam_a.hue,
+            self.beam_b.hue,
+            str(self.setting("palette", "rainbow")),
+            str(self.setting("custom_color", "#7C3AED")),
+        )

@@ -5,14 +5,18 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ..audio import AudioFrame
+from ..buffers import PixelBuffer
 from ..color import Rgb
 from ..controller import Controller
+from ..render import native_fire_available, render_fire_into
 from .base import Animation
 from .reactive import AudioReactive
 
 
 @dataclass(slots=True)
 class Fire(Animation):
+    native_render_enabled = True
+
     heat: np.ndarray = field(init=False, repr=False)
     _next_heat: np.ndarray = field(init=False, repr=False)
 
@@ -37,6 +41,46 @@ class Fire(Animation):
             shimmer=reactive.high,
             accent=reactive.accent,
         )
+
+    def _render_native(
+        self,
+        frame: int,
+        destination: PixelBuffer,
+        audio: AudioFrame | None,
+        brightness: float,
+    ) -> bool:
+        if not native_fire_available():
+            return False
+        length = len(destination)
+        if len(self.heat) != length:
+            self.heat = np.zeros(length, dtype=np.float32)
+            self._next_heat = np.zeros(length, dtype=np.float32)
+        if audio is None:
+            drive, bass, shimmer, accent = 0.18, 0.08, 0.08, 0.0
+        else:
+            reactive = AudioReactive.from_frame(audio)
+            drive, bass, shimmer, accent = (
+                reactive.drive(),
+                reactive.low,
+                reactive.high,
+                reactive.accent,
+            )
+        rendered = render_fire_into(
+            destination,
+            self.heat,
+            self._next_heat,
+            frame,
+            self.setting("cooling", 50) / 100.0,
+            self.setting("sparking", 35) / 100.0,
+            drive,
+            bass,
+            shimmer,
+            accent,
+            max(0.0, min(1.0, float(self._output_brightness(brightness)))),
+        )
+        if rendered:
+            self.heat, self._next_heat = self._next_heat, self.heat
+        return rendered
 
     def _step(
         self,

@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import numpy as np
+
 from ..animation.reactive import AudioReactive
 from ..audio import AudioFrame
+from ..buffers import PixelBuffer
 from ..color import Hsla, Rgba
 from ..controller import Controller
+from ..render import native_firework_burst_available, render_firework_burst_into
 from .base import Effect
 
 
@@ -19,8 +23,15 @@ class _Burst:
 
 @dataclass(slots=True)
 class FireworkBurst(Effect):
+    native_render_enabled = True
     bursts: list[_Burst] = field(default_factory=list)
     _hue: int = 0
+    _native_phases: np.ndarray = field(init=False, repr=False)
+    _native_bursts: np.ndarray = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._native_phases = np.zeros(12, dtype=np.float64)
+        self._native_bursts = np.zeros((12, 3), dtype=np.float64)
 
     @property
     def name(self) -> str:
@@ -103,3 +114,96 @@ class FireworkBurst(Effect):
                 controller.set_pixel(i, Hsla(pixel_hue, 100, lightness, pixel_alpha))
             else:
                 controller.set_pixel(i, Rgba(0, 0, 0, 0.0))
+
+    def _render_native(
+        self,
+        frame: int,
+        destination: PixelBuffer,
+        audio: AudioFrame | None,
+        brightness: float,
+    ) -> bool:
+        if not native_firework_burst_available():
+            return False
+        count = int(self.setting("count", 4))
+        if not 1 <= count <= 12:
+            return False
+        length = int(destination.shape[0])
+        center = max(length - 1, 0) * 0.5
+        spread = 0.5 + self.setting("spread", 60) / 100.0
+        fade = self.setting("fade_time", 50) / 100.0
+        phase_count = 0
+        burst_count = 0
+        hue = 0
+        fade_alpha = 1.0
+        glow = mid = high = 0.0
+        bands: tuple[float, ...] | None = None
+
+        if audio is None:
+            radius = center + 4.0
+            for index in range(count):
+                self._native_phases[index] = (
+                    frame * 0.25 * spread + index * radius / count
+                ) % radius
+            phase_count = count
+            fade_alpha = max(
+                0.25,
+                1.0 - (frame % 36) / 36.0 * (1.0 - fade * 0.75),
+            )
+            burst_id = int(frame / 36)
+            seed = burst_id * 1103515245 + 12345
+            hue = ((seed // 100) % 256 + frame * 2) % 256
+        else:
+            reactive = AudioReactive.from_frame(audio)
+            if audio.beat:
+                self._hue = (self._hue + 41) % 256
+                self.bursts.append(
+                    _Burst(
+                        phase=0.5,
+                        speed=(
+                            0.5
+                            + reactive.speed(0.15, 2.5)
+                            * (0.8 + reactive.accent * 0.4)
+                        )
+                        * spread,
+                        strength=0.7 + reactive.accent * 0.3,
+                        hue=self._hue,
+                    )
+                )
+                self.bursts = self.bursts[-count:]
+            for burst in self.bursts:
+                burst.phase += burst.speed
+                burst.strength *= 0.90 + fade * 0.14
+            self.bursts = [
+                burst
+                for burst in self.bursts
+                if burst.strength > 0.02 and burst.phase < center + 6.0
+            ]
+            burst_count = len(self.bursts)
+            for index, burst in enumerate(self.bursts):
+                self._native_bursts[index, 0] = burst.phase
+                self._native_bursts[index, 1] = burst.strength
+                self._native_bursts[index, 2] = burst.hue
+            hue = reactive.hue_shift(frame, 0.25)
+            glow = reactive.rms * 0.08
+            mid, high = reactive.mid, reactive.high
+            bands = audio.bands
+
+        return render_firework_burst_into(
+            destination,
+            self._native_phases,
+            phase_count,
+            self._native_bursts,
+            burst_count,
+            frame,
+            audio is not None,
+            float(center),
+            float(fade_alpha),
+            float(glow),
+            float(mid),
+            float(high),
+            max(0.0, min(1.0, float(self._output_brightness(brightness)))),
+            bands,
+            int(hue),
+            str(self.setting("palette", "rainbow")),
+            str(self.setting("custom_color", "#7C3AED")),
+        )

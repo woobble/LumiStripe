@@ -4,8 +4,10 @@ from dataclasses import dataclass
 from math import sin
 
 from ..audio import AudioFrame
+from ..buffers import PixelBuffer
 from ..color import Hsla
 from ..controller import Controller
+from ..render import native_rainbow_pattern_available, render_rainbow_pattern_into
 from .base import Animation
 from .club_utils import strip_ratio
 from .reactive import AudioReactive
@@ -13,6 +15,8 @@ from .reactive import AudioReactive
 
 @dataclass(slots=True)
 class RainbowCycle(Animation):
+    native_render_enabled = True
+
     @property
     def name(self) -> str:
         return "rainbow_cycle"
@@ -38,3 +42,40 @@ class RainbowCycle(Animation):
             hue = (base + int(pos * 256.0 * spread) + int(local * 22.0)) % 256
             light = 48 + int(reactive.low * 6.0 + local * 6.0 + reactive.beat_pulse(0.0, 0.35) * 8.0)
             controller.set_pixel(i, Hsla(hue, 100, min(light, 64), 1.0))
+
+    def _render_native(
+        self,
+        frame: int,
+        destination: PixelBuffer,
+        audio: AudioFrame | None,
+        brightness: float,
+    ) -> bool:
+        if not native_rainbow_pattern_available():
+            return False
+        spread = 0.35 + float(self.setting("color_spread", 50)) / 100.0 * 1.3
+        if audio is None:
+            base_hue, low, mid, beat_pulse = 0.0, 0.0, 0.0, 0.0
+            bands = None
+        else:
+            reactive = AudioReactive.from_frame(audio)
+            speed = max(reactive.speed(0.35, 2.2), 0.1)
+            base_hue = float(reactive.hue_shift(frame, speed))
+            low, mid = reactive.low, reactive.mid
+            beat_pulse = reactive.beat_pulse(0.0, 0.35)
+            bands = audio.bands
+        return render_rainbow_pattern_into(
+            destination,
+            1,
+            frame,
+            bands,
+            spread,
+            base_hue,
+            100.0,
+            1.0,
+            low,
+            mid,
+            beat_pulse,
+            max(0.0, min(1.0, float(self._output_brightness(brightness)))),
+            str(self.setting("palette", "rainbow")),
+            str(self.setting("custom_color", "#7C3AED")),
+        )

@@ -28,8 +28,12 @@ def _measure(
     mode: str,
     warmup: int,
     samples: int,
-) -> tuple[float, float, float]:
+    renderer: str,
+) -> tuple[float, float, float, int]:
     animation = definition.create()
+    rng = getattr(animation, "_rng", None)
+    if rng is not None and hasattr(rng, "seed"):
+        rng.seed(0x4C554D49)
     stripe = Stripe(length)
     quiet = AudioFrame(
         rms=0.02,
@@ -42,13 +46,28 @@ def _measure(
         beat_strength=0.95,
     )
     timings: list[float] = []
+    native_hits = 0
     for frame in range(warmup + samples):
         start = perf_counter_ns()
-        if mode == "static":
-            animation.tick(frame, stripe)
-        else:
-            audio = loud if frame % 12 == 0 else quiet
-            animation.tick_audio(frame, stripe, audio)
+        audio = None if mode == "static" else (loud if frame % 12 == 0 else quiet)
+        configured_audio = (
+            None if audio is None else animation.effective_audio(audio)
+        )
+        rendered = (
+            animation._render_native(
+                frame, stripe.pixels(), configured_audio, 1.0
+            )
+            if renderer == "native" and animation.native_render_enabled
+            else False
+        )
+        if frame >= warmup and rendered:
+            native_hits += 1
+        if not rendered:
+            controller = animation.output_controller(stripe, 1.0)
+            if configured_audio is None:
+                animation.tick(frame, controller)
+            else:
+                animation.tick_audio(frame, controller, configured_audio)
         elapsed_ms = (perf_counter_ns() - start) / 1_000_000.0
         if frame >= warmup:
             timings.append(elapsed_ms)
@@ -56,6 +75,7 @@ def _measure(
         _percentile(timings, 0.50),
         _percentile(timings, 0.95),
         _percentile(timings, 0.99),
+        native_hits,
     )
 
 
@@ -66,6 +86,12 @@ def main() -> int:
     )
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--frames", type=int, default=40)
+    parser.add_argument(
+        "--renderer",
+        choices=("python", "native", "both"),
+        default="python",
+        help="measure the Python path, force native kernels, or measure both",
+    )
     parser.add_argument(
         "--fail-on-over-budget",
         action="store_true",
@@ -79,22 +105,26 @@ def main() -> int:
         parser.error("warmup must be nonnegative and frames must be positive")
 
     print(
-        "animation,length,mode,p50_ms,p95_ms,p99_ms,effective_fps,budget_ms,within_budget"
+        "animation,length,mode,renderer,p50_ms,p95_ms,p99_ms,native_hits,"
+        "effective_fps,budget_ms,within_budget"
     )
     over_budget = False
     for definition in party_catalog():
         for length in lengths:
             for mode in ("static", "audio"):
-                p50_ms, p95_ms, p99_ms = _measure(
-                    definition, length, mode, args.warmup, args.frames
-                )
-                within_budget = p95_ms <= definition.frame_ms
-                over_budget |= not within_budget
-                print(
-                    f"{definition.name},{length},{mode},{p50_ms:.3f},"
-                    f"{p95_ms:.3f},{p99_ms:.3f},{1000.0 / p50_ms:.1f},"
-                    f"{definition.frame_ms},{within_budget}"
-                )
+                renderers = ("python", "native") if args.renderer == "both" else (args.renderer,)
+                for renderer in renderers:
+                    p50_ms, p95_ms, p99_ms, native_hits = _measure(
+                        definition, length, mode, args.warmup, args.frames, renderer
+                    )
+                    within_budget = p95_ms <= definition.frame_ms
+                    over_budget |= not within_budget
+                    print(
+                        f"{definition.name},{length},{mode},{renderer},{p50_ms:.6f},"
+                        f"{p95_ms:.6f},{p99_ms:.6f},{native_hits},"
+                        f"{1000.0 / p50_ms:.1f},"
+                        f"{definition.frame_ms},{within_budget}"
+                    )
     return int(args.fail_on_over_budget and over_budget)
 
 

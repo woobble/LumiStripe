@@ -14,7 +14,7 @@ from .base import Animation
 from .reactive import AudioReactive
 
 
-def _render_comet(controller: Controller, head: float, hue: int, length: float, alpha: float) -> None:
+def _render_comet(controller: Controller, head: float, hue: float, length: float, alpha: float) -> None:
     for i in range(controller.length):
         direct = abs(head - i)
         dist = min(direct, max(controller.length - direct, 0.0))

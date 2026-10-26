@@ -5,12 +5,15 @@ from dataclasses import dataclass, field
 from ..animation.club_utils import club_color, warm_flash
 from ..animation.reactive import AudioReactive, Decay
 from ..audio import AudioFrame
+from ..buffers import PixelBuffer
 from ..controller import Controller
+from ..render import native_club_flash_available, render_club_flash_into
 from .base import Effect
 
 
 @dataclass(slots=True)
 class ClubFlash(Effect):
+    native_render_enabled = True
     flash: Decay = field(default_factory=Decay)
     segment_start: int = 0
     segment_width: int = 0
@@ -102,3 +105,59 @@ class ClubFlash(Effect):
                         self.hue_seed + offset, alpha=min(1.0, 0.1 + brightness * 0.7)
                     ),
                 )
+
+    def _render_native(
+        self,
+        frame: int,
+        destination: PixelBuffer,
+        audio: AudioFrame | None,
+        brightness: float,
+    ) -> bool:
+        if not native_club_flash_available():
+            return False
+        if audio is None:
+            drive = 0.18 + ((frame % 13) / 13.0) * 0.28
+            low = 0.08 + ((frame % 9) / 9.0) * 0.18
+            accent = 0.0
+            beat = frame % 11 == 0
+        else:
+            reactive = AudioReactive.from_frame(audio)
+            drive = reactive.drive()
+            low = reactive.low
+            accent = reactive.accent
+            beat = audio.beat
+
+        length = max(int(destination.shape[0]), 1)
+        seed = frame * 131 + length * 17 + int(drive * 100.0) + int(low * 80.0)
+        strong_hit = (
+            (beat and low > 0.24) or accent > 0.74 or low > 0.78 or drive > 0.82
+        )
+        trigger_prob = 0.03 + drive * 0.08 + accent * 0.07 + low * 0.05
+        flash_rate = self.setting("flash_rate", 50) / 100.0
+        release = 0.02 + (1.0 - self.setting("duty_cycle", 30) / 100.0) * 0.12
+        trigger_prob *= 0.5 + flash_rate
+        if strong_hit or (seed % 1000) < int(trigger_prob * 1000.0):
+            strength = min(1.0, 0.18 + low * 0.34 + accent * 0.52 + drive * 0.24)
+            self.flash.step(strength, release)
+            self.hue_seed = seed
+            self.whole_strip = strong_hit and (
+                (seed // 7) % 3 != 0 or strength > 0.72
+            )
+            max_width = max(3, length // 2)
+            self.segment_width = max(2, min(max_width, 2 + int(strength * max_width)))
+            self.segment_start = seed % length
+        else:
+            self.flash.step(0.0, release)
+
+        flash = self.flash.step(self.flash.value, 0.0)
+        return render_club_flash_into(
+            destination,
+            self.hue_seed,
+            self.segment_start,
+            self.segment_width,
+            self.whole_strip,
+            max(0.0, min(1.0, float(flash))),
+            max(0.0, min(1.0, float(self._output_brightness(brightness)))),
+            str(self.setting("palette", "rainbow")),
+            str(self.setting("custom_color", "#7C3AED")),
+        )

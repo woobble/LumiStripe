@@ -5,13 +5,17 @@ from dataclasses import dataclass, field
 from ..animation.club_utils import center_distance, ring_profile
 from ..animation.reactive import AudioReactive, Decay
 from ..audio import AudioFrame
+from ..buffers import PixelBuffer
 from ..color import Hsla
 from ..controller import Controller
+from ..render import native_shockwave_available, render_shockwave_into
 from .base import Effect
 
 
 @dataclass(slots=True)
 class Shockwave(Effect):
+    native_render_enabled = True
+
     radius: float = 0.0
     accent: Decay = field(default_factory=Decay)
 
@@ -54,3 +58,47 @@ class Shockwave(Effect):
                 68,
             )
             controller.set_pixel(i, reactive.accent_color(hue, 95, light, alpha))
+
+    def _render_native(
+        self,
+        frame: int,
+        destination: PixelBuffer,
+        audio: AudioFrame | None,
+        brightness: float,
+    ) -> bool:
+        if not native_shockwave_available():
+            return False
+        length = destination.shape[0]
+        center = max(length - 1, 0) * 0.5
+        speed = 0.25 + self.setting("speed", 50) / 100.0 * 1.5
+        width = max(1.0, length * self.setting("width", 30) / 100.0 * 0.14)
+        bands = None
+        accent = mid = 0.0
+        if audio is None:
+            self.radius = (frame * 0.32 * speed) % (center + 6.0)
+            hue = 188
+        else:
+            reactive = AudioReactive.from_frame(audio)
+            self.accent.step(reactive.accent, 0.04 + reactive.high * 0.04)
+            if audio.beat:
+                self.radius = 0.0
+            else:
+                self.radius += reactive.speed(0.48, 1.7) * speed
+                if self.radius > center + 8.0:
+                    self.radius = 0.0
+            width += reactive.high * 2.0
+            accent, mid = self.accent.value, reactive.mid
+            hue = (170 + int(reactive.low * 18.0) - int(reactive.high * 10.0)) % 256
+            bands = audio.bands
+        return render_shockwave_into(
+            destination,
+            self.radius,
+            width,
+            float(accent),
+            hue,
+            float(mid),
+            max(0.0, min(1.0, float(self._output_brightness(brightness)))),
+            bands,
+            str(self.setting("palette", "rainbow")),
+            str(self.setting("custom_color", "#7C3AED")),
+        )

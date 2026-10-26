@@ -5,8 +5,10 @@ from random import Random
 
 from ..animation.reactive import AudioReactive, Decay
 from ..audio import AudioFrame
+from ..buffers import PixelBuffer
 from ..color import Hsla, Rgba
 from ..controller import Controller
+from ..render import native_lightning_strike_available, render_lightning_strike_into
 from .base import Effect
 
 
@@ -27,6 +29,8 @@ def _render_bolt(
 
 @dataclass(slots=True)
 class LightningStrike(Effect):
+    native_render_enabled = True
+
     flash: Decay = field(default_factory=Decay)
     strike_pos: int = 0
     strike_len: int = 0
@@ -85,3 +89,82 @@ class LightningStrike(Effect):
                 controller.set_pixel(i, Hsla(self.hue, 50, 80, all_flash * 0.4))
             else:
                 controller.set_pixel(i, Rgba(0, 0, 0, 0.0))
+
+    def _render_native(
+        self,
+        frame: int,
+        destination: PixelBuffer,
+        audio: AudioFrame | None,
+        brightness: float,
+    ) -> bool:
+        if not native_lightning_strike_available():
+            return False
+        length = int(destination.shape[0])
+        if audio is None:
+            if frame % 45 < 3:
+                self.flash.value = 1.0
+                safe_length = max(length, 1)
+                spread = float(self.setting("spread", 60)) / 100.0
+                center = (safe_length - 1) / 2.0
+                offset = ((frame * 17) % 101) / 100.0 * 2.0 - 1.0
+                self.strike_pos = max(
+                    0,
+                    min(safe_length - 1, round(center + offset * center * spread)),
+                )
+                self.strike_len = max(
+                    2,
+                    round(
+                        safe_length
+                        * float(self.setting("width", 30))
+                        / 100.0
+                        * 0.12
+                    ),
+                )
+                self.hue = (frame * 50) % 256
+            flash_alpha = self.flash.step(
+                0.0, 0.02 + float(self.setting("decay", 50)) * 0.0008
+            )
+            audio_mode = False
+        else:
+            reactive = AudioReactive.from_frame(audio)
+            if audio.beat:
+                self.flash.value = min(self.flash.value + 0.8, 1.0)
+                safe_length = max(length, 1)
+                center = (safe_length - 1) / 2.0
+                spread = float(self.setting("spread", 60)) / 100.0
+                offset = self._rng.uniform(-1.0, 1.0)
+                self.strike_pos = max(
+                    0,
+                    min(safe_length - 1, round(center + offset * center * spread)),
+                )
+                configured_width = max(
+                    2.0,
+                    safe_length
+                    * float(self.setting("width", 30))
+                    / 100.0
+                    * 0.12,
+                )
+                self.strike_len = int(
+                    configured_width + reactive.drive() * 4 + reactive.shimmer() * 3
+                )
+                self.hue = (190 - int(reactive.low * 40)) % 256
+            flash_alpha = self.flash.step(
+                0.0,
+                0.015
+                + float(self.setting("decay", 50)) * 0.0004
+                + reactive.high * 0.025,
+            )
+            audio_mode = True
+        all_flash = max(flash_alpha * 2.0 - 0.5, 0.0)
+        return render_lightning_strike_into(
+            destination,
+            self.strike_pos,
+            self.strike_len,
+            self.hue,
+            flash_alpha,
+            all_flash,
+            max(0.0, min(1.0, float(self._output_brightness(brightness)))),
+            audio_mode,
+            str(self.setting("palette", "rainbow")),
+            str(self.setting("custom_color", "#7C3AED")),
+        )
