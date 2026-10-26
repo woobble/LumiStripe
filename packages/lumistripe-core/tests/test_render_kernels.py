@@ -90,17 +90,17 @@ def test_native_kernels_reject_partially_overlapping_buffers() -> None:
     assert native is not None
     storage = np.zeros((5, 4), dtype=np.uint8)
     correction = np.full(3, 255, dtype=np.uint16)
-    with pytest.raises(ValueError, match="partially overlap"):
+    with pytest.raises(ValueError, match="overlap"):
         native.correct_rgba_into(storage[:4], storage[1:], correction)
 
     source = np.zeros((5, 4), dtype=np.uint8)
     corrected_storage = np.zeros((6, 4), dtype=np.uint8)
-    with pytest.raises(ValueError, match="partially overlap"):
+    with pytest.raises(ValueError, match="overlap"):
         native.apply_alpha_scale_into(
             source, corrected_storage[:5], corrected_storage[1:], 0.5
         )
 
-    with pytest.raises(ValueError, match="partially overlap"):
+    with pytest.raises(ValueError, match="overlap"):
         native.composite_screen_rgba_into(
             storage[:4], storage[1:], 1.0, None, 0.0, None, 0.0
         )
@@ -137,6 +137,121 @@ def test_native_tunnel_rejects_nonfinite_geometry(invalid: float) -> None:
             np.zeros(3, dtype=np.uint8),
             2,
             1.0,
+        )
+
+
+@pytest.mark.skipif(kernels._native_module is None, reason="render extension is not built")
+@pytest.mark.parametrize("bad_level", [float("nan"), float("inf"), -0.01, 1.01])
+def test_native_confetti_rejects_invalid_mutable_state(bad_level: float) -> None:
+    native = kernels._native_module
+    assert native is not None
+    destination = np.empty((2, 4), dtype=np.uint8)
+    levels = np.array([0.25, bad_level], dtype=np.float32)
+    with pytest.raises(ValueError):
+        native.render_neon_confetti_into(
+            destination,
+            levels,
+            np.array([0, 12], dtype=np.int16),
+            2,
+            1.0,
+            1.0,
+            0.2,
+            0.5,
+            1.0,
+            0,
+            0,
+        )
+
+
+@pytest.mark.skipif(kernels._native_module is None, reason="render extension is not built")
+def test_native_confetti_rejects_negative_palette_index_and_state_alias() -> None:
+    native = kernels._native_module
+    assert native is not None
+    destination = np.empty((2, 4), dtype=np.uint8)
+    levels = np.array([0.25, 0.5], dtype=np.float32)
+    with pytest.raises(ValueError, match="hues"):
+        native.render_neon_confetti_into(
+            destination, levels, np.array([0, -1], dtype=np.int16),
+            2, 1.0, 1.0, 0.2, 0.5, 1.0, 0, 0,
+        )
+    shared = np.zeros((2, 4), dtype=np.uint8)
+    with pytest.raises(ValueError, match="overlap"):
+        native.render_neon_confetti_into(
+            shared, shared.view(np.float32).reshape(-1),
+            np.zeros(2, dtype=np.int16), 2, 1.0, 1.0, 0.2, 0.5,
+            1.0, 0, 0,
+        )
+
+
+@pytest.mark.skipif(kernels._native_module is None, reason="render extension is not built")
+def test_native_rgba_entry_points_reject_misaligned_or_readonly_buffers() -> None:
+    native = kernels._native_module
+    assert native is not None
+    misaligned = np.ndarray((2,), dtype=np.float32, buffer=bytearray(9), offset=1)
+    with pytest.raises(ValueError, match="aligned"):
+        native.render_neon_confetti_into(
+            np.empty((2, 4), dtype=np.uint8), misaligned,
+            np.zeros(2, dtype=np.int16), 0, 1.0, 1.0, 0.2,
+            0.5, 1.0, 0, 0,
+        )
+
+    readonly = np.zeros((1, 4), dtype=np.uint8)
+    readonly.flags.writeable = False
+    with pytest.raises(ValueError, match="writable"):
+        native.render_solid_rgba_into(readonly, 1, 2, 3, 255)
+
+
+@pytest.mark.skipif(kernels._native_module is None, reason="render extension is not built")
+def test_native_particle_geometry_rejects_unsafe_integer_conversions() -> None:
+    native = kernels._native_module
+    assert native is not None
+    destination = np.empty((1, 4), dtype=np.uint8)
+    phases = np.zeros(12, dtype=np.float64)
+    phases[0] = float(np.iinfo(np.int32).max)
+    with pytest.raises(ValueError, match="phases"):
+        native.render_firework_burst_into(
+            destination, phases, np.zeros((12, 3), dtype=np.float64),
+            1, 0, 0, 0, 0.0, 0.5, 0.0, 0.0, 0.0, 1.0,
+            None, 100, 0, 0,
+        )
+
+    bursts = np.zeros((1, 4), dtype=np.float64)
+    bursts[0, 2] = float(np.iinfo(np.int32).max)
+    with pytest.raises(ValueError, match="hues"):
+        native.render_pixel_explosion_into(destination, bursts, 1, 1.0, 1.0, 0, 0)
+
+
+@pytest.mark.skipif(kernels._native_module is None, reason="render extension is not built")
+def test_native_reactive_kernels_reject_invalid_bands_and_integer_seed_overflow() -> None:
+    native = kernels._native_module
+    assert native is not None
+    destination = np.empty((1, 4), dtype=np.uint8)
+    with pytest.raises(ValueError, match="bands"):
+        native.render_spectrum_flash_into(
+            destination, (float("nan"),) + (0.0,) * 7,
+            0.5, 0.0, 0.0, 1.0, 0, 0,
+        )
+    with pytest.raises(ValueError, match="parameters"):
+        native.render_spectrum_flash_into(
+            destination, (0.0,) * 8, 0.5,
+            float(np.iinfo(np.int32).max) * 16.0,
+            1.0, 1.0, 0, 0,
+        )
+
+
+@pytest.mark.skipif(kernels._native_module is None, reason="render extension is not built")
+def test_native_pattern_kernels_reject_out_of_range_integer_inputs() -> None:
+    native = kernels._native_module
+    assert native is not None
+    destination = np.empty((2, 4), dtype=np.uint8)
+    with pytest.raises(ValueError, match="rainbow"):
+        native.render_rainbow_pattern_into(
+            destination, 0, 0, None, 1.0e300, 0.0, 100.0,
+            1.0, 0.0, 0.5, 0.0, 1.0, 0, 0,
+        )
+    with pytest.raises(ValueError, match="TheaterChase"):
+        native.render_theater_chase_into(
+            destination, 4, 1.0e300, 120.0, 0.0, 1.0, 0, 0, 0,
         )
 
 

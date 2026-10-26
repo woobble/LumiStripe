@@ -7,6 +7,7 @@
 #include <Python.h>
 #include <numpy/arrayobject.h>
 #include <math.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
 int validate_rgba(PyArrayObject *array, const char *name, int writable);
@@ -29,6 +30,20 @@ PyObject *composite_screen_rgba_into(PyObject *module, PyObject *args);
 int validate_fixed_array(PyArrayObject *array, int type, int dimensions,
                                 npy_intp first, npy_intp second,
                                 const char *name);
+int validate_array(PyArrayObject *array, int type, int dimensions,
+                   const npy_intp *shape, int writable, double minimum,
+                   double maximum, const char *name);
+int validate_int16_array_range(PyArrayObject *array, int dimensions,
+                               const npy_intp *shape, int writable,
+                               int16_t minimum, int16_t maximum,
+                               const char *name);
+int validate_array_layout(PyArrayObject *array, int type, int dimensions,
+                          const npy_intp *shape, int writable,
+                          const char *name);
+int validate_finite_prefix(PyArrayObject *array, npy_intp elements,
+                           const char *name);
+int reject_any_overlap(const PyArrayObject *left, const PyArrayObject *right,
+                       const char *left_name, const char *right_name);
 PyObject *render_tunnel_rings_into(PyObject *module, PyObject *args);
 void hsl_to_rgb(double hue, double saturation, double lightness,
                        uint8_t *red, uint8_t *green, uint8_t *blue);

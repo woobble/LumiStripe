@@ -213,7 +213,9 @@ PyObject *render_spectrum_flash_into(PyObject *module, PyObject *args) {
         PyErr_SetString(PyExc_ValueError, "bands must contain exactly eight values");
         return NULL;
     }
-    if (!isfinite(width) || !isfinite(hue_phase) || !isfinite(flash) ||
+    const npy_intp count = PyArray_DIM(destination, 0);
+    if (!isfinite(width) || !isfinite(hue_phase) ||
+        fabs(hue_phase / 8.0) > (double)INT_MAX || !isfinite(flash) ||
         !isfinite(brightness) || width < 0.0 || brightness < 0.0 ||
         brightness > 1.0 || palette < 0 || palette > 3 ||
         custom_rgb > 0xFFFFFFu) {
@@ -224,15 +226,17 @@ PyObject *render_spectrum_flash_into(PyObject *module, PyObject *args) {
     double band_values[8];
     for (Py_ssize_t i = 0; i < 8; i++) {
         band_values[i] = PyFloat_AsDouble(PySequence_Fast_GET_ITEM(bands, i));
-        if (PyErr_Occurred()) {
+        if (PyErr_Occurred() || !isfinite(band_values[i]) ||
+            band_values[i] < 0.0 || band_values[i] > 1.0) {
             Py_DECREF(bands);
+            if (!PyErr_Occurred())
+                PyErr_SetString(PyExc_ValueError, "bands must be finite values between zero and one");
             return NULL;
         }
     }
     Py_DECREF(bands);
 
     uint8_t *output = (uint8_t *)PyArray_DATA(destination);
-    const npy_intp count = PyArray_DIM(destination, 0);
     const double blend = width;
     volatile double flash_scaled = flash * 0.9;
     const double flash_alpha = fmin(1.0, 0.1 + flash_scaled);
@@ -251,9 +255,12 @@ PyObject *render_spectrum_flash_into(PyObject *module, PyObject *args) {
         double lightness = 56.0;
         double pixel_alpha = alpha;
         if (flash > 0.0) {
-            const int seed = (int)(hue_phase / 8.0) + (int)index;
             static const int warm_hues[4] = {0, 20, 38, 320};
-            hue = warm_hues[((seed % 4) + 4) % 4];
+            const int hue_seed = (int)(hue_phase / 8.0);
+            int seed_mod = (hue_seed % 4 + (int)(index % 4)) % 4;
+            if (seed_mod < 0)
+                seed_mod += 4;
+            hue = warm_hues[seed_mod];
             lightness = 60.0;
             pixel_alpha = flash_alpha;
         }
@@ -474,11 +481,10 @@ PyObject *render_beat_wave_into(PyObject *module, PyObject *args) {
         return NULL;
     if (validate_rgba(destination, "destination", 1) < 0)
         return NULL;
-    if (PyArray_TYPE(waves) != NPY_FLOAT64 || PyArray_NDIM(waves) != 2 ||
-        PyArray_DIM(waves, 0) != 8 || PyArray_DIM(waves, 1) != 2 ||
-        !PyArray_IS_C_CONTIGUOUS(waves)) {
-        PyErr_SetString(PyExc_ValueError,
-                        "waves must be a contiguous float64 array with shape (8, 2)");
+    const npy_intp wave_shape[2] = {8, 2};
+    if (validate_array(waves, NPY_FLOAT64, 2, wave_shape, 0, -INFINITY,
+                       INFINITY, "waves") < 0 ||
+        reject_any_overlap(destination, waves, "destination", "waves") < 0) {
         return NULL;
     }
     if (wave_count < 0 || wave_count > 8 || !isfinite(width) || width < 1.0 ||
@@ -598,6 +604,8 @@ PyObject *render_plasma_rave_into(PyObject *module, PyObject *args) {
     if (!isfinite(frequency) || !isfinite(time_one) || !isfinite(time_two) ||
         !isfinite(time_three) || !isfinite(hue_base) || !isfinite(hue_scale) ||
         !isfinite(alpha_extra) || !isfinite(brightness) || frequency <= 0.0 ||
+        fabs(hue_base) > (double)INT_MAX / 4.0 ||
+        fabs(hue_scale) > (double)INT_MAX / 4.0 ||
         alpha_extra < 0.0 || alpha_extra > 1.0 || brightness < 0.0 ||
         brightness > 1.0 || palette < 0 || palette > 3 ||
         (clamp_alpha != 0 && clamp_alpha != 1) ||
@@ -1115,12 +1123,20 @@ PyObject *render_neon_storm_into(PyObject *module, PyObject *args) {
         return NULL;
     if (validate_rgba(destination, "destination", 1) < 0) return NULL;
     const npy_intp count = PyArray_DIM(destination, 0);
-    if (PyArray_TYPE(levels) != NPY_FLOAT32 || PyArray_NDIM(levels) != 1 ||
-        PyArray_DIM(levels, 0) != count || !PyArray_ISCARRAY_RO(levels) ||
-        PyArray_TYPE(hues) != NPY_INT16 || PyArray_NDIM(hues) != 1 ||
-        PyArray_DIM(hues, 0) != count || !PyArray_ISCARRAY_RO(hues) ||
-        PyArray_TYPE(positions) != NPY_FLOAT64 || PyArray_NDIM(positions) != 1 ||
-        !PyArray_ISCARRAY_RO(positions) || !isfinite(drive) ||
+    const npy_intp particle_shape[1] = {count};
+    const npy_intp position_shape[1] = {-1};
+    if (validate_array(levels, NPY_FLOAT32, 1, particle_shape, 0, 0.0, 1.0,
+                       "levels") < 0 ||
+        validate_int16_array_range(hues, 1, particle_shape, 0, 0, 4, "hues") < 0 ||
+        validate_array(positions, NPY_FLOAT64, 1, position_shape, 0, 0.0,
+                       count > 0 ? (double)count : 0.0, "positions") < 0 ||
+        reject_any_overlap(destination, levels, "destination", "levels") < 0 ||
+        reject_any_overlap(destination, hues, "destination", "hues") < 0 ||
+        reject_any_overlap(destination, positions, "destination", "positions") < 0 ||
+        reject_any_overlap(levels, hues, "levels", "hues") < 0 ||
+        reject_any_overlap(levels, positions, "levels", "positions") < 0 ||
+        reject_any_overlap(hues, positions, "hues", "positions") < 0 ||
+        !isfinite(drive) ||
         !isfinite(brightness) || brightness < 0.0 || brightness > 1.0 ||
         palette < 0 || palette > 3 || custom_rgb > 0xFFFFFFu) {
         PyErr_SetString(PyExc_ValueError, "invalid NeonStorm buffers or parameters");
@@ -1182,8 +1198,10 @@ PyObject *render_electric_storm_into(PyObject *module, PyObject *args) {
                           &PyArray_Type, &geometry, &flash_alpha, &brightness,
                           &palette, &custom_rgb)) return NULL;
     if (validate_rgba(destination, "destination", 1) < 0) return NULL;
-    if (PyArray_TYPE(geometry) != NPY_FLOAT64 || PyArray_NDIM(geometry) != 2 ||
-        PyArray_DIM(geometry, 1) != 4 || !PyArray_ISCARRAY_RO(geometry) ||
+    const npy_intp geometry_shape[2] = {-1, 4};
+    if (validate_array(geometry, NPY_FLOAT64, 2, geometry_shape, 0,
+                       -INFINITY, INFINITY, "geometry") < 0 ||
+        reject_any_overlap(destination, geometry, "destination", "geometry") < 0 ||
         !isfinite(flash_alpha) || flash_alpha < 0.0 || flash_alpha > 1.0 ||
         !isfinite(brightness) || brightness < 0.0 || brightness > 1.0 ||
         palette < 0 || palette > 3 || custom_rgb > 0xFFFFFFu) {

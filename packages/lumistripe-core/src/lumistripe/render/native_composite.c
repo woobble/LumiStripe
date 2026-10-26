@@ -313,11 +313,14 @@ PyObject *render_fire_into(PyObject *module, PyObject *args) {
     if (validate_rgba(destination, "destination", 1) < 0)
         return NULL;
     const npy_intp count = PyArray_DIM(destination, 0);
-    if (PyArray_TYPE(heat_array) != NPY_FLOAT32 || PyArray_NDIM(heat_array) != 1 ||
-        PyArray_TYPE(next_array) != NPY_FLOAT32 || PyArray_NDIM(next_array) != 1 ||
-        PyArray_DIM(heat_array, 0) != count || PyArray_DIM(next_array, 0) != count ||
-        !PyArray_ISCARRAY(heat_array) || !PyArray_ISCARRAY(next_array)) {
-        PyErr_SetString(PyExc_ValueError, "heat buffers must be contiguous float32 vectors matching destination");
+    const npy_intp state_shape[1] = {count};
+    if (validate_array(heat_array, NPY_FLOAT32, 1, state_shape, 0, 0.0, 1.0,
+                       "heat") < 0 ||
+        validate_array(next_array, NPY_FLOAT32, 1, state_shape, 1, -INFINITY,
+                       INFINITY, "next heat") < 0 ||
+        reject_any_overlap(destination, heat_array, "destination", "heat") < 0 ||
+        reject_any_overlap(destination, next_array, "destination", "next heat") < 0 ||
+        reject_any_overlap(heat_array, next_array, "heat", "next heat") < 0) {
         return NULL;
     }
     if (!isfinite(cooling) || !isfinite(sparking) || !isfinite(drive) ||

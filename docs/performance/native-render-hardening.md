@@ -85,33 +85,84 @@ CPU-frequency or thermal study.
   `native_reactive.c`.
 - Native correction and alpha-scaling entry points now reject unsafe partial
   buffer overlap; exact in-place aliases remain supported.
-- Fixed-shape native floating-point arrays now reject NaN and infinities before
-  use. This covers the tunnel geometry array.
+- Shared array validation now checks dtype, rank, fixed dimensions, alignment,
+  C-contiguity, and writability before direct buffer access. Finite-value and
+  range checks cover mutable particle levels and fixed/active geometry used by
+  the hardened kernels. Scratch arrays with spare capacity validate only the
+  active prefix so intentionally uninitialized inactive slots remain valid.
+- Mutable state buffers are checked for overlap with output and with other
+  state buffers where the kernel reads and writes them in the same call.
+- NeonConfetti validates palette indices before indexing its seven-color table;
+  its frame-center multiplication now reduces the frame before multiplying to
+  avoid signed overflow.
+- Added adversarial cases for misalignment, read-only output, invalid mutable
+  state, negative palette indices, active-prefix validation, and state/output
+  overlap.
 - RainbowStrobe now passes its selected palette and custom color through the
   existing native rainbow kernel, including palette-correct RGB under fully
   transparent pixels. Default rainbow output remains unchanged.
 - Added adversarial overlap, exact-alias, and non-finite geometry tests.
 
-## Validation and limits
+## Acceptance follow-up
 
-- Initial focused native renderer suite: 3,357 passed before changes.
-- Full core suite with native rendering, expanded length and palette matrix:
-  6,153 passed, 168 skipped for palette variants that deliberately use the
-  existing Python fallback.
-- Pure-Python full core suite: 590 passed, 5,731 native-only tests skipped.
-- Focused catalog parity and kernel suite after the translation-unit split:
-  2,612 passed and 168 unsupported native palette cases skipped, both normally
-  and under UBSan.
-- A normal extension build succeeded after the split. Catalog parity covers
-  1, 30, 60, 150, 300, 600, and 1,200 LEDs in static and audio modes. Palette
-  cases cover each palette setting on the catalog animations; unsupported
-  native palette paths are verified to take the Python fallback.
-- `graphify update .` completed. It reported existing parser warnings for
-  third-party KissFFT headers and `pyproject.toml`.
-- Raspberry Pi ARM64 output, real SPI timing, Bluetooth audio, long-duration
-  RSS stability, and physical frame-deadline behavior were not measured.
+- Native extension exports: 51 callable functions, unchanged.
+- Full native release core suite after the validation additions: 6,162 passed,
+  168 skipped. The skips are native palette combinations that deliberately
+  dispatch through Python. The isolated native build rendering, parity, and
+  spectrum suite passed 2,718 tests, with 168 unsupported native palette cases
+  skipped. Final UBSan and
+  ASan focused native boundary suites each passed 31 tests.
+- ASan had to be
+  preloaded into the project Python directly; preloading it into `uv` crashed
+  in the runner's jemalloc before Python started. Leak detection was disabled,
+  so this does not verify Python reference leaks.
+- No-render isolated profile build (`audio,gpio,spi`, without `render`): 590
+  passed, 5,740 skipped. Every skip reports
+  that the render extension/kernel is not
+  built; these skips are not counted as fallback coverage. A representative
+  playback/render subset ran without the extension: 120 passed, 29 native-only
+  skips. Existing layer/playback tests exercise zero, one, and two effects,
+  Crossfade, FadeBlack, Wipe, and independent playback-engine transition state.
+- Catalog parity covers all supported catalog animation/palette cases at
+  1, 30, 60, 150, 300, 600, and 1,200 LEDs for 12 consecutive static and audio
+  frames. The 168 unsupported native palette combinations use and test the
+  existing Python fallback. Exact RGBA byte equality is asserted when a native
+  kernel is available. Layered playback is separately covered by the core
+  compositor and transition tests; no physical LED zone or mirror wiring was
+  available for hardware-level validation.
+- Final serial benchmark samples on x86-64 (Python 3.12.15, NumPy 2.5.4):
 
-The native-interface audit still needs adversarial coverage across every
-array-bearing kernel, including alignment, writeability, numerical ranges,
-integer conversions, and cross-buffer aliasing. Transition states and every
-possible layered scenario have not all been exercised against the C paths.
+  | LEDs | Correction+alpha C p50 / p95 / p99 (µs) | NumPy p95 (µs) | Two-overlay compositor C p95 (µs) | NumPy p95 (µs) |
+  | ---: | ---: | ---: | ---: | ---: |
+  | 150 | 0.371 / 0.381 / 0.391 | 6.111 | 8.135 | 20.779 |
+  | 300 | 0.561 / 0.571 / 0.681 | 8.926 | 9.117 | 15.018 |
+  | 600 | 0.932 / 1.222 / 1.583 | 10.680 | 10.910 | 18.184 |
+
+  Catalog and layered benchmarks completed at 150/300/600 LEDs in static and
+  audio modes, with 0/1/2 effects. Native calls stayed within frame budgets;
+  results were consistent with the earlier baseline and showed no broad
+  sustained regression. These are synthetic in-memory measurements, not a
+  statistical CPU-frequency/thermal study. Benchmark JSON/CSV is generated to
+  stdout by the existing scripts and was not committed as a large artifact.
+- `ruff check .`, core `mypy`, and `git diff --check` pass. `graphify update .`
+  completed with the existing KissFFT parser and pyproject warnings.
+- The final rerun of `test_render_kernels.py`, `test_catalog_native_parity.py`,
+  and `test_spectrum_flash_native.py` passed 2,718 tests with 168 expected
+  fallback skips; focused checks emitted only project coverage warnings about
+  unrelated packages not imported by this core-only selection.
+- Separate `setup.py build` output trees were produced for `audio,gpio,spi` and
+  `render,gpio,spi`. The no-render build has no `_native` shared object; the
+  native build exports all 51 methods. The representative fallback suite passed
+  against the no-render tree, and 2,718 focused native tests passed against the
+  native tree.
+- No Raspberry Pi or ARM64 test ran. Real SPI transfer, Bluetooth capture,
+  long-duration RSS stability, physical zone mapping, and appliance frame
+  deadlines remain unmeasured.
+
+The expanded checks cover the state-array and geometry entry points identified
+during this pass, but do not constitute a formal proof of every C scalar's
+domain or every CPython reference path. In particular, extreme finite values
+for several legacy scalar parameters and Python C API allocation-failure paths
+still need targeted per-kernel cases before treating the native interface as
+fully adversarially verified. No public API or supported animation output was
+intentionally changed.

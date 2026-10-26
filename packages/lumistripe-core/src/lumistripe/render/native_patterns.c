@@ -107,9 +107,19 @@ PyObject *render_rainbow_pattern_into(PyObject *module, PyObject *args) {
         return NULL;
     if (validate_rgba(destination, "destination", 1) < 0)
         return NULL;
+    const npy_intp count = PyArray_DIM(destination, 0);
+    const double safe_spread = count > 0
+        ? (double)INT_MAX / 256.0 / (double)count
+        : (double)INT_MAX / 256.0;
     if (mode < 0 || mode > 2 || !isfinite(spread) || spread <= 0.0 ||
+        spread > safe_spread || frame < (Py_ssize_t)(INT_MIN / 2) ||
+        frame > (Py_ssize_t)(INT_MAX / 2) ||
         !isfinite(base_hue) || !isfinite(saturation) || !isfinite(alpha) ||
         !isfinite(low) || !isfinite(mid) || !isfinite(beat_pulse) ||
+        fabs(base_hue) > (double)INT_MAX / 4.0 || low < 0.0 || low > 1.0 ||
+        (mode == 2 && (mid < (double)INT_MIN || mid > (double)INT_MAX)) ||
+        (mode != 2 && (mid < 0.0 || mid > 1.0)) ||
+        beat_pulse < 0.0 || beat_pulse > 1.0 ||
         !isfinite(brightness) || alpha < 0.0 || alpha > 1.0 ||
         brightness < 0.0 || brightness > 1.0 || palette < 0 || palette > 3 ||
         custom_rgb > 0xFFFFFFu) {
@@ -138,7 +148,6 @@ PyObject *render_rainbow_pattern_into(PyObject *module, PyObject *args) {
         Py_DECREF(bands);
     }
     const int audio_mode = bands_object != Py_None;
-    const npy_intp count = PyArray_DIM(destination, 0);
     uint8_t *pixels = (uint8_t *)PyArray_DATA(destination);
     const uint8_t output_alpha = (uint8_t)(alpha * brightness * 255.0);
     for (npy_intp index = 0; index < count; index++) {
@@ -219,7 +228,8 @@ PyObject *render_theater_chase_into(PyObject *module, PyObject *args) {
         return NULL;
     if (validate_rgba(destination, "destination", 1) < 0)
         return NULL;
-    if (stride < 1 || !isfinite(phase) || !isfinite(hue) || !isfinite(drive) ||
+    if (stride < 1 || !isfinite(phase) || phase < (double)INT_MIN ||
+        phase > (double)INT_MAX || !isfinite(hue) || !isfinite(drive) ||
         !isfinite(brightness) || drive < 0.0 || drive > 1.0 ||
         brightness < 0.0 || brightness > 1.0 || (audio_mode != 0 && audio_mode != 1) ||
         palette < 0 || palette > 3 || custom_rgb > 0xFFFFFFu) {

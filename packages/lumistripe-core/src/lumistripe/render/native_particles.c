@@ -15,10 +15,10 @@ PyObject *render_confetti_into(PyObject *module, PyObject *args) {
         return NULL;
     if (validate_rgba(destination, "destination", 1) < 0)
         return NULL;
-    if (PyArray_TYPE(intensity_array) != NPY_FLOAT32 || PyArray_NDIM(intensity_array) != 1 ||
-        !PyArray_ISCARRAY(intensity_array) ||
-        PyArray_DIM(intensity_array, 0) != PyArray_DIM(destination, 0)) {
-        PyErr_SetString(PyExc_ValueError, "intensities must be contiguous float32 with one value per pixel");
+    const npy_intp intensity_shape[1] = {PyArray_DIM(destination, 0)};
+    if (validate_array(intensity_array, NPY_FLOAT32, 1, intensity_shape, 1,
+                       0.0, 1.0, "intensities") < 0 ||
+        reject_any_overlap(destination, intensity_array, "destination", "intensities") < 0) {
         return NULL;
     }
     if ((audio_mode != 0 && audio_mode != 1) || !isfinite(fade) || fade < 0.0 ||
@@ -266,9 +266,10 @@ PyObject *render_comet_storm_into(PyObject *module, PyObject *args) {
         return NULL;
     if (validate_rgba(destination, "destination", 1) < 0)
         return NULL;
-    if (PyArray_TYPE(geometry) != NPY_DOUBLE || PyArray_NDIM(geometry) != 2 ||
-        PyArray_DIM(geometry, 1) != 4 || !PyArray_ISCARRAY_RO(geometry)) {
-        PyErr_SetString(PyExc_ValueError, "geometry must be a contiguous float64 array of shape (n, 4)");
+    const npy_intp geometry_shape[2] = {-1, 4};
+    if (validate_array(geometry, NPY_DOUBLE, 2, geometry_shape, 0,
+                       -INFINITY, INFINITY, "geometry") < 0 ||
+        reject_any_overlap(destination, geometry, "destination", "geometry") < 0) {
         return NULL;
     }
     if (!isfinite(brightness) || brightness < 0.0 || brightness > 1.0 ||
@@ -345,11 +346,13 @@ PyObject *render_twinkle_into(PyObject *module, PyObject *args) {
     if (validate_rgba(destination, "destination", 1) < 0)
         return NULL;
     const npy_intp count = PyArray_DIM(destination, 0);
-    if (PyArray_TYPE(levels) != NPY_FLOAT32 || PyArray_NDIM(levels) != 1 ||
-        PyArray_DIM(levels, 0) != count || !PyArray_ISCARRAY_RO(levels) ||
-        PyArray_TYPE(hues) != NPY_INT16 || PyArray_NDIM(hues) != 1 ||
-        PyArray_DIM(hues, 0) != count || !PyArray_ISCARRAY_RO(hues)) {
-        PyErr_SetString(PyExc_ValueError, "levels and hues must be contiguous arrays matching destination length");
+    const npy_intp state_shape[1] = {count};
+    if (validate_array(levels, NPY_FLOAT32, 1, state_shape, 0, 0.0, 1.0,
+                       "levels") < 0 ||
+        validate_array_layout(hues, NPY_INT16, 1, state_shape, 0, "hues") < 0 ||
+        reject_any_overlap(destination, levels, "destination", "levels") < 0 ||
+        reject_any_overlap(destination, hues, "destination", "hues") < 0 ||
+        reject_any_overlap(levels, hues, "levels", "hues") < 0) {
         return NULL;
     }
     if (radius < 0 || !isfinite(bloom) || !isfinite(brightness) ||
@@ -473,11 +476,10 @@ PyObject *render_disco_sparkle_into(PyObject *module, PyObject *args) {
         return NULL;
     if (validate_rgba(destination, "destination", 1) < 0)
         return NULL;
-    if (PyArray_TYPE(intensities) != NPY_FLOAT32 || PyArray_NDIM(intensities) != 1 ||
-        PyArray_DIM(intensities, 0) != PyArray_DIM(destination, 0) ||
-        !PyArray_IS_C_CONTIGUOUS(intensities) || !PyArray_ISWRITEABLE(intensities)) {
-        PyErr_SetString(PyExc_ValueError,
-                        "intensities must be a writable contiguous float32 array matching destination");
+    const npy_intp intensity_shape[1] = {PyArray_DIM(destination, 0)};
+    if (validate_array(intensities, NPY_FLOAT32, 1, intensity_shape, 1,
+                       0.0, 1.0, "intensities") < 0 ||
+        reject_any_overlap(destination, intensities, "destination", "intensities") < 0) {
         return NULL;
     }
     if ((audio_mode != 0 && audio_mode != 1) || density < 0 || density > 100 ||
@@ -571,19 +573,46 @@ PyObject *render_firework_burst_into(PyObject *module, PyObject *args) {
         return NULL;
     if (validate_rgba(destination, "destination", 1) < 0)
         return NULL;
-    if (PyArray_TYPE(phases) != NPY_FLOAT64 || PyArray_NDIM(phases) != 1 ||
-        PyArray_DIM(phases, 0) != 12 || !PyArray_IS_C_CONTIGUOUS(phases) ||
-        PyArray_TYPE(bursts) != NPY_FLOAT64 || PyArray_NDIM(bursts) != 2 ||
-        PyArray_DIM(bursts, 0) != 12 || PyArray_DIM(bursts, 1) != 3 ||
-        !PyArray_IS_C_CONTIGUOUS(bursts)) {
-        PyErr_SetString(PyExc_ValueError,
-                        "FireworkBurst scratch arrays have invalid shapes or layouts");
+    if (phase_count < 0 || phase_count > 12 || burst_count < 0 || burst_count > 12) {
+        PyErr_SetString(PyExc_ValueError, "FireworkBurst counts must be between zero and twelve");
         return NULL;
+    }
+    const npy_intp phase_shape[1] = {12};
+    const npy_intp burst_shape[2] = {12, 3};
+    if (validate_array_layout(phases, NPY_FLOAT64, 1, phase_shape, 0,
+                              "phases") < 0 ||
+        validate_array_layout(bursts, NPY_FLOAT64, 2, burst_shape, 0,
+                              "bursts") < 0 ||
+        validate_finite_prefix(phases, phase_count, "phases") < 0 ||
+        validate_finite_prefix(bursts, (npy_intp)burst_count * 3,
+                               "bursts") < 0 ||
+        reject_any_overlap(destination, phases, "destination", "phases") < 0 ||
+        reject_any_overlap(destination, bursts, "destination", "bursts") < 0 ||
+        reject_any_overlap(phases, bursts, "phases", "bursts") < 0) {
+        return NULL;
+    }
+    const double *phase_data = (const double *)PyArray_DATA(phases);
+    const double *burst_data = (const double *)PyArray_DATA(bursts);
+    for (int i = 0; i < phase_count; i++) {
+        if (phase_data[i] < 0.0 || phase_data[i] > (double)INT_MAX / 10.0) {
+            PyErr_SetString(PyExc_ValueError, "active phases are outside the supported range");
+            return NULL;
+        }
+    }
+    for (int i = 0; i < burst_count; i++) {
+        if (burst_data[i * 3] < 0.0 ||
+            burst_data[i * 3] > (double)INT_MAX / 10.0 ||
+            burst_data[i * 3 + 1] < 0.0 || burst_data[i * 3 + 1] > 1.0 ||
+            burst_data[i * 3 + 2] < 0.0 || burst_data[i * 3 + 2] > 255.0) {
+            PyErr_SetString(PyExc_ValueError, "active burst geometry is outside the supported range");
+            return NULL;
+        }
     }
     if (phase_count < 0 || phase_count > 12 || burst_count < 0 || burst_count > 12 ||
         (audio_mode != 0 && audio_mode != 1) || !isfinite(center) || center < 0.0 ||
         !isfinite(fade_alpha) || fade_alpha < 0.0 || fade_alpha > 1.0 ||
-        !isfinite(glow) || glow < 0.0 || !isfinite(mid) || !isfinite(high) ||
+        !isfinite(glow) || glow < 0.0 || !isfinite(mid) || mid < 0.0 || mid > 1.0 ||
+        !isfinite(high) || high < 0.0 || high > 1.0 || frame < 0 ||
         !isfinite(brightness) || brightness < 0.0 || brightness > 1.0 ||
         hue < 0 || hue > 255 || palette < 0 || palette > 3 ||
         custom_rgb > 0xFFFFFFu) {
@@ -604,8 +633,11 @@ PyObject *render_firework_burst_into(PyObject *module, PyObject *args) {
         }
         for (Py_ssize_t band = 0; band < band_count; band++) {
             band_values[band] = PyFloat_AsDouble(PySequence_Fast_GET_ITEM(sequence, band));
-            if (PyErr_Occurred()) {
+            if (PyErr_Occurred() || !isfinite(band_values[band]) ||
+                band_values[band] < 0.0 || band_values[band] > 1.0) {
                 Py_DECREF(sequence);
+                if (!PyErr_Occurred())
+                    PyErr_SetString(PyExc_ValueError, "bands must be finite values");
                 return NULL;
             }
         }
@@ -696,11 +728,16 @@ PyObject *render_color_burst_into(PyObject *module, PyObject *args) {
         return NULL;
     if (validate_rgba(destination, "destination", 1) < 0)
         return NULL;
-    if (PyArray_TYPE(bursts) != NPY_FLOAT64 || PyArray_NDIM(bursts) != 2 ||
-        PyArray_DIM(bursts, 0) != 6 || PyArray_DIM(bursts, 1) != 5 ||
-        !PyArray_IS_C_CONTIGUOUS(bursts)) {
-        PyErr_SetString(PyExc_ValueError,
-                        "ColorBurst scratch must be contiguous float64 with shape (6, 5)");
+    if (burst_count < 0 || burst_count > 6) {
+        PyErr_SetString(PyExc_ValueError, "ColorBurst count must be between zero and six");
+        return NULL;
+    }
+    const npy_intp burst_shape[2] = {6, 5};
+    if (validate_array_layout(bursts, NPY_FLOAT64, 2, burst_shape, 0,
+                              "bursts") < 0 ||
+        validate_finite_prefix(bursts, (npy_intp)burst_count * 5,
+                               "bursts") < 0 ||
+        reject_any_overlap(destination, bursts, "destination", "bursts") < 0) {
         return NULL;
     }
     if (burst_count < 0 || burst_count > 6 || !isfinite(brightness) ||
@@ -719,6 +756,11 @@ PyObject *render_color_burst_into(PyObject *module, PyObject *args) {
     }
     static const int club_hues[7] = {330, 18, 48, 126, 190, 224, 286};
     for (int burst_index = 0; burst_index < burst_count; burst_index++) {
+        if (state[burst_index * 5 + 2] < (double)INT_MIN ||
+            state[burst_index * 5 + 2] > (double)INT_MAX) {
+            PyErr_SetString(PyExc_ValueError, "active burst hues must fit in a signed int");
+            return NULL;
+        }
         const double center = state[burst_index * 5];
         const double radius = state[burst_index * 5 + 1];
         const int hue_seed = (int)state[burst_index * 5 + 2];
@@ -730,7 +772,7 @@ PyObject *render_color_burst_into(PyObject *module, PyObject *args) {
             const double intensity = fmax(0.0, 1.0 - fabs(distance - radius) / width);
             if (intensity <= 0.0)
                 continue;
-            int hue_index = (hue_seed + (int)index) % 7;
+            int hue_index = (hue_seed % 7 + (int)(index % 7)) % 7;
             if (hue_index < 0)
                 hue_index += 7;
             uint8_t red, green, blue;
@@ -762,13 +804,13 @@ PyObject *render_neon_confetti_into(PyObject *module, PyObject *args) {
     if (validate_rgba(destination, "destination", 1) < 0)
         return NULL;
     const npy_intp length = PyArray_DIM(destination, 0);
-    if (PyArray_TYPE(levels) != NPY_FLOAT32 || PyArray_NDIM(levels) != 1 ||
-        PyArray_DIM(levels, 0) != length || !PyArray_IS_C_CONTIGUOUS(levels) ||
-        !PyArray_ISWRITEABLE(levels) || PyArray_TYPE(hues) != NPY_INT16 ||
-        PyArray_NDIM(hues) != 1 || PyArray_DIM(hues, 0) != length ||
-        !PyArray_IS_C_CONTIGUOUS(hues) || !PyArray_ISWRITEABLE(hues)) {
-        PyErr_SetString(PyExc_ValueError,
-                        "NeonConfetti state arrays must match the destination");
+    const npy_intp state_shape[1] = {length};
+    if (validate_array(levels, NPY_FLOAT32, 1, state_shape, 1, 0.0, 1.0,
+                       "levels") < 0 ||
+        validate_int16_array_range(hues, 1, state_shape, 1, 0, 359, "hues") < 0 ||
+        reject_any_overlap(destination, levels, "destination", "levels") < 0 ||
+        reject_any_overlap(destination, hues, "destination", "hues") < 0 ||
+        reject_any_overlap(levels, hues, "levels", "hues") < 0) {
         return NULL;
     }
     if (!isfinite(fade_multiplier) || fade_multiplier < 0.0 ||
@@ -784,7 +826,8 @@ PyObject *render_neon_confetti_into(PyObject *module, PyObject *args) {
     int16_t *hue_values = (int16_t *)PyArray_DATA(hues);
     uint8_t *pixels = (uint8_t *)PyArray_DATA(destination);
     const npy_intp safe_length = length > 0 ? length : 1;
-    const double center = (double)((frame * 53) % safe_length);
+    const Py_ssize_t frame_mod = frame % safe_length;
+    const double center = (double)((frame_mod * 53) % safe_length);
     for (npy_intp index = 0; index < length; index++) {
         const size_t offset = (size_t)index * 4u;
         pixels[offset] = pixels[offset + 1u] = pixels[offset + 2u] = 0u;
@@ -914,14 +957,19 @@ PyObject *render_pixel_explosion_into(PyObject *module, PyObject *args) {
     if (validate_rgba(destination, "destination", 1) < 0)
         return NULL;
     const npy_intp length = PyArray_DIM(destination, 0);
-    if (PyArray_TYPE(bursts) != NPY_FLOAT64 || PyArray_NDIM(bursts) != 2 ||
-        PyArray_DIM(bursts, 1) != 4 || burst_count < 0 ||
-        burst_count > PyArray_DIM(bursts, 0) ||
-        !PyArray_IS_C_CONTIGUOUS(bursts)) {
+    if (PyArray_NDIM(bursts) != 2 || PyArray_DIM(bursts, 1) != 4 ||
+        burst_count < 0 || burst_count > PyArray_DIM(bursts, 0)) {
         PyErr_SetString(PyExc_ValueError,
                         "PixelExplosion bursts must be contiguous float64 rows");
         return NULL;
     }
+    const npy_intp burst_shape[2] = {-1, 4};
+    if (validate_array_layout(bursts, NPY_FLOAT64, 2, burst_shape, 0,
+                              "bursts") < 0 ||
+        validate_finite_prefix(bursts, (npy_intp)burst_count * 4,
+                               "bursts") < 0 ||
+        reject_any_overlap(destination, bursts, "destination", "bursts") < 0)
+        return NULL;
     if (!isfinite(width) || width <= 0.0 || !isfinite(brightness) ||
         brightness < 0.0 || brightness > 1.0 || palette < 0 || palette > 3 ||
         custom_rgb > 0xFFFFFFu) {
@@ -936,6 +984,10 @@ PyObject *render_pixel_explosion_into(PyObject *module, PyObject *args) {
         pixels[offset + 3u] = 0u;
     }
     for (int burst = 0; burst < burst_count; burst++) {
+        if (state[burst * 4 + 2] < 0.0 || state[burst * 4 + 2] > 359.0) {
+            PyErr_SetString(PyExc_ValueError, "active explosion hues must be between zero and 359");
+            return NULL;
+        }
         const double x = state[burst * 4];
         const double radius = state[burst * 4 + 1];
         const int hue = (int)state[burst * 4 + 2];
