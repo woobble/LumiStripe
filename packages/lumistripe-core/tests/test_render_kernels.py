@@ -84,6 +84,62 @@ def test_kernel_boundaries_reject_invalid_buffers() -> None:
         )
 
 
+@pytest.mark.skipif(kernels._native_module is None, reason="render extension is not built")
+def test_native_kernels_reject_partially_overlapping_buffers() -> None:
+    native = kernels._native_module
+    assert native is not None
+    storage = np.zeros((5, 4), dtype=np.uint8)
+    correction = np.full(3, 255, dtype=np.uint16)
+    with pytest.raises(ValueError, match="partially overlap"):
+        native.correct_rgba_into(storage[:4], storage[1:], correction)
+
+    source = np.zeros((5, 4), dtype=np.uint8)
+    corrected_storage = np.zeros((6, 4), dtype=np.uint8)
+    with pytest.raises(ValueError, match="partially overlap"):
+        native.apply_alpha_scale_into(
+            source, corrected_storage[:5], corrected_storage[1:], 0.5
+        )
+
+    with pytest.raises(ValueError, match="partially overlap"):
+        native.composite_screen_rgba_into(
+            storage[:4], storage[1:], 1.0, None, 0.0, None, 0.0
+        )
+
+
+@pytest.mark.skipif(kernels._native_module is None, reason="render extension is not built")
+def test_native_kernels_allow_exact_in_place_aliases() -> None:
+    native = kernels._native_module
+    assert native is not None
+    frame = np.array([[100, 80, 60, 255], [20, 40, 60, 127]], dtype=np.uint8)
+    expected = frame.copy()
+    expected[:, :3] = (expected[:, :3].astype(np.uint16) * 128 // 255).astype(np.uint8)
+    native.correct_rgba_into(frame, frame, np.array([128, 128, 128], dtype=np.uint16))
+    np.testing.assert_array_equal(frame, expected)
+
+    native.apply_alpha_scale_into(frame, frame, frame, 0.5)
+    expected[:, 3] = np.floor(expected[:, 3].astype(np.float64) * 0.5).astype(np.uint8)
+    np.testing.assert_array_equal(frame, expected)
+
+
+@pytest.mark.skipif(kernels._native_module is None, reason="render extension is not built")
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), -float("inf")])
+def test_native_tunnel_rejects_nonfinite_geometry(invalid: float) -> None:
+    native = kernels._native_module
+    assert native is not None
+    destination = np.empty((3, 4), dtype=np.uint8)
+    geometry = np.array([[0.5, 1.0, 0.5, 2.0, 1.0], [0.5, 1.5, 0.5, 2.0, 1.0]])
+    geometry[0, 1] = invalid
+    with pytest.raises(ValueError, match="finite"):
+        native.render_tunnel_rings_into(
+            destination,
+            geometry,
+            np.zeros((2, 3), dtype=np.uint8),
+            np.zeros(3, dtype=np.uint8),
+            2,
+            1.0,
+        )
+
+
 def test_public_kernels_use_numpy_fallback_without_native_extension(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -23,7 +23,9 @@ if unknown_extensions:
         + ", ".join(sorted(unknown_extensions))
     )
 if "none" in requested_extensions and len(requested_extensions) > 1:
-    raise RuntimeError("LUMISTRIPE_BUILD_EXTENSIONS=none cannot be combined with other profiles")
+    raise RuntimeError(
+        "LUMISTRIPE_BUILD_EXTENSIONS=none cannot be combined with other profiles"
+    )
 build_all_extensions = "all" in requested_extensions
 optimized_native_build = os.environ.get("LUMISTRIPE_NATIVE_OPTIMIZATION", "0") == "1"
 
@@ -35,7 +37,19 @@ def optimization_flags() -> tuple[list[str], list[str]]:
     link_flags: list[str] = []
     if optimized_native_build:
         compile_flags.extend(
-            ["-O3", "-flto", "-ffinite-math-only", "-fno-math-errno", "-march=native"]
+            [
+                "-O3",
+                "-flto",
+                "-ffinite-math-only",
+                "-fno-math-errno",
+                "-ftree-vectorize",
+                "-ftree-loop-vectorize",
+                "-ftree-slp-vectorize",
+                "-ffast-math",
+                "-march=native",
+                "-mtune=native",
+                "-mcpu=native",
+            ]
         )
         link_flags.extend(["-flto", "-O3"])
     return compile_flags, link_flags
@@ -60,19 +74,29 @@ ext_sm16716 = Extension(
 
 ext_render = Extension(
     "lumistripe.render._native",
-    sources=["src/lumistripe/render/_native.c"],
+    sources=[
+        "src/lumistripe/render/_native.c",
+        "src/lumistripe/render/native_common.c",
+        "src/lumistripe/render/native_composite.c",
+        "src/lumistripe/render/native_patterns.c",
+        "src/lumistripe/render/native_particles.c",
+        "src/lumistripe/render/native_reactive.c",
+    ],
     include_dirs=[numpy.get_include()],
     extra_compile_args=native_compile_flags,
     extra_link_args=native_link_flags,
 )
 
-kissfft_root = KISSFFT_PACKAGE if (KISSFFT_PACKAGE / "kiss_fft.c").exists() else KISSFFT_SOURCE
+kissfft_root = (
+    KISSFFT_PACKAGE if (KISSFFT_PACKAGE / "kiss_fft.c").exists() else KISSFFT_SOURCE
+)
 
 
 def package_path(path: Path) -> str:
     """Return a setup.py path relative to the package root."""
 
     return Path(os.path.relpath(path, ROOT)).as_posix()
+
 
 ext_audio = Extension(
     "lumistripe.audio._audio",
@@ -110,8 +134,16 @@ class SourceDistribution(_sdist):
             target.mkdir(parents=True)
         source = KISSFFT_SOURCE if KISSFFT_SOURCE.exists() else KISSFFT_PACKAGE
         if not source.exists():
-            raise RuntimeError("KISS FFT submodule is required to build a source distribution")
-        for filename in ("kiss_fft.c", "kiss_fft.h", "kiss_fftr.c", "kiss_fftr.h", "_kiss_fft_guts.h"):
+            raise RuntimeError(
+                "KISS FFT submodule is required to build a source distribution"
+            )
+        for filename in (
+            "kiss_fft.c",
+            "kiss_fft.h",
+            "kiss_fftr.c",
+            "kiss_fftr.h",
+            "_kiss_fft_guts.h",
+        ):
             shutil.copy2(source / filename, target / filename)
 
 

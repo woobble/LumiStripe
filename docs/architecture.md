@@ -95,6 +95,14 @@ extensions are selected explicitly with `LUMISTRIPE_BUILD_EXTENSIONS`, and
 optimized `-march=native` builds are reserved for device-local use. See
 `docs/decisions/0003-native-extensions.md` for the release and CI policy.
 
+The optional render extension keeps the import path
+`lumistripe.render._native`. `_native.c` owns module initialization and method
+registration; `native_common.c` contains shared buffer validation and color
+utilities; and composite, pattern, particle, and reactive kernels live in
+their corresponding translation units. `native_common.h` is the shared
+internal boundary. The extension remains optional and its Python/NumPy paths
+remain available in the pure-Python profile.
+
 These modules are the intended seams for future implementation moves.
 
 ## Physical stripe zones

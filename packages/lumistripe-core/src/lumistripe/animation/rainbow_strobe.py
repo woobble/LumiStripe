@@ -85,6 +85,6 @@ class RainbowStrobe(Animation):
             float(light),
             0.0,
             max(0.0, min(1.0, float(self._output_brightness(brightness)))),
-            "rainbow",
-            "#7C3AED",
+            str(self.setting("palette", "rainbow")),
+            str(self.setting("custom_color", "#7C3AED")),
         )
