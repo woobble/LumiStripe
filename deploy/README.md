@@ -227,6 +227,13 @@ separate bind mounts. If Docker cannot access the host audio socket, confirm tha
 `XDG_RUNTIME_DIR` points to the logged-in desktop session and that
 `$XDG_RUNTIME_DIR/pulse/native` exists. The Spotify container creates a
 temporary `lumistripe_spotify` virtual sink and removes it when the stack stops.
+Its shutdown allows Soloist to close its audio stream, then unloads the sink
+before the container exits. If audio is still distorted after stopping the
+stack, check `pactl list short sinks` for a leftover `lumistripe_spotify` sink
+and find its module ID with
+`pactl list short modules | awk '$2 == "module-null-sink" && $0 ~ /sink_name=lumistripe_spotify/ {print $1}'`.
+Unload that ID with `pactl unload-module MODULE_ID`; restarting the user
+PipeWire services is a recovery step, not normally required.
 
 ## Uninstallation
 

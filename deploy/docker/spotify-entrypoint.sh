@@ -20,7 +20,8 @@ if [ "${LUMI_SPOTIFY_CREATE_SINK:-0}" = "1" ]; then
   fi
 fi
 
-set -- /usr/local/bin/soloist \
+soloist_bin="${LUMI_SPOTIFY_BIN:-/usr/local/bin/soloist}"
+set -- "$soloist_bin" \
   --device-name "${LUMI_SPOTIFY_DEVICE_NAME:-LumiStripe}" \
   --api-key "$api_key" \
   --ws "${LUMI_SPOTIFY_WS:-127.0.0.1:9090}" \
@@ -35,10 +36,24 @@ fi
 cleanup() {
   trap - EXIT INT TERM
   if [ -n "${soloist_pid:-}" ]; then
-    kill "$soloist_pid" 2>/dev/null || true
+    # Give Soloist a short chance to close its PipeWire stream cleanly. A
+    # container stop has a finite grace period, so force it down before that
+    # expires and leave time to unload the sink from the host audio server.
+    kill -TERM "$soloist_pid" 2>/dev/null || true
+    attempts=0
+    while kill -0 "$soloist_pid" 2>/dev/null && [ "$attempts" -lt 3 ]; do
+      sleep 1
+      attempts=$((attempts + 1))
+    done
+    if kill -0 "$soloist_pid" 2>/dev/null; then
+      kill -KILL "$soloist_pid" 2>/dev/null || true
+    fi
     wait "$soloist_pid" 2>/dev/null || true
   fi
-  pactl unload-module "$spotify_sink_module" >/dev/null 2>&1 || true
+  if [ -n "$spotify_sink_module" ]; then
+    timeout --kill-after=1s 3s pactl unload-module "$spotify_sink_module" \
+      >/dev/null 2>&1 || true
+  fi
 }
 
 trap cleanup EXIT

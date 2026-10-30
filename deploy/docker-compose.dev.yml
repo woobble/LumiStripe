@@ -48,6 +48,8 @@ services:
     pull_policy: never
     network_mode: host
     restart: unless-stopped
+    init: true
+    stop_grace_period: 15s
     user: "${LUMI_DEV_UID:?Set LUMI_DEV_UID to the current user ID}:${LUMI_DEV_GID:?Set LUMI_DEV_GID to the current group ID}"
     read_only: true
     tmpfs:
