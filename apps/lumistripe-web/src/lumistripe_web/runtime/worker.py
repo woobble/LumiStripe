@@ -96,6 +96,8 @@ from ..models import (
     ColorCorrectionProfile,
     DashboardState,
     DiagnosticIssue,
+    MusicIdleRequest,
+    MusicIdleState,
     SequenceLibraryEntry,
     SequenceLibrarySummary,
     SequencePlaybackDiagnostics,
@@ -116,6 +118,7 @@ from ..settings import (
     SHARED_ANIMATION_SETTINGS_KEY,
     AudioTuningProfile,
     CalibrationSettingsStore,
+    MusicIdleSettings,
     StartupPlaybackSettings,
     StripeTopologySettings,
     TransitionSettings,
@@ -372,6 +375,7 @@ class RuntimeWorker:
             self._animation_sequences, self._active_sequence_id
         )
         self._remembered_playback = loaded_settings.remembered_playback
+        self._music_idle = loaded_settings.music_idle.copy()
         self._settings_io_lock = threading.RLock()
         self._startup_persist_lock = threading.Lock()
         self._startup_persist_timer: threading.Timer | None = None
@@ -401,6 +405,7 @@ class RuntimeWorker:
                 dynamic_response=self._audio_profile.dynamic_response,
             ),
         )
+        self._apply_music_idle(self.playback, SHARED_ANIMATION_SETTINGS_KEY)
         if self._active_animation_sequence is not None:
             try:
                 self.playback.set_animation_sequence(self._active_animation_sequence)
@@ -1143,6 +1148,9 @@ class RuntimeWorker:
             self._submit("brightness", _TargetCommand(float(brightness), stripe_id)),
         )
 
+    def set_music_idle(self, request: MusicIdleRequest) -> Future[DashboardState]:
+        return cast(Future[DashboardState], self._submit("music_idle", request))
+
     def select_animation(
         self, name: str, *, stripe_id: str | None = None
     ) -> Future[DashboardState]:
@@ -1470,6 +1478,7 @@ class RuntimeWorker:
                     dynamic_response=self._audio_profile.dynamic_response,
                 ),
             )
+            self._apply_music_idle(engine, output.id)
             if self._active_animation_sequence is not None:
                 engine.set_animation_sequence(self._active_animation_sequence)
             current = self.player.name_at(self.player.current_index())
@@ -1577,6 +1586,24 @@ class RuntimeWorker:
                         mode=mode_command.mode,
                         solid_color=_color_to_hex(color) if color is not None else None,
                     )
+                result = self._publish(running=True)
+            elif command.name == "music_idle":
+                request = _expect(command.value, MusicIdleRequest)
+                try:
+                    idle_value = MusicIdleSettings(request.mode, request.color, request.animation)
+                except (TypeError, ValueError) as exc:
+                    raise RuntimeCommandError(str(exc)) from exc
+                targets = self._target_playbacks(request.stripe_id)
+                scopes = ([request.stripe_id] if request.stripe_id is not None else
+                          [output.id for output in self._topology.outputs] if self._topology.layout == "independent" else [SHARED_ANIMATION_SETTINGS_KEY])
+                updated = self._music_idle.copy()
+                for scope in scopes:
+                    updated[scope] = idle_value
+                with self._settings_io_lock:
+                    self._settings_store.save_music_idle(updated)
+                self._music_idle = updated
+                for _, playback in targets:
+                    playback.set_idle(idle_value.mode, _rgb_from_hex(idle_value.color), idle_value.animation)
                 result = self._publish(running=True)
             elif command.name == "brightness":
                 target = _expect(command.value, _TargetCommand)
@@ -1718,6 +1745,10 @@ class RuntimeWorker:
         if target is None:
             raise RuntimeCommandError(f"unknown stripe: {stripe_id}")
         return (target,)
+
+    def _apply_music_idle(self, playback: PlaybackEngine, scope: str) -> None:
+        value = self._music_idle.get(scope, MusicIdleSettings())
+        playback.set_idle(value.mode, _rgb_from_hex(value.color), value.animation)
 
     def _target_gates(self, stripe_id: str | None) -> tuple[OutputGateController, ...]:
         assert self._controller is not None
@@ -3504,6 +3535,7 @@ profile.audio_config(microphone=True),
             blackout=controller.blackout if controller is not None else False,
             music_active=self.playback.music_active,
             music_recognition_enabled=self.playback.music_recognition_enabled,
+            music_idle=MusicIdleState(**{name: getattr(self._music_idle.get(SHARED_ANIMATION_SETTINGS_KEY, MusicIdleSettings()), name) for name in ("mode", "color", "animation")}),
             music_gate=self.playback.music_gate_state.value,
             bpm=self._music_features.bpm,
             audio_status=self._audio_status,
@@ -3764,6 +3796,7 @@ profile.audio_config(microphone=True),
                     blackout=gate.blackout if gate is not None else False,
                     music_active=playback.music_active,
                     music_recognition_enabled=playback.music_recognition_enabled,
+                    music_idle=MusicIdleState(mode=playback.idle_mode, color=_color_to_hex(playback.idle_color), animation=playback.idle_animation),
                     sequencer_diagnostics=self._sequencer_diagnostics(playback),
                     sequence_playback=self._sequence_playback_diagnostics(playback),
                 )

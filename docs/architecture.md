@@ -168,6 +168,13 @@ confidence is low. On relock or after a stalled render skips bar boundaries,
 it reanchors the remaining duration to future boundaries without catching up
 or replaying missed steps. Its immutable `SequencePlaybackState` exposes the
 active step, remaining bars, waiting state, and next scheduled transition.
+Music Mode uses the activity gate to choose between reactive playback and a
+saved idle behavior: off, a solid color, or a separate animation player.
+The Dashboard stores idle choices for shared playback and each independent
+stripe target; existing settings default to off. The `PUT /api/music-idle`
+command updates those choices through the runtime worker, and dashboard state
+reports the effective selection. Idle output respects brightness and blackout.
+
 Sequence playback remains disabled by default and uses the same animation
 player crossfades and effect rendering path as ordinary Dynamic playback.
 

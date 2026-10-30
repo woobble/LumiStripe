@@ -102,6 +102,26 @@ def test_static_holds_animation_past_authored_cycle() -> None:
     assert player.current_index() == original
 
 
+def test_music_idle_modes_render_without_changing_active_animation() -> None:
+    player = AnimationPlayer()
+    player.add(Red(), 20, 10)
+    player.add(Blue(), 20, 10)
+    engine = PlaybackEngine(player, PlaybackConfig(mode=PlaybackMode.DYNAMIC))
+    stripe = Stripe(2)
+    engine.step(stripe, now_s=0.0)
+    np.testing.assert_array_equal(stripe.pixels()[0, :3], [0, 0, 0])
+    engine.set_idle("solid", Rgb(20, 40, 60), "blue")
+    engine.step(stripe, now_s=1.0)
+    np.testing.assert_array_equal(stripe.pixels()[0, :3], [20, 40, 60])
+    engine.set_idle("animation", Rgb(20, 40, 60), "blue")
+    engine.step(stripe, now_s=2.0)
+    np.testing.assert_array_equal(stripe.pixels()[0, :3], [0, 0, 255])
+    assert player.name_at(player.current_index()) == "red"
+    engine.set_idle("off", Rgb(20, 40, 60), "blue")
+    engine.step(stripe, now_s=3.0)
+    np.testing.assert_array_equal(stripe.pixels()[0, :3], [0, 0, 0])
+
+
 def test_static_can_render_with_optional_audio() -> None:
     player = AnimationPlayer.party()
     engine = PlaybackEngine(player)

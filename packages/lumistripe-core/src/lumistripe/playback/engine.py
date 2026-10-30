@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass, field, replace
 from math import exp
 from random import Random
+from typing import Literal
 
 import numpy as np
 
@@ -75,6 +76,10 @@ class PlaybackEngine:
     _idle_rendered: bool = field(init=False, default=False)
     _rng: Random = field(init=False)
     solid_color: Color = field(init=False)
+    idle_mode: Literal["off", "solid", "animation"] = field(init=False, default="off")
+    idle_color: Color = field(init=False)
+    idle_animation: str = field(init=False, default="")
+    _idle_player: AnimationPlayer = field(init=False, default_factory=AnimationPlayer)
     beat_clock_tracker: BeatClockTracker = field(init=False)
     _beat_clock_state: BeatClockState = field(init=False)
     _structure_tracker: MusicStructureTracker = field(init=False)
@@ -94,6 +99,7 @@ class PlaybackEngine:
     def __post_init__(self) -> None:
         self.mode = self.config.mode
         self.solid_color = self.config.solid_color
+        self.idle_color = self.config.idle_color
         self.dynamic_selector = DynamicSelector(self.config.dynamic)
         self.activity_detector = MusicActivityDetector(self.config.activity)
         effect_config = self.config.effects
@@ -280,6 +286,22 @@ class PlaybackEngine:
     def set_solid_color(self, color: Color) -> None:
         self.solid_color = color
 
+    def set_idle(self, mode: Literal["off", "solid", "animation"], color: Color, animation: str) -> None:
+        if mode not in ("off", "solid", "animation"):
+            raise ValueError("invalid idle mode")
+        index = self.player.index_of(animation) if animation else None
+        if animation and index is None:
+            raise ValueError(f"unknown animation: {animation}")
+        if mode == "animation" and index is None:
+            raise ValueError("idle animation is required")
+        self.idle_mode, self.idle_color, self.idle_animation = mode, color, animation
+        self._idle_player = AnimationPlayer()
+        if index is not None:
+            entry = self.player.animations[index]
+            self._idle_player.add(entry.fresh_animation(), entry.frame_ms, entry.frames_per_cycle)
+        self._idle_player.audio_enabled = False
+        self._idle_rendered = False
+
     def set_activity_config(self, config: MusicActivityConfig) -> None:
         self.activity_detector.config = config
         self.activity_detector.reset()
@@ -439,7 +461,15 @@ class PlaybackEngine:
                     brightness=self.player.brightness,
                 )
                 self.last_playback_decision = decision
-                if not self._idle_rendered:
+                if self.idle_mode == "animation":
+                    self._idle_player.set_brightness(self.player.brightness)
+                    delay = self._idle_player.step(controller, flush=flush, now_s=now)
+                    self._remember_rendered_frame(controller)
+                    return delay
+                if self.idle_mode == "solid":
+                    solid = decide_playback(PlaybackMode.SOLID, animation_name=None, solid_color=self.idle_color, brightness=self.player.brightness)
+                    self.render_adapter.render_solid(build_render_plan(solid, flush=flush), controller)
+                elif not self._idle_rendered:
                     self.render_adapter.clear(
                         build_render_plan(decision, flush=flush),
                         controller,

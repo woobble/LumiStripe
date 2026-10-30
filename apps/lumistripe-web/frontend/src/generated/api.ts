@@ -635,6 +635,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/music-idle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set Music Idle */
+        put: operations["set_music_idle_api_music_idle_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/network/connect": {
         parameters: {
             query?: never;
@@ -1674,6 +1691,7 @@ export interface components {
              * @default calm
              */
             music_gate: string;
+            music_idle?: components["schemas"]["MusicIdleState"];
             /**
              * Music Recognition Enabled
              * @default true
@@ -1779,6 +1797,46 @@ export interface components {
             music_recognition_enabled?: boolean | null;
             /** Stripe Id */
             stripe_id?: string | null;
+        };
+        /** MusicIdleRequest */
+        MusicIdleRequest: {
+            /**
+             * Animation
+             * @default
+             */
+            animation: string;
+            /**
+             * Color
+             * @default #2060FF
+             */
+            color: string;
+            /**
+             * Mode
+             * @default off
+             * @enum {string}
+             */
+            mode: "off" | "solid" | "animation";
+            /** Stripe Id */
+            stripe_id?: string | null;
+        };
+        /** MusicIdleState */
+        MusicIdleState: {
+            /**
+             * Animation
+             * @default
+             */
+            animation: string;
+            /**
+             * Color
+             * @default #2060FF
+             */
+            color: string;
+            /**
+             * Mode
+             * @default off
+             * @enum {string}
+             */
+            mode: "off" | "solid" | "animation";
         };
         /** NetworkAdapterInfo */
         NetworkAdapterInfo: {
@@ -2242,6 +2300,7 @@ export interface components {
              * @default false
              */
             music_active: boolean;
+            music_idle?: components["schemas"]["MusicIdleState"];
             /**
              * Music Recognition Enabled
              * @default true
@@ -3662,6 +3721,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ModeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_music_idle_api_music_idle_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MusicIdleRequest"];
             };
         };
         responses: {

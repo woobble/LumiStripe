@@ -34,6 +34,24 @@ StripeLayout = Literal["mirrored", "continuous", "independent"]
 StripeBackend = Literal["spi", "gpio"]
 StripeZonePattern = Literal["repeat", "alternate"]
 
+@dataclass(frozen=True, slots=True)
+class MusicIdleSettings:
+    mode: Literal["off", "solid", "animation"] = "off"
+    color: str = "#2060FF"
+    animation: str = ""
+
+    def __post_init__(self) -> None:
+        if self.mode not in {"off", "solid", "animation"}:
+            raise ValueError("invalid music idle mode")
+        if not isinstance(self.color, str) or not re.fullmatch(r"#[0-9A-Fa-f]{6}", self.color):
+            raise ValueError("invalid music idle color")
+        if not isinstance(self.animation, str):
+            raise TypeError("invalid music idle animation")
+        if self.animation and self.animation not in {item.name for item in animation_catalog()}:
+            raise ValueError("unknown music idle animation")
+        if self.mode == "animation" and not self.animation:
+            raise ValueError("music idle animation is required")
+
 
 @dataclass(frozen=True, slots=True)
 class StartupPlaybackSettings:
@@ -298,6 +316,7 @@ class AudioTuningProfile:
 
 @dataclass(slots=True)
 class DashboardSettings:
+    music_idle: dict[str, MusicIdleSettings] = field(default_factory=dict)
     color_corrections: dict[str, ColorCorrection] = field(
         default_factory=lambda: {name: ColorCorrection() for name in PROFILE_NAMES}
     )
@@ -495,6 +514,17 @@ class CalibrationSettingsStore:
                 payload["animation_settings"], warnings
             )
 
+        encoded_idle = payload.get("music_idle", {})
+        if isinstance(encoded_idle, dict):
+            for scope, value in encoded_idle.items():
+                try:
+                    if not isinstance(scope, str) or not isinstance(value, dict):
+                        raise TypeError("invalid idle setting")
+                    settings.music_idle[scope] = MusicIdleSettings(**value)
+                except (TypeError, ValueError) as exc:
+                    warnings.append(f"music idle: {exc}")
+        else:
+            warnings.append("music_idle must be an object")
         warning = None
         if warnings:
             warning = "Dashboard settings contain invalid values: " + "; ".join(
@@ -522,6 +552,11 @@ class CalibrationSettingsStore:
     def save_audio_sync_offset(self, route: str, offset_ms: float) -> None:
         settings, _ = self.load_all()
         settings.audio_sync_offsets_ms[route] = offset_ms
+        self.save_all(settings)
+
+    def save_music_idle(self, values: dict[str, MusicIdleSettings]) -> None:
+        settings, _ = self.load_all()
+        settings.music_idle = values.copy()
         self.save_all(settings)
 
     def save_stripes(self, topology: StripeTopologySettings) -> None:
@@ -588,6 +623,7 @@ class CalibrationSettingsStore:
         )
         payload = {
             "version": SETTINGS_VERSION,
+            "music_idle": {scope: {"mode": value.mode, "color": value.color, "animation": value.animation} for scope, value in settings.music_idle.items()},
             "color_correction": {
                 name: {
                     "red": settings.color_corrections.get(name, ColorCorrection()).red,

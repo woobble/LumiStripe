@@ -158,6 +158,12 @@ const stripeTopologySchema = z.object({
   supply_capacity_watts: z.number().positive().optional().default(200),
   pi_reserve_watts: z.number().nonnegative().optional().default(15),
 }).strict()
+const musicIdleSchema = z.object({
+  mode: z.enum(["off", "solid", "animation"]),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  animation: z.string(),
+}).strict()
+const defaultMusicIdle = { mode: "off" as const, color: "#2060FF", animation: "" }
 const stripePlaybackSchema = z.object({
   stripe_id: z.string(),
   mode: playbackModeSchema,
@@ -167,6 +173,7 @@ const stripePlaybackSchema = z.object({
   blackout: z.boolean(),
   music_active: z.boolean(),
   music_recognition_enabled: z.boolean(),
+  music_idle: musicIdleSchema.optional().default(defaultMusicIdle),
   sequencer_diagnostics: sequencerDiagnosticsSchema.optional().default({
     mode: "off",
     beats_per_bar: 4,
@@ -248,6 +255,7 @@ const dashboardStateSchema = z.object({
   blackout: z.boolean(),
   music_active: z.boolean(),
   music_recognition_enabled: z.boolean(),
+  music_idle: musicIdleSchema.optional().default(defaultMusicIdle),
   music_gate: z.string(),
   bpm: z.number(),
   audio_status: z.string(),
@@ -765,6 +773,8 @@ export const dashboardApi = {
         ...(musicRecognitionEnabled === undefined ? {} : { music_recognition_enabled: musicRecognitionEnabled }),
       }),
     }, dashboardStateSchema),
+  setMusicIdle: (idle: { mode: "off" | "solid" | "animation"; color: string; animation: string }, stripeId?: string) =>
+    request("/api/music-idle", { method: "PUT", body: JSON.stringify({ ...idle, ...(stripeId ? { stripe_id: stripeId } : {}) }) }, dashboardStateSchema),
   setBrightness: (brightness: number, stripeId?: string) =>
     request("/api/brightness", {
       method: "PUT",

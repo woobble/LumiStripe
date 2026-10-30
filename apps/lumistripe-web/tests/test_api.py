@@ -31,6 +31,17 @@ from lumistripe_web.settings import (
 from starlette.websockets import WebSocketDisconnect
 
 
+def test_music_idle_api_persists_settings(tmp_path: Path) -> None:
+    settings = RuntimeSettings(pixels=8, settings_file=tmp_path / "settings.json")
+    with TestClient(create_app(settings)) as client:
+        response = client.put("/api/music-idle", json={"mode": "solid", "color": "#123456", "animation": ""})
+        assert response.status_code == 200
+        assert response.json()["music_idle"]["mode"] == "solid"
+        assert client.put("/api/music-idle", json={"mode": "animation", "animation": "unknown"}).status_code == 409
+    with TestClient(create_app(settings)) as client:
+        assert client.get("/api/state").json()["music_idle"]["color"] == "#123456"
+
+
 def test_control_api_round_trip() -> None:
     app = create_app(RuntimeSettings(pixels=8))
     with TestClient(app) as client:

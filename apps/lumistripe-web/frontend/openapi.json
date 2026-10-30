@@ -1838,6 +1838,9 @@
             "title": "Music Gate",
             "type": "string"
           },
+          "music_idle": {
+            "$ref": "#/components/schemas/MusicIdleState"
+          },
           "music_recognition_enabled": {
             "default": true,
             "title": "Music Recognition Enabled",
@@ -2044,6 +2047,71 @@
           "mode"
         ],
         "title": "ModeRequest",
+        "type": "object"
+      },
+      "MusicIdleRequest": {
+        "properties": {
+          "animation": {
+            "default": "",
+            "title": "Animation",
+            "type": "string"
+          },
+          "color": {
+            "default": "#2060FF",
+            "pattern": "^#[0-9A-Fa-f]{6}$",
+            "title": "Color",
+            "type": "string"
+          },
+          "mode": {
+            "default": "off",
+            "enum": [
+              "off",
+              "solid",
+              "animation"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "stripe_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stripe Id"
+          }
+        },
+        "title": "MusicIdleRequest",
+        "type": "object"
+      },
+      "MusicIdleState": {
+        "properties": {
+          "animation": {
+            "default": "",
+            "title": "Animation",
+            "type": "string"
+          },
+          "color": {
+            "default": "#2060FF",
+            "pattern": "^#[0-9A-Fa-f]{6}$",
+            "title": "Color",
+            "type": "string"
+          },
+          "mode": {
+            "default": "off",
+            "enum": [
+              "off",
+              "solid",
+              "animation"
+            ],
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "title": "MusicIdleState",
         "type": "object"
       },
       "NetworkAdapterInfo": {
@@ -3153,6 +3221,9 @@
             "default": false,
             "title": "Music Active",
             "type": "boolean"
+          },
+          "music_idle": {
+            "$ref": "#/components/schemas/MusicIdleState"
           },
           "music_recognition_enabled": {
             "default": true,
@@ -5230,6 +5301,44 @@
           }
         },
         "summary": "Set Mode"
+      }
+    },
+    "/api/music-idle": {
+      "put": {
+        "operationId": "set_music_idle_api_music_idle_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MusicIdleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Music Idle"
       }
     },
     "/api/network/connect": {

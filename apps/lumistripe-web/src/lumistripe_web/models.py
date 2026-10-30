@@ -199,6 +199,16 @@ class SequencePlaybackDiagnostics(BaseModel):
     next_transition_in_s: float | None = Field(default=None, ge=0.0)
 
 
+class MusicIdleState(BaseModel):
+    mode: Literal["off", "solid", "animation"] = "off"
+    color: str = Field(default="#2060FF", pattern=r"^#[0-9A-Fa-f]{6}$")
+    animation: str = ""
+
+
+class MusicIdleRequest(MusicIdleState):
+    stripe_id: str | None = None
+
+
 class StripePlaybackState(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -210,6 +220,7 @@ class StripePlaybackState(BaseModel):
     blackout: bool = False
     music_active: bool = False
     music_recognition_enabled: bool = True
+    music_idle: MusicIdleState = Field(default_factory=MusicIdleState)
     sequencer_diagnostics: SequencerDiagnostics = Field(
         default_factory=SequencerDiagnostics
     )
@@ -234,6 +245,7 @@ class DashboardState(BaseModel):
     blackout: bool = False
     music_active: bool = False
     music_recognition_enabled: bool = True
+    music_idle: MusicIdleState = Field(default_factory=MusicIdleState)
     music_gate: str = "calm"
     bpm: float = 0.0
     audio_status: str = "No audio source active."

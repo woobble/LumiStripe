@@ -16,9 +16,15 @@ from ...contracts.control import (
     CalibrationUpdateRequest,
     ModeRequest,
 )
+from ...models import MusicIdleRequest
 from ..dependencies import await_command, runtime_from_request
 
 router = APIRouter()
+
+
+@router.put("/api/music-idle", response_model=DashboardState)
+async def set_music_idle(request: Request, body: MusicIdleRequest) -> DashboardState:
+    return await await_command(runtime_from_request(request).set_music_idle(body))
 
 
 @router.put("/api/mode", response_model=DashboardState)

@@ -125,6 +125,7 @@ export function ControlPanel({ controller }: { controller: DashboardController }
   const [target, setTarget] = useState("all")
   const [previewEnabled, setPreviewEnabled] = useState(false)
   const [animationEditorVisible, setAnimationEditorVisible] = useState(false)
+  const [idleColorDraft, setIdleColorDraft] = useState<string | null>(null)
 
   if (!state) return null
   const disabled = !state.running || pendingCommand !== null
@@ -138,6 +139,7 @@ export function ControlPanel({ controller }: { controller: DashboardController }
   const solidColor = targetPlayback?.solid_color ?? state.solid_color
   const animation = targetPlayback?.animation ?? state.animation
   const musicRecognitionEnabled = targetPlayback?.music_recognition_enabled ?? state.music_recognition_enabled ?? true
+  const musicIdle = targetPlayback?.music_idle ?? state.music_idle ?? { mode: "off" as const, color: "#2060FF", animation: "" }
   const blackout = targetId
     ? (targetPlayback?.blackout ?? false)
     : state.stripe_topology.layout === "independent" && state.stripe_playback.length > 0
@@ -206,6 +208,7 @@ export function ControlPanel({ controller }: { controller: DashboardController }
               if (!values[0]) return
               setBrightnessDraft(null)
               setTarget(values[0])
+              setIdleColorDraft(null)
             }}
             variant="outline"
             spacing={1}
@@ -313,6 +316,20 @@ export function ControlPanel({ controller }: { controller: DashboardController }
               <p className="text-xs leading-relaxed text-muted-foreground">
                 Let live audio influence this animation without switching to Music mode.
               </p>
+            </div>
+          )}
+
+          {mode === "dynamic" && (
+            <div className="space-y-3 rounded-xl border border-white/5 bg-black/20 p-3">
+              <label className="block text-sm font-medium" htmlFor="music-idle-mode">When music is idle</label>
+              <select id="music-idle-mode" className="w-full rounded-lg bg-card p-2" disabled={disabled} value={musicIdle.mode} onChange={(event) => {
+                const next = event.target.value as "off" | "solid" | "animation"
+                void controller.setMusicIdle({ ...musicIdle, mode: next, animation: musicIdle.animation || animations[0]?.name || "" }, targetId)
+              }}>
+                <option value="off">Off</option><option value="solid">Solid color</option><option value="animation" disabled={animations.length === 0}>Animation</option>
+              </select>
+              {musicIdle.mode === "solid" && <div className="flex items-center gap-3"><label className="flex items-center gap-3 text-sm">Idle color <input type="color" aria-label="Idle color" disabled={disabled} value={idleColorDraft ?? musicIdle.color} onChange={(event) => setIdleColorDraft(event.target.value)} /></label><Button disabled={disabled || idleColorDraft === null} onClick={() => void controller.setMusicIdle({ ...musicIdle, color: idleColorDraft ?? musicIdle.color }, targetId).then((ok) => { if (ok) setIdleColorDraft(null) })}>Apply color</Button></div>}
+              {musicIdle.mode === "animation" && <label className="block text-sm">Idle animation<select aria-label="Idle animation" className="mt-2 w-full rounded-lg bg-card p-2" disabled={disabled} value={musicIdle.animation} onChange={(event) => void controller.setMusicIdle({ ...musicIdle, animation: event.target.value }, targetId)}>{animations.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}</select></label>}
             </div>
           )}
 

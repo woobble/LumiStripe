@@ -19,7 +19,7 @@ import {
 import { useWebSocketStream } from "@/hooks/use-websocket-stream"
 
 export type ConnectionStatus = "connecting" | "connected" | "reconnecting"
-export type CommandName = "mode" | "brightness" | "solidColor" | "animation" | "animationSettings" | "blackout" | "calibration" | "stripes" | "stripeTest" | "sequencer" | "transitions" | "sequence"
+export type CommandName = "mode" | "musicIdle" | "brightness" | "solidColor" | "animation" | "animationSettings" | "blackout" | "calibration" | "stripes" | "stripeTest" | "sequencer" | "transitions" | "sequence"
 export const dashboardStateQueryKey = ["dashboard-state"] as const
 export const animationsQueryKey = ["animations"] as const
 export const sequenceLibraryQueryKey = ["animation-sequences"] as const
@@ -196,6 +196,8 @@ export function useDashboard() {
     refresh,
     setMode: (mode: PlaybackMode, stripeId?: string, musicRecognitionEnabled?: boolean) =>
       runCommand("mode", () => dashboardApi.setMode(mode, undefined, stripeId, musicRecognitionEnabled)),
+    setMusicIdle: (idle: { mode: "off" | "solid" | "animation"; color: string; animation: string }, stripeId?: string) =>
+      runCommand("musicIdle", () => dashboardApi.setMusicIdle(idle, stripeId)),
     setBrightness: (brightness: number, stripeId?: string) =>
       runCommand("brightness", () => dashboardApi.setBrightness(brightness, stripeId)),
     setSolidColor: (color: string, stripeId?: string) =>
