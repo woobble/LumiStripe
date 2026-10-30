@@ -5,24 +5,14 @@ import { PairingScreen } from "@/components/auth/pairing-screen"
 import { ConnectionBadge } from "@/components/dashboard/connection-badge"
 import { DashboardNavigation } from "@/components/dashboard/dashboard-navigation"
 import { DashboardRoutes } from "@/components/dashboard/dashboard-routes"
+import { DashboardSkeleton } from "@/components/dashboard/dashboard-skeleton"
 import { SystemUpdateNotice } from "@/components/dashboard/system-update-notice"
 import { Button } from "@/components/ui/button"
-import { Skeleton } from "@/components/ui/skeleton"
 import { Toaster } from "@/components/ui/sonner"
 import { useAccess, type AccessController } from "@/hooks/use-access"
 import { useDashboard } from "@/hooks/use-dashboard"
 import { UnsavedChangesProvider } from "@/hooks/use-unsaved-changes"
 import { AppProviders } from "@/app/providers"
-
-function DashboardSkeleton() {
-  return (
-    <div className="space-y-4" aria-label="Loading dashboard">
-      <Skeleton className="h-14 rounded-2xl" />
-      <Skeleton className="h-48 rounded-2xl" />
-      <Skeleton className="h-56 rounded-2xl" />
-    </div>
-  )
-}
 
 function Unavailable({ message, retry }: { message: string; retry: () => void }) {
   return (
@@ -149,8 +139,8 @@ function DashboardApp() {
   const access = useAccess()
   if (access.loading) {
     return (
-      <div className="relative grid min-h-svh place-items-center overflow-hidden bg-background px-5">
-        <div className="w-full max-w-sm">
+      <div className="relative grid min-h-svh place-items-center overflow-hidden bg-background px-4 py-8 sm:px-6 lg:px-10">
+        <div className="w-full max-w-[1500px]">
           <DashboardSkeleton />
         </div>
       </div>
