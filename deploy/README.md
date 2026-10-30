@@ -34,28 +34,39 @@ rebuilding dependencies and restarting services.
 Change the dashboard title and Spotify Connect player name from
 **Devices → Startup → Names**. Saving a Spotify name updates the Soloist
 service configuration and requests a service restart so Connect advertises it.
-On appliances installed before this naming control was added, rerun
-`sudo ./deploy/install.sh` once to install its restricted restart helper and
-the Soloist service override path.
+On appliances installed before this naming control was added, rerun the
+installer from a trusted checkout as described below to install its restricted
+restart helper and the Soloist service override path.
 
-## One-command installation
+## Install from a trusted checkout
 
-From the LumiStripe checkout on the Pi, run:
+The installer copies deployment helpers, systemd units, sudoers rules, and the
+Nginx configuration into privileged locations. Run it from a reviewed checkout
+under a directory that the service account cannot modify. For example, from
+the repository root:
 
 ```bash
-sudo ./deploy/install.sh
+sudo install -d -o root -g root -m 755 /opt/lumistripe-install
+sudo cp -a "$PWD"/. /opt/lumistripe-install/
+sudo chown -R root:root /opt/lumistripe-install
+sudo chmod -R go-w /opt/lumistripe-install
+sudo env LUMI_SERVICE_USER=pi LUMI_PROJECT_DIR=/opt/lumistripe-install \
+  /opt/lumistripe-install/deploy/install.sh
 ```
+
+Replace `pi` with the non-root account that should run LumiStripe. The
+installer checks that the invoking and service accounts cannot write the
+checkout, its parent directories, or its deployment files. It installs the
+root-owned deployment snapshot before making the runtime checkout writable by
+the service account. It refuses to import privileged files from a live,
+service-user-writable checkout.
 
 In a terminal, the installer asks for a four-digit pairing code and the
 Spotify Soloist API key. Leave the pairing-code prompt blank to generate a
 random code. Leave the Spotify-key prompt blank to install without Spotify.
-For unattended installation, provide the pairing code and optional API key in
-the environment:
-
-```bash
-sudo env LUMI_PAIRING_CODE=0427 \
-  LUMI_SPOTIFY_API_KEY=YOUR_SOLOIST_API_KEY ./deploy/install.sh
-```
+For unattended installation, provide `LUMI_PAIRING_CODE` and the optional
+Spotify key through the provisioning process environment. Keep their values
+out of shell history and command arguments.
 
 The installer provisions the complete appliance: Debian/Raspberry Pi OS
 packages and native
@@ -96,16 +107,28 @@ from that checkout, use a trusted administrator-controlled copy. If the
 service account may have been compromised, do not rerun the installer from its
 writable checkout; restore a trusted copy first.
 
+The pairing code is stored in `/etc/lumistripe/lumistripe-web.env` with mode
+`600`. The systemd service passes it through the process environment, not its
+command-line arguments.
+
 On Trixie the installer selects `libgpiod3`; older supported Debian-based Pi
 images are handled with `libgpiod2` when that is the available runtime package.
 
 The installer needs internet access for apt, uv, Bun, mkcert, and package
-downloads. It can be run again safely after updating the checkout; existing
-pairing and complete TLS files are kept. If either TLS file is missing or
-empty, the installer recreates the certificate and key using the existing CA.
+downloads. After installation the runtime checkout is service-user-writable,
+so it is no longer a trusted source for another root installer run. For a
+repair or reinstall, provide a fresh reviewed checkout under an
+administrator-controlled path; existing pairing and complete TLS files are
+kept. If either TLS file is missing or empty, the installer recreates the
+certificate and key using the existing CA.
 The generated CA is stored at the service
 user's mkcert CA path and must be installed/trusted on each phone or PC that
 opens the HTTPS dashboard.
+
+The installer and updater build native extensions on the target Pi with
+`LUMISTRIPE_NATIVE_OPTIMIZATION=1`. GCC therefore selects the local ARM CPU and
+emits the baseline Advanced SIMD instructions used by render correction.
+Release wheels keep portable flags and the renderer retains a scalar fallback.
 
 ## Connect the internet Wi-Fi adapter
 
@@ -119,8 +142,8 @@ The installer provides NetworkManager, `iw`, and a root-owned helper that
 accepts requests only from the paired dashboard service. Passwords are sent to
 the helper over standard input and are stored only in NetworkManager's
 system-managed connection profile. After updating an existing appliance to a
-version that adds this feature, rerun `sudo ./deploy/install.sh` once to
-install the helper permission and adapter tools.
+version that adds this feature, rerun the installer from a trusted checkout as
+described above to install the helper permission and adapter tools.
 
 ## Systemd updates
 
@@ -134,31 +157,24 @@ and checks that the dashboard is healthy. The updater attempts to roll back if
 that check fails.
 
 The updater is installed by `deploy/install.sh`. To add it to an existing
-systemd installation, first update the checkout to a version containing these
-files, then rerun:
-
-```bash
-sudo ./deploy/install.sh
-```
-
-This is safe to rerun; it preserves the existing pairing and Spotify settings.
-Existing installations must rerun the installer once after acquiring this
-version to replace the old updater, which could install privileged files from
-the service-user-writable checkout. Review and trust the checkout before
-running the installer as root. A clean-tree check does not prevent a
-service-user process from changing files while the installer stages its
-root-owned snapshot. The installer also makes the checkout service-user-writable
-before snapshotting it, so stopping the web and updater services alone does not
-close that race. If the service account may be compromised, restore from
-trusted administrator-controlled media instead of relying on this migration.
-During migration, prevent the old dashboard trigger and updater from running
-while the trusted installer replaces them:
+systemd installation, prepare a reviewed administrator-controlled checkout as
+described above. This preserves existing pairing and Spotify settings.
+Existing installations must replace the old updater once because it could
+install privileged files from the service-user-writable checkout. During that
+migration, prevent the old dashboard trigger and updater from running while the
+trusted installer replaces them:
 
 ```bash
 sudo mv /etc/sudoers.d/lumistripe-update /etc/lumistripe/lumistripe-update.sudoers.disabled
 sudo systemctl stop lumistripe-web.service lumistripe-update.service lumistripe-update-check.timer
-sudo ./deploy/install.sh
+sudo env LUMI_SERVICE_USER=pi LUMI_PROJECT_DIR=/opt/lumistripe-install \
+  /opt/lumistripe-install/deploy/install.sh
 ```
+
+Before running the last command, copy the reviewed checkout to
+`/opt/lumistripe-install` and make it root-owned and non-writable by the
+service account, following the trusted-checkout instructions above. Replace
+`pi` with the account used by the appliance.
 
 The installer reinstalls the validated sudoers file and starts the services.
 If the updater sudoers file is absent on an older installation, omit the first

@@ -1,4 +1,5 @@
 #include "native_common.h"
+#include "native_pixel.h"
 PyObject *correct_rgba_into(PyObject *module, PyObject *args) {
     (void)module;
     PyArrayObject *source;
@@ -34,13 +35,7 @@ PyObject *correct_rgba_into(PyObject *module, PyObject *args) {
         return NULL;
     }
     const npy_intp count = PyArray_DIM(source, 0);
-    for (npy_intp index = 0; index < count; index++) {
-        const size_t offset = (size_t)index * 4u;
-        dst[offset] = (uint8_t)((uint32_t)src[offset] * rgb[0] / 255u);
-        dst[offset + 1u] = (uint8_t)((uint32_t)src[offset + 1u] * rgb[1] / 255u);
-        dst[offset + 2u] = (uint8_t)((uint32_t)src[offset + 2u] * rgb[2] / 255u);
-        dst[offset + 3u] = src[offset + 3u];
-    }
+    lumistripe_correct_rgba(src, dst, (size_t)count, rgb);
     Py_RETURN_NONE;
 }
 

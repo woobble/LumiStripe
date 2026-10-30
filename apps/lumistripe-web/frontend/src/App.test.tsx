@@ -1,8 +1,9 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { ReactNode } from "react"
-import { MemoryRouter } from "react-router"
+import { createMemoryRouter, RouterProvider } from "react-router"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { useState } from "react"
 
 import App from "@/App"
 import { emptyTelemetry } from "@/components/dashboard/audio-telemetry"
@@ -110,7 +111,8 @@ const audioSettings = {
 }
 
 function Router({ children }: { children: ReactNode }) {
-  return <MemoryRouter>{children}</MemoryRouter>
+  const [router] = useState(() => createMemoryRouter([{ path: "*", element: children }]))
+  return <RouterProvider router={router} />
 }
 
 function emitAudioSourceState(revision: number, configured: string, active: string, monitoring: boolean) {
@@ -161,6 +163,7 @@ describe("App", () => {
   let failAudioDeviceChange = false
   let failOutputVolume = false
   let failOutputMute = false
+  let failIdentityLoad = false
   let currentBluetoothStatus: BluetoothStatusResponse = bluetoothStatus as unknown as BluetoothStatusResponse
   let currentSyncRoute = audioSettings.sync_route
   let currentAudioSource = audioSettings.source
@@ -172,6 +175,13 @@ describe("App", () => {
       return jsonResponse({ required: false, authenticated: true })
     }
     if (path === "/api/animations") return jsonResponse({ items: animations })
+    if (path === "/api/identity") return failIdentityLoad
+      ? jsonResponse({ detail: "Name settings unavailable." }, 503)
+      : jsonResponse({
+        application_name: "LumiStripe",
+        spotify_device_name: "LumiStripe",
+        spotify_restart_requested: false,
+      })
     if (path === "/api/audio/settings" || path === "/api/audio/settings/reset") {
       const microphone = audioSettings.devices.find((device) => device.selector === currentMicrophone)
       return jsonResponse({ ...audioSettings, source: currentAudioSource, active_device: currentMicrophone, active_device_name: microphone?.name ?? null, spotify: spotifySettingsStatus, bluetooth: currentBluetoothStatus, sync_route: currentSyncRoute, sync_offset_ms: currentSyncOffsets[currentSyncRoute] ?? 0 })
@@ -314,6 +324,7 @@ describe("App", () => {
     failAudioDeviceChange = false
     failOutputVolume = false
     failOutputMute = false
+    failIdentityLoad = false
     currentBluetoothStatus = bluetoothStatus as unknown as BluetoothStatusResponse
     currentSyncRoute = audioSettings.sync_route
     currentAudioSource = audioSettings.source
@@ -429,6 +440,14 @@ describe("App", () => {
     expect(screen.getByText("Right", { selector: "span.text-foreground" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Right" })).toHaveAttribute("data-pressed")
     expect(screen.getByText("40%")).toBeInTheDocument()
+
+    await user.click(screen.getByRole("link", { name: "Transitions and sequences" }))
+    expect(await screen.findByRole("heading", { name: "Advanced settings" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Right" })).toHaveAttribute("data-pressed")
+
+    await user.click(screen.getByRole("link", { name: "Back to lights" }))
+    expect(await screen.findByRole("heading", { name: "Control" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Right" })).toHaveAttribute("data-pressed")
   })
 
   it("runs a guided color calibration session", async () => {
@@ -1211,6 +1230,21 @@ describe("App", () => {
     expect(await screen.findByRole("button", { name: "Restore last state on" })).toHaveAttribute("data-pressed")
   })
 
+  it("keeps startup controls available when loading names fails", async () => {
+    const user = userEvent.setup()
+    failIdentityLoad = true
+    render(<App />, { wrapper: Router })
+    await screen.findByText(/aurora wave/i)
+
+    await user.click(screen.getByRole("link", { name: "Devices" }))
+    const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
+    await user.click(within(setupNav).getByRole("link", { name: "Startup" }))
+
+    expect(await screen.findByRole("button", { name: "Restore last state off" })).toBeInTheDocument()
+    expect(await screen.findByRole("alert")).toHaveTextContent("Name settings unavailable.")
+    expect(screen.getByRole("textbox", { name: "Application name" })).toBeDisabled()
+  })
+
   it("shows and applies the stripe direction while the layout fills its card", async () => {
     const user = userEvent.setup()
     render(<App />, { wrapper: Router })
@@ -1615,11 +1649,10 @@ describe("App", () => {
     })
     vi.stubGlobal("fetch", protectedFetch)
 
-    render(
-      <MemoryRouter initialEntries={["/setup/audio/tuning"]}>
-        <App />
-      </MemoryRouter>,
-    )
+    const router = createMemoryRouter([{ path: "*", element: <App /> }], {
+      initialEntries: ["/setup/audio/tuning"],
+    })
+    render(<RouterProvider router={router} />)
 
     expect(await screen.findByLabelText("Pairing code")).toBeInTheDocument()
     expect(protectedFetch.mock.calls.some(([path]) => String(path) === "/api/audio/settings")).toBe(false)

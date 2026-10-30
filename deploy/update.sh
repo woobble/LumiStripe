@@ -162,6 +162,7 @@ sync_dependencies() (
   as_user "$UV_BIN" python install "$PYTHON_VERSION" || return 1
   as_user_with_env \
     LUMISTRIPE_BUILD_EXTENSIONS=all \
+    LUMISTRIPE_NATIVE_OPTIMIZATION=1 \
     UV_PYTHON_PREFERENCE=only-managed \
     "$UV_BIN" sync --locked --python "$PYTHON_VERSION" --no-dev \
     --extra hardware-gain --reinstall-package lumistripe-core || return 1

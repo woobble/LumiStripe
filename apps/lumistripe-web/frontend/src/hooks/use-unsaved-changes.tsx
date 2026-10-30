@@ -1,5 +1,5 @@
-import { createContext, useCallback, useContext, useEffect, useId, useMemo, useState, type ReactNode, type MouseEvent } from "react"
-import { Link, NavLink, useNavigate } from "react-router"
+import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react"
+import { Link, NavLink, useBlocker } from "react-router"
 import type { NavLinkProps, LinkProps } from "react-router"
 
 import {
@@ -18,19 +18,28 @@ type GuardContextValue = {
   description: string
   register: (id: string, dirty: boolean, description?: string) => void
   unregister: (id: string) => void
-  requestNavigation: (to: string) => boolean
 }
 
 const defaultUnsavedDescription = "Your Setup changes will be discarded if you leave this page."
 const GuardContext = createContext<GuardContextValue | null>(null)
 
 export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
-  const navigate = useNavigate()
   const [registrations, setRegistrations] = useState<Record<string, string>>({})
-  const [pendingPath, setPendingPath] = useState<string | null>(null)
   const dirty = Object.keys(registrations).length > 0
   const descriptions = [...new Set(Object.values(registrations))]
   const description = descriptions.length > 0 ? descriptions.join(" ") : defaultUnsavedDescription
+  const blocker = useBlocker(useCallback(({ currentLocation, nextLocation }) => (
+    dirty && (
+      currentLocation.pathname !== nextLocation.pathname
+      || currentLocation.search !== nextLocation.search
+      || currentLocation.hash !== nextLocation.hash
+    )
+  ), [dirty]))
+  const proceedingRef = useRef(false)
+
+  useEffect(() => {
+    if (blocker.state !== "blocked") proceedingRef.current = false
+  }, [blocker.state])
 
   useEffect(() => {
     const handler = (event: BeforeUnloadEvent) => {
@@ -40,12 +49,6 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
     }
     window.addEventListener("beforeunload", handler)
     return () => window.removeEventListener("beforeunload", handler)
-  }, [dirty])
-
-  const requestNavigation = useCallback((to: string) => {
-    if (!dirty) return false
-    setPendingPath(to)
-    return true
   }, [dirty])
 
   const register = useCallback((id: string, nextDirty: boolean, nextDescription?: string) => {
@@ -75,12 +78,16 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
     description,
     register,
     unregister,
-    requestNavigation,
-  }), [description, dirty, register, requestNavigation, unregister])
+  }), [description, dirty, register, unregister])
   return (
     <GuardContext.Provider value={value}>
       {children}
-      <AlertDialog open={pendingPath !== null} onOpenChange={(open) => { if (!open) setPendingPath(null) }}>
+      <AlertDialog
+        open={blocker.state === "blocked"}
+        onOpenChange={(open) => {
+          if (!open && !proceedingRef.current && blocker.state === "blocked") blocker.reset()
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Leave without saving?</AlertDialogTitle>
@@ -88,7 +95,12 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Stay</AlertDialogCancel>
-            <AlertDialogAction onClick={() => { const path = pendingPath; setPendingPath(null); if (path) navigate(path) }}>Leave</AlertDialogAction>
+            <AlertDialogAction onClick={() => {
+              if (blocker.state === "blocked") {
+                proceedingRef.current = true
+                blocker.proceed()
+              }
+            }}>Leave</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -111,29 +123,13 @@ export function useUnsavedChangesGuard(isDirty: boolean, description?: string, e
   }, [description, enabled, id, isDirty, register, unregister])
   return {
     dirty: isDirty,
-    requestNavigation: context?.requestNavigation ?? (() => false),
   }
 }
 
-export function GuardedNavLink({ onClick, ...props }: NavLinkProps) {
-  const context = useContext(GuardContext)
-  const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
-    onClick?.(event)
-    if (event.defaultPrevented || !context?.dirty || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
-    const href = event.currentTarget.getAttribute("href")
-    if (!href || href === window.location.pathname) return
-    if (context.requestNavigation(href)) event.preventDefault()
-  }
-  return <NavLink {...props} onClick={handleClick} />
+export function GuardedNavLink(props: NavLinkProps) {
+  return <NavLink {...props} />
 }
 
-export function GuardedLink({ onClick, ...props }: LinkProps) {
-  const context = useContext(GuardContext)
-  const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
-    onClick?.(event)
-    if (event.defaultPrevented || !context?.dirty || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
-    const href = event.currentTarget.getAttribute("href")
-    if (href && context.requestNavigation(href)) event.preventDefault()
-  }
-  return <Link {...props} onClick={handleClick} />
+export function GuardedLink(props: LinkProps) {
+  return <Link {...props} />
 }

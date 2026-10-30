@@ -191,7 +191,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--pairing-code",
         type=_pairing_code,
-        help="Require this four-digit code before allowing dashboard access",
+        help=(
+            "Require this four-digit code before allowing dashboard access "
+            "(LUMI_PAIRING_CODE keeps it out of process arguments)"
+        ),
     )
     parser.add_argument(
         "--log-level",
@@ -211,6 +214,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         parser.error("--spi-device-2 requires --output-backend spi")
     if (args.ssl_certfile is None) != (args.ssl_keyfile is None):
         parser.error("--ssl-certfile and --ssl-keyfile must be used together")
+    pairing_code = args.pairing_code
+    if pairing_code is None and "LUMI_PAIRING_CODE" in os.environ:
+        try:
+            pairing_code = _pairing_code(os.environ["LUMI_PAIRING_CODE"])
+        except argparse.ArgumentTypeError as exc:
+            parser.error(f"LUMI_PAIRING_CODE {exc}")
     settings = RuntimeSettings(
         pixels=args.pixels,
         hardware=args.hardware,
@@ -229,7 +238,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         ignore_saved_stripes=args.ignore_saved_stripes,
     )
     uvicorn.run(
-        create_app(settings, pairing_code=args.pairing_code),
+        create_app(settings, pairing_code=pairing_code),
         host=args.host,
         port=args.port,
         log_level=args.log_level,

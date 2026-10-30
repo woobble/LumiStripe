@@ -49,13 +49,20 @@ function StreamedAnimationSheet({
   )
 }
 
-export function AdvancedPlaybackPage({ controller }: { controller: DashboardController }) {
+export function AdvancedPlaybackPage({
+  controller,
+  selectedStripe,
+  onSelectedStripeChange,
+}: {
+  controller: DashboardController
+  selectedStripe: string
+  onSelectedStripeChange: (stripeId: string) => void
+}) {
   const { state, pendingCommand } = controller
-  const [target, setTarget] = useState("all")
   const [idleBrightnessDraft, setIdleBrightnessDraft] = useState<number | null>(null)
   if (!state) return null
 
-  const targetId = target === "all" ? undefined : target
+  const targetId = selectedStripe === "all" ? undefined : selectedStripe
   const targetPlayback = state.stripe_topology.layout === "independent"
     ? targetId
       ? state.stripe_playback.find((item) => item.stripe_id === targetId)
@@ -85,7 +92,7 @@ export function AdvancedPlaybackPage({ controller }: { controller: DashboardCont
           </span>
         </header>
 
-        <StripeTargetSelector state={state} value={target} onChange={setTarget} />
+        <StripeTargetSelector state={state} value={selectedStripe} onChange={onSelectedStripeChange} />
 
         {(mode === "static" || mode === "cycling") && (
           <section className="rounded-2xl border border-border/70 bg-card p-4 sm:p-5">
@@ -174,7 +181,7 @@ export function AdvancedPlaybackPage({ controller }: { controller: DashboardCont
         <TransitionSettingsPanel controller={controller} disabled={disabled} />
         <SequencerPanel
           state={state}
-          target={target}
+          target={selectedStripe}
           disabled={disabled}
           saving={pendingCommand === "sequencer"}
           sequenceBusy={pendingCommand !== null}

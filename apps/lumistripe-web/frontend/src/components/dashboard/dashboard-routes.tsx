@@ -1,4 +1,4 @@
-import { lazy, Suspense, type ReactNode } from "react"
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react"
 import { Navigate, Outlet, Route, Routes } from "react-router"
 
 import type { AccessController } from "@/hooks/use-access"
@@ -69,10 +69,20 @@ export function DashboardRoutes({
   controller: DashboardController
   fallback: ReactNode
 }) {
+  const [selectedStripe, setSelectedStripe] = useState("all")
+  useEffect(() => {
+    if (
+      selectedStripe !== "all"
+      && !controller.state?.stripe_topology.outputs.some((output) => output.id === selectedStripe)
+    ) {
+      setSelectedStripe("all")
+    }
+  }, [controller.state?.stripe_topology.outputs, selectedStripe])
+
   return (
     <Routes>
-      <Route path="/" element={<Suspense fallback={fallback}><ControlPanel controller={controller} /></Suspense>} />
-      <Route path="/playback" element={<Suspense fallback={fallback}><AdvancedPlaybackPage controller={controller} /></Suspense>} />
+      <Route path="/" element={<Suspense fallback={fallback}><ControlPanel controller={controller} selectedStripe={selectedStripe} onSelectedStripeChange={setSelectedStripe} /></Suspense>} />
+      <Route path="/playback" element={<Suspense fallback={fallback}><AdvancedPlaybackPage controller={controller} selectedStripe={selectedStripe} onSelectedStripeChange={setSelectedStripe} /></Suspense>} />
       <Route path="/audio" element={<Suspense fallback={fallback}><AudioStatusPanel
         audioStatus={controller.state?.audio_status ?? "Audio input status unavailable."}
         audioHealth={controller.state?.audio_health}

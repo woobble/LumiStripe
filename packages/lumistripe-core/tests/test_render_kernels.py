@@ -139,10 +139,36 @@ def test_native_kernels_allow_exact_in_place_aliases() -> None:
     expected[:, :3] = (expected[:, :3].astype(np.uint16) * 128 // 255).astype(np.uint8)
     native.correct_rgba_into(frame, frame, np.array([128, 128, 128], dtype=np.uint16))
     np.testing.assert_array_equal(frame, expected)
-
     native.apply_alpha_scale_into(frame, frame, frame, 0.5)
     expected[:, 3] = np.floor(expected[:, 3].astype(np.float64) * 0.5).astype(np.uint8)
     np.testing.assert_array_equal(frame, expected)
+
+
+@pytest.mark.skipif(kernels._native_module is None, reason="render extension is not built")
+@pytest.mark.parametrize("length", [0, 1, 15, 16, 17, 31, 32, 33, 257])
+@pytest.mark.parametrize("gains", [(0, 1, 255), (37, 128, 254), (255, 255, 255)])
+def test_native_rgba_correction_matches_scalar_reference_at_simd_boundaries(
+    length: int, gains: tuple[int, int, int]
+) -> None:
+    native = kernels._native_module
+    assert native is not None
+    source = np.empty((length, 4), dtype=np.uint8)
+    if length:
+        values = np.arange(length, dtype=np.uint8)
+        source[:, 0] = values
+        source[:, 1] = values * np.uint8(13) + np.uint8(7)
+        source[:, 2] = values * np.uint8(29) + np.uint8(11)
+        source[:, 3] = values * np.uint8(17) + np.uint8(19)
+    output = np.empty_like(source)
+    correction = np.asarray(gains, dtype=np.uint16)
+    expected = source.copy()
+    expected[:, :3] = (
+        source[:, :3].astype(np.uint16) * correction // 255
+    ).astype(np.uint8)
+
+    native.correct_rgba_into(source, output, correction)
+
+    np.testing.assert_array_equal(output, expected)
 
 
 @pytest.mark.skipif(kernels._native_module is None, reason="render extension is not built")

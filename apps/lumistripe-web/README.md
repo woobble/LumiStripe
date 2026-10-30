@@ -108,8 +108,10 @@ uv run lumistripe-web
 ```
 
 The frontend build is written into the Python package and served by FastAPI.
-Set `--pairing-code` to exactly four digits to protect dashboard APIs and live
-WebSocket updates. After entering the code, each browser receives an opaque
+Set `--pairing-code` or `LUMI_PAIRING_CODE` to exactly four digits to protect
+dashboard APIs and live WebSocket updates. The deployed systemd service reads
+the code from its mode-600 environment file so the secret does not appear in
+the process argument list. After entering the code, each browser receives an opaque
 HttpOnly session cookie. Five incorrect pairing attempts within 60 seconds
 block further attempts with HTTP 429 and a `Retry-After` header. The limit is
 shared across clients in one process and is cleared when that process restarts;
@@ -134,8 +136,8 @@ certificate and private key. This enables WebGPU for supported browsers on the
 LAN (the certificate must be trusted by each client device):
 
 ```bash
-uv run lumistripe-web --ssl-certfile /path/to/cert.pem \
-  --ssl-keyfile /path/to/key.pem --pairing-code 0427
+LUMI_PAIRING_CODE=0427 uv run lumistripe-web \
+  --ssl-certfile /path/to/cert.pem --ssl-keyfile /path/to/key.pem
 ```
 
 ## USB microphone setup

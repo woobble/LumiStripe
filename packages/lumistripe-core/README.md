@@ -25,6 +25,12 @@ Portable compiler flags are used by default. Set
 distributions materialize the KISS FFT submodule, so the development symlink
 is not required when building from a clean sdist.
 
+The Raspberry Pi installer and updater set the device-local optimization flag
+when rebuilding native extensions on the Pi. The render correction kernel uses
+ARM64 Advanced SIMD in 16-pixel blocks and keeps a scalar implementation for
+portable builds and the final partial block. Portable wheels retain their
+default compiler flags.
+
 Install hardware SPI support with:
 
 ```bash

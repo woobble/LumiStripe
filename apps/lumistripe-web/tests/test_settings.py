@@ -137,7 +137,7 @@ def test_settings_round_trip_both_profiles_atomically(tmp_path: Path) -> None:
     assert warning is None
     assert profiles["primary"] == ColorCorrection(255, 220, 180)
     assert profiles["secondary"] == ColorCorrection(200, 210, 220)
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 11
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == settings_module.SETTINGS_VERSION
     assert not list(path.parent.glob("*.tmp"))
 
 
@@ -203,7 +203,7 @@ def test_power_budget_round_trip_and_legacy_defaults(tmp_path: Path) -> None:
     assert loaded.stripe_topology.outputs[0].zone_pattern == "alternate"
     assert topology.available_led_watts == 185.0
     assert topology.effective_power_budget_watts == 18.5
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 11
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == settings_module.SETTINGS_VERSION
 
     path.write_text(
         json.dumps(
@@ -264,7 +264,7 @@ def test_audio_sync_offsets_persist_per_route_and_migrate_from_v5(
         "bluetooth|AA:BB|bluez_output": 100.0,
         "mic|USB Mic|analog_output": -35.0,
     }
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 11
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == settings_module.SETTINGS_VERSION
 
     path.write_text(
         json.dumps({"version": 5, "selected_audio_device": "USB Mic"}),
@@ -377,7 +377,7 @@ def test_transition_settings_default_round_trip_and_preserve_existing_settings(
     )
     assert restored.audio_sync_offsets_ms == {"mic|USB Mic|analog_output": -85.0}
     payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload["version"] == 11
+    assert payload["version"] == settings_module.SETTINGS_VERSION
     assert payload["transition_settings"] == {
         "enabled": False,
         "duration_ms": 850,
@@ -475,7 +475,7 @@ def test_animation_settings_round_trip_scopes_and_validate_values(
         "left": {"pulse": pulse},
     }
     payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload["version"] == 11
+    assert payload["version"] == settings_module.SETTINGS_VERSION
     assert payload["animation_settings"]["shared"]["comet"]["speed"] == 88
 
     invalid = {"shared": {"comet": {**comet, "speed": 101}}}
@@ -567,7 +567,7 @@ def test_animation_sequences_round_trip_and_version_seven_migration(
     assert restarted.animation_sequences == (sequence,)
     assert restarted.active_sequence_id == sequence.id
     assert restarted.audio_sync_offsets_ms == {"mic|USB|out": -85.0}
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 11
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == settings_module.SETTINGS_VERSION
 
 
 def test_invalid_saved_sequence_entries_are_skipped_individually(

@@ -58,16 +58,23 @@ function StreamedAnimationSheet(props: StreamedAnimationSheetProps) {
   return <AnimationSheet {...props} previewFrame={frame} previewConnection={connection} />
 }
 
-export function ControlPanel({ controller }: { controller: DashboardController }) {
+export function ControlPanel({
+  controller,
+  selectedStripe,
+  onSelectedStripeChange,
+}: {
+  controller: DashboardController
+  selectedStripe: string
+  onSelectedStripeChange: (stripeId: string) => void
+}) {
   const { state, animations, pendingCommand } = controller
   const [brightnessDraft, setBrightnessDraft] = useState<number | null>(null)
-  const [target, setTarget] = useState("all")
   const [previewEnabled, setPreviewEnabled] = useState(false)
   const [animationEditorVisible, setAnimationEditorVisible] = useState(false)
 
   if (!state) return null
   const disabled = !state.running || pendingCommand !== null
-  const targetId = target === "all" ? undefined : target
+  const targetId = selectedStripe === "all" ? undefined : selectedStripe
   const targetPlayback = state.stripe_topology.layout === "independent"
     ? targetId
       ? state.stripe_playback.find((item) => item.stripe_id === targetId)
@@ -113,10 +120,10 @@ export function ControlPanel({ controller }: { controller: DashboardController }
 
         <StripeTargetSelector
           state={state}
-          value={target}
+          value={selectedStripe}
           onChange={(value) => {
             setBrightnessDraft(null)
-            setTarget(value)
+            onSelectedStripeChange(value)
           }}
         />
 
@@ -126,7 +133,7 @@ export function ControlPanel({ controller }: { controller: DashboardController }
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h3 className="font-medium">Brightness</h3>
-                  <p className="mt-0.5 text-xs text-muted-foreground">Adjust the output for {target === "all" ? "your lights" : state.stripe_topology.outputs.find((stripe) => stripe.id === target)?.name ?? "this strip"}.</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">Adjust the output for {selectedStripe === "all" ? "your lights" : state.stripe_topology.outputs.find((stripe) => stripe.id === selectedStripe)?.name ?? "this strip"}.</p>
                 </div>
                 <output className="text-3xl font-semibold tabular-nums tracking-tight" aria-label="Brightness level">{brightness}%</output>
               </div>

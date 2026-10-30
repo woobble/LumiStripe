@@ -24,6 +24,7 @@ function StartupPanelView() {
   const [identity, setIdentity] = useState({ application_name: "LumiStripe", spotify_device_name: "LumiStripe" })
   const [savedIdentity, setSavedIdentity] = useState({ application_name: "LumiStripe", spotify_device_name: "LumiStripe" })
   const [identityLoaded, setIdentityLoaded] = useState(false)
+  const [identityLoadError, setIdentityLoadError] = useState<string | null>(null)
   const [identitySaving, setIdentitySaving] = useState(false)
   const [saving, setSaving] = useState(false)
   const form = useForm<StartupFormValues>({ resolver: zodResolver(startupSchema), defaultValues: { restore_last_state: false } })
@@ -33,15 +34,24 @@ function StartupPanelView() {
   const load = useCallback(async () => {
     try {
       const next = await dashboardApi.getStartupSettings()
-      const nextIdentity = await dashboardApi.getIdentitySettings()
       setSettings(next)
+      reset({ restore_last_state: next.restore_last_state })
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not load startup behavior.")
+    }
+
+    try {
+      const nextIdentity = await dashboardApi.getIdentitySettings()
       const loadedIdentity = { application_name: nextIdentity.application_name, spotify_device_name: nextIdentity.spotify_device_name }
       setIdentity(loadedIdentity)
       setSavedIdentity(loadedIdentity)
       setIdentityLoaded(true)
-      reset({ restore_last_state: next.restore_last_state })
+      setIdentityLoadError(null)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not load startup behavior.")
+      setIdentityLoaded(false)
+      const message = error instanceof Error ? error.message : "Could not load dashboard names."
+      setIdentityLoadError(message)
+      toast.error(message)
     }
   }, [reset])
 
@@ -120,6 +130,7 @@ function StartupPanelView() {
           <CardDescription>Choose the name shown in this dashboard and the Spotify Connect player name.</CardDescription>
         </CardHeader>
         <CardContent>
+          {identityLoadError && <p role="alert" className="mb-4 text-sm text-red-300">{identityLoadError}</p>}
           <form className="space-y-4" onSubmit={(event) => void saveIdentity(event)}>
             <label className="block space-y-2 text-sm font-medium">
               <span>Application name</span>

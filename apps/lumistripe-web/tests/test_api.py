@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import lumistripe_web.app as app_module
 import lumistripe_web.runtime as runtime_module
 import lumistripe_web.runtime.worker as worker_module
 import pytest
@@ -1517,3 +1518,33 @@ def test_cli_validates_pairing_code() -> None:
     assert build_parser().parse_args(["--pairing-code", "0427"]).pairing_code == "0427"
     with pytest.raises(SystemExit):
         build_parser().parse_args(["--pairing-code", "123"])
+
+
+def test_cli_loads_pairing_code_from_environment_without_changing_cli_compatibility(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {}
+    monkeypatch.setenv("LUMI_PAIRING_CODE", "0427")
+    monkeypatch.setattr(
+        app_module.uvicorn,
+        "run",
+        lambda app, **kwargs: calls.update(app=app, **kwargs),
+    )
+
+    main([])
+    app = calls["app"]
+    access = app.state.access  # type: ignore[union-attr]
+    assert access.pair("0427", "test-client")
+
+    main(["--pairing-code", "1234"])
+    app = calls["app"]
+    access = app.state.access  # type: ignore[union-attr]
+    assert access.pair("1234", "test-client")
+
+
+def test_cli_rejects_invalid_pairing_code_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LUMI_PAIRING_CODE", "invalid")
+    with pytest.raises(SystemExit):
+        main([])

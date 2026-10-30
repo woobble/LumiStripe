@@ -35,17 +35,28 @@ if [[ $EUID -ne 0 ]]; then
   echo "Run this installer as root (for example: sudo $0)." >&2
   exit 1
 fi
-# shellcheck source=deploy/update-support.sh
-source "$SCRIPT_DIR/update-support.sh"
-PROJECT_DIR="$(canonical_project_directory "$PROJECT_DIR")" || exit 1
+
+[[ -d "$PROJECT_DIR" ]] || {
+  echo "Project directory does not exist: $PROJECT_DIR" >&2
+  exit 1
+}
+PROJECT_DIR="$(cd -- "$PROJECT_DIR" && pwd -P)"
+[[ "$SCRIPT_DIR" == "$PROJECT_DIR/deploy" ]] || {
+  echo "Run the installer from the trusted checkout selected by LUMI_PROJECT_DIR." >&2
+  exit 1
+}
+[[ -d "$PROJECT_DIR/deploy" ]] || {
+  echo "Deployment source directory is missing: $PROJECT_DIR/deploy" >&2
+  exit 1
+}
+[[ "$PROJECT_DIR" != *$'\n'* && "$PROJECT_DIR" != *$'\r'* ]] || {
+  echo "Project directory must be a single-line path." >&2
+  exit 1
+}
 
 if [[ -z "$SERVICE_USER" || "$SERVICE_USER" == root ]]; then
-  # When invoked by a root shell, use the existing owner of the checkout. A
-  # root-owned checkout must provide LUMI_SERVICE_USER explicitly so the
-  # installer never silently runs the appliance as root.
   SERVICE_USER="$(stat -c '%U' "$PROJECT_DIR" 2>/dev/null || true)"
 fi
-
 [[ -n "$SERVICE_USER" && "$SERVICE_USER" != root ]] || {
   echo "Set LUMI_SERVICE_USER to a non-root account for this installation." >&2
   exit 1
@@ -54,6 +65,66 @@ fi
   echo "Invalid Linux service username: $SERVICE_USER" >&2
   exit 1
 }
+command -v runuser >/dev/null 2>&1 || {
+  echo "runuser is required to verify the installer source permissions." >&2
+  exit 1
+}
+
+# Root copies several scripts and configuration files into privileged system
+# locations. Refuse to read them from a checkout that the service account or
+# invoking user can modify, including through a writable parent directory.
+trusted_source_users=()
+for candidate in "${SUDO_USER:-}" "$SERVICE_USER" "$(stat -c '%U' "$PROJECT_DIR" 2>/dev/null || true)"; do
+  [[ -n "$candidate" && "$candidate" != root ]] || continue
+  id "$candidate" >/dev/null 2>&1 || continue
+  already_checked=0
+  for checked_user in "${trusted_source_users[@]}"; do
+    if [[ "$checked_user" == "$candidate" ]]; then
+      already_checked=1
+      break
+    fi
+  done
+  if [[ "$already_checked" -eq 0 ]]; then
+    trusted_source_users+=("$candidate")
+  fi
+done
+((${#trusted_source_users[@]} > 0)) || {
+  echo "Run through sudo from an existing non-root account or create the service account first." >&2
+  exit 1
+}
+for trusted_user in "${trusted_source_users[@]}"; do
+  source_path="$PROJECT_DIR"
+  while :; do
+    source_mode="$(stat -c '%a' -- "$source_path")" || exit 1
+    if (( (8#$source_mode & 0022) != 0 )); then
+      echo "Installer source path is group- or world-writable: $source_path" >&2
+      exit 1
+    fi
+    if runuser -u "$trusted_user" -- test -w "$source_path"; then
+      echo "Installer source path is writable by $trusted_user: $source_path" >&2
+      echo "Copy a reviewed checkout under an administrator-controlled directory and retry." >&2
+      exit 1
+    fi
+    [[ "$source_path" == / ]] && break
+    source_path="$(dirname -- "$source_path")"
+  done
+  while IFS= read -r -d '' source_path; do
+    source_mode="$(stat -c '%a' -- "$source_path")" || exit 1
+    if (( (8#$source_mode & 0022) != 0 )); then
+      echo "Installer deployment source is group- or world-writable: $source_path" >&2
+      exit 1
+    fi
+    if runuser -u "$trusted_user" -- test -w "$source_path"; then
+      echo "Installer deployment source is writable by $trusted_user: $source_path" >&2
+      echo "Copy a reviewed checkout under an administrator-controlled directory and retry." >&2
+      exit 1
+    fi
+  done < <(find -P "$PROJECT_DIR/deploy" -print0)
+done
+
+# shellcheck source=deploy/update-support.sh
+source "$SCRIPT_DIR/update-support.sh"
+PROJECT_DIR="$(canonical_project_directory "$PROJECT_DIR")" || exit 1
 
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
   echo "Creating service user $SERVICE_USER..."
@@ -297,6 +368,7 @@ install_project_dependencies() {
   as_user "$UV_BIN" python install "$PYTHON_VERSION"
   as_user_with_env \
     LUMISTRIPE_BUILD_EXTENSIONS=all \
+    LUMISTRIPE_NATIVE_OPTIMIZATION=1 \
     UV_PYTHON_PREFERENCE=only-managed \
     "$UV_BIN" sync --locked --python "$PYTHON_VERSION" --no-dev \
     --extra hardware-gain --reinstall-package lumistripe-core
@@ -604,26 +676,27 @@ install_system_packages
 install_mkcert
 ensure_groups
 enable_spi
-
-# The service user must be able to update its uv environment and the bundled
-# frontend. This also makes deploy/update.sh work after a root-owned checkout.
-chown -R "$SERVICE_USER:$SERVICE_GROUP" "$PROJECT_DIR"
 install_toolchains
 create_environment_file
 create_spotify_environment_file
 if spotify_environment_ready; then
   install_spotify_soloist "$SERVICE_HOME"
 fi
-install_project_dependencies
 create_tls_certificate
 render_service_unit
 render_spotify_service_unit
 install_update_support
+install_nginx
 install_wireplumber_config
+write_install_state
+
+# The service account gets a writable runtime checkout only after all files
+# copied into privileged system locations have been installed from the trusted
+# source above.
+chown -R "$SERVICE_USER:$SERVICE_GROUP" "$PROJECT_DIR"
+install_project_dependencies
 start_bluetooth
 start_user_audio
-install_nginx
-write_install_state
 
 systemctl daemon-reload
 start_deployment_services

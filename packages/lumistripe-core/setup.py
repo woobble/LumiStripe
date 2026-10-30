@@ -76,6 +76,7 @@ ext_render = Extension(
         "src/lumistripe/render/_native.c",
         "src/lumistripe/render/native_common.c",
         "src/lumistripe/render/native_composite.c",
+        "src/lumistripe/render/native_pixel.c",
         "src/lumistripe/render/native_patterns.c",
         "src/lumistripe/render/native_particles.c",
         "src/lumistripe/render/native_reactive.c",
