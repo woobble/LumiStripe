@@ -353,9 +353,10 @@ Start LumiStripe with the default automatic source policy:
 uv run lumistripe-web --hardware --audio-source auto --pairing-code 0427
 ```
 
-Automatic source selection prefers a live Bluetooth stream, falls back to the
-selected microphone, and returns to Bluetooth when the phone reconnects. Use
-`--audio-source bluetooth` to require Bluetooth, or choose the source from the
+Automatic source selection prefers active Spotify Connect playback on
+LumiStripe, then a live Bluetooth stream, and finally the selected microphone.
+It returns to a higher-priority source when that source becomes active. Use
+`--audio-source bluetooth` to require Bluetooth, or choose a source from the
 dashboard.
 
 ## Spotify Connect

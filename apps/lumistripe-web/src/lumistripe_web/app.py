@@ -166,7 +166,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--audio-source",
         choices=("auto", "off", "demo", "mic", "bluetooth", "spotify"),
         default="auto",
-        help="Dynamic-mode audio source (auto prefers Bluetooth, then mic, on hardware)",
+        help=(
+            "Dynamic-mode audio source (auto prefers active Spotify, then "
+            "Bluetooth, then mic on hardware)"
+        ),
     )
     parser.add_argument(
         "--enable-spotify",

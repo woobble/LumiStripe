@@ -208,6 +208,7 @@ FPS_SAMPLE_SECONDS = 1.0
 AUDIO_ROUTE_POLL_SECONDS = 1.0
 AUDIO_CALLBACK_STALE_SECONDS = 0.5
 AUDIO_CALLBACK_STARTUP_GRACE_SECONDS = 3.0
+AUTOMATIC_SPOTIFY_RETRY_SECONDS = 5.0
 CALIBRATION_FRAME_SECONDS = 0.05
 CALIBRATION_TIMEOUT_SECONDS = 300.0
 WORKER_STARTUP_GRACE_SECONDS = 3.0
@@ -499,6 +500,7 @@ class RuntimeWorker:
         self._bluetooth_previous_default_source: str | None = None
         self._next_audio_route_check_at = 0.0
         self._spotify_last_active: bool | None = None
+        self._automatic_spotify_retry_at_s = 0.0
         self._audio_frame = AudioFrame()
         self._last_beat_event: BeatEvent | None = None
         self._sync_calibration_start_s: float | None = None
@@ -2102,12 +2104,91 @@ class RuntimeWorker:
         except Exception as exc:  # noqa: BLE001 - stale-device recovery must continue
             self._audio_monitor_error = f"Previous input did not close cleanly: {exc}"
 
+    def _maintain_automatic_audio_monitor(self, now: float) -> None:
+        """Prefer active Spotify, then live Bluetooth, then the selected mic."""
+        spotify = self._spotify.status()
+        spotify_ready = (
+            spotify.configured
+            and spotify.connected
+            and spotify.logged_in
+            and spotify.is_active
+        )
+        spotify_active_changed = (
+            self._spotify_last_active is not None
+            and self._spotify_last_active != spotify.is_active
+        )
+        self._spotify_last_active = spotify.is_active
+        if not spotify_ready:
+            self._automatic_spotify_retry_at_s = 0.0
+
+        bluetooth = self._bluetooth.status()
+        bluetooth_ready = bluetooth.streaming and bluetooth.input_source is not None
+
+        candidates: list[AudioSource] = []
+        if spotify_ready and now >= self._automatic_spotify_retry_at_s:
+            candidates.append(AudioSource.SPOTIFY)
+        if bluetooth_ready:
+            candidates.append(AudioSource.BLUETOOTH)
+        candidates.append(AudioSource.MIC)
+
+        last_error: str | None = None
+        for source in candidates:
+            self._configured_audio_source = source
+            if (
+                self._audio_input is not None
+                and self._monitor_audio_source is source
+                and not (
+                    source is AudioSource.SPOTIFY and spotify_active_changed
+                )
+                and (
+                    source is not AudioSource.BLUETOOTH
+                    or self._active_bluetooth_address
+                    == (
+                        bluetooth.connected_device.address
+                        if bluetooth.connected_device is not None
+                        else None
+                    )
+                )
+            ):
+                return
+
+            if self._audio_input is not None:
+                self._close_audio_input()
+            try:
+                if source is AudioSource.SPOTIFY:
+                    self._open_spotify_monitor(
+                        refresh_route=spotify_active_changed
+                    )
+                elif source is AudioSource.BLUETOOTH:
+                    self._open_bluetooth_monitor(bluetooth)
+                else:
+                    self._open_microphone_monitor()
+            except (BluetoothCommandError, RuntimeError) as exc:
+                last_error = str(exc)
+                if source is AudioSource.SPOTIFY:
+                    self._automatic_spotify_retry_at_s = (
+                        now + AUTOMATIC_SPOTIFY_RETRY_SECONDS
+                    )
+                continue
+
+            if source is AudioSource.SPOTIFY:
+                self._automatic_spotify_retry_at_s = 0.0
+            return
+
+        self._audio_monitor_error = last_error
+        if last_error is not None:
+            self._audio_status = f"Automatic audio unavailable: {last_error}"
+
     def _maintain_audio_monitor(self, *, force: bool = False) -> None:
         now = time.monotonic()
         if not force and now < self._next_audio_route_check_at:
             return
         self._next_audio_route_check_at = now + AUDIO_ROUTE_POLL_SECONDS
         self._restart_stalled_audio_input(now)
+
+        if self._audio_source_setting == "auto" and self.settings.hardware:
+            self._maintain_automatic_audio_monitor(now)
+            return
 
         if self._configured_audio_source is AudioSource.DEMO:
             if self._audio_input is not None:
@@ -2179,8 +2260,6 @@ class RuntimeWorker:
         bluetooth_ready = bluetooth.streaming and bluetooth.input_source is not None
         wants_bluetooth = self._configured_audio_source is AudioSource.BLUETOOTH
         use_bluetooth = wants_bluetooth and bluetooth_ready
-        if self._audio_source_setting == "auto":
-            use_bluetooth = bluetooth_ready
 
         if use_bluetooth:
             connected_address = (
@@ -2602,6 +2681,7 @@ profile.audio_config(microphone=True),
             raise RuntimeCommandError("dynamic mode requires demo or microphone audio")
         self._audio_source_setting = source
         self._spotify_last_active = None
+        self._automatic_spotify_retry_at_s = 0.0
         if source == "auto":
             self._configured_audio_source = (
                 AudioSource.BLUETOOTH if self.settings.hardware else AudioSource.DEMO

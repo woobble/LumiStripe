@@ -55,7 +55,7 @@ export function AudioSourceControls({
     <Card className="border-white/5 bg-card/80">
       <CardHeader>
         <CardTitle className="flex items-center gap-2"><AudioLinesIcon className="size-4 text-cyan-300" />Audio input</CardTitle>
-        <CardDescription>Choose what drives the Stripe animation. Bluetooth is preferred automatically on hardware, with the microphone as fallback. Spotify Connect is available as a dedicated source.</CardDescription>
+        <CardDescription>Choose what drives the Stripe animation. Automatic mode prefers active Spotify Connect, then live Bluetooth input, then the selected microphone on hardware.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <Select value={source} onValueChange={(value) => { if (value && isAudioSource(value)) changeSource(value) }} disabled={saving || disabled}>

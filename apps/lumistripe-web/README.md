@@ -79,9 +79,11 @@ uv run lumistripe-web --hardware --output-backend gpio \
 ```
 
 Dynamic mode uses demo audio in simulation. On hardware, the default `auto`
-source prefers a connected Bluetooth phone and falls back to the selected
-microphone. Override that policy with `--audio-source off|demo|mic|bluetooth`
-and optionally select a microphone with `--audio-device PATTERN`.
+source prefers active Spotify Connect playback on LumiStripe, then a live
+Bluetooth input, and then the selected microphone. It returns to a higher
+priority source when that source becomes active. Override that policy with
+`--audio-source off|demo|mic|bluetooth|spotify` and optionally select a
+microphone with `--audio-device PATTERN`.
 
 Spotify Connect can also run with simulated output and no Bluetooth adapter.
 Enable it with `--enable-spotify --audio-source spotify`; a PipeWire/PulseAudio
