@@ -66,19 +66,19 @@ function StreamedAnimationSheet(props: StreamedAnimationSheetProps) {
 const solidPresets = ["#EF4444", "#F59E0B", "#22C55E", "#06B6D4", "#3B82F6", "#8B5CF6"]
 
 type SolidModeSectionProps = {
-  controller: DashboardController
-  targetId?: string
   color: string
   disabled: boolean
+  label: string
+  onCommit: (color: string) => Promise<boolean>
 }
 
-const SolidModeSection = memo(function SolidModeSection({ controller, targetId, color, disabled }: SolidModeSectionProps) {
+const SolidModeSection = memo(function SolidModeSection({ color, disabled, label, onCommit }: SolidModeSectionProps) {
   const [colorDraft, setColorDraft] = useState<string | null>(null)
   const [colorOpen, setColorOpen] = useState(false)
 
   const commit = async (nextColor: string) => {
     setColorDraft(nextColor)
-    const ok = await controller.setSolidColor(nextColor, targetId)
+    const ok = await onCommit(nextColor)
     if (ok) setColorDraft(null)
     return ok
   }
@@ -87,23 +87,23 @@ const SolidModeSection = memo(function SolidModeSection({ controller, targetId, 
     <div className="space-y-3 rounded-xl border border-white/5 bg-black/20 p-3">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <div className="text-sm font-medium">Solid color</div>
+          <div className="text-sm font-medium">{label}</div>
           <div className="text-xs text-muted-foreground">Tap the swatch to choose a color.</div>
         </div>
         <Popover open={colorOpen} onOpenChange={setColorOpen}>
-          <PopoverTrigger disabled={disabled} aria-label="Choose solid color" className="size-12 shrink-0 rounded-xl border-2 border-white/15 shadow-lg" style={{ backgroundColor: colorDraft ?? color }} />
+          <PopoverTrigger disabled={disabled} aria-label={`Choose ${label.toLowerCase()}`} className="size-12 shrink-0 rounded-xl border-2 border-white/15 shadow-lg" style={{ backgroundColor: colorDraft ?? color }} />
           <PopoverContent className="w-64">
             <HexColorPicker color={colorDraft ?? color} onChange={setColorDraft} />
             <Button className="w-full" disabled={disabled} onClick={() => void commit(colorDraft ?? color).then((ok) => { if (ok) setColorOpen(false) })}>Apply color</Button>
           </PopoverContent>
         </Popover>
       </div>
-      <div className="grid grid-cols-6 gap-2" aria-label="Solid color presets">
+      <div className="grid grid-cols-6 gap-2" aria-label={`${label} presets`}>
         {solidPresets.map((preset) => (
           <button
             key={preset}
             type="button"
-            aria-label={`Set solid color ${preset}`}
+            aria-label={`Set ${label.toLowerCase()} ${preset}`}
             disabled={disabled}
             onClick={() => void commit(preset)}
             className="aspect-square cursor-pointer rounded-full border-2 border-white/15 shadow-sm transition-transform active:scale-90 disabled:cursor-not-allowed disabled:opacity-50"
@@ -113,11 +113,7 @@ const SolidModeSection = memo(function SolidModeSection({ controller, targetId, 
       </div>
     </div>
   )
-}, (previous, next) => (
-  previous.targetId === next.targetId
-  && previous.color === next.color
-  && previous.disabled === next.disabled
-))
+})
 
 export function ControlPanel({ controller }: { controller: DashboardController }) {
   const { state, animations, pendingCommand } = controller
@@ -125,7 +121,6 @@ export function ControlPanel({ controller }: { controller: DashboardController }
   const [target, setTarget] = useState("all")
   const [previewEnabled, setPreviewEnabled] = useState(false)
   const [animationEditorVisible, setAnimationEditorVisible] = useState(false)
-  const [idleColorDraft, setIdleColorDraft] = useState<string | null>(null)
 
   if (!state) return null
   const disabled = !state.running || pendingCommand !== null
@@ -208,7 +203,6 @@ export function ControlPanel({ controller }: { controller: DashboardController }
               if (!values[0]) return
               setBrightnessDraft(null)
               setTarget(values[0])
-              setIdleColorDraft(null)
             }}
             variant="outline"
             spacing={1}
@@ -321,22 +315,25 @@ export function ControlPanel({ controller }: { controller: DashboardController }
 
           {mode === "dynamic" && (
             <div className="space-y-3 rounded-xl border border-white/5 bg-black/20 p-3">
-              <label className="block text-sm font-medium" htmlFor="music-idle-mode">When music is idle</label>
-              <select id="music-idle-mode" className="w-full rounded-lg bg-card p-2" disabled={disabled} value={musicIdle.mode} onChange={(event) => {
-                const next = event.target.value as "off" | "solid" | "animation"
-                void controller.setMusicIdle({ ...musicIdle, mode: next, animation: musicIdle.animation || animations[0]?.name || "" }, targetId)
-              }}>
-                <option value="off">Off</option><option value="solid">Solid color</option><option value="animation" disabled={animations.length === 0}>Animation</option>
-              </select>
-              {musicIdle.mode === "solid" && <div className="flex items-center gap-3"><label className="flex items-center gap-3 text-sm">Idle color <input type="color" aria-label="Idle color" disabled={disabled} value={idleColorDraft ?? musicIdle.color} onChange={(event) => setIdleColorDraft(event.target.value)} /></label><Button disabled={disabled || idleColorDraft === null} onClick={() => void controller.setMusicIdle({ ...musicIdle, color: idleColorDraft ?? musicIdle.color }, targetId).then((ok) => { if (ok) setIdleColorDraft(null) })}>Apply color</Button></div>}
-              {musicIdle.mode === "animation" && <label className="block text-sm">Idle animation<select aria-label="Idle animation" className="mt-2 w-full rounded-lg bg-card p-2" disabled={disabled} value={musicIdle.animation} onChange={(event) => void controller.setMusicIdle({ ...musicIdle, animation: event.target.value }, targetId)}>{animations.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}</select></label>}
+              <div className="text-sm font-medium">When music is idle</div>
+              <ToggleGroup aria-label="Music idle mode" value={[musicIdle.mode]} onValueChange={(values) => {
+                const next = values[0] as "off" | "solid" | "animation" | undefined
+                if (next && next !== musicIdle.mode) void controller.setMusicIdle({ ...musicIdle, mode: next, animation: musicIdle.animation || animations[0]?.name || "" }, targetId)
+              }} className="grid w-full grid-cols-3 rounded-xl bg-black/20 p-1">
+                <ToggleGroupItem className="h-11 min-w-0 rounded-lg border-0 px-1 text-xs data-pressed:bg-violet-400/15 data-pressed:text-violet-200" value="off" disabled={disabled}>Off</ToggleGroupItem>
+                <ToggleGroupItem className="h-11 min-w-0 rounded-lg border-0 px-1 text-xs data-pressed:bg-violet-400/15 data-pressed:text-violet-200" value="solid" disabled={disabled}>Solid color</ToggleGroupItem>
+                <ToggleGroupItem className="h-11 min-w-0 rounded-lg border-0 px-1 text-xs data-pressed:bg-violet-400/15 data-pressed:text-violet-200" value="animation" disabled={disabled || animations.length === 0}>Animation</ToggleGroupItem>
+              </ToggleGroup>
+              {musicIdle.mode === "solid" && <SolidModeSection key={targetId ?? "all"} label="Idle color" color={musicIdle.color} disabled={disabled} onCommit={(color) => controller.setMusicIdle({ ...musicIdle, color }, targetId)} />}
+              {musicIdle.mode === "animation" && <StreamedAnimationSheet selectionOnly animations={animations} current={musicIdle.animation} disabled={disabled} stripeId={targetId} onSelect={(name) => controller.setMusicIdle({ ...musicIdle, animation: name }, targetId)} onLoadSettings={controller.getAnimationSettings} onSaveSettings={controller.setAnimationSettings} previewEnabled={false} previewTopology={state.stripe_topology} onEnablePreview={() => {}} onDisablePreview={() => {}} onEditorVisibilityChange={() => {}} />}
             </div>
           )}
 
           {mode === "solid" ? (
             <SolidModeSection
-              controller={controller}
-              targetId={targetId}
+              key={targetId ?? "all"}
+              label="Solid color"
+              onCommit={(color) => controller.setSolidColor(color, targetId)}
               color={solidColor}
               disabled={disabled || pendingCommand === "solidColor"}
             />

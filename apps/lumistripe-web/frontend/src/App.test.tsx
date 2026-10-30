@@ -1284,6 +1284,25 @@ describe("App", () => {
     )
   })
 
+  it("uses the shared color picker for music idle colors", async () => {
+    const original = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation((input, init) => {
+      if (String(input) === "/api/music-idle") {
+        const idle = JSON.parse(String(init?.body))
+        return jsonResponse({ ...initialState, revision: 6, mode: "dynamic", music_idle: idle })
+      }
+      return original(input, init)
+    })
+    const user = userEvent.setup()
+    render(<App />, { wrapper: Router })
+    await screen.findByText(/aurora wave/i)
+    await user.click(screen.getByRole("button", { name: "Music" }))
+    await user.click(await screen.findByRole("button", { name: "Solid color" }))
+    await user.click(await screen.findByRole("button", { name: "Set idle color #EF4444" }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/music-idle", expect.objectContaining({ body: expect.stringContaining('"color":"#EF4444"') })))
+    expect(screen.getByRole("button", { name: "Choose idle color" })).toBeInTheDocument()
+  })
+
   it("navigates to the diagnostics page and shows runtime health", async () => {
     const user = userEvent.setup()
     render(<App />, { wrapper: Router })

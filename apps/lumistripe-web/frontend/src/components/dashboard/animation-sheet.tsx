@@ -40,6 +40,7 @@ const PreviewCanvas = lazy(async () => {
 })
 
 interface AnimationSheetProps {
+  selectionOnly?: boolean
   animations: AnimationOption[]
   current: string
   disabled: boolean
@@ -230,6 +231,7 @@ function SettingControl({
 }
 
 export function AnimationSheet({
+  selectionOnly = false,
   animations,
   current,
   disabled,
@@ -368,7 +370,7 @@ export function AnimationSheet({
         </h3>
         {items.map((animation) => {
           const selected = animation.name === current
-          const configurable = animation.settings.length > 0
+          const configurable = !selectionOnly && animation.settings.length > 0
           return (
             <div
               key={animation.name}
@@ -440,7 +442,7 @@ export function AnimationSheet({
           render={
             <Button
               variant="outline"
-              aria-label={`Animation ${animations.find((item) => item.name === current)?.display_name ?? displayName(current)}. Change`}
+              aria-label={`${selectionOnly ? "Idle animation" : "Animation"} ${animations.find((item) => item.name === current)?.display_name ?? displayName(current)}. Change`}
               className="h-auto min-h-14 w-full justify-between rounded-xl border-white/10 bg-white/[0.03] px-4 py-3 text-left"
               disabled={disabled}
             />
@@ -451,8 +453,9 @@ export function AnimationSheet({
               <SparklesIcon aria-hidden="true" />
             </span>
             <span className="min-w-0">
-              <span className="block text-xs font-normal text-muted-foreground">Animation</span>
+              <span className="block text-xs font-normal text-muted-foreground">{selectionOnly ? "Idle animation" : "Animation"}</span>
               <span className="block truncate">{animations.find((item) => item.name === current)?.display_name ?? displayName(current) ?? "Choose an animation"}</span>
+              {selectionOnly && <span className="block text-xs font-normal text-muted-foreground">{animations.find((item) => item.name === current)?.description}</span>}
             </span>
           </span>
           <span className="text-muted-foreground">Change</span>
@@ -478,8 +481,8 @@ export function AnimationSheet({
               </div>
             ) : (
               <>
-                <SheetTitle>Choose animation</SheetTitle>
-                <SheetDescription>Choose a base animation or an audio-triggered effect. Selecting one switches playback to Static mode.</SheetDescription>
+                <SheetTitle>{selectionOnly ? "Choose idle animation" : "Choose animation"}</SheetTitle>
+                <SheetDescription>{selectionOnly ? "Choose an animation to play while music is idle." : "Choose a base animation or an audio-triggered effect. Selecting one switches playback to Static mode."}</SheetDescription>
               </>
             )}
           </SheetHeader>

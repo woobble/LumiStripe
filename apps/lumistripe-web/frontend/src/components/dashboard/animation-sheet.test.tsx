@@ -144,6 +144,16 @@ function renderSheet(overrides: Partial<ComponentProps<typeof AnimationSheet>> =
 }
 
 describe("AnimationSheet", () => {
+  it("selects an idle animation without exposing playback settings", async () => {
+    const user = userEvent.setup()
+    const { props } = renderSheet({ selectionOnly: true })
+    await user.click(screen.getByRole("button", { name: /Idle animation.*Change/i }))
+    expect(screen.getByText("Choose idle animation")).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Configure Comet" })).toBeNull()
+    await user.type(screen.getByRole("searchbox", { name: "Search animations" }), "wave")
+    await user.click(screen.getByRole("button", { name: /Beat Wave/ }))
+    expect(props.onSelect).toHaveBeenCalledWith("beat_wave")
+  })
   it("groups entries by role and marks the selected, music-ready animation", async () => {
     const user = userEvent.setup()
     renderSheet()
