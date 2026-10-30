@@ -96,13 +96,7 @@ def main() -> int:
         run_numpy()
         run_native()
         np.testing.assert_array_equal(corrected_native, corrected_numpy)
-        np.testing.assert_array_equal(scaled_native[:, :3], scaled_numpy[:, :3])
-        alpha_delta = np.abs(
-            scaled_native[:, 3].astype(np.int16)
-            - scaled_numpy[:, 3].astype(np.int16)
-        )
-        if np.max(alpha_delta, initial=0) > 1:
-            raise AssertionError("native alpha scaling differs by more than one LSB")
+        np.testing.assert_array_equal(scaled_native, scaled_numpy)
         results.append(
             {
                 "led_count": length,

@@ -54,32 +54,7 @@ void lumistripe_correct_rgba(const uint8_t *source, uint8_t *destination,
 #endif
 }
 
-void lumistripe_apply_alpha_scale_scalar(const uint8_t *source,
-                                         uint8_t *corrected,
-                                         uint8_t *destination,
-                                         size_t pixel_count, double scale) {
-    for (size_t index = 0; index < pixel_count; index++) {
-        const size_t offset = index * 4u;
-        const uint8_t alpha = (uint8_t)((double)source[offset + 3u] * scale);
-        destination[offset] = source[offset];
-        destination[offset + 1u] = source[offset + 1u];
-        destination[offset + 2u] = source[offset + 2u];
-        destination[offset + 3u] = alpha;
-        corrected[offset + 3u] = alpha;
-    }
-}
-
 #if defined(__aarch64__) && !defined(LUMISTRIPE_DISABLE_RENDER_NEON)
-static uint8x8_t scale_alpha8(uint8x8_t alpha, float scale) {
-    const uint16x8_t wide = vmovl_u8(alpha);
-    const float32x4_t low = vcvtq_f32_u32(vmovl_u16(vget_low_u16(wide)));
-    const float32x4_t high = vcvtq_f32_u32(vmovl_u16(vget_high_u16(wide)));
-    const uint32x4_t low_scaled = vcvtq_u32_f32(vmulq_n_f32(low, scale));
-    const uint32x4_t high_scaled = vcvtq_u32_f32(vmulq_n_f32(high, scale));
-    return vmovn_u16(vcombine_u16(vmovn_u32(low_scaled),
-                                  vmovn_u32(high_scaled)));
-}
-
 static float32x4_t u8x8_to_f32_low(uint8x8_t value) {
     return vcvtq_f32_u32(vmovl_u16(vget_low_u16(vmovl_u8(value))));
 }
@@ -122,32 +97,15 @@ static uint8x8_t finish_channel(float32x4_t low, float32x4_t high) {
 void lumistripe_apply_alpha_scale(const uint8_t *source, uint8_t *corrected,
                                   uint8_t *destination, size_t pixel_count,
                                   double scale) {
-#if defined(__aarch64__) && !defined(LUMISTRIPE_DISABLE_RENDER_NEON)
-    size_t index = 0;
-    const float scale_f32 = (float)scale;
-    while (pixel_count - index >= 8u) {
-        const uint8x8x4_t rgba = vld4_u8(source);
-        const uint8x8_t scaled_alpha = scale_alpha8(rgba.val[3], scale_f32);
-        uint8x8x4_t output;
-        uint8_t alpha_lanes[8];
-        output.val[0] = rgba.val[0];
-        output.val[1] = rgba.val[1];
-        output.val[2] = rgba.val[2];
-        output.val[3] = scaled_alpha;
-        vst4_u8(destination, output);
-        vst1_u8(alpha_lanes, scaled_alpha);
-        for (size_t lane = 0; lane < 8u; lane++)
-            corrected[(index + lane) * 4u + 3u] = alpha_lanes[lane];
-        source += 32u;
-        destination += 32u;
-        index += 8u;
+    for (size_t index = 0; index < pixel_count; index++) {
+        const size_t offset = index * 4u;
+        const uint8_t alpha = (uint8_t)((double)source[offset + 3u] * scale);
+        destination[offset] = source[offset];
+        destination[offset + 1u] = source[offset + 1u];
+        destination[offset + 2u] = source[offset + 2u];
+        destination[offset + 3u] = alpha;
+        corrected[offset + 3u] = alpha;
     }
-    lumistripe_apply_alpha_scale_scalar(source, corrected + index * 4u,
-                                       destination, pixel_count - index, scale);
-#else
-    lumistripe_apply_alpha_scale_scalar(source, corrected, destination,
-                                       pixel_count, scale);
-#endif
 }
 
 static float visible_channel_scalar(const uint8_t *pixel, size_t channel) {

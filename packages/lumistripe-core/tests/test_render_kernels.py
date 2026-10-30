@@ -73,10 +73,8 @@ def test_alpha_scale_matches_numpy_floor_semantics(scale: float) -> None:
     apply_alpha_scale_into(
         source, corrected, destination, scale, alpha_scratch
     )
-    np.testing.assert_array_equal(corrected[:, :3], expected_corrected[:, :3])
-    np.testing.assert_array_equal(destination[:, :3], expected_destination[:, :3])
-    _assert_within_one_lsb(corrected[:, 3], expected_corrected[:, 3])
-    _assert_within_one_lsb(destination[:, 3], expected_destination[:, 3])
+    np.testing.assert_array_equal(corrected, expected_corrected)
+    np.testing.assert_array_equal(destination, expected_destination)
 
 
 def test_kernel_boundaries_reject_invalid_buffers() -> None:
@@ -154,7 +152,7 @@ def test_native_kernels_allow_exact_in_place_aliases() -> None:
     expected = frame.copy()
     expected[:, 3] = np.floor(expected[:, 3].astype(np.float64) * 0.37).astype(np.uint8)
     native.apply_alpha_scale_into(frame, frame, frame, 0.37)
-    _assert_within_one_lsb(frame, expected)
+    np.testing.assert_array_equal(frame, expected)
 
     base = np.arange(33 * 4, dtype=np.uint8).reshape(33, 4)
     overlay_destination = np.flip(base, axis=0).copy()
@@ -171,7 +169,7 @@ def test_native_kernels_allow_exact_in_place_aliases() -> None:
 @pytest.mark.skipif(kernels._native_module is None, reason="render extension is not built")
 @pytest.mark.parametrize("length", [0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 257])
 @pytest.mark.parametrize("scale", [0.0, 0.1, 0.5, 0.999, 1.0])
-def test_native_alpha_scaling_matches_numpy_within_one_lsb(
+def test_native_alpha_scaling_matches_numpy_exactly(
     length: int, scale: float
 ) -> None:
     native = kernels._native_module
@@ -187,10 +185,9 @@ def test_native_alpha_scaling_matches_numpy_within_one_lsb(
 
     expected = source.copy()
     expected[:, 3] = np.floor(source[:, 3].astype(np.float64) * scale).astype(np.uint8)
-    np.testing.assert_array_equal(destination[:, :3], source[:, :3])
+    np.testing.assert_array_equal(destination, expected)
     np.testing.assert_array_equal(corrected[:, :3], np.full((length, 3), 71, dtype=np.uint8))
-    _assert_within_one_lsb(destination[:, 3], expected[:, 3])
-    _assert_within_one_lsb(corrected[:, 3], expected[:, 3])
+    np.testing.assert_array_equal(corrected[:, 3], expected[:, 3])
 
 
 @pytest.mark.skipif(kernels._native_module is None, reason="render extension is not built")

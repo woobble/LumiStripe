@@ -100,25 +100,15 @@ only and do not predict Raspberry Pi speedups.
 | Cortex-A76 | 4,096 | normal `-O3` scalar | 56.334 | 9.645 | 5.84x | 98.8% / 98.0% |
 | Cortex-A76 | 16,384 | normal `-O3` scalar | 227.103 | 42.118 | 5.39x | 97.8% / 92.9% |
 
-The updated harness also measured the new alpha-scale and screen-composition
-paths under QEMU on Cortex-A72. These 1,000-iteration timings are emulator
-results, not Pi performance:
+The final screen-composition harness also ran under QEMU for 500 iterations.
+The emulator ratios were about 0.82x on both CPU models, despite the strong
+native Pi gain below. This confirms QEMU timings are not a useful proxy for
+screen-kernel performance on the target hardware.
 
-| Kernel | Pixels | Scalar ms | Dispatch ms | Ratio |
-| --- | ---: | ---: | ---: | ---: |
-| Alpha scale | 600 | 13.855 | 10.099 | 1.37x |
-| Alpha scale | 4,096 | 87.691 | 62.331 | 1.41x |
-| Alpha scale | 16,384 | 348.541 | 249.777 | 1.40x |
-| Screen composite | 600 | 121.883 | 141.865 | 0.86x |
-| Screen composite | 4,096 | 768.740 | 948.668 | 0.81x |
-| Screen composite | 16,384 | 3,069.466 | 3,812.514 | 0.81x |
-
-The Cortex-A76 QEMU ratios were 1.18x, 1.18x, and 1.16x for alpha scaling;
-screen compositing measured 1.15x, 1.14x, and 1.15x. The screen path was slower
-on A72 QEMU but faster on A76 QEMU, so emulator results are model-sensitive and
-do not resolve the native-device acceptance criterion. Keep the screen path
-only if the benchmark on `rpi02` shows a repeatable gain of at least 10%;
-otherwise remove its NEON branch and retain the scalar implementation.
+| CPU model | 600 pixels | 4,096 pixels | 16,384 pixels |
+| --- | ---: | ---: | ---: |
+| Cortex-A72 | 0.82x | 0.82x | 0.82x |
+| Cortex-A76 | 0.83x | 0.83x | 0.82x |
 
 The large difference between the two scalar baselines is another reason not to
 use emulator timings to forecast device performance. Native measurements from
@@ -148,15 +138,39 @@ build and about 1.7x faster than the normally optimized scalar build in these
 measurements. These are kernel-only timings; they do not measure the full
 rendering pipeline or GPIO/SPI output.
 
+## `rpi02` follow-up benchmark
+
+The updated harness was run once with 10,000 iterations per case on `rpi02`.
+The Pi model and clock/thermal conditions were not included. All cases passed
+their parity checks; screen composition reported a zero-byte delta and matching
+checksums.
+
+| Kernel | Pixels | Scalar ms | Dispatch ms | Speedup |
+| --- | ---: | ---: | ---: | ---: |
+| RGBA correction | 600 | 13.755 | 8.034 | 1.71x |
+| RGBA correction | 4,096 | 91.605 | 53.164 | 1.72x |
+| RGBA correction | 16,384 | 376.504 | 215.472 | 1.75x |
+| Alpha scale | 600 | 15.800 | 13.587 | 1.16x |
+| Alpha scale | 4,096 | 137.819 | 227.320 | 0.61x |
+| Alpha scale | 16,384 | 1,003.179 | 1,007.488 | 1.00x |
+| Screen composite | 600 | 489.434 | 120.460 | 4.06x |
+| Screen composite | 4,096 | 3,456.768 | 826.209 | 4.18x |
+| Screen composite | 16,384 | 14,410.044 | 3,327.591 | 4.33x |
+
+The screen SIMD path clears the 10% target at all tested sizes and is retained.
+Alpha SIMD is removed: despite a gain at 600 pixels, it regressed at 4,096 and
+was neutral at 16,384, violating the no-regression requirement. Alpha scaling
+uses the scalar implementation and preserves exact NumPy floor semantics.
+
 ## Validation
 
 - Cross-built the full native extension profile for both Cortex-A72 and
   Cortex-A76 against target CPython 3.12 and NumPy headers; all four extension
   modules were ELF64 AArch64 and imported in target CPython 3.12.16 with NumPy
   2.5.4 under QEMU on both CPU models.
-- Ran the Python extension's byte-parity checks on both CPU models, covering
-  every 8-bit gain/source value across RGB channels, SIMD boundary lengths,
-  alpha preservation, and exact in-place aliasing.
+- Ran AArch64 extension parity checks under QEMU across SIMD boundaries,
+  screen-composition strengths and overlays, saturation fallback, and supported
+  in-place aliases. Alpha scaling remains scalar and byte-exact.
 - Inspected render and audio compiler vectorization reports and disassembled
   the generated AArch64 object code.
 - Ran exhaustive C scalar/dispatch parity and benchmark tests under QEMU on
@@ -193,12 +207,11 @@ successfully with Oxlint warnings. OpenAPI generation produced no changes to
 now compare persisted data with the current `SETTINGS_VERSION`; all 66 settings
 tests passed.
 
-The RGBA correction kernel was benchmarked natively on `rpi02`, but its model
-and runtime conditions were not recorded. The new alpha-scale and screen
-compositing kernels still need the same native-device benchmark before their
-10% performance acceptance criterion is resolved. GPIO/SPI hardware output
-and Bluetooth/PipeWire audio smoke tests were not part of the reported run.
-QEMU checks validate target-architecture loading and behavior, but do not
-substitute for those device checks. The broader expression-level renderer
-safety audit and its remaining risks are tracked in
+RGBA correction and screen-composition performance were measured natively on
+`rpi02`; alpha SIMD was removed after failing the acceptance bar. The Pi model
+and runtime conditions were not recorded. GPIO/SPI hardware output and
+Bluetooth/PipeWire audio smoke tests were not part of the reported run. QEMU
+checks validate target-architecture loading and behavior, but do not substitute
+for those device checks. The broader expression-level renderer safety audit
+and its remaining risks are tracked in
 [`native-render-hardening.md`](native-render-hardening.md).
