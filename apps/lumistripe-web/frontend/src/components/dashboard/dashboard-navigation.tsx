@@ -14,7 +14,7 @@ const items = [
 export function DashboardNavigation() {
   const location = useLocation()
   return (
-    <aside className="fixed inset-x-0 bottom-0 z-40 border-t border-border/80 bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl lg:inset-y-0 lg:right-auto lg:w-64 lg:border-r lg:border-t-0 lg:pb-0">
+    <aside className="fixed inset-x-0 bottom-0 z-40 border-t border-border/80 bg-background/95 pb-[max(0.5rem,env(safe-area-inset-bottom))] backdrop-blur-xl lg:inset-y-0 lg:right-auto lg:w-64 lg:border-r lg:border-t-0 lg:pb-0">
       <div className="mx-auto max-w-lg px-2 pt-2 lg:flex lg:h-full lg:max-w-none lg:flex-col lg:px-4 lg:py-6">
         <div className="mb-8 hidden items-center gap-3 px-3 lg:flex">
           <div className="grid size-10 place-items-center rounded-xl bg-primary/15 text-primary">
