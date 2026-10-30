@@ -39,6 +39,36 @@ including unchanged alpha, then compares scalar and dispatched correction,
 alpha-scaling, and screen-composition calls at 600, 4,096, and 16,384 pixels.
 The Python regression tests cover vector boundaries for all three kernels.
 
+### Reactive effect candidates
+
+`native_reactive.c` has scalar references and AArch64 NEON candidates for
+Aurora, PlasmaRave, and BeatRipple. BeatRipple vectorizes per-pixel distance
+and intensity calculations; Aurora and PlasmaRave vectorize final alpha
+scaling while keeping trigonometry and palette conversion scalar. The
+candidates are exposed only through private benchmark entry points for now;
+production rendering stays scalar until a Raspberry Pi run confirms a
+repeatable speedup.
+
+Build the render extension on the Pi from the repository root:
+
+```bash
+LUMISTRIPE_BUILD_EXTENSIONS=render UV_CACHE_DIR=/tmp/lumistripe-uv-cache \
+  uv run --directory packages/lumistripe-core --with setuptools \
+  python setup.py build_ext --inplace --force
+```
+
+Run all three candidates at the established strip sizes:
+
+```bash
+UV_CACHE_DIR=/tmp/lumistripe-uv-cache uv run python \
+  packages/lumistripe-core/benchmarks/benchmark_reactive_simd.py 10000
+```
+
+The script verifies exact scalar/candidate parity before timing each effect
+in static and audio modes. It runs three rounds in alternating order and
+reports the median timing, ratio, and output checksum. Share the output to
+decide which candidates should become production dispatch paths.
+
 ## Compiler and instruction checks
 
 The `none`, `audio`, `gpio`, `spi`, `render`, and `all` build profiles remain

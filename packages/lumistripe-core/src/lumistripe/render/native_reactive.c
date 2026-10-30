@@ -1,4 +1,23 @@
 #include "native_common.h"
+
+#if defined(__aarch64__) && !defined(LUMISTRIPE_DISABLE_RENDER_NEON)
+#include <arm_neon.h>
+#define LUMISTRIPE_REACTIVE_NEON 1
+
+static void store_alpha_pair(uint8_t *pixels, npy_intp index,
+                             const double alpha[2], double brightness,
+                             int clamp_alpha) {
+    float64x2_t value = vmulq_f64(vld1q_f64(alpha), vdupq_n_f64(brightness));
+    if (clamp_alpha)
+        value = vminq_f64(value, vdupq_n_f64(1.0));
+    value = vmulq_f64(value, vdupq_n_f64(255.0));
+    uint64_t converted[2];
+    vst1q_u64(converted, vcvtq_u64_f64(value));
+    pixels[(size_t)(index - 1) * 4u + 3u] = (uint8_t)converted[0];
+    pixels[(size_t)index * 4u + 3u] = (uint8_t)converted[1];
+}
+#endif
+
 PyObject *render_shockwave_into(PyObject *module, PyObject *args) {
     (void)module;
     PyArrayObject *destination;
@@ -93,8 +112,10 @@ PyObject *render_shockwave_into(PyObject *module, PyObject *args) {
     Py_RETURN_NONE;
 }
 
-PyObject *render_aurora_into(PyObject *module, PyObject *args) {
+static PyObject *render_aurora_impl(PyObject *module, PyObject *args,
+                                    int use_neon) {
     (void)module;
+    (void)use_neon;
     PyArrayObject *destination;
     PyObject *bands_object;
     Py_ssize_t frame;
@@ -163,6 +184,9 @@ PyObject *render_aurora_into(PyObject *module, PyObject *args) {
         return NULL;
     }
     uint8_t *pixels = (uint8_t *)PyArray_DATA(destination);
+#if defined(LUMISTRIPE_REACTIVE_NEON)
+    double alpha_pair[2];
+#endif
     for (npy_intp index = 0; index < count; index++) {
         const double position = count <= 1 ? 0.0 : (double)index / (double)(count - 1);
         double alpha, hue;
@@ -213,8 +237,24 @@ PyObject *render_aurora_into(PyObject *module, PyObject *args) {
         pixels[offset] = red;
         pixels[offset + 1u] = green;
         pixels[offset + 2u] = blue;
+#if defined(LUMISTRIPE_REACTIVE_NEON)
+        if (use_neon) {
+            alpha_pair[index & 1] = alpha;
+            if (index & 1)
+                store_alpha_pair(pixels, index, alpha_pair, brightness, 0);
+        } else {
+            pixels[offset + 3u] = (uint8_t)(alpha * brightness * 255.0);
+        }
+#else
         pixels[offset + 3u] = (uint8_t)(alpha * brightness * 255.0);
+#endif
     }
+#if defined(LUMISTRIPE_REACTIVE_NEON)
+    if (use_neon && (count & 1)) {
+        const size_t offset = (size_t)(count - 1) * 4u;
+        pixels[offset + 3u] = (uint8_t)(alpha_pair[0] * brightness * 255.0);
+    }
+#endif
     Py_RETURN_NONE;
 }
 
@@ -642,8 +682,23 @@ PyObject *render_beat_explosion_into(PyObject *module, PyObject *args) {
     Py_RETURN_NONE;
 }
 
-PyObject *render_plasma_rave_into(PyObject *module, PyObject *args) {
+PyObject *render_aurora_into(PyObject *module, PyObject *args) {
+    return render_aurora_impl(module, args, 0);
+}
+
+static PyObject *benchmark_render_aurora_scalar(PyObject *module, PyObject *args) {
+    return render_aurora_impl(module, args, 0);
+}
+
+static PyObject *benchmark_render_aurora_candidate(PyObject *module,
+                                                    PyObject *args) {
+    return render_aurora_impl(module, args, 1);
+}
+
+static PyObject *render_plasma_rave_impl(PyObject *module, PyObject *args,
+                                         int use_neon) {
     (void)module;
+    (void)use_neon;
     PyArrayObject *destination;
     double frequency, time_one, time_two, time_three, hue_base, hue_scale;
     double alpha_extra, brightness;
@@ -686,6 +741,9 @@ PyObject *render_plasma_rave_into(PyObject *module, PyObject *args) {
         return NULL;
     }
     uint8_t *pixels = (uint8_t *)PyArray_DATA(destination);
+#if defined(LUMISTRIPE_REACTIVE_NEON)
+    double alpha_pair[2];
+#endif
     for (npy_intp index = 0; index < length; index++) {
         const double position = (double)index / (double)(length > 1 ? length - 1 : 1);
         const double value_one = sin(position * 4.0 * frequency + time_one);
@@ -710,14 +768,49 @@ PyObject *render_plasma_rave_into(PyObject *module, PyObject *args) {
         pixels[offset + 1u] = green;
         pixels[offset + 2u] = blue;
         alpha *= brightness;
+#if defined(LUMISTRIPE_REACTIVE_NEON)
+        if (use_neon) {
+            alpha_pair[index & 1] = alpha;
+            if (index & 1)
+                store_alpha_pair(pixels, index, alpha_pair, 1.0, 1);
+        } else {
+            if (alpha > 1.0)
+                alpha = 1.0;
+            pixels[offset + 3u] = (uint8_t)(alpha * 255.0);
+        }
+#else
         if (alpha > 1.0)
             alpha = 1.0;
         pixels[offset + 3u] = (uint8_t)(alpha * 255.0);
+#endif
     }
+#if defined(LUMISTRIPE_REACTIVE_NEON)
+    if (use_neon && (length & 1)) {
+        double alpha = alpha_pair[0];
+        if (alpha > 1.0)
+            alpha = 1.0;
+        pixels[(size_t)(length - 1) * 4u + 3u] = (uint8_t)(alpha * 255.0);
+    }
+#endif
     Py_RETURN_NONE;
 }
 
-PyObject *render_beat_ripple_into(PyObject *module, PyObject *args) {
+PyObject *render_plasma_rave_into(PyObject *module, PyObject *args) {
+    return render_plasma_rave_impl(module, args, 0);
+}
+
+static PyObject *benchmark_render_plasma_rave_scalar(PyObject *module,
+                                                       PyObject *args) {
+    return render_plasma_rave_impl(module, args, 0);
+}
+
+static PyObject *benchmark_render_plasma_rave_candidate(PyObject *module,
+                                                         PyObject *args) {
+    return render_plasma_rave_impl(module, args, 1);
+}
+
+static PyObject *render_beat_ripple_impl(PyObject *module, PyObject *args,
+                                         int use_neon) {
     (void)module;
     PyArrayObject *destination;
     int audio_mode, hue, lightness, palette;
@@ -746,6 +839,94 @@ PyObject *render_beat_ripple_into(PyObject *module, PyObject *args) {
         pixels[offset] = pixels[offset + 1u] = pixels[offset + 2u] = 0u;
         pixels[offset + 3u] = 0u;
     }
+#if defined(LUMISTRIPE_REACTIVE_NEON)
+    if (use_neon && length >= 2) {
+        uint8_t red, green, blue;
+        palette_hsl_to_rgb((double)hue, 100.0, (double)lightness, palette,
+                           custom_rgb, &red, &green, &blue);
+        const float64x2_t width_vector = vdupq_n_f64(width);
+        const float64x2_t one = vdupq_n_f64(1.0);
+        const float64x2_t zero = vdupq_n_f64(0.0);
+        const float64x2_t center_vector = vdupq_n_f64(center);
+        const float64x2_t radius_vector = vdupq_n_f64(radius_or_offset);
+        const float64x2_t mirrored_radius = vdupq_n_f64(
+            center + center - radius_or_offset);
+        const float64x2_t scale_vector = vdupq_n_f64(alpha_scale);
+        const float64x2_t brightness_vector = vdupq_n_f64(brightness);
+        npy_intp index = 0;
+        for (; index + 1 < length; index += 2) {
+            const float64x2_t pixel_index = {
+                (double)index, (double)(index + 1)
+            };
+            float64x2_t intensity;
+            if (audio_mode) {
+                const float64x2_t left = vabsq_f64(
+                    vsubq_f64(pixel_index, radius_vector));
+                const float64x2_t right = vabsq_f64(vsubq_f64(
+                    vsubq_f64(center_vector, radius_vector), pixel_index));
+                intensity = vmaxq_f64(
+                    vsubq_f64(one, vdivq_f64(left, width_vector)),
+                    vsubq_f64(one, vdivq_f64(right, width_vector)));
+            } else {
+                const float64x2_t distance = vabsq_f64(
+                    vsubq_f64(pixel_index, center_vector));
+                const float64x2_t first_delta = vabsq_f64(
+                    vsubq_f64(distance, radius_vector));
+                const float64x2_t second_delta = vabsq_f64(
+                    vsubq_f64(distance, mirrored_radius));
+                const float64x2_t first = vmaxq_f64(
+                    vsubq_f64(one, vdivq_f64(first_delta, width_vector)), zero);
+                const float64x2_t second = vmaxq_f64(
+                    vsubq_f64(one, vdivq_f64(second_delta, width_vector)), zero);
+                intensity = vmaxq_f64(first, second);
+            }
+            const float64x2_t alpha = vmulq_f64(intensity, scale_vector);
+            const float64x2_t output_alpha = vminq_f64(
+                one, vmulq_f64(alpha, brightness_vector));
+            double alpha_lanes[2];
+            double output_lanes[2];
+            vst1q_f64(alpha_lanes, alpha);
+            vst1q_f64(output_lanes, output_alpha);
+            for (npy_intp lane = 0; lane < 2; lane++) {
+                if (alpha_lanes[lane] <= 0.01)
+                    continue;
+                const size_t offset = (size_t)(index + lane) * 4u;
+                pixels[offset] = red;
+                pixels[offset + 1u] = green;
+                pixels[offset + 2u] = blue;
+                pixels[offset + 3u] = (uint8_t)(output_lanes[lane] * 255.0);
+            }
+        }
+        for (; index < length; index++) {
+            const double pixel = (double)index;
+            double intensity;
+            if (audio_mode) {
+                const double left = fabs(pixel - radius_or_offset);
+                const double right = fabs(center - radius_or_offset - pixel);
+                intensity = fmax(1.0 - left / width, 1.0 - right / width);
+            } else {
+                const double distance = fabs(pixel - center);
+                const double first = fmax(
+                    1.0 - fabs(distance - radius_or_offset) / width, 0.0);
+                const double second = fmax(
+                    1.0 - fabs(distance - (center + center - radius_or_offset)) / width,
+                    0.0);
+                intensity = fmax(first, second);
+            }
+            const double alpha = intensity * alpha_scale;
+            if (alpha <= 0.01)
+                continue;
+            const size_t offset = (size_t)index * 4u;
+            pixels[offset] = red;
+            pixels[offset + 1u] = green;
+            pixels[offset + 2u] = blue;
+            pixels[offset + 3u] = (uint8_t)(fmin(1.0, alpha * brightness) * 255.0);
+        }
+        Py_RETURN_NONE;
+    }
+#else
+    (void)use_neon;
+#endif
     for (npy_intp index = 0; index < length; index++) {
         double intensity;
         if (audio_mode) {
@@ -773,6 +954,20 @@ PyObject *render_beat_ripple_into(PyObject *module, PyObject *args) {
         pixels[offset + 3u] = (uint8_t)(output_alpha * 255.0);
     }
     Py_RETURN_NONE;
+}
+
+PyObject *render_beat_ripple_into(PyObject *module, PyObject *args) {
+    return render_beat_ripple_impl(module, args, 0);
+}
+
+static PyObject *benchmark_render_beat_ripple_scalar(PyObject *module,
+                                                       PyObject *args) {
+    return render_beat_ripple_impl(module, args, 0);
+}
+
+static PyObject *benchmark_render_beat_ripple_candidate(PyObject *module,
+                                                         PyObject *args) {
+    return render_beat_ripple_impl(module, args, 1);
 }
 
 PyObject *render_strobe_chase_into(PyObject *module, PyObject *args) {
@@ -1380,6 +1575,18 @@ static PyMethodDef methods[] = {
      "Render NeonStorm into a reusable RGBA destination."},
     {"render_electric_storm_into", render_electric_storm_into, METH_VARARGS,
      "Render ElectricStorm flashes and streaks into a reusable RGBA destination."},
+    {"_benchmark_render_aurora_scalar", benchmark_render_aurora_scalar, METH_VARARGS,
+     "Scalar Aurora reference kernel for the native SIMD benchmark."},
+    {"_benchmark_render_plasma_rave_scalar", benchmark_render_plasma_rave_scalar,
+     METH_VARARGS, "Scalar PlasmaRave reference kernel for the native SIMD benchmark."},
+    {"_benchmark_render_beat_ripple_scalar", benchmark_render_beat_ripple_scalar,
+     METH_VARARGS, "Scalar BeatRipple reference kernel for the native SIMD benchmark."},
+    {"_benchmark_render_aurora_candidate", benchmark_render_aurora_candidate,
+     METH_VARARGS, "Unreleased Aurora SIMD candidate for benchmark comparison."},
+    {"_benchmark_render_plasma_rave_candidate", benchmark_render_plasma_rave_candidate,
+     METH_VARARGS, "Unreleased PlasmaRave SIMD candidate for benchmark comparison."},
+    {"_benchmark_render_beat_ripple_candidate", benchmark_render_beat_ripple_candidate,
+     METH_VARARGS, "Unreleased BeatRipple SIMD candidate for benchmark comparison."},
     {NULL, NULL, 0, NULL}
 };
 
