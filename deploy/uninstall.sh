@@ -251,6 +251,7 @@ remove_directory "$PROJECT_STATIC_DIR"
 
 remove_file "$STATE_FILE"
 remove_directory /var/lib/lumistripe/update
+rm -f -- /var/lib/lumistripe/spotify-device-name.env
 remove_empty_directory "$STATE_DIR"
 remove_empty_directory /var/backups/lumistripe
 

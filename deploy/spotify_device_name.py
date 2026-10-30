@@ -8,7 +8,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-ENV_FILE = Path("/etc/lumistripe/lumistripe-spotify.env")
+BASE_ENV_FILE = Path("/etc/lumistripe/lumistripe-spotify.env")
+ENV_FILE = Path("/var/lib/lumistripe/spotify-device-name.env")
 SERVICE = "lumistripe-spotify.service"
 
 
@@ -24,27 +25,13 @@ def main() -> int:
     ):
         print("Spotify player name must be 1 to 64 printable characters", file=sys.stderr)
         return 2
-    if not ENV_FILE.is_file():
+    if not BASE_ENV_FILE.is_file():
         print("Spotify environment file is not installed", file=sys.stderr)
         return 1
 
-    original = ENV_FILE.read_text(encoding="utf-8")
+    ENV_FILE.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
     encoded_name = '"' + name.replace("\\", "\\\\").replace('"', '\\"') + '"'
-    lines = original.splitlines()
-    replaced = False
-    result: list[str] = []
-    for line in lines:
-        if line.startswith("LUMI_SPOTIFY_DEVICE_NAME="):
-            if not replaced:
-                result.append(f"LUMI_SPOTIFY_DEVICE_NAME={encoded_name}")
-                replaced = True
-        else:
-            result.append(line)
-    if not replaced:
-        result.append(f"LUMI_SPOTIFY_DEVICE_NAME={encoded_name}")
-    updated = "\n".join(result) + "\n"
-
-    metadata = ENV_FILE.stat()
+    updated = f"LUMI_SPOTIFY_DEVICE_NAME={encoded_name}\n"
     descriptor, temporary_name = tempfile.mkstemp(prefix=".spotify-env-", dir=ENV_FILE.parent)
     temporary = Path(temporary_name)
     try:
@@ -52,8 +39,8 @@ def main() -> int:
             stream.write(updated)
             stream.flush()
             os.fsync(stream.fileno())
-        os.chown(temporary, metadata.st_uid, metadata.st_gid)
-        os.chmod(temporary, metadata.st_mode & 0o777)
+        os.chown(temporary, 0, 0)
+        os.chmod(temporary, 0o644)
         os.replace(temporary, ENV_FILE)
     finally:
         temporary.unlink(missing_ok=True)

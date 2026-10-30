@@ -35,7 +35,8 @@ Change the dashboard title and Spotify Connect player name from
 **Devices → Startup → Names**. Saving a Spotify name updates the Soloist
 service configuration and requests a service restart so Connect advertises it.
 On appliances installed before this naming control was added, rerun
-`sudo ./deploy/install.sh` once to install its restricted restart helper.
+`sudo ./deploy/install.sh` once to install its restricted restart helper and
+the Soloist service override path.
 
 ## One-command installation
 
