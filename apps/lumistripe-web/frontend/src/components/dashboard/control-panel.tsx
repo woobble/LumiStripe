@@ -1,6 +1,6 @@
 import { lazy, memo, Suspense, useState } from "react"
 import type { ComponentProps } from "react"
-import { ActivityIcon, ListRestartIcon, Music2Icon, PaletteIcon, PowerIcon, RadioIcon, SunMediumIcon } from "lucide-react"
+import { ActivityIcon, ChevronDownIcon, ListRestartIcon, Music2Icon, PaletteIcon, PowerIcon, RadioIcon, SunMediumIcon } from "lucide-react"
 import { HexColorPicker } from "react-colorful"
 
 import { AnimationSheet } from "@/components/dashboard/animation-sheet"
@@ -8,6 +8,7 @@ import { SequencerPanel } from "@/components/dashboard/sequencer-panel"
 import { TransitionSettingsPanel } from "@/components/dashboard/transition-settings-panel"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Slider } from "@/components/ui/slider"
 import { Toggle } from "@/components/ui/toggle"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
@@ -318,8 +319,13 @@ export function ControlPanel({ controller }: { controller: DashboardController }
           )}
 
           {mode === "dynamic" && (
-            <div className="space-y-3 rounded-xl border border-white/5 bg-black/20 p-3">
-              <div className="text-sm font-medium">When music is idle</div>
+            <Collapsible defaultOpen={false} className="rounded-xl border border-white/5 bg-black/20 p-3">
+              <CollapsibleTrigger className="group flex w-full items-center justify-between text-left text-sm font-medium">
+                <span>When music is idle</span>
+                <ChevronDownIcon className="size-4 text-muted-foreground transition-transform group-data-[panel-open]:rotate-180" aria-hidden="true" />
+              </CollapsibleTrigger>
+              <CollapsibleContent className="pt-3">
+                <div className="space-y-3">
               <div className="flex items-end justify-between">
                 <span className="text-lg font-semibold tabular-nums">{idleBrightnessDraft ?? Math.round(musicIdle.brightness * 100)}%</span>
                 <span className="text-xs text-muted-foreground">Idle brightness</span>
@@ -339,7 +345,9 @@ export function ControlPanel({ controller }: { controller: DashboardController }
               </ToggleGroup>
               {musicIdle.mode === "solid" && <SolidModeSection key={targetId ?? "all"} label="Idle color" color={musicIdle.color} disabled={disabled} onCommit={(color) => controller.setMusicIdle({ ...musicIdle, color }, targetId)} />}
               {musicIdle.mode === "animation" && <StreamedAnimationSheet selectionOnly animations={animations} current={musicIdle.animation} disabled={disabled} stripeId={targetId} onSelect={(name) => controller.setMusicIdle({ ...musicIdle, animation: name }, targetId)} onLoadSettings={controller.getAnimationSettings} onSaveSettings={controller.setAnimationSettings} previewEnabled={false} previewTopology={state.stripe_topology} onEnablePreview={() => {}} onDisablePreview={() => {}} onEditorVisibilityChange={() => {}} />}
-            </div>
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
           )}
 
           {mode === "solid" ? (

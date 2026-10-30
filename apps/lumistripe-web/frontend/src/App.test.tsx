@@ -1297,12 +1297,20 @@ describe("App", () => {
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
     await user.click(screen.getByRole("button", { name: "Music" }))
+    const idleOptionsToggle = await screen.findByRole("button", { name: "When music is idle" })
+    expect(idleOptionsToggle).toHaveAttribute("aria-expanded", "false")
+    expect(screen.queryByText("Idle brightness")).not.toBeInTheDocument()
+    await user.click(idleOptionsToggle)
+    expect(idleOptionsToggle).toHaveAttribute("aria-expanded", "true")
     await user.click(await screen.findByRole("button", { name: "Solid color" }))
     await user.click(await screen.findByRole("button", { name: "Set idle color #EF4444" }))
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/music-idle", expect.objectContaining({ body: expect.stringContaining('"color":"#EF4444"') })))
     expect(screen.getByRole("button", { name: "Choose idle color" })).toBeInTheDocument()
 
     expect(screen.getByText("Idle brightness")).toBeInTheDocument()
+    await user.click(idleOptionsToggle)
+    expect(idleOptionsToggle).toHaveAttribute("aria-expanded", "false")
+    expect(screen.queryByText("Idle brightness")).not.toBeInTheDocument()
   })
 
   it("navigates to the diagnostics page and shows runtime health", async () => {
