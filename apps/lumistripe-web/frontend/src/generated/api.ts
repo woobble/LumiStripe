@@ -1806,6 +1806,11 @@ export interface components {
              */
             animation: string;
             /**
+             * Brightness
+             * @default 1
+             */
+            brightness: number;
+            /**
              * Color
              * @default #2060FF
              */
@@ -1826,6 +1831,11 @@ export interface components {
              * @default
              */
             animation: string;
+            /**
+             * Brightness
+             * @default 1
+             */
+            brightness: number;
             /**
              * Color
              * @default #2060FF

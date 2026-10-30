@@ -219,6 +219,7 @@ class MusicIdleState(BaseModel):
     mode: Literal["off", "solid", "animation"] = "off"
     color: str = Field(default="#2060FF", pattern=r"^#[0-9A-Fa-f]{6}$")
     animation: str = ""
+    brightness: float = Field(default=1.0, ge=0.0, le=1.0)
 
 
 class MusicIdleRequest(MusicIdleState):

@@ -196,7 +196,7 @@ export function useDashboard() {
     refresh,
     setMode: (mode: PlaybackMode, stripeId?: string, musicRecognitionEnabled?: boolean) =>
       runCommand("mode", () => dashboardApi.setMode(mode, undefined, stripeId, musicRecognitionEnabled)),
-    setMusicIdle: (idle: { mode: "off" | "solid" | "animation"; color: string; animation: string }, stripeId?: string) =>
+    setMusicIdle: (idle: { mode: "off" | "solid" | "animation"; color: string; animation: string; brightness: number }, stripeId?: string) =>
       runCommand("musicIdle", () => dashboardApi.setMusicIdle(idle, stripeId)),
     setBrightness: (brightness: number, stripeId?: string) =>
       runCommand("brightness", () => dashboardApi.setBrightness(brightness, stripeId)),

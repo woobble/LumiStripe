@@ -29,6 +29,9 @@ const modes: Array<{ value: PlaybackMode; label: string; icon: typeof RadioIcon 
   { value: "dynamic", label: "Music", icon: Music2Icon },
 ]
 
+const firstSliderValue = (value: number | readonly number[]) =>
+  typeof value === "number" ? value : value[0] ?? 100
+
 function StreamedLivePreview({
   state,
   onDisable,
@@ -118,6 +121,7 @@ const SolidModeSection = memo(function SolidModeSection({ color, disabled, label
 export function ControlPanel({ controller }: { controller: DashboardController }) {
   const { state, animations, pendingCommand } = controller
   const [brightnessDraft, setBrightnessDraft] = useState<number | null>(null)
+  const [idleBrightnessDraft, setIdleBrightnessDraft] = useState<number | null>(null)
   const [target, setTarget] = useState("all")
   const [previewEnabled, setPreviewEnabled] = useState(false)
   const [animationEditorVisible, setAnimationEditorVisible] = useState(false)
@@ -134,7 +138,7 @@ export function ControlPanel({ controller }: { controller: DashboardController }
   const solidColor = targetPlayback?.solid_color ?? state.solid_color
   const animation = targetPlayback?.animation ?? state.animation
   const musicRecognitionEnabled = targetPlayback?.music_recognition_enabled ?? state.music_recognition_enabled ?? true
-  const musicIdle = targetPlayback?.music_idle ?? state.music_idle ?? { mode: "off" as const, color: "#2060FF", animation: "" }
+  const musicIdle = targetPlayback?.music_idle ?? state.music_idle ?? { mode: "off" as const, color: "#2060FF", animation: "", brightness: 1 }
   const blackout = targetId
     ? (targetPlayback?.blackout ?? false)
     : state.stripe_topology.layout === "independent" && state.stripe_playback.length > 0
@@ -316,6 +320,15 @@ export function ControlPanel({ controller }: { controller: DashboardController }
           {mode === "dynamic" && (
             <div className="space-y-3 rounded-xl border border-white/5 bg-black/20 p-3">
               <div className="text-sm font-medium">When music is idle</div>
+              <div className="flex items-end justify-between">
+                <span className="text-lg font-semibold tabular-nums">{idleBrightnessDraft ?? Math.round(musicIdle.brightness * 100)}%</span>
+                <span className="text-xs text-muted-foreground">Idle brightness</span>
+              </div>
+              <Slider aria-label="Idle brightness" min={0} max={100} step={1} value={[idleBrightnessDraft ?? Math.round(musicIdle.brightness * 100)]} disabled={disabled || pendingCommand === "musicIdle"} onValueChange={(value) => setIdleBrightnessDraft(firstSliderValue(value))} onValueCommitted={(value) => {
+                const next = firstSliderValue(value)
+                setIdleBrightnessDraft(next)
+                void controller.setMusicIdle({ ...musicIdle, brightness: next / 100 }, targetId).finally(() => setIdleBrightnessDraft(null))
+              }} className="py-2 [&_[data-slot=slider-track]]:h-2 [&_[data-slot=slider-thumb]]:size-5" />
               <ToggleGroup aria-label="Music idle mode" value={[musicIdle.mode]} onValueChange={(values) => {
                 const next = values[0] as "off" | "solid" | "animation" | undefined
                 if (next && next !== musicIdle.mode) void controller.setMusicIdle({ ...musicIdle, mode: next, animation: musicIdle.animation || animations[0]?.name || "" }, targetId)

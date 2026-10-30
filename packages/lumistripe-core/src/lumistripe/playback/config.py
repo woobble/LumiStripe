@@ -72,7 +72,7 @@ class PlaybackConfig:
     )
     activity: MusicActivityConfig = field(default_factory=MusicActivityConfig)
     idle_color: Color = field(default_factory=lambda: Rgb(32, 96, 255))
-    idle_brightness: float = 0.08
+    idle_brightness: float = 1.0
     transition_duration_s: float = 0.3
     dynamic_response: float = 0.65
     effects: EffectSchedulerConfig = field(default_factory=EffectSchedulerConfig)

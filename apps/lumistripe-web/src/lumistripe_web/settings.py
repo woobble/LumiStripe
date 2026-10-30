@@ -40,6 +40,7 @@ class MusicIdleSettings:
     mode: Literal["off", "solid", "animation"] = "off"
     color: str = "#2060FF"
     animation: str = ""
+    brightness: float = 1.0
 
     def __post_init__(self) -> None:
         if self.mode not in {"off", "solid", "animation"}:
@@ -48,6 +49,8 @@ class MusicIdleSettings:
             raise ValueError("invalid music idle color")
         if not isinstance(self.animation, str):
             raise TypeError("invalid music idle animation")
+        if isinstance(self.brightness, bool) or not math.isfinite(self.brightness) or not 0.0 <= self.brightness <= 1.0:
+            raise ValueError("music idle brightness must be between zero and one")
         if self.animation and self.animation not in {item.name for item in animation_catalog()}:
             raise ValueError("unknown music idle animation")
         if self.mode == "animation" and not self.animation:
@@ -639,7 +642,7 @@ class CalibrationSettingsStore:
         )
         payload = {
             "version": SETTINGS_VERSION,
-            "music_idle": {scope: {"mode": value.mode, "color": value.color, "animation": value.animation} for scope, value in settings.music_idle.items()},
+            "music_idle": {scope: {"mode": value.mode, "color": value.color, "animation": value.animation, "brightness": value.brightness} for scope, value in settings.music_idle.items()},
             "color_correction": {
                 name: {
                     "red": settings.color_corrections.get(name, ColorCorrection()).red,

@@ -1301,6 +1301,8 @@ describe("App", () => {
     await user.click(await screen.findByRole("button", { name: "Set idle color #EF4444" }))
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/music-idle", expect.objectContaining({ body: expect.stringContaining('"color":"#EF4444"') })))
     expect(screen.getByRole("button", { name: "Choose idle color" })).toBeInTheDocument()
+
+    expect(screen.getByText("Idle brightness")).toBeInTheDocument()
   })
 
   it("navigates to the diagnostics page and shows runtime health", async () => {

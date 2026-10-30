@@ -1672,7 +1672,12 @@ class RuntimeWorker:
             elif command.name == "music_idle":
                 request = _expect(command.value, MusicIdleRequest)
                 try:
-                    idle_value = MusicIdleSettings(request.mode, request.color, request.animation)
+                    idle_value = MusicIdleSettings(
+                        request.mode,
+                        request.color,
+                        request.animation,
+                        request.brightness,
+                    )
                 except (TypeError, ValueError) as exc:
                     raise RuntimeCommandError(str(exc)) from exc
                 targets = self._target_playbacks(request.stripe_id)
@@ -1685,7 +1690,12 @@ class RuntimeWorker:
                     self._settings_store.save_music_idle(updated)
                 self._music_idle = updated
                 for _, playback in targets:
-                    playback.set_idle(idle_value.mode, _rgb_from_hex(idle_value.color), idle_value.animation)
+                    playback.set_idle(
+                        idle_value.mode,
+                        _rgb_from_hex(idle_value.color),
+                        idle_value.animation,
+                        idle_value.brightness,
+                    )
                 result = self._publish(running=True)
             elif command.name == "brightness":
                 target = _expect(command.value, _TargetCommand)
@@ -1830,7 +1840,12 @@ class RuntimeWorker:
 
     def _apply_music_idle(self, playback: PlaybackEngine, scope: str) -> None:
         value = self._music_idle.get(scope, MusicIdleSettings())
-        playback.set_idle(value.mode, _rgb_from_hex(value.color), value.animation)
+        playback.set_idle(
+            value.mode,
+            _rgb_from_hex(value.color),
+            value.animation,
+            value.brightness,
+        )
 
     def _target_gates(self, stripe_id: str | None) -> tuple[OutputGateController, ...]:
         assert self._controller is not None
@@ -3671,7 +3686,7 @@ profile.audio_config(microphone=True),
             blackout=controller.blackout if controller is not None else False,
             music_active=self.playback.music_active,
             music_recognition_enabled=self.playback.music_recognition_enabled,
-            music_idle=MusicIdleState(**{name: getattr(self._music_idle.get(SHARED_ANIMATION_SETTINGS_KEY, MusicIdleSettings()), name) for name in ("mode", "color", "animation")}),
+            music_idle=MusicIdleState(**{name: getattr(self._music_idle.get(SHARED_ANIMATION_SETTINGS_KEY, MusicIdleSettings()), name) for name in ("mode", "color", "animation", "brightness")}),
             music_gate=self.playback.music_gate_state.value,
             bpm=self._music_features.bpm,
             audio_status=self._audio_status,
@@ -3937,7 +3952,7 @@ profile.audio_config(microphone=True),
                     blackout=gate.blackout if gate is not None else False,
                     music_active=playback.music_active,
                     music_recognition_enabled=playback.music_recognition_enabled,
-                    music_idle=MusicIdleState(mode=playback.idle_mode, color=_color_to_hex(playback.idle_color), animation=playback.idle_animation),
+                    music_idle=MusicIdleState(mode=playback.idle_mode, color=_color_to_hex(playback.idle_color), animation=playback.idle_animation, brightness=playback.idle_brightness),
                     sequencer_diagnostics=self._sequencer_diagnostics(playback),
                     sequence_playback=self._sequence_playback_diagnostics(playback),
                 )

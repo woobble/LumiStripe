@@ -29,13 +29,14 @@ def test_music_idle_settings_persist_per_target(tmp_path: Path) -> None:
     store = CalibrationSettingsStore(tmp_path / "settings.json")
     assert store.load_all()[0].music_idle == {}
     values = {
-        "shared": MusicIdleSettings("solid", "#123456"),
+        "shared": MusicIdleSettings("solid", "#123456", brightness=0.35),
         "stripe-1": MusicIdleSettings("animation", "#ABCDEF", animation_catalog()[0].name),
     }
     store.save_music_idle(values)
     loaded, warning = store.load_all()
     assert warning is None
     assert loaded.music_idle == values
+    assert loaded.music_idle["shared"].brightness == pytest.approx(0.35)
 
 
 @pytest.mark.parametrize(

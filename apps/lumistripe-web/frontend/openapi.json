@@ -2056,6 +2056,13 @@
             "title": "Animation",
             "type": "string"
           },
+          "brightness": {
+            "default": 1.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Brightness",
+            "type": "number"
+          },
           "color": {
             "default": "#2060FF",
             "pattern": "^#[0-9A-Fa-f]{6}$",
@@ -2093,6 +2100,13 @@
             "default": "",
             "title": "Animation",
             "type": "string"
+          },
+          "brightness": {
+            "default": 1.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Brightness",
+            "type": "number"
           },
           "color": {
             "default": "#2060FF",
