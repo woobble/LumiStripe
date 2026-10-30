@@ -22,7 +22,6 @@ jobs:
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
     env:
-      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       # The full suite imports and exercises audio, GPIO, and SPI native
       # backends. Release builds are covered separately below with the default
       # pure-Python profile and each supported native profile.
@@ -62,9 +61,22 @@ jobs:
       - name: Test Python
         run: uv run python -m pytest -q --junitxml=junit.xml -o junit_family=legacy
 
+      - name: Check device-optimized native validation
+        if: matrix.python-version == '3.12'
+        env:
+          LUMISTRIPE_NATIVE_OPTIMIZATION: "1"
+        run: |
+          uv sync --locked --all-extras --dev --no-cache --reinstall-package lumistripe-core
+          uv run python -m pytest -q --no-cov \
+            packages/lumistripe-core/tests/test_audio.py::test_native_audio_rejects_invalid_configuration_and_unaligned_buffers \
+            packages/lumistripe-core/tests/test_audio.py::test_native_audio_nonfinite_samples_do_not_poison_statistics \
+            packages/lumistripe-core/tests/test_render_kernels.py::test_native_tunnel_rejects_nonfinite_geometry
+
       - name: Upload coverage to Codecov
-        if: matrix.python-version == '3.12' && env.CODECOV_TOKEN != ''
+        if: matrix.python-version == '3.12' && github.event_name != 'pull_request' && env.CODECOV_TOKEN != ''
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         with:
           files: ./coverage.xml
           token: ${{ env.CODECOV_TOKEN }}
@@ -73,8 +85,10 @@ jobs:
           fail_ci_if_error: true
 
       - name: Upload test results to Codecov
-        if: matrix.python-version == '3.12' && !cancelled() && env.CODECOV_TOKEN != ''
+        if: matrix.python-version == '3.12' && !cancelled() && github.event_name != 'pull_request' && env.CODECOV_TOKEN != ''
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         with:
           files: ./junit.xml
           token: ${{ env.CODECOV_TOKEN }}
@@ -212,8 +226,7 @@ jobs:
               )
           PY
 
-      - name: Verify render source is included in the source distribution
-        if: matrix.profile == 'render' || matrix.profile == 'all'
+      - name: Verify native sources are included in the source distribution
         run: |
           python - <<'PY'
           import tarfile
@@ -221,8 +234,50 @@ jobs:
 
           archive = next(Path("dist", "${{ matrix.profile }}").glob("*.tar.gz"))
           with tarfile.open(archive, "r:gz") as source:
-              if not any(name.endswith("/src/lumistripe/render/_native.c") for name in source.getnames()):
-                  raise SystemExit("render extension source is missing from the sdist")
+              names = source.getnames()
+              required = (
+                  "_native.c", "native_common.h", "native_common.c", "native_composite.c",
+                  "native_particles.c", "native_patterns.c", "native_reactive.c",
+              )
+              missing = [name for name in required if not any(
+                  entry.endswith(f"/src/lumistripe/render/{name}") for entry in names
+              )]
+              if missing:
+                  raise SystemExit(f"render extension sources missing from sdist: {missing}")
+              other_sources = (
+                  "audio/_audio.c", "audio/kissfft/kiss_fft.c", "audio/kissfft/kiss_fftr.c",
+                  "audio/kissfft/kiss_fft.h", "audio/kissfft/kiss_fftr.h",
+                  "gpio/_gpiomem.c", "gpio/_sm16716.c",
+              )
+              missing = [name for name in other_sources if not any(
+                  entry.endswith(f"/src/lumistripe/{name}") for entry in names
+              )]
+              if missing:
+                  raise SystemExit(f"native extension sources missing from sdist: {missing}")
+          PY
+
+      - name: Build all native extensions from the pure-profile sdist
+        if: matrix.profile == 'none'
+        env:
+          LUMISTRIPE_BUILD_EXTENSIONS: all
+        run: |
+          uv build --wheel dist/none/*.tar.gz --out-dir dist/cross-profile
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          wheel = next(Path("dist/cross-profile").glob("*.whl"))
+          with ZipFile(wheel) as archive:
+              actual = {
+                  f"{Path(name).parent.as_posix()}/{Path(name).name.split('.')[0]}"
+                  for name in archive.namelist() if name.endswith(".so")
+              }
+          expected = {
+              "lumistripe/audio/_audio", "lumistripe/gpio/_gpiomem",
+              "lumistripe/gpio/_sm16716", "lumistripe/render/_native",
+          }
+          if actual != expected:
+              raise SystemExit(f"cross-profile wheel has unexpected extensions: {sorted(actual)}")
           PY
 
   raspberry-pi:

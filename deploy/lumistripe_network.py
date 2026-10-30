@@ -16,6 +16,7 @@ from typing import Any
 NETWORK_CONNECTION_DIR = Path("/etc/NetworkManager/system-connections")
 INTERFACE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,14}$")
 WIFI_CONNECTION_PREFIX = "lumistripe-wifi-"
+MAX_REQUEST_BYTES = 8192
 
 
 class NetworkOperationError(Exception):
@@ -441,11 +442,14 @@ def main() -> int:
     if len(sys.argv) != 1:
         return 2
     try:
-        payload = json.load(sys.stdin)
+        request = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
+        if len(request) > MAX_REQUEST_BYTES:
+            raise NetworkOperationError("invalid", "The network request is too large.")
+        payload = json.loads(request)
         response = dispatch(payload)
     except NetworkOperationError as exc:
         response = {"ok": False, "error_code": exc.code, "error": str(exc)}
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError, UnicodeEncodeError):
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError, UnicodeEncodeError, RecursionError):
         response = {
             "ok": False,
             "error_code": "invalid",

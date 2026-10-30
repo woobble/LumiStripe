@@ -7,7 +7,7 @@ After=network-online.target
 Type=oneshot
 User=root
 WorkingDirectory=@LUMI_PROJECT_DIR@
-Environment=HOME=@LUMI_SERVICE_HOME@
+Environment=HOME=/root
 Environment=LUMI_PROJECT_DIR=@LUMI_PROJECT_DIR@
 Environment=LUMI_SERVICE_USER=@LUMI_SERVICE_USER@
 Environment=LUMI_UPDATE_STATE_FILE=/var/lib/lumistripe/update/status.json

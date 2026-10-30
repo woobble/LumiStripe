@@ -55,7 +55,7 @@ class CyclingConfig:
     seed: int | None = None
 
     def __post_init__(self) -> None:
-        if self.interval_s <= 0.0:
+        if not isfinite(self.interval_s) or self.interval_s <= 0.0:
             raise ValueError("cycle interval must be greater than zero")
 
 

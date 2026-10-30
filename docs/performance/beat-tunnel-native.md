@@ -18,8 +18,9 @@ not include audio capture or physical SPI transmission.
 From the repository root on Linux:
 
 ```bash
-LUMISTRIPE_BUILD_EXTENSIONS=render uv run --with setuptools \
-  python packages/lumistripe-core/setup.py build_ext --inplace
+LUMISTRIPE_BUILD_EXTENSIONS=render uv run \
+  --directory packages/lumistripe-core --with setuptools \
+  python setup.py build_ext --inplace
 UV_CACHE_DIR=/tmp/lumistripe-uv uv run python \
   packages/lumistripe-core/benchmarks/benchmark_beat_tunnel.py \
   --iterations 300 --warmup 40 --rounds 3

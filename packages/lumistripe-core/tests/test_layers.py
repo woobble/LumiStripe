@@ -817,6 +817,39 @@ def test_player_crossfades_automatic_switches() -> None:
     np.testing.assert_array_equal(stripe.pixels()[:, :3], [[0, 0, 255]] * 4)
 
 
+@pytest.mark.parametrize("now_s", [float("nan"), float("inf"), -float("inf")])
+def test_transition_rejects_non_finite_timestamps_before_mutating_state(
+    now_s: float,
+) -> None:
+    player = AnimationPlayer(transition_ms=100)
+    player.add(Red(), 50, 10)
+    player.add(Blue(), 50, 10)
+    stripe = Stripe(2)
+    player.step(stripe, now_s=0.0)
+    initial_pixels = stripe.pixels().copy()
+
+    with pytest.raises(ValueError, match="now_s must be finite"):
+        player.set_index(1, now_s=now_s)
+    assert player.current_index() == 0
+    assert not player.transition_active
+
+    with pytest.raises(ValueError, match="now_s must be finite"):
+        player.begin_transition(duration_ms=100, now_s=now_s)
+    assert not player.transition_active
+
+    player.set_index(1, now_s=1.0)
+    frame = player.frame
+    with pytest.raises(ValueError, match="now_s must be finite"):
+        player.step(stripe, now_s=now_s)
+    assert player.frame == frame
+    np.testing.assert_array_equal(stripe.pixels(), initial_pixels)
+
+    with pytest.raises(ValueError, match="now_s must be finite"):
+        player.apply_transition(stripe, now_s=now_s)
+    with pytest.raises(ValueError, match="now_s must be finite"):
+        player.transition_progress_at(now_s)
+
+
 def test_interrupted_transition_starts_from_currently_visible_frame() -> None:
     player = AnimationPlayer(transition_ms=100)
     player.add(Red(), 50, 10)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from concurrent.futures import Future
 from pathlib import Path
 
 import lumistripe_web.runtime as runtime_module
@@ -37,11 +38,13 @@ from lumistripe_web.runtime.cadence import (
     DASHBOARD_STATE_INTERVAL_SECONDS,
     PREVIEW_FRAME_INTERVAL_SECONDS,
 )
+from lumistripe_web.runtime.commands import _Command
 from lumistripe_web.runtime.state import _CalibrationSession
 from lumistripe_web.runtime.worker import (
     RuntimeWorker,
     _frame_deadline_missed,
     _FrameTimingWindow,
+    _next_frame_due,
 )
 from lumistripe_web.settings import (
     AudioTuningProfile,
@@ -51,6 +54,7 @@ from lumistripe_web.settings import (
     StripeTopologySettings,
     TransitionSettings,
 )
+from lumistripe_web.spotify import SpotifyStatus
 
 
 class TrackingStripe(Stripe):
@@ -83,6 +87,19 @@ class FailingStripe(TrackingStripe):
         raise RuntimeError("render failed")
 
 
+class RecoveringStripe(TrackingStripe):
+    def __init__(self, length: int, *, failures: int = 1) -> None:
+        super().__init__(length)
+        self.failures = failures
+        self.flush_attempts = 0
+
+    def flush(self) -> None:
+        self.flush_attempts += 1
+        if self.flush_attempts <= self.failures:
+            raise OSError("device temporarily unavailable")
+        super().flush()
+
+
 class BlockingStripe(TrackingStripe):
     def __init__(self, length: int) -> None:
         super().__init__(length)
@@ -101,6 +118,7 @@ class FakeAudioInput:
         self.config = config
         self.closed = False
         self.sequence = 0
+        self.last_callback_age: float | None = 0.0
 
     def read(self) -> AudioFrame:
         self.sequence += 1
@@ -118,7 +136,7 @@ class FakeAudioInput:
     def health(self) -> AudioInputHealth:
         return AudioInputHealth(
             callback_count=self.sequence,
-            last_callback_age=0.0,
+            last_callback_age=self.last_callback_age,
             last_frame_age=0.0,
             processor=AudioProcessorStats(input_rms=0.12, normalization_gain=1.4),
         )
@@ -131,6 +149,72 @@ class FakeAudioInput:
 
     def close(self) -> None:
         self.closed = True
+
+
+def test_stalled_audio_monitor_reopens_capture_after_callback_grace(
+    tmp_path: Path,
+) -> None:
+    opened: list[FakeAudioInput] = []
+
+    def audio_factory(device, config):
+        del device
+        audio_input = FakeAudioInput("USB Mic", config)
+        opened.append(audio_input)
+        return audio_input
+
+    worker = RuntimeWorker(
+        RuntimeSettings(
+            audio_source="mic",
+            audio_device="USB Mic",
+            settings_file=tmp_path / "settings.json",
+        ),
+        audio_factory=audio_factory,
+    )
+    try:
+        worker._initialize_audio_monitor()
+        assert len(opened) == 1
+        first = opened[0]
+        first.last_callback_age = 0.75
+
+        worker._maintain_audio_monitor(force=True)
+
+        assert first.closed
+        assert len(opened) == 2
+        assert worker._audio_input is opened[1]
+        assert worker._audio_monitor_error is None
+    finally:
+        worker._cleanup()
+
+
+def test_audio_monitor_startup_grace_keeps_new_stream_open(
+    tmp_path: Path,
+) -> None:
+    opened: list[FakeAudioInput] = []
+
+    def audio_factory(device, config):
+        del device
+        audio_input = FakeAudioInput("USB Mic", config)
+        audio_input.last_callback_age = None
+        opened.append(audio_input)
+        return audio_input
+
+    worker = RuntimeWorker(
+        RuntimeSettings(
+            audio_source="mic",
+            audio_device="USB Mic",
+            settings_file=tmp_path / "settings.json",
+        ),
+        audio_factory=audio_factory,
+    )
+    try:
+        worker._initialize_audio_monitor()
+        worker._maintain_audio_monitor(force=True)
+
+        assert len(opened) == 1
+        assert opened[0].closed is False
+        assert worker._audio_input is opened[0]
+    finally:
+        worker._cleanup()
 
 
 def test_output_gate_blackout_preserves_latest_buffered_frame() -> None:
@@ -155,6 +239,44 @@ def test_output_gate_blackout_preserves_latest_buffered_frame() -> None:
     assert gate.last_successful_update_age_seconds is not None
 
 
+def test_output_gate_retries_transient_io_failures_with_backoff() -> None:
+    stripe = RecoveringStripe(2)
+    gate = OutputGateController(stripe)
+
+    gate.flush()
+    assert gate.last_error == "OSError: device temporarily unavailable"
+    assert stripe.flush_attempts == 1
+
+    gate.flush()
+    assert stripe.flush_attempts == 1
+
+    time.sleep(0.11)
+    gate.flush()
+    assert stripe.flush_attempts == 2
+    assert gate.last_error is None
+    assert gate.last_successful_update_at is not None
+
+
+def test_output_gate_restores_frame_when_blackout_write_fails() -> None:
+    class FailingForceFlushStripe(TrackingStripe):
+        def force_flush(self) -> None:
+            self.force_flush_count += 1
+            if self.force_flush_count == 1:
+                raise OSError("GPIO line temporarily unavailable")
+            super().force_flush()
+
+    stripe = FailingForceFlushStripe(1)
+    gate = OutputGateController(stripe)
+    gate.fill(Rgb(10, 20, 30))
+
+    with pytest.raises(OSError, match="temporarily unavailable"):
+        gate.set_blackout(True)
+
+    assert gate.blackout is False
+    assert gate.last_error == "OSError: GPIO line temporarily unavailable"
+    np.testing.assert_array_equal(stripe.pixels()[0], np.array([10, 20, 30, 255]))
+
+
 def test_frame_deadline_uses_the_effective_animation_interval() -> None:
     assert not _frame_deadline_missed(
         due_at_s=0.0,
@@ -166,6 +288,24 @@ def test_frame_deadline_uses_the_effective_animation_interval() -> None:
         completed_at_s=0.020,
         expected_delay_s=0.010,
     )
+
+
+def test_next_frame_schedule_preserves_period_and_skips_catchup() -> None:
+    assert _next_frame_due(
+        due_at_s=10.0,
+        completed_at_s=10.004,
+        expected_delay_s=0.020,
+    ) == pytest.approx(10.020)
+    assert _next_frame_due(
+        due_at_s=10.0,
+        completed_at_s=10.025,
+        expected_delay_s=0.020,
+    ) == pytest.approx(10.025)
+    assert _next_frame_due(
+        due_at_s=10.0,
+        completed_at_s=10.004,
+        expected_delay_s=0.010,
+    ) == pytest.approx(10.016)
 
 
 def test_frame_timing_window_prunes_old_outcomes() -> None:
@@ -689,6 +829,138 @@ def test_brightness_commands_coalesce_while_a_frame_is_in_progress() -> None:
         runtime.stop()
 
 
+def test_command_submission_is_rejected_once_shutdown_begins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stripe = BlockingStripe(8)
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(pixels=8), controller_factory=lambda settings: stripe
+    )
+    runtime.start()
+    assert stripe.entered.wait(1)
+    reached_admission = threading.Event()
+    original_key = runtime._coalesce_key
+
+    def signal_admission(name: str, value: object) -> tuple[str, str | None] | None:
+        reached_admission.set()
+        return original_key(name, value)
+
+    monkeypatch.setattr(runtime, "_coalesce_key", signal_admission)
+    futures: list[Future[object]] = []
+    submitter = threading.Thread(target=lambda: futures.append(runtime.set_brightness(0.5)))
+    try:
+        with runtime._command_lock:
+            submitter.start()
+            assert reached_admission.wait(1)
+            runtime._stop_event.set()
+        submitter.join(1)
+        assert not submitter.is_alive()
+        with pytest.raises(worker_implementation.RuntimeUnavailableError):
+            futures[0].result(timeout=1)
+    finally:
+        stripe.release.set()
+        runtime.stop()
+
+
+def test_full_command_queue_rejects_new_work_and_does_not_block_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(worker_implementation, "MAX_PENDING_COMMANDS", 2)
+    stripe = BlockingStripe(8)
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(pixels=8), controller_factory=lambda settings: stripe
+    )
+    runtime.start()
+    assert stripe.entered.wait(1)
+    queued = [runtime.set_mode(PlaybackMode.STATIC) for _ in range(2)]
+    rejected = runtime.set_mode(PlaybackMode.STATIC)
+    with pytest.raises(worker_implementation.RuntimeUnavailableError, match="queue is full"):
+        rejected.result(timeout=1)
+    stopper = threading.Thread(target=runtime.stop)
+    stopper.start()
+    assert runtime._stop_event.wait(1)
+    stripe.release.set()
+    stopper.join(2)
+    assert not stopper.is_alive()
+    for future in queued:
+        with pytest.raises(worker_implementation.RuntimeUnavailableError):
+            future.result(timeout=1)
+
+
+def test_cleanup_continues_and_rejects_pending_after_backend_stop_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stripe = BlockingStripe(8)
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(pixels=8), controller_factory=lambda settings: stripe
+    )
+    runtime.start()
+    assert stripe.entered.wait(1)
+    original_bluetooth_stop = runtime._bluetooth.stop
+    original_spotify_stop = runtime._spotify.stop
+    spotify_stopped = threading.Event()
+
+    def fail_bluetooth_stop() -> None:
+        original_bluetooth_stop()
+        raise RuntimeError("bluetooth stop failed")
+
+    def stop_spotify() -> None:
+        original_spotify_stop()
+        spotify_stopped.set()
+
+    monkeypatch.setattr(runtime._bluetooth, "stop", fail_bluetooth_stop)
+    monkeypatch.setattr(runtime._spotify, "stop", stop_spotify)
+    pending = runtime.set_mode(PlaybackMode.STATIC)
+    stopper = threading.Thread(target=runtime.stop)
+    stopper.start()
+    assert runtime._stop_event.wait(1)
+    stripe.release.set()
+    stopper.join(2)
+    assert not stopper.is_alive()
+    with pytest.raises(worker_implementation.RuntimeUnavailableError):
+        pending.result(timeout=1)
+    assert spotify_stopped.is_set()
+    assert stripe.close_count == 1
+    assert runtime.snapshot().running is False
+    assert runtime.snapshot().error == "bluetooth stop failed"
+
+
+def test_coalesced_brightness_waiters_are_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(worker_implementation, "MAX_COALESCED_COMMAND_WAITERS", 2)
+    stripe = BlockingStripe(8)
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(pixels=8), controller_factory=lambda settings: stripe
+    )
+    runtime.start()
+    assert stripe.entered.wait(1)
+    first = runtime.set_brightness(0.2)
+    second = runtime.set_brightness(0.8)
+    rejected = runtime.set_brightness(0.4)
+    try:
+        with pytest.raises(worker_implementation.RuntimeUnavailableError, match="queue is full"):
+            rejected.result(timeout=1)
+        stripe.release.set()
+        assert first.result(timeout=1).brightness == pytest.approx(0.8)
+        assert second.result(timeout=1).brightness == pytest.approx(0.8)
+    finally:
+        stripe.release.set()
+        runtime.stop()
+
+
+def test_cancelled_future_during_completion_does_not_break_coalesced_commands() -> None:
+    class CancellingFuture(Future[object]):
+        def set_result(self, result: object) -> None:
+            self.cancel()
+            super().set_result(result)
+
+    cancelled = CancellingFuture()
+    remaining: Future[object] = Future()
+    command = _Command("brightness", None, cancelled, [remaining])
+    RuntimeWorker._resolve_command(command, result="applied")
+    assert cancelled.cancelled()
+    assert remaining.result(timeout=1) == "applied"
+
+
 def test_fatal_worker_failure_invokes_exit_callback_after_cleanup() -> None:
     stripe = FailingStripe(8)
     exits: list[int] = []
@@ -707,6 +979,161 @@ def test_fatal_worker_failure_invokes_exit_callback_after_cleanup() -> None:
         assert stripe.close_count == 1
     finally:
         runtime.stop()
+
+
+@pytest.mark.parametrize("temporary_test", [False, True])
+def test_failed_topology_rollback_stops_worker_and_requests_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    temporary_test: bool,
+) -> None:
+    exits: list[int] = []
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(pixels=4, settings_file=tmp_path / "settings.json"),
+        fatal_exit=exits.append,
+    )
+    runtime.start()
+
+    def fail_build(topology: StripeTopologySettings) -> None:
+        raise OSError("forced topology build failure")
+
+    monkeypatch.setattr(runtime, "_build_topology", fail_build)
+    topology = StripeTopologySettings(
+        outputs=(StripeOutputSettings(id="draft", name="Draft", pixels=4),)
+    )
+    try:
+        operation = (
+            runtime.test_stripe("draft", "identify", topology)
+            if temporary_test
+            else runtime.apply_stripe_topology(topology)
+        )
+        with pytest.raises(RuntimeCommandError, match="rollback failed"):
+            operation.result(timeout=1)
+
+        deadline = time.monotonic() + 1
+        while not exits and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert exits == [1]
+        assert runtime.healthy is False
+        assert runtime.snapshot().running is False
+        assert "rollback failed" in (runtime.snapshot().error or "")
+        with pytest.raises(worker_implementation.RuntimeUnavailableError):
+            runtime.set_brightness(0.5).result(timeout=1)
+    finally:
+        runtime.stop()
+
+
+@pytest.mark.parametrize("temporary_test", [False, True])
+def test_topology_cleanup_failure_restores_previous_outputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    temporary_test: bool,
+) -> None:
+    stripes: list[TrackingStripe] = []
+
+    class FirstCloseFailingStripe(TrackingStripe):
+        def __init__(self, length: int) -> None:
+            super().__init__(length)
+            stripes.append(self)
+
+        def close(self) -> None:
+            super().close()
+            if self is stripes[0]:
+                raise OSError("old output close failed")
+
+    monkeypatch.setattr(worker_implementation, "Stripe", FirstCloseFailingStripe)
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(pixels=4, settings_file=tmp_path / "settings.json")
+    )
+    runtime.start()
+    original_topology = runtime.snapshot().stripe_topology
+    topology = StripeTopologySettings(
+        outputs=(StripeOutputSettings(id="draft", name="Draft", pixels=4),)
+    )
+    try:
+        operation = (
+            runtime.test_stripe("draft", "red", topology)
+            if temporary_test
+            else runtime.apply_stripe_topology(topology)
+        )
+        with pytest.raises(RuntimeCommandError, match="could not release current outputs"):
+            operation.result(timeout=1)
+
+        assert runtime.healthy is True
+        assert runtime.snapshot().running is True
+        assert runtime.snapshot().stripe_topology == original_topology
+        assert stripes[0].close_count == 1
+        assert len(stripes) >= 2
+        assert stripes[1].close_count == 0
+    finally:
+        runtime.stop()
+
+
+def test_transient_output_io_failure_keeps_runtime_running_and_reports_output_error() -> None:
+    stripe = RecoveringStripe(8, failures=5)
+    exits: list[int] = []
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(pixels=8),
+        controller_factory=lambda settings: stripe,
+        fatal_exit=exits.append,
+    )
+    runtime.start()
+    try:
+        deadline = time.monotonic() + 5.0
+        outputs = ()
+        while time.monotonic() < deadline:
+            state = runtime.snapshot()
+            outputs = state.stripe_topology.outputs
+            if outputs and outputs[0].error is not None:
+                break
+            time.sleep(0.01)
+        assert runtime.snapshot().running is True
+        assert outputs[0].error == "OSError: device temporarily unavailable"
+        assert exits == []
+
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            state = runtime.snapshot()
+            outputs = state.stripe_topology.outputs
+            if outputs and outputs[0].error is None and stripe.flush_attempts >= 2:
+                break
+            time.sleep(0.01)
+        assert runtime.snapshot().running is True
+        assert outputs[0].error is None
+        assert stripe.flush_attempts >= 2
+    finally:
+        runtime.stop()
+    assert exits == []
+
+
+def test_startup_timeout_stops_late_worker_and_requests_process_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runtime_module, "WORKER_STOP_GRACE_SECONDS", 0.01)
+    entered = threading.Event()
+    release = threading.Event()
+    stripe = TrackingStripe(8)
+    exits: list[int] = []
+
+    def blocked_factory(settings: RuntimeSettings) -> TrackingStripe:
+        entered.set()
+        release.wait()
+        return stripe
+
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(pixels=8), controller_factory=blocked_factory, fatal_exit=exits.append
+    )
+    try:
+        with pytest.raises(worker_implementation.RuntimeUnavailableError, match="startup timed out"):
+            runtime.start(timeout=0.01)
+        assert entered.is_set()
+        assert runtime._stop_event.is_set()
+        assert exits == [1]
+    finally:
+        release.set()
+        runtime.stop(timeout=2)
+    assert stripe.close_count == 1
+    assert runtime.snapshot().running is False
 
 
 def test_stalled_worker_invokes_exit_callback(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -735,6 +1162,59 @@ def test_stalled_worker_invokes_exit_callback(monkeypatch: pytest.MonkeyPatch) -
         stripe.release.set()
         runtime.stop(timeout=1)
     assert "stopped making progress" in (runtime.snapshot().error or "")
+
+
+@pytest.mark.parametrize(
+    "command_limit,expect_exit,blackout",
+    [(0.5, False, False), (0.05, True, False), (0.05, True, True)],
+)
+def test_watchdog_distinguishes_slow_commands_from_stalled_commands(
+    monkeypatch: pytest.MonkeyPatch, command_limit: float, expect_exit: bool, blackout: bool
+) -> None:
+    monkeypatch.setattr(runtime_module, "WORKER_STARTUP_GRACE_SECONDS", 0.01)
+    monkeypatch.setattr(runtime_module, "WORKER_WATCHDOG_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(runtime_module, "WORKER_STOP_GRACE_SECONDS", 0.01)
+    monkeypatch.setattr(runtime_module, "FRAME_STALL_GRACE_SECONDS", 0.01)
+    monkeypatch.setattr(runtime_module, "FRAME_STALL_MIN_SECONDS", 0.02)
+    monkeypatch.setattr(runtime_module, "FRAME_STALL_MAX_SECONDS", 0.05)
+    entered = threading.Event()
+    release = threading.Event()
+    exited = threading.Event()
+
+    class SlowSpotify:
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+        def status(self) -> SpotifyStatus:
+            return SpotifyStatus(configured=True, connected=True)
+
+        def control(self, action: str, value: object | None = None) -> SpotifyStatus:
+            entered.set()
+            release.wait()
+            return self.status()
+
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(pixels=8),
+        spotify_manager=SlowSpotify(),
+        fatal_exit=lambda code: exited.set(),
+    )
+    monkeypatch.setattr(worker_implementation, "COMMAND_STALL_MAX_SECONDS", command_limit)
+    runtime.start()
+    try:
+        if blackout:
+            runtime.set_blackout(True).result(timeout=1)
+        future = runtime.control_spotify("play")
+        assert entered.wait(1)
+        assert exited.wait(0.15) is expect_exit
+        release.set()
+        if not expect_exit:
+            future.result(timeout=1)
+    finally:
+        release.set()
+        runtime.stop(timeout=2)
 
 
 def test_microphone_monitor_stays_active_outside_dynamic_mode_and_saves_profile(
@@ -1406,6 +1886,22 @@ def test_independent_layout_accepts_targeted_playback_commands(tmp_path: Path) -
         runtime.select_animation(target, stripe_id="a").result(timeout=1)
         assert runtime._playbacks["a"][1].transition_active is True
         assert runtime._playbacks["b"][1].transition_active is False
+    finally:
+        runtime.stop()
+
+
+def test_invalid_saved_settings_block_updates_without_changing_runtime(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    original = b'{"version":999,"future_value":"keep"}'
+    path.write_bytes(original)
+    runtime = LumiStripeRuntime(RuntimeSettings(pixels=2, settings_file=path))
+    runtime.start()
+    try:
+        before = runtime.transition_settings()
+        with pytest.raises(RuntimeCommandError, match="without losing data"):
+            runtime.set_transition_settings(False, 900).result(timeout=1)
+        assert runtime.transition_settings() == before
+        assert path.read_bytes() == original
     finally:
         runtime.stop()
 

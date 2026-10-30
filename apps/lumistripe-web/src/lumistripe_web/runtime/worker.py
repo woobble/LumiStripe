@@ -7,11 +7,11 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable, Mapping
-from concurrent.futures import Future
+from concurrent.futures import Future, InvalidStateError
 from dataclasses import dataclass, replace
 from datetime import datetime
 from importlib import metadata
-from typing import Literal, TypedDict, cast
+from typing import Literal, NoReturn, TypedDict, cast
 from uuid import uuid4
 
 import numpy as np
@@ -206,11 +206,16 @@ def _default_controller_factory(settings: RuntimeSettings) -> Controller:
 MIN_FRAME_SECONDS = 0.016
 FPS_SAMPLE_SECONDS = 1.0
 AUDIO_ROUTE_POLL_SECONDS = 1.0
+AUDIO_CALLBACK_STALE_SECONDS = 0.5
+AUDIO_CALLBACK_STARTUP_GRACE_SECONDS = 3.0
 CALIBRATION_FRAME_SECONDS = 0.05
 CALIBRATION_TIMEOUT_SECONDS = 300.0
 WORKER_STARTUP_GRACE_SECONDS = 3.0
 WORKER_WATCHDOG_INTERVAL_SECONDS = 0.1
 WORKER_STOP_GRACE_SECONDS = 0.5
+COMMAND_STALL_MAX_SECONDS = 8.0
+MAX_PENDING_COMMANDS = 256
+MAX_COALESCED_COMMAND_WAITERS = 256
 FRAME_STALL_GRACE_SECONDS = 0.5
 FRAME_STALL_MIN_SECONDS = 0.75
 FRAME_STALL_MAX_SECONDS = 5.0
@@ -310,6 +315,15 @@ def _frame_deadline_missed(
 
     deadline = due_at_s + max(expected_delay_s, MIN_FRAME_SECONDS)
     return completed_at_s > deadline
+
+
+def _next_frame_due(
+    *, due_at_s: float, completed_at_s: float, expected_delay_s: float
+) -> float:
+    """Keep the requested frame period without scheduling overlapping work."""
+
+    next_deadline = due_at_s + max(expected_delay_s, MIN_FRAME_SECONDS)
+    return max(next_deadline, completed_at_s)
 
 
 class RuntimeWorker:
@@ -424,7 +438,7 @@ class RuntimeWorker:
         )
         self.player.set_brightness(1.0)
 
-        self._commands: queue.Queue[_Command | None] = queue.Queue()
+        self._commands: queue.Queue[_Command | None] = queue.Queue(maxsize=MAX_PENDING_COMMANDS)
         self._command_lock = threading.Lock()
         self._coalesced_commands: dict[tuple[str, str | None], _Command] = {}
         self._stop_event = threading.Event()
@@ -474,6 +488,7 @@ class RuntimeWorker:
         self._audio_calibration_snapshot: AudioCalibrationSessionResponse | None = None
         self._stripe_test: _StripeTestSession | None = None
         self._audio_input: AudioInput | None = None
+        self._audio_input_opened_at: float | None = None
         self._hardware_gain: HardwareGainController | None = None
         self._audio_source_setting = self.settings.audio_source
         self._configured_audio_source = self.settings.dynamic_audio_source()
@@ -511,6 +526,8 @@ class RuntimeWorker:
         self._last_step_completed_s: float | None = None
         self._last_step_expected_delay_s = MIN_FRAME_SECONDS
         self._last_step_started_s: float | None = None
+        self._command_started_s: float | None = None
+        self._last_command_completed_s: float | None = None
         self._missed_frame_count = 0
         self._last_render_time_ms = 0.0
         self._frame_timing = _FrameTimingWindow()
@@ -518,7 +535,11 @@ class RuntimeWorker:
     @property
     def healthy(self) -> bool:
         state = self.snapshot()
-        return state.running and state.error is None
+        return (
+            not self._fatal_failure.is_set()
+            and state.running
+            and state.error is None
+        )
 
     def start(self, *, timeout: float = 5.0) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -533,6 +554,8 @@ class RuntimeWorker:
         with self._worker_state_lock:
             self._last_step_completed_s = None
             self._last_step_started_s = None
+            self._command_started_s = None
+            self._last_command_completed_s = None
             self._last_step_expected_delay_s = MIN_FRAME_SECONDS
             self._missed_frame_count = 0
             self._last_render_time_ms = 0.0
@@ -550,12 +573,21 @@ class RuntimeWorker:
         )
         self._watchdog_thread.start()
         if not self._started_event.wait(timeout):
+            self._stop_event.set()
+            self._watchdog_stop_event.set()
+            self._wake_worker()
+            self._thread.join(WORKER_STOP_GRACE_SECONDS)
+            if self._thread.is_alive():
+                # A blocked hardware initialization cannot be interrupted
+                # safely in Python. The production callback lets systemd
+                # restart the process rather than leaving a non-daemon thread.
+                self._request_fatal_exit()
             raise RuntimeUnavailableError("runtime startup timed out")
 
     def stop(self, *, timeout: float = 5.0) -> None:
         self._stop_event.set()
         self._watchdog_stop_event.set()
-        self._commands.put(None)
+        self._wake_worker()
         thread = self._thread
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout)
@@ -574,6 +606,13 @@ class RuntimeWorker:
         if self._thread is not None and self._thread.is_alive():
             raise RuntimeCommandError("fatal exit callback must be set before start")
         self._fatal_exit = callback
+
+    def _wake_worker(self) -> None:
+        try:
+            self._commands.put_nowait(None)
+        except queue.Full:
+            # A full queue already wakes the worker; the stop event ends its loop.
+            pass
 
     def snapshot(self) -> DashboardState:
         with self._snapshot_lock:
@@ -1223,24 +1262,39 @@ class RuntimeWorker:
 
     def _submit(self, name: str, value: object) -> Future[object]:
         future: Future[object] = Future()
-        thread = self._thread
-        if thread is None or not thread.is_alive() or not self.healthy:
-            future.set_exception(
-                RuntimeUnavailableError(self._fatal_error or "runtime is not running")
-            )
-            return future
         coalesce_key = self._coalesce_key(name, value)
         with self._command_lock:
+            thread = self._thread
+            if (
+                thread is None
+                or not thread.is_alive()
+                or self._stop_event.is_set()
+                or self._fatal_failure.is_set()
+                or not self.healthy
+            ):
+                future.set_exception(
+                    RuntimeUnavailableError(self._fatal_error or "runtime is not running")
+                )
+                return future
             if coalesce_key is not None:
                 existing = self._coalesced_commands.get(coalesce_key)
                 if existing is not None:
+                    if len(existing.coalesced_futures) + 1 >= MAX_COALESCED_COMMAND_WAITERS:
+                        future.set_exception(
+                            RuntimeUnavailableError("runtime command queue is full")
+                        )
+                        return future
                     existing.value = value
                     existing.coalesced_futures.append(future)
                     return future
             command = _Command(name, value, future)
+            try:
+                self._commands.put_nowait(command)
+            except queue.Full:
+                future.set_exception(RuntimeUnavailableError("runtime command queue is full"))
+                return future
             if coalesce_key is not None:
                 self._coalesced_commands[coalesce_key] = command
-            self._commands.put(command)
         return future
 
     @staticmethod
@@ -1264,10 +1318,14 @@ class RuntimeWorker:
         for future in command.futures():
             if future.done():
                 continue
-            if error is None:
-                future.set_result(result)
-            else:
-                future.set_exception(error)
+            try:
+                if error is None:
+                    future.set_result(result)
+                else:
+                    future.set_exception(error)
+            except InvalidStateError:
+                # A caller may cancel after the done check but before completion.
+                continue
 
     def _run(self) -> None:
         unexpected_failure = False
@@ -1305,6 +1363,7 @@ class RuntimeWorker:
             self._publish(running=False, error=self._fatal_error)
             self._started_event.set()
         finally:
+            self._stop_event.set()
             self._cleanup()
             self._reject_pending()
             self._publish(running=False, error=self._fatal_error)
@@ -1321,6 +1380,12 @@ class RuntimeWorker:
             self._fatal_exit_requested = True
         callback(1)
 
+    def _mark_fatal_failure(self, message: str) -> None:
+        self._fatal_error = message
+        self._fatal_failure.set()
+        self._stop_event.set()
+        self._wake_worker()
+
     def _watchdog_loop(self) -> None:
         while not self._watchdog_stop_event.wait(WORKER_WATCHDOG_INTERVAL_SECONDS):
             thread = self._thread
@@ -1331,10 +1396,10 @@ class RuntimeWorker:
 
             self._fatal_failure.set()
             self._fatal_error = (
-                "the rendering worker stopped making progress before its frame deadline"
+                "the runtime worker stopped making progress"
             )
             self._stop_event.set()
-            self._commands.put(None)
+            self._wake_worker()
             thread.join(WORKER_STOP_GRACE_SECONDS)
             if thread.is_alive():
                 self._request_fatal_exit()
@@ -1346,15 +1411,21 @@ class RuntimeWorker:
         started_at = self._started_at_s
         if started_at is None or time.monotonic() - started_at < WORKER_STARTUP_GRACE_SECONDS:
             return False
+        with self._worker_state_lock:
+            completed_at = self._last_step_completed_s
+            expected_delay = self._last_step_expected_delay_s
+            command_started = self._command_started_s
+            command_completed = self._last_command_completed_s
+        if command_started is not None:
+            return time.monotonic() - command_started > COMMAND_STALL_MAX_SECONDS
         if self._calibration is not None or self._stripe_test is not None:
             return False
         if self._output_gates and all(gate.blackout for gate in self._output_gates):
             return False
-        with self._worker_state_lock:
-            completed_at = self._last_step_completed_s
-            expected_delay = self._last_step_expected_delay_s
         if completed_at is None:
             return False
+        if command_completed is not None:
+            completed_at = max(completed_at, command_completed)
         timeout = min(
             FRAME_STALL_MAX_SECONDS,
             max(
@@ -1516,14 +1587,25 @@ class RuntimeWorker:
                     completed_at,
                     missed_deadline=missed_deadline,
                 )
-                next_frame_at = completed_at + max(delay, MIN_FRAME_SECONDS)
+                next_frame_at = _next_frame_due(
+                    due_at_s=next_frame_at,
+                    completed_at_s=completed_at,
+                    expected_delay_s=delay,
+                )
                 continue
 
             if pending_command is not None:
                 self._take_command(pending_command)
                 command = pending_command
                 pending_command = None
-                self._execute(command)
+                with self._worker_state_lock:
+                    self._command_started_s = time.monotonic()
+                try:
+                    self._execute(command)
+                finally:
+                    with self._worker_state_lock:
+                        self._command_started_s = None
+                        self._last_command_completed_s = time.monotonic()
                 continue
 
             timeout = max(0.0, min(next_frame_at - now, 0.05))
@@ -1820,25 +1902,15 @@ class RuntimeWorker:
             )
         previous = self._topology
         self._stripe_test = None
-        old_raw = self._raw_controller
-        if old_raw is not None:
-            try:
-                old_raw.clear()
-                old_raw.force_flush()
-            finally:
-                old_raw.close()
+        self._release_output_before_topology_change(
+            previous, reason="configuration"
+        )
         try:
             built = self._build_topology(topology)
-        except Exception as exc:
-            try:
-                self._topology = previous
-                self._install_topology(self._build_topology(previous))
-            except Exception as rollback_exc:
-                self._fatal_error = (
-                    f"configuration failed: {exc}; rollback failed: {rollback_exc}"
-                )
-                raise RuntimeCommandError(self._fatal_error) from rollback_exc
-            raise RuntimeCommandError(f"configuration was not applied: {exc}") from exc
+        except Exception as exc:  # noqa: BLE001 - rebuild the prior topology on failure
+            self._rollback_topology_change(
+                previous, "configuration was not applied", exc
+            )
         if previous.layout == "independent" and topology.layout != "independent":
             first = previous.outputs[0].id if previous.outputs else None
             source = self._playbacks.get(first) if first is not None else None
@@ -1858,6 +1930,40 @@ class RuntimeWorker:
             raise RuntimeCommandError(
                 f"configuration is active but could not be saved: {exc}"
             ) from exc
+
+    def _release_output_before_topology_change(
+        self, previous: StripeTopologySettings, *, reason: str
+    ) -> None:
+        old_raw = self._raw_controller
+        if old_raw is None:
+            return
+        first_error: Exception | None = None
+        for cleanup in (old_raw.clear, old_raw.force_flush, old_raw.close):
+            try:
+                cleanup()
+            except Exception as exc:  # noqa: BLE001 - attempt every output cleanup
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            self._rollback_topology_change(
+                previous, f"{reason} could not release current outputs", first_error
+            )
+
+    def _rollback_topology_change(
+        self,
+        previous: StripeTopologySettings,
+        reason: str,
+        cause: Exception,
+    ) -> NoReturn:
+        try:
+            built = self._build_topology(previous)
+            self._topology = previous
+            self._install_topology(built)
+        except Exception as rollback_exc:
+            message = f"{reason}: {cause}; rollback failed: {rollback_exc}"
+            self._mark_fatal_failure(message)
+            raise RuntimeCommandError(message) from rollback_exc
+        raise RuntimeCommandError(f"{reason}: {cause}") from cause
 
     @staticmethod
     def _copy_playback_state(
@@ -1934,26 +2040,15 @@ class RuntimeWorker:
 
     def _replace_topology(self, topology: StripeTopologySettings) -> None:
         previous = self._topology
-        old_raw = self._raw_controller
-        if old_raw is not None:
-            try:
-                old_raw.clear()
-                old_raw.force_flush()
-            finally:
-                old_raw.close()
+        self._release_output_before_topology_change(
+            previous, reason="temporary configuration"
+        )
         try:
             built = self._build_topology(topology)
-        except Exception as exc:
-            try:
-                self._topology = previous
-                self._install_topology(self._build_topology(previous))
-            except Exception as rollback_exc:
-                self._fatal_error = (
-                    f"temporary configuration failed: {exc}; "
-                    f"rollback failed: {rollback_exc}"
-                )
-                raise RuntimeCommandError(self._fatal_error) from rollback_exc
-            raise RuntimeCommandError(f"temporary configuration failed: {exc}") from exc
+        except Exception as exc:  # noqa: BLE001 - restore the previous topology
+            self._rollback_topology_change(
+                previous, "temporary configuration failed", exc
+            )
         self._topology = topology
         self._power_budget_state = _power_budget_state_for(topology)
         self._pending_preview_frames = None
@@ -1962,11 +2057,42 @@ class RuntimeWorker:
     def _initialize_audio_monitor(self) -> None:
         self._maintain_audio_monitor(force=True)
 
+    def _restart_stalled_audio_input(self, now: float) -> None:
+        audio_input = self._audio_input
+        if audio_input is None or self._monitor_audio_source not in {
+            AudioSource.MIC,
+            AudioSource.BLUETOOTH,
+            AudioSource.SPOTIFY,
+        }:
+            return
+
+        callback_age = getattr(
+            audio_input,
+            "last_callback_age",
+            self._audio_health.last_callback_age,
+        )
+        if callback_age is None:
+            opened_at = self._audio_input_opened_at
+            stalled = (
+                opened_at is not None
+                and now - opened_at >= AUDIO_CALLBACK_STARTUP_GRACE_SECONDS
+            )
+        else:
+            stalled = callback_age > AUDIO_CALLBACK_STALE_SECONDS
+        if not stalled:
+            return
+
+        try:
+            self._close_audio_input()
+        except Exception as exc:  # noqa: BLE001 - stale-device recovery must continue
+            self._audio_monitor_error = f"Previous input did not close cleanly: {exc}"
+
     def _maintain_audio_monitor(self, *, force: bool = False) -> None:
         now = time.monotonic()
         if not force and now < self._next_audio_route_check_at:
             return
         self._next_audio_route_check_at = now + AUDIO_ROUTE_POLL_SECONDS
+        self._restart_stalled_audio_input(now)
 
         if self._configured_audio_source is AudioSource.DEMO:
             if self._audio_input is not None:
@@ -2104,6 +2230,8 @@ profile.audio_config(microphone=True),
         self._selected_audio_device = device_name
         self._audio_profile = profile
         self._audio_input = audio_input
+        self._audio_input_opened_at = time.monotonic()
+        self._audio_health = AudioInputHealth()
         self._monitor_audio_source = AudioSource.MIC
         self._active_audio_device_name = device_name
         self._active_bluetooth_address = None
@@ -2129,6 +2257,8 @@ profile.audio_config(microphone=True),
             self._bluetooth.restore_default_source(previous_source)
             raise
         self._audio_input = audio_input
+        self._audio_input_opened_at = time.monotonic()
+        self._audio_health = AudioInputHealth()
         self._audio_profile = profile
         self._monitor_audio_source = AudioSource.BLUETOOTH
         self._active_audio_device_name = device.name
@@ -2177,6 +2307,8 @@ profile.audio_config(microphone=True),
                 self._bluetooth.restore_default_source(restore_source)
             raise
         self._audio_input = audio_input
+        self._audio_input_opened_at = time.monotonic()
+        self._audio_health = AudioInputHealth()
         self._audio_profile = profile
         self._monitor_audio_source = AudioSource.SPOTIFY
         self._active_audio_device_name = audio_input.device_name()
@@ -2202,6 +2334,7 @@ profile.audio_config(microphone=True),
         self._stop_audio_sync_calibration()
         candidate: AudioInput | None = None
         current = self._audio_input
+        current_opened_at = self._audio_input_opened_at
         target_is_bluetooth = device_name == BLUETOOTH_PROFILE_KEY
         target_is_spotify = device_name == SPOTIFY_PROFILE_KEY
         current_name = current.device_name() if current is not None else None
@@ -2251,6 +2384,8 @@ profile.audio_config(microphone=True),
 
             if candidate is not None:
                 self._audio_input = candidate
+                self._audio_input_opened_at = time.monotonic()
+                self._audio_health = AudioInputHealth()
             elif active_bluetooth or active_spotify or target_is_active_mic:
                 assert current is not None
                 current.reconfigure(profile.audio_config(microphone=target_is_active_mic))
@@ -2307,6 +2442,7 @@ profile.audio_config(microphone=True),
                 candidate.close()
                 if self._audio_input is candidate:
                     self._audio_input = current
+                    self._audio_input_opened_at = current_opened_at
             if isinstance(exc, RuntimeCommandError):
                 raise
             raise RuntimeCommandError(str(exc)) from exc
@@ -3749,6 +3885,11 @@ profile.audio_config(microphone=True),
                         if index < len(self._output_gates)
                         else None
                     ),
+                    error=(
+                        self._output_gates[index].last_error
+                        if index < len(self._output_gates)
+                        else None
+                    ),
                 )
                 for index, output in enumerate(self._topology.outputs)
             ),
@@ -4089,16 +4230,18 @@ profile.audio_config(microphone=True),
         return tuple(issues)
 
     def _cleanup(self) -> None:
-        self._cancel_startup_persist_timer()
-        self._stop_audio_sync_calibration()
+        cleanup_steps = [
+            self._cancel_startup_persist_timer,
+            self._stop_audio_sync_calibration,
+        ]
         if self._restore_last_state:
-            self._flush_startup_settings()
-        try:
-            self._close_audio_input()
-        except Exception as exc:  # noqa: BLE001 - cleanup continues after individual failures
-            self._fatal_error = self._fatal_error or str(exc)
-        self._bluetooth.stop()
-        self._spotify.stop()
+            cleanup_steps.append(self._flush_startup_settings)
+        cleanup_steps.extend((self._close_audio_input, self._bluetooth.stop, self._spotify.stop))
+        for cleanup_step in cleanup_steps:
+            try:
+                cleanup_step()
+            except Exception as exc:  # noqa: BLE001 - cleanup continues after individual failures
+                self._fatal_error = self._fatal_error or str(exc)
         controller = self._raw_controller
         if controller is None:
             return
@@ -4124,6 +4267,7 @@ profile.audio_config(microphone=True),
         self._active_audio_device_name = None
         self._active_bluetooth_address = None
         self._bluetooth_previous_default_source = None
+        self._audio_input_opened_at = None
         try:
             if audio_input is not None:
                 audio_input.close()

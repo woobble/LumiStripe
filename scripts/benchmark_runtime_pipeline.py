@@ -19,6 +19,7 @@ import time
 import tracemalloc
 from collections import deque
 from collections.abc import Callable, Iterable
+from itertools import pairwise
 from math import ceil
 from pathlib import Path
 from typing import Any
@@ -131,11 +132,12 @@ def _install_timers(
     runtime: LumiStripeRuntime,
     *,
     sample_limit: int | None = None,
-) -> tuple[dict[str, deque[float]], dict[str, int]]:
+) -> tuple[dict[str, deque[float]], dict[str, int], deque[int]]:
     timings = {
         stage: deque[float](maxlen=sample_limit) for stage in _STAGES
     }
     counts = dict.fromkeys(_STAGES, 0)
+    frame_starts_ns: deque[int] = deque(maxlen=sample_limit)
     for stage in _STAGES:
         original = getattr(runtime, stage)
 
@@ -146,6 +148,8 @@ def _install_timers(
             **kwargs: Any,
         ) -> Any:
             started = time.perf_counter_ns()
+            if _stage == "_step":
+                frame_starts_ns.append(started)
             try:
                 return _original(*args, **kwargs)
             finally:
@@ -153,7 +157,7 @@ def _install_timers(
                 counts[_stage] += 1
 
         setattr(runtime, stage, timed)
-    return timings, counts
+    return timings, counts, frame_starts_ns
 
 
 def _run_case(
@@ -206,7 +210,7 @@ def _run_case(
                     settings_file=settings_file,
                 )
             )
-            timings, timing_counts = _install_timers(
+            timings, timing_counts, frame_starts_ns = _install_timers(
                 runtime,
                 sample_limit=512 if duration_s >= 10.0 else None,
             )
@@ -218,6 +222,7 @@ def _run_case(
             for samples in timings.values():
                 samples.clear()
             timing_counts.update(dict.fromkeys(_STAGES, 0))
+            frame_starts_ns.clear()
             with runtime._worker_state_lock:
                 missed_before = runtime._missed_frame_count
             if trace_allocations:
@@ -248,6 +253,11 @@ def _run_case(
                 missed_after = runtime._missed_frame_count
                 expected_interval_s = runtime._last_step_expected_delay_s
             measured_frames = timing_counts["_step"]
+            measured_frame_starts = list(frame_starts_ns)
+            actual_frame_intervals_ms = [
+                (later - earlier) / 1_000_000.0
+                for earlier, later in pairwise(measured_frame_starts)
+            ]
             preview = runtime.preview_frame()
             metrics: dict[str, object] = {
                 "led_count": led_count,
@@ -261,6 +271,8 @@ def _run_case(
                 "frames": measured_frames,
                 "effective_fps": measured_frames / max(elapsed, 1e-9),
                 "expected_interval_ms": expected_interval_s * 1000.0,
+                "actual_frame_interval_ms": summarize(actual_frame_intervals_ms),
+                "actual_frame_interval_sample_count": len(actual_frame_intervals_ms),
                 "missed_deadlines": missed_after - missed_before,
                 "missed_deadline_rate": (missed_after - missed_before)
                 / max(measured_frames, 1),

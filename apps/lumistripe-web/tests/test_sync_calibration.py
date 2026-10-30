@@ -161,6 +161,28 @@ def test_calibration_tone_requires_a_pipewire_or_pulse_output() -> None:
         AudioSyncCalibrationTone(sounddevice)
 
 
+def test_calibration_arm_uses_one_coherent_dac_clock_anchor() -> None:
+    sounddevice = FakeSoundDevice(
+        [
+            {
+                "name": "pulse",
+                "index": 4,
+                "hostapi": 0,
+                "max_output_channels": 2,
+                "default_samplerate": 48_000.0,
+            }
+        ]
+    )
+    player = AudioSyncCalibrationTone(sounddevice)
+    player._latest_timing_anchor = (2000.0, 0.125)
+
+    player.arm()
+
+    assert player._start_at_stream_time == pytest.approx(2001.5)
+    assert player.start_at_monotonic == pytest.approx(2001.625)
+    player.close()
+
+
 def test_calibration_tone_uses_default_output_from_pulse_host_api() -> None:
     sounddevice = FakeSoundDevice(
         [

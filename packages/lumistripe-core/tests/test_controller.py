@@ -31,6 +31,18 @@ class TrackingStripe(Stripe):
         super().force_flush()
 
 
+class CloseFailingStripe(TrackingStripe):
+    def __init__(self, length: int, error: Exception | None = None) -> None:
+        super().__init__(length)
+        self.close_count = 0
+        self.close_error = error
+
+    def close(self) -> None:
+        self.close_count += 1
+        if self.close_error is not None:
+            raise self.close_error
+
+
 def test_color_correction_validates_channel_gains() -> None:
     assert ColorCorrection() == ColorCorrection(255, 255, 255)
     with pytest.raises(ValueError, match="red correction"):
@@ -106,6 +118,12 @@ def test_brightness_controller_clamps_and_scales_single_pixel() -> None:
 
     np.testing.assert_array_equal(dark_inner.pixels()[0], np.array([10, 20, 30, 0]))
     np.testing.assert_array_equal(bright_inner.pixels()[0], np.array([10, 20, 30, 127]))
+
+
+@pytest.mark.parametrize("brightness", [float("nan"), float("inf"), -float("inf")])
+def test_brightness_controller_rejects_nonfinite_values(brightness: float) -> None:
+    with pytest.raises(ValueError, match="brightness must be finite"):
+        BrightnessController(Stripe(1), brightness)
 
 
 def test_brightness_controller_scales_color_sequence_and_array_pixels() -> None:
@@ -219,6 +237,24 @@ def test_reversed_controller_fill_clear_and_flush_delegate() -> None:
 def test_composite_controller_rejects_empty_list() -> None:
     with pytest.raises(ValueError, match="at least one controller"):
         CompositeController([])
+
+
+def test_aggregate_controller_close_attempts_all_children_and_preserves_first_error() -> None:
+    factories = (
+        lambda children: CompositeController(children),
+        lambda children: MultiController(children),
+        lambda children: ScaledMultiController(children),
+    )
+    for factory in factories:
+        first = CloseFailingStripe(2, RuntimeError("first close failed"))
+        second = CloseFailingStripe(2, RuntimeError("second close failed"))
+        controller = factory([first, second])
+
+        with pytest.raises(RuntimeError, match="first close failed"):
+            controller.close()
+
+        assert first.close_count == 1
+        assert second.close_count == 1
 
 
 def test_composite_controller_single_child_pixels_fast_path() -> None:

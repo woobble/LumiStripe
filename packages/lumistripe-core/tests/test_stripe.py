@@ -1,3 +1,6 @@
+import subprocess
+import sys
+
 import lumistripe.gpio as gpio_module
 import lumistripe.gpio.spi as spi_module
 import numpy as np
@@ -347,6 +350,30 @@ def test_gpio_stripe_force_flush_always_writes() -> None:
     assert len(writer.writes) == first_flush_count * 2
 
 
+def test_gpio_fallback_keeps_dirty_pixels_after_failed_write() -> None:
+    class FailingOnceWriter(FakeLineWriter):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        def set_values(self, data: bool, clock: bool) -> None:
+            self.calls += 1
+            if self.calls == 1:
+                raise OSError("GPIO line temporarily unavailable")
+            super().set_values(data, clock)
+
+    writer = FailingOnceWriter()
+    stripe = GPIOStripe(Config(), 1, _line_writer=writer)
+
+    with pytest.raises(OSError, match="temporarily unavailable"):
+        stripe.flush()
+    assert bool(np.any(stripe._dirty))
+
+    stripe.flush()
+    assert writer.calls > 1
+    assert not bool(np.any(stripe._dirty))
+
+
 def test_gpio_stripe_clear_marks_transparent_black() -> None:
     writer = FakeLineWriter()
     stripe = GPIOStripe(Config(default_color=Rgb(10, 20, 30)), 1, _line_writer=writer)
@@ -490,12 +517,77 @@ def test_native_sm16716_encoder_matches_reference(pixel_count: int) -> None:
 def test_native_sm16716_encoder_validates_buffers() -> None:
     pixels = np.zeros((2, 4), dtype=np.uint8)
 
-    with pytest.raises(ValueError, match="too small"):
+    with pytest.raises(ValueError, match=r"too small: need \d+ bytes, got 1"):
         encode_sm16716_into(pixels, bytearray(1))
     with pytest.raises(ValueError, match="C-contiguous"):
         encode_sm16716_into(pixels[::-1], bytearray(sm16716_frame_size(2)))
     with pytest.raises(ValueError, match="one-byte elements"):
         encode_sm16716_into(pixels, np.zeros(sm16716_frame_size(2), dtype=np.uint16))
+
+
+def test_native_sm16716_encoder_rejects_overlapping_buffers() -> None:
+    storage = np.arange(32, dtype=np.uint8)
+    pixels = storage[4:12].reshape(2, 4)
+    before = storage.copy()
+    for destination in (storage[:14], storage[6:20]):
+        with pytest.raises(ValueError, match="overlap"):
+            encode_sm16716_into(pixels, destination)
+        np.testing.assert_array_equal(storage, before)
+
+
+def test_uninitialized_gpiomem_does_not_close_standard_input() -> None:
+    result = subprocess.run(
+        [sys.executable, "-c", (
+            "import os; from lumistripe.gpio._gpiomem import GPIOMem; "
+            "writer = GPIOMem.__new__(GPIOMem); writer.close(); os.fstat(0)"
+        )],
+        input=b"",
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr.decode()
+
+
+def test_spi_stripe_closes_device_if_encoder_initialization_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    device = FakeSPIDevice()
+
+    def fail_encoder(length: int) -> None:
+        raise MemoryError("encoder allocation failed")
+
+    monkeypatch.setattr(spi_module, "_FrameEncoder", fail_encoder)
+    with pytest.raises(MemoryError, match="encoder allocation failed"):
+        SPIStripe(SPIConfig(), 2, _device=device)
+    assert device.close_count == 1
+
+
+def test_spi_stripe_closes_device_on_non_os_open_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    class BrokenDevice(FakeSPIDevice):
+        def open_path(self, path: str) -> None:
+            raise ValueError("invalid device")
+
+    device = BrokenDevice()
+    monkeypatch.setattr(spi_module.importlib, "import_module", lambda name: type("Module", (), {"SpiDev": lambda: device}))
+    with pytest.raises(ValueError, match="invalid device"):
+        SPIStripe(SPIConfig(), 2)
+    assert device.close_count == 1
+
+
+def test_spi_initialization_preserves_error_when_close_also_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BrokenClose(FakeSPIDevice):
+        def close(self) -> None:
+            raise RuntimeError("close failed")
+
+    def fail_configuration(device: object, config: object) -> None:
+        raise ValueError("configuration failed")
+
+    monkeypatch.setattr(SPIStripe, "_configure_device", staticmethod(fail_configuration))
+    with pytest.raises(ValueError, match="configuration failed") as exc:
+        SPIStripe(SPIConfig(), 2, _device=BrokenClose())
+    assert any("close failed" in note for note in exc.value.__notes__)
 
 
 def test_spi_stripe_configures_mode_and_sends_one_transfer() -> None:

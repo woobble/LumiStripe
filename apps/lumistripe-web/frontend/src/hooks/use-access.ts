@@ -9,22 +9,41 @@ export function useAccess() {
   const [loading, setLoading] = useState(true)
   const [pairing, setPairing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [statusError, setStatusError] = useState<string | null>(null)
+
+  const loadStatus = useCallback(() => accessApi.status(), [])
 
   const refresh = useCallback(async () => {
     setLoading(true)
     setError(null)
+    setStatusError(null)
     try {
-      setStatus(await accessApi.status())
+      setStatus(await loadStatus())
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Could not check dashboard access.")
+      setStatusError(nextError instanceof Error ? nextError.message : "Could not check dashboard access.")
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [loadStatus])
 
   useEffect(() => {
-    void refresh()
-  }, [refresh])
+    let active = true
+    void loadStatus()
+      .then((nextStatus) => {
+        if (active) setStatus(nextStatus)
+      })
+      .catch((nextError: unknown) => {
+        if (active) {
+          setStatusError(nextError instanceof Error ? nextError.message : "Could not check dashboard access.")
+        }
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [loadStatus])
 
   useEffect(() => {
     const revoke = () => setStatus({ required: true, authenticated: false })
@@ -55,7 +74,7 @@ export function useAccess() {
     }
   }
 
-  return { ...status, loading, pairing, error, refresh, pair, logout }
+  return { ...status, loading, pairing, error, statusError, refresh, pair, logout }
 }
 
 export type AccessController = ReturnType<typeof useAccess>

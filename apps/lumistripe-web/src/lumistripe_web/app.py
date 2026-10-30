@@ -5,6 +5,7 @@ import os
 from collections.abc import Callable, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -80,6 +81,30 @@ def create_app(
 
     @app.middleware("http")
     async def require_pairing(request: Request, call_next):
+        origin = request.headers.get("origin")
+        if (
+            request.url.path.startswith("/api/")
+            and request.method in {"DELETE", "PATCH", "POST", "PUT"}
+            and origin is not None
+        ):
+            try:
+                parsed_origin = urlsplit(origin)
+            except ValueError:
+                parsed_origin = None
+            request_host = request.headers.get("host", "")
+            if (
+                parsed_origin is None
+                or parsed_origin.scheme.lower() != request.url.scheme.lower()
+                or parsed_origin.netloc.casefold() != request_host.casefold()
+                or parsed_origin.path
+                or parsed_origin.query
+                or parsed_origin.fragment
+            ):
+                return JSONResponse(
+                    {"detail": "Cross-origin API requests are not allowed."},
+                    status_code=403,
+                )
+
         public_api_paths = {
             "/api/health",
             "/api/auth/status",

@@ -60,8 +60,10 @@ async def websocket_state(websocket: WebSocket) -> None:
                     await websocket.close(code=1011, reason="runtime unavailable")
                     return
             await asyncio.sleep(WEBSOCKET_INTERVAL_SECONDS)
-    except (WebSocketDisconnect, RuntimeError):
+    except WebSocketDisconnect:
         return
+    except RuntimeError:
+        await _close_runtime_failure(websocket)
 
 
 @router.websocket("/ws/audio")
@@ -77,8 +79,10 @@ async def websocket_audio(websocket: WebSocket) -> None:
             telemetry: AudioTelemetry = runtime.audio_telemetry()
             await websocket.send_json(telemetry.model_dump(mode="json"))
             await asyncio.sleep(AUDIO_WEBSOCKET_INTERVAL_SECONDS)
-    except (WebSocketDisconnect, RuntimeError):
+    except WebSocketDisconnect:
         return
+    except RuntimeError:
+        await _close_runtime_failure(websocket)
 
 
 @router.websocket("/ws/preview")
@@ -100,6 +104,15 @@ async def websocket_preview(websocket: WebSocket) -> None:
                     await websocket.close(code=1011, reason="runtime unavailable")
                     return
             await asyncio.sleep(PREVIEW_WEBSOCKET_INTERVAL_SECONDS)
+    except WebSocketDisconnect:
+        return
+    except RuntimeError:
+        await _close_runtime_failure(websocket)
+
+
+async def _close_runtime_failure(websocket: WebSocket) -> None:
+    try:
+        await websocket.close(code=1011, reason="runtime unavailable")
     except (WebSocketDisconnect, RuntimeError):
         return
 

@@ -90,6 +90,21 @@ def _active_snapshot() -> AudioSnapshot:
     return AudioSnapshot.from_parts(frame, features)
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+@pytest.mark.parametrize(
+    "field", ["activation_delay_s", "activation_hysteresis_ratio", "beat_density_window_s"]
+)
+def test_music_activity_rejects_nonfinite_timing(field: str, value: float) -> None:
+    with pytest.raises(ValueError):
+        MusicActivityConfig(**{field: value})
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+def test_cycling_rejects_nonfinite_interval(value: float) -> None:
+    with pytest.raises(ValueError):
+        CyclingConfig(interval_s=value)
+
+
 def test_static_holds_animation_past_authored_cycle() -> None:
     player = AnimationPlayer.party()
     engine = PlaybackEngine(player)
@@ -643,6 +658,16 @@ def test_music_must_remain_qualified_for_activation_delay() -> None:
     assert detector.state.value == "music"
 
 
+@pytest.mark.parametrize("now_s", [float("nan"), float("inf"), -float("inf")])
+def test_music_activity_rejects_nonfinite_update_timestamp(now_s: float) -> None:
+    detector = MusicActivityDetector()
+
+    with pytest.raises(ValueError, match="now_s must be finite"):
+        detector.update(MusicFeatures(beat=True), now_s=now_s)
+
+    assert not detector.beat_samples
+
+
 def test_balanced_broadband_music_can_activate_without_detected_beats() -> None:
     detector = MusicActivityDetector(MusicActivityConfig(activation_delay_s=0.75))
     broadband_music = MusicFeatures(
@@ -713,3 +738,14 @@ def test_playback_config_rejects_invalid_idle_brightness() -> None:
         assert "idle_brightness" in str(exc)
     else:
         raise AssertionError("invalid idle brightness was accepted")
+
+
+@pytest.mark.parametrize("brightness", [float("nan"), float("inf"), -float("inf")])
+def test_animation_player_rejects_nonfinite_brightness(brightness: float) -> None:
+    player = AnimationPlayer.party()
+    player.set_brightness(0.25)
+
+    with pytest.raises(ValueError, match="brightness must be finite"):
+        player.set_brightness(brightness)
+
+    assert player.brightness == 0.25

@@ -260,6 +260,22 @@ def test_parser_rejects_invalid_mic_tuning_values() -> None:
         parser.parse_args(["--dynamic-idle-brightness", "1.1"])
 
 
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+@pytest.mark.parametrize(
+    "option",
+    ["--mic-target-level", "--mic-noise-floor", "--cycle-interval", "--dynamic-randomness"],
+)
+def test_parser_rejects_non_finite_float_options(option: str, value: str) -> None:
+    with pytest.raises(SystemExit):
+        build_parser().parse_args([option, value])
+
+
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_parser_rejects_non_positive_pixel_counts(value: str) -> None:
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["--pixels", value])
+
+
 def test_build_output_controller_returns_single_stripe(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("lumistripe_cli.app.GPIOStripe", FakeGPIOStripe)
     monkeypatch.setattr("lumistripe_cli.app._ensure_gpio_ready", lambda chip: None)
@@ -298,13 +314,39 @@ def test_gpio_backend_label_reports_single_and_multi_controller() -> None:
 
 
 def test_build_output_controller_rejects_partial_second_stripe(monkeypatch: pytest.MonkeyPatch) -> None:
+    checks: list[str] = []
     monkeypatch.setattr("lumistripe_cli.app.GPIOStripe", FakeGPIOStripe)
-    monkeypatch.setattr("lumistripe_cli.app._ensure_gpio_ready", lambda chip: None)
+    monkeypatch.setattr("lumistripe_cli.app._ensure_gpio_ready", checks.append)
     args = build_parser().parse_args(
         ["--pixels", "16", "--output-backend", "gpio", "--data-pin-2", "16"]
     )
     with pytest.raises(ValueError, match="secondary stripe"):
         build_output_controller(args)
+    assert checks == []
+
+
+def test_build_output_controller_closes_first_gpio_if_second_open_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opened: list[FakeGPIOStripe] = []
+    closed: list[FakeGPIOStripe] = []
+
+    def open_stripe(config, length):
+        if opened:
+            raise RuntimeError("second device failed")
+        stripe = FakeGPIOStripe(config, length)
+        opened.append(stripe)
+        return stripe
+
+    monkeypatch.setattr(FakeGPIOStripe, "close", lambda self: closed.append(self))
+    monkeypatch.setattr("lumistripe_cli.app.GPIOStripe", open_stripe)
+    monkeypatch.setattr("lumistripe_cli.app._ensure_gpio_ready", lambda chip: None)
+    args = build_parser().parse_args(
+        ["--output-backend", "gpio", "--data-pin-2", "16", "--clock-pin-2", "20"]
+    )
+    with pytest.raises(RuntimeError, match="second device failed"):
+        build_output_controller(args)
+    assert closed == opened
 
 
 def test_build_output_controller_returns_spi_stripe_by_default(
@@ -610,6 +652,35 @@ def test_headless_app_run_consumes_encoder_events() -> None:
     app.run(frame_limit=1)
     assert app.player.brightness == pytest.approx(0.9)
     assert backend.closed is True
+
+
+@pytest.mark.parametrize("method", ["run", "run_audio_debug"])
+def test_headless_app_cleans_other_resources_when_controller_close_fails(method: str) -> None:
+    class BrokenStripe(Stripe):
+        def close(self) -> None:
+            raise RuntimeError("close failed")
+
+    class Encoder(NullEncoderBackend):
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    class Audio:
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    encoder = Encoder()
+    audio = Audio()
+    app = HeadlessApp(controller=BrokenStripe(12), pixel_count=12, quiet=True, encoder_backend=encoder)
+    app.audio_input = audio  # type: ignore[assignment]
+    with pytest.raises(RuntimeError, match="close failed"):
+        getattr(app, method)(frame_limit=1)
+    assert encoder.closed
+    assert audio.closed
+    assert app.audio_input is None
 
 
 def test_headless_app_debug_header_and_line_include_metrics() -> None:

@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from colorsys import rgb_to_hsv
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from math import ceil, floor
+from math import ceil, floor, isfinite
 from typing import Any, TypeVar, cast
 
 import numpy as np
@@ -336,7 +336,10 @@ class AnimationPlayer:
         return player
 
     def set_brightness(self, brightness: float) -> None:
-        self.brightness = max(0.0, min(1.0, brightness))
+        value = float(brightness)
+        if not isfinite(value):
+            raise ValueError("brightness must be finite")
+        self.brightness = max(0.0, min(1.0, value))
 
     def set_animation_settings(
         self, name: str, values: object
@@ -378,6 +381,7 @@ class AnimationPlayer:
         now_s: float | None = None,
         transition_external: bool = False,
     ) -> float:
+        _validate_transition_time(now_s)
         if not self.animations:
             return 0.05
 
@@ -446,6 +450,7 @@ class AnimationPlayer:
         return self.transition_progress_at()
 
     def transition_progress_at(self, now_s: float | None = None) -> float:
+        _validate_transition_time(now_s)
         if not self.transition_active:
             return 1.0
         started_at = self._transition_started_at_s
@@ -466,6 +471,7 @@ class AnimationPlayer:
         restart: bool = True,
         now_s: float | None = None,
     ) -> None:
+        _validate_transition_time(now_s)
         next_index = min(max(index, 0), max(len(self.animations) - 1, 0))
         changed = next_index != self.index
         self.index = next_index
@@ -496,6 +502,7 @@ class AnimationPlayer:
         now_s: float | None = None,
         effect: TransitionEffect | None = None,
     ) -> None:
+        _validate_transition_time(now_s)
         duration_ms = max(int(duration_ms), 0)
         if duration_ms == 0:
             self.cancel_transition()
@@ -533,6 +540,7 @@ class AnimationPlayer:
         flush: bool = False,
         target_pixels: Any = None,
     ) -> None:
+        _validate_transition_time(now_s)
         if not self.transition_active:
             if flush:
                 controller.flush()
@@ -647,3 +655,8 @@ class AnimationPlayer:
         if 0 <= index < len(self.animations):
             return self.animations[index].animation.name
         return None
+
+
+def _validate_transition_time(now_s: float | None) -> None:
+    if now_s is not None and not isfinite(now_s):
+        raise ValueError("now_s must be finite")

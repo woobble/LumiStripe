@@ -60,8 +60,7 @@ class AudioSyncCalibrationTone:
         self._closed = False
         self._armed = False
         self._callback_timing_ready = False
-        self._latest_dac_time: float | None = None
-        self._latest_stream_offset_s: float | None = None
+        self._latest_timing_anchor: tuple[float, float] | None = None
         self._sample_rate, device_index = self._select_pipewire_output()
         self._waveform = self._build_waveform(self._sample_rate)
         self._waveform_sample_rate = self._sample_rate
@@ -106,12 +105,12 @@ class AudioSyncCalibrationTone:
         """Schedule the cue after the caller has verified its PipeWire route."""
         if self._callback_error is not None:
             raise RuntimeError(self._callback_error)
-        if self._latest_dac_time is None or self._latest_stream_offset_s is None:
+        anchor = self._latest_timing_anchor
+        if anchor is None:
             raise RuntimeError("The calibration output stream has no timing anchor.")
-        self._start_at_stream_time = self._latest_dac_time + SYNC_START_DELAY_S
-        self._start_at_monotonic = (
-            self._start_at_stream_time + self._latest_stream_offset_s
-        )
+        latest_dac_time, latest_stream_offset_s = anchor
+        self._start_at_stream_time = latest_dac_time + SYNC_START_DELAY_S
+        self._start_at_monotonic = self._start_at_stream_time + latest_stream_offset_s
         self._armed = True
 
     def diagnostics(self) -> CalibrationOutputDiagnostics:
@@ -305,8 +304,10 @@ class AudioSyncCalibrationTone:
             dac_time = float(time_info.outputBufferDacTime)
             if not isfinite(current_time) or not isfinite(dac_time):
                 raise ValueError("The PipeWire output returned invalid timing data.")
-            self._latest_dac_time = dac_time
-            self._latest_stream_offset_s = time.monotonic() - current_time
+            self._latest_timing_anchor = (
+                dac_time,
+                time.monotonic() - current_time,
+            )
             self._callback_timing_ready = True
             if not self._closed and self._armed:
                 self._render_callback_audio(outdata, frames, dac_time)

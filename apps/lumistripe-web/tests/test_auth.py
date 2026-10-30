@@ -5,6 +5,7 @@ from lumistripe_web import auth
 from lumistripe_web.auth import (
     InvalidPairingCodeError,
     PairingAuth,
+    PairingRateLimitError,
 )
 
 
@@ -43,15 +44,23 @@ def test_pairing_auth_creates_and_revokes_opaque_session() -> None:
     assert access.authenticated(session, now_s=1.0) is False
 
 
-def test_pairing_auth_allows_repeated_attempts() -> None:
+def test_pairing_auth_limits_all_clients_until_window_expires() -> None:
     access = PairingAuth("1234")
 
-    for attempt in range(10):
+    for attempt in range(auth.PAIRING_MAX_FAILURES):
         with pytest.raises(InvalidPairingCodeError):
-            access.pair("0000", "phone", now_s=float(attempt))
+            access.pair("0000", f"client-{attempt}", now_s=float(attempt))
 
-    session = access.pair("1234", "phone", now_s=10.0)
-    assert access.authenticated(session, now_s=10.0) is True
+    with pytest.raises(PairingRateLimitError) as exc:
+        access.pair("1234", "another-client", now_s=10.5)
+    assert exc.value.retry_after == 50
+    session = access.pair("1234", "phone", now_s=60.0)
+    assert access.authenticated(session, now_s=60.0) is True
+    # A successful pairing does not erase failures and reopen the guessing budget.
+    with pytest.raises(InvalidPairingCodeError):
+        access.pair("0000", "phone", now_s=60.0)
+    with pytest.raises(PairingRateLimitError):
+        access.pair("0000", "phone", now_s=60.5)
 
 
 @pytest.mark.parametrize("code", ["123", "12345", "12a4", "１２３４"])

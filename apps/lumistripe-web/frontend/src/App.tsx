@@ -148,6 +148,13 @@ function DashboardApp() {
       </div>
     )
   }
+  if (access.statusError) {
+    return (
+      <DashboardAccessFrame>
+        <Unavailable message={access.statusError} retry={() => void access.refresh()} />
+      </DashboardAccessFrame>
+    )
+  }
   if (access.required && !access.authenticated) {
     return (
       <div className="relative min-h-svh overflow-hidden bg-background">

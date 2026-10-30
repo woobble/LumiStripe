@@ -31,7 +31,7 @@ class DiscoSparkle(Animation):
         fade = self.setting("fade_time", 50) / 100.0
         density = self.setting("density", 40) / 100.0
         variation = self.setting("variation", 50) / 100.0
-        self._intensities *= 0.65 + fade * 0.4
+        self._intensities *= min(1.0, 0.65 + fade * 0.4)
         for i in range(controller.length):
             seed = (frame * 1103515245 + i * 12345) & 0xFFFFFFFFFFFFFFFF
             if (seed % 100) < 5 + int(density * 65.0):
@@ -82,7 +82,7 @@ class DiscoSparkle(Animation):
             audio_mode = False
             density = 5 + int(density_setting * 65.0)
             accent_trigger = False
-            decay = 0.65 + fade * 0.4
+            decay = min(1.0, 0.65 + fade * 0.4)
             hue_rate = 3.0
             pulse = 0.0
         else:

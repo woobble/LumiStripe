@@ -1511,6 +1511,29 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument()
   })
 
+  it("shows an unavailable retry state when access status cannot be checked", async () => {
+    let statusChecks = 0
+    const accessFetch = vi.fn((input: string | URL | Request) => {
+      if (String(input) === "/api/auth/status") {
+        statusChecks += 1
+        return statusChecks === 1
+          ? jsonResponse({ detail: "Access service unavailable." }, 503)
+          : jsonResponse({ required: true, authenticated: false })
+      }
+      return jsonResponse(initialState)
+    })
+    vi.stubGlobal("fetch", accessFetch)
+    const user = userEvent.setup()
+    render(<App />, { wrapper: Router })
+
+    expect(await screen.findByText("LumiStripe is unavailable")).toBeInTheDocument()
+    expect(screen.getByText("Access service unavailable.")).toBeInTheDocument()
+    expect(screen.queryByLabelText("Pairing code")).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Try again" }))
+    expect(await screen.findByLabelText("Pairing code")).toBeInTheDocument()
+  })
+
   it("pairs before connecting to the protected dashboard", async () => {
     const protectedFetch = vi.fn((input: string | URL | Request) => {
       const path = String(input)

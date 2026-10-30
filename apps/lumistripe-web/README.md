@@ -108,8 +108,11 @@ uv run lumistripe-web
 The frontend build is written into the Python package and served by FastAPI.
 Set `--pairing-code` to exactly four digits to protect dashboard APIs and live
 WebSocket updates. After entering the code, each browser receives an opaque
-HttpOnly session cookie. Pairing attempts are not rate limited and a four-digit
-code is easily guessed. Expose the dashboard only on a trusted local network,
+HttpOnly session cookie. Five incorrect pairing attempts within 60 seconds
+block further attempts with HTTP 429 and a `Retry-After` header. The limit is
+shared across clients in one process and is cleared when that process restarts;
+it does not protect multiple independent worker processes. A four-digit code
+remains weak, so expose the dashboard only on a trusted local network,
 including when pairing is enabled.
 
 Sessions expire after 30 days. Live streams close with code `4401` after logout
@@ -120,6 +123,9 @@ Pairing-disabled operation does not retain sessions.
 
 Malformed saved stripe settings are ignored with a warning while other valid
 settings are retained. Settings files with invalid UTF-8 fall back to defaults.
+When any settings cannot be read or validated, partial updates are refused to
+avoid overwriting the original file with defaults. Back up the file and repair
+it or restore a compatible backup before saving dashboard settings again.
 
 To serve the production dashboard over HTTPS directly from Uvicorn, provide a
 certificate and private key. This enables WebGPU for supported browsers on the

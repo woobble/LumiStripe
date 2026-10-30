@@ -4,6 +4,28 @@
 UPDATE_LIBEXEC_DIR=/usr/local/libexec/lumistripe/deploy
 NETWORK_LIBEXEC_DIR=/usr/local/libexec/lumistripe/network
 
+canonical_project_directory() {
+  local candidate="${1:-}"
+  local canonical
+
+  if [[ -z "$candidate" || "$candidate" == *$'\n'* || "$candidate" == *$'\r'* ]]; then
+    echo "Project directory must be a single-line path." >&2
+    return 1
+  fi
+  if ! canonical="$(cd -- "$candidate" 2>/dev/null && pwd -P)"; then
+    echo "Project directory does not exist: $candidate" >&2
+    return 1
+  fi
+  if [[ "$canonical" == "/" || "$canonical" == *$'\n'* || "$canonical" == *$'\r'* ||
+        ! -e "$canonical/.git" || ! -f "$canonical/pyproject.toml" ||
+        ! -d "$canonical/deploy" || ! -d "$canonical/apps/lumistripe-web" ||
+        ! -d "$canonical/packages/lumistripe-core" ]]; then
+    echo "Project directory is not a valid LumiStripe checkout: $canonical" >&2
+    return 1
+  fi
+  printf '%s\n' "$canonical"
+}
+
 uv_version_at_least() {
   local installed_version="$1"
   local minimum_version="$2"
@@ -38,7 +60,9 @@ install_update_support() {
   install -d -o root -g root -m 755 "$UPDATE_LIBEXEC_DIR"
   install -d -o root -g root -m 755 "$NETWORK_LIBEXEC_DIR"
   for template in \
-    update.sh update_state.py update-support.sh tls.sh \
+    update.sh update_state.py update-support.sh tls.sh soloist.sh extract_soloist.py \
+    90-lumistripe-bluetooth.conf 90-lumistripe-spotify.conf \
+    lumistripe-spotify.env.example \
     lumistripe-web.service lumistripe-spotify.service \
     lumistripe-update-check.service lumistripe-update-check.timer \
     lumistripe-update.service lumistripe-update.sudoers \
@@ -50,6 +74,10 @@ install_update_support() {
     install -o root -g root -m "$mode" \
       "$PROJECT_DIR/deploy/$template" "$UPDATE_LIBEXEC_DIR/$template"
   done
+
+  install -d -o root -g root -m 755 "$UPDATE_LIBEXEC_DIR/nginx"
+  install -o root -g root -m 644 \
+    "$PROJECT_DIR/deploy/nginx/led-controller.conf" "$UPDATE_LIBEXEC_DIR/nginx/led-controller.conf"
 
   install -o root -g root -m 644 \
     "$PROJECT_DIR/deploy/lumistripe_network.py" \

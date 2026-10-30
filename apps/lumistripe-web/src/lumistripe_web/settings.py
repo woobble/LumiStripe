@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import tempfile
@@ -148,12 +149,17 @@ class StripeOutputSettings:
             raise ValueError("GPIO pins must not be negative")
         if self.data_pin == self.clock_pin:
             raise ValueError("GPIO data and clock pins must differ")
-        if self.voltage_v <= 0.0:
-            raise ValueError("stripe voltage must be greater than zero")
-        if self.full_white_current_a <= 0.0:
-            raise ValueError("full-white current must be greater than zero")
-        if self.power_limit_watts is not None and self.power_limit_watts <= 0.0:
-            raise ValueError("stripe power limit must be greater than zero")
+        if not math.isfinite(self.voltage_v) or self.voltage_v <= 0.0:
+            raise ValueError("stripe voltage must be finite and greater than zero")
+        if (
+            not math.isfinite(self.full_white_current_a)
+            or self.full_white_current_a <= 0.0
+        ):
+            raise ValueError("full-white current must be finite and greater than zero")
+        if self.power_limit_watts is not None and (
+            not math.isfinite(self.power_limit_watts) or self.power_limit_watts <= 0.0
+        ):
+            raise ValueError("stripe power limit must be finite and greater than zero")
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,8 +179,10 @@ class StripeTopologySettings:
             raise ValueError("at most two stripes can be configured")
         if not isinstance(self.power_budget_enabled, bool):
             raise TypeError("power_budget_enabled must be a boolean")
-        if self.power_budget_watts is not None and self.power_budget_watts <= 0.0:
-            raise ValueError("power budget must be greater than zero")
+        if self.power_budget_watts is not None and (
+            not math.isfinite(self.power_budget_watts) or self.power_budget_watts <= 0.0
+        ):
+            raise ValueError("power budget must be finite and greater than zero")
         if self.power_budget_enabled and self.power_budget_watts is None:
             raise ValueError("an enabled power budget requires a watt limit")
         if not isinstance(self.shared_supply_enabled, bool):
@@ -182,15 +190,17 @@ class StripeTopologySettings:
         if (
             isinstance(self.supply_capacity_watts, bool)
             or not isinstance(self.supply_capacity_watts, (int, float))
+            or not math.isfinite(self.supply_capacity_watts)
             or self.supply_capacity_watts <= 0.0
         ):
-            raise ValueError("supply capacity must be greater than zero")
+            raise ValueError("supply capacity must be finite and greater than zero")
         if (
             isinstance(self.pi_reserve_watts, bool)
             or not isinstance(self.pi_reserve_watts, (int, float))
+            or not math.isfinite(self.pi_reserve_watts)
             or self.pi_reserve_watts < 0.0
         ):
-            raise ValueError("Pi reserve must not be negative")
+            raise ValueError("Pi reserve must be finite and not negative")
         ids = [output.id for output in self.outputs]
         if len(ids) != len(set(ids)):
             raise ValueError("stripe ids must be unique")
@@ -363,11 +373,11 @@ class CalibrationSettingsStore:
             if not isinstance(payload, dict):
                 raise TypeError("settings must be an object")
             version = payload.get("version")
-            if version not in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, SETTINGS_VERSION}:
+            if type(version) is not int or version not in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, SETTINGS_VERSION}:
                 raise ValueError(
                     f"expected settings version 1 through {SETTINGS_VERSION}"
                 )
-        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        except (json.JSONDecodeError, TypeError, ValueError, RecursionError) as exc:
             return settings, f"Dashboard settings are invalid: {exc}"
 
         encoded_colors = payload.get("color_correction", {})
@@ -532,8 +542,14 @@ class CalibrationSettingsStore:
             )
         return settings, warning
 
+    def _load_for_update(self) -> DashboardSettings:
+        settings, warning = self.load_all()
+        if warning is not None:
+            raise OSError(f"Cannot update dashboard settings without losing data: {warning}")
+        return settings
+
     def save(self, profiles: dict[str, ColorCorrection]) -> None:
-        settings, _ = self.load_all()
+        settings = self._load_for_update()
         settings.color_corrections = {
             name: correction for name, correction in profiles.items()
         }
@@ -544,30 +560,30 @@ class CalibrationSettingsStore:
         selected_device: str,
         profiles: dict[str, AudioTuningProfile],
     ) -> None:
-        settings, _ = self.load_all()
+        settings = self._load_for_update()
         settings.selected_audio_device = selected_device
         settings.audio_profiles = dict(profiles)
         self.save_all(settings)
 
     def save_audio_sync_offset(self, route: str, offset_ms: float) -> None:
-        settings, _ = self.load_all()
+        settings = self._load_for_update()
         settings.audio_sync_offsets_ms[route] = offset_ms
         self.save_all(settings)
 
     def save_music_idle(self, values: dict[str, MusicIdleSettings]) -> None:
-        settings, _ = self.load_all()
+        settings = self._load_for_update()
         settings.music_idle = values.copy()
         self.save_all(settings)
 
     def save_stripes(self, topology: StripeTopologySettings) -> None:
-        settings, _ = self.load_all()
+        settings = self._load_for_update()
         settings.stripe_topology = topology
         self.save_all(settings)
 
     def save_startup(
         self, restore_last_state: bool, remembered: StartupPlaybackSettings
     ) -> None:
-        settings, _ = self.load_all()
+        settings = self._load_for_update()
         settings.restore_last_state = restore_last_state
         settings.remembered_playback = remembered
         self.save_all(settings)
@@ -575,20 +591,20 @@ class CalibrationSettingsStore:
     def save_sequencer_settings(
         self, switch_quantization: SwitchQuantization, bars_per_phrase: int
     ) -> None:
-        settings, _ = self.load_all()
+        settings = self._load_for_update()
         settings.switch_quantization = switch_quantization
         settings.bars_per_phrase = bars_per_phrase
         self.save_all(settings)
 
     def save_transition_settings(self, transitions: TransitionSettings) -> None:
-        settings, _ = self.load_all()
+        settings = self._load_for_update()
         settings.transition_settings = transitions
         self.save_all(settings)
 
     def save_animation_settings(
         self, animation_settings: dict[str, dict[str, dict[str, object]]]
     ) -> None:
-        settings, _ = self.load_all()
+        settings = self._load_for_update()
         settings.animation_settings = {
             scope: {name: dict(values) for name, values in animations.items()}
             for scope, animations in animation_settings.items()
@@ -600,7 +616,7 @@ class CalibrationSettingsStore:
         sequences: tuple[AnimationSequence, ...],
         active_sequence_id: str | None,
     ) -> None:
-        settings, _ = self.load_all()
+        settings = self._load_for_update()
         settings.animation_sequences = sequences
         settings.active_sequence_id = active_sequence_id
         self.save_all(settings)

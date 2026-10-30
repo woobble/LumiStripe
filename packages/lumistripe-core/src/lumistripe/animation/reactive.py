@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 
 from ..audio.types import AudioFrame, AudioSnapshot
 from ..color import Hsla
@@ -20,29 +21,31 @@ class AudioReactive:
 
     @classmethod
     def from_frame(cls, audio: AudioFrame) -> AudioReactive:
-        bands = list(audio.bands)
+        rms = _finite_or_zero(audio.rms)
+        beat_strength = _finite_or_zero(audio.beat_strength)
+        bands = [_finite_or_zero(value) for value in audio.bands]
         if len(bands) < 8:
             bands.extend(0.0 for _ in range(8 - len(bands)))
         low = (bands[0] + bands[1]) * 0.5
         mid = (bands[2] + bands[3] + bands[4]) / 3.0
         high = (bands[5] + bands[6] + bands[7]) / 3.0
-        accent = max(audio.beat_strength, audio.rms * 0.55) if audio.beat else audio.rms * 0.2
-        drive = max(0.0, min(1.0, audio.rms * 0.5 + low * 0.3 + mid * 0.2))
+        accent = max(beat_strength, rms * 0.55) if audio.beat else rms * 0.2
+        drive = max(0.0, min(1.0, rms * 0.5 + low * 0.3 + mid * 0.2))
         return cls(
-            rms=audio.rms,
+            rms=rms,
             accent=max(0.0, min(1.0, accent)),
             low=max(0.0, min(1.0, low)),
             mid=max(0.0, min(1.0, mid)),
             high=max(0.0, min(1.0, high)),
-            onset=max(0.0, min(1.0, audio.beat_strength if audio.beat else audio.rms * 0.18)),
-            brightness=max(0.0, min(1.0, high * 0.55 + audio.rms * 0.25)),
+            onset=max(0.0, min(1.0, beat_strength if audio.beat else rms * 0.18)),
+            brightness=max(0.0, min(1.0, high * 0.55 + rms * 0.25)),
             activity_level=max(0.0, min(1.0, drive * 0.65 + accent * 0.25 + high * 0.1)),
         )
 
     @classmethod
     def from_snapshot(cls, snapshot: AudioSnapshot) -> AudioReactive:
         return cls(
-            rms=snapshot.features.energy,
+            rms=_finite_or_zero(snapshot.features.energy),
             accent=snapshot.accent,
             low=snapshot.low,
             mid=snapshot.mid,
@@ -132,3 +135,9 @@ class Decay:
         else:
             self.value = max(self.value - release, target, 0.0)
         return self.value
+
+
+def _finite_or_zero(value: float) -> float:
+    if not isfinite(value):
+        return 0.0
+    return value

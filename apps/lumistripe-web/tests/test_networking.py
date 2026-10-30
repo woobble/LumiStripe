@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,20 @@ SPEC = importlib.util.spec_from_file_location("lumistripe_network_helper", HELPE
 assert SPEC is not None and SPEC.loader is not None
 network_helper = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(network_helper)
+
+
+@pytest.mark.parametrize(
+    "request_bytes",
+    [b" " * (network_helper.MAX_REQUEST_BYTES + 1), b"[" * 2000 + b"]" * 2000],
+)
+def test_network_helper_rejects_oversized_or_deep_requests(request_bytes: bytes) -> None:
+    result = subprocess.run(
+        [sys.executable, str(HELPER_PATH)],
+        input=request_bytes,
+        capture_output=True,
+        check=True,
+    )
+    assert json.loads(result.stdout)["error_code"] == "invalid"
 
 
 class FakeNetworkService:

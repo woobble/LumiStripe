@@ -32,7 +32,8 @@ Build the optional render extension from the repository root:
 
 ```bash
 LUMISTRIPE_BUILD_EXTENSIONS=render UV_CACHE_DIR=/tmp/lumistripe-uv-cache \
-  uv run --with setuptools python packages/lumistripe-core/setup.py build_ext --inplace
+  uv run --directory packages/lumistripe-core --with setuptools \
+  python setup.py build_ext --inplace
 ```
 
 Then run the paired benchmark:

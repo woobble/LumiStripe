@@ -36,23 +36,36 @@ are executed by one worker, which owns mutable playback, controller, audio,
 and hardware state. API handlers may read immutable snapshots but must not
 mutate hardware directly.
 
+The worker bounds its pending command queue and the number of callers waiting
+on each coalesced brightness update. When either limit is reached, new work is
+rejected with `RuntimeUnavailableError` (HTTP 503 through the API). Shutdown
+rejects queued work and does not wait for a free queue slot; callers can retry
+after the runtime is available.
+
 The runtime package is organized around this ownership boundary:
 
+- `runtime/facade.py`: public `LumiStripeRuntime` façade
+- `runtime/worker.py`: single-writer command loop and watchdog
 - `runtime/commands.py`: typed command messages
 - `runtime/state.py`: settings, snapshots, sessions, and factory protocols
-- `runtime/audio.py`: audio input construction
 - `runtime/topology.py`: controller and persisted topology construction
+- `runtime/playback_service.py`: playback and animation policy operations
+- `runtime/audio_service.py`, `runtime/calibration_service.py`, and
+  `runtime/sync_calibration.py`: audio lifecycle, microphone calibration, and
+  synchronization measurements
 - `runtime/outputs.py`: output gates, power-limited frame processing, and reusable buffers
-- `runtime/cadence.py`: shared dashboard, audio, and preview publication rates
-- `runtime/__init__.py`: façade, worker loop, and orchestration
+- `runtime/preview.py` and `runtime/cadence.py`: preview frames and shared
+  dashboard, audio, and preview publication rates
+- `runtime/audio.py`: audio input construction
+- `runtime/__init__.py`: public re-exports
 
 The API package follows the same feature boundary:
 
-- `api/routes/`: system, control, stripes, sequencer, transitions,
-  audio/Bluetooth, startup, auth, and WebSocket routes
+- `api/routes/`: system, control, stripes, sequencer, transitions, audio,
+  Bluetooth, network, animations, startup, auth, and WebSocket routes
 - `api/dependencies.py`: runtime lookup and command error mapping
 - `api/protocols/preview.py`: binary preview framing
-- `contracts/`: feature-oriented HTTP model namespaces
+- `contracts/`: feature-oriented Pydantic model namespaces
 
 Further service extraction should preserve the single-worker invariant.
 
@@ -70,6 +83,12 @@ useful for historical telemetry. The Diagnostics page uses a separate rolling
 reports an active warning. This prevents a transient startup spike from
 remaining visible indefinitely while still surfacing sustained CPU, animation,
 or hardware-output pressure.
+
+The watchdog distinguishes frames from synchronous worker commands: a command
+may run for up to eight seconds before it is considered stalled, while frame
+heartbeat telemetry continues to describe completed render steps. Commands can
+still delay rendering during their execution; a command that exceeds the
+deadline requests the same process recovery as a stalled renderer.
 
 ## Core boundaries
 

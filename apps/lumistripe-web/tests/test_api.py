@@ -1284,6 +1284,38 @@ def test_websocket_sends_initial_and_changed_state() -> None:
         assert changed["brightness"] == 0.25
 
 
+@pytest.mark.parametrize(
+    ("path", "runtime_method"),
+    [
+        ("/ws/state", "snapshot"),
+        ("/ws/audio", "audio_telemetry"),
+        ("/ws/preview", "preview_frame"),
+    ],
+)
+def test_websocket_closes_1011_when_runtime_fails(
+    path: str, runtime_method: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = create_app(RuntimeSettings(pixels=8))
+
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+
+        def fail_runtime() -> None:
+            raise RuntimeError("runtime unavailable")
+
+        monkeypatch.setattr(runtime, runtime_method, fail_runtime)
+        with (
+            pytest.raises(WebSocketDisconnect) as exc_info,
+            client.websocket_connect(path) as websocket,
+        ):
+            if path == "/ws/preview":
+                websocket.receive_bytes()
+            else:
+                websocket.receive_json()
+
+    assert exc_info.value.code == 1011
+
+
 def test_compiled_spa_is_served_after_api_routes(tmp_path: Path) -> None:
     (tmp_path / "index.html").write_text(
         "<h1>LumiStripe dashboard</h1>", encoding="utf-8"
@@ -1389,6 +1421,44 @@ def test_pairing_code_protects_api_and_websocket() -> None:
         assert client.get("/api/stripes").status_code == 401
 
 
+def test_mutating_api_requests_reject_a_foreign_origin() -> None:
+    app = create_app(RuntimeSettings(pixels=8), pairing_code="1234")
+    with TestClient(app, base_url="https://testserver") as client:
+        cross_origin_pair = client.post(
+            "/api/auth/pair",
+            json={"code": "0000"},
+            headers={"Origin": "https://evil.example"},
+        )
+        assert cross_origin_pair.status_code == 403
+
+        paired = client.post(
+            "/api/auth/pair",
+            json={"code": "1234"},
+            headers={"Origin": "https://testserver"},
+        )
+        assert paired.status_code == 200
+
+        cross_origin_logout = client.post(
+            "/api/auth/logout",
+            headers={"Origin": "https://evil.example"},
+        )
+        assert cross_origin_logout.status_code == 403
+        assert client.get("/api/auth/status").json() == {
+            "required": True,
+            "authenticated": True,
+        }
+
+        same_origin_logout = client.post(
+            "/api/auth/logout",
+            headers={"Origin": "https://testserver"},
+        )
+        assert same_origin_logout.status_code == 200
+        assert same_origin_logout.json() == {
+            "required": True,
+            "authenticated": False,
+        }
+
+
 @pytest.mark.parametrize("stream", ["state", "audio", "preview"])
 @pytest.mark.parametrize("invalidate", ["logout", "expiry"])
 def test_open_websocket_closes_when_session_invalidated(stream: str, invalidate: str) -> None:
@@ -1411,14 +1481,16 @@ def test_open_websocket_closes_when_session_invalidated(stream: str, invalidate:
                     break
 
 
-def test_pairing_endpoint_allows_repeated_attempts() -> None:
+def test_pairing_endpoint_limits_repeated_attempts() -> None:
     app = create_app(RuntimeSettings(pixels=8), pairing_code="1234")
     with TestClient(app) as client:
-        for _ in range(10):
+        for _ in range(5):
             assert (
                 client.post("/api/auth/pair", json={"code": "0000"}).status_code == 401
             )
-        assert client.post("/api/auth/pair", json={"code": "1234"}).status_code == 200
+        response = client.post("/api/auth/pair", json={"code": "1234"})
+        assert response.status_code == 429
+        assert 1 <= int(response.headers["retry-after"]) <= 60
 
 
 def test_websocket_rejects_cross_origin() -> None:

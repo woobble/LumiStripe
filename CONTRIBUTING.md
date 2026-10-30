@@ -4,7 +4,10 @@ Thanks for helping improve LumiStripe. Changes are welcome through pull requests
 
 ## Development setup
 
-You need Python 3.12 or newer, [uv](https://docs.astral.sh/uv/), and Bun 1.4.0. Hardware is not required for the normal test suite; the in-memory stripe and simulator paths are used for development.
+You need Python 3.12 or newer, [uv](https://docs.astral.sh/uv/), and the Bun
+version in `.bun-version` (currently 1.4.4). Hardware is not required for the
+normal test suite; the in-memory stripe and simulator paths are used for
+development.
 
 Clone the repository with its native dependency submodule:
 

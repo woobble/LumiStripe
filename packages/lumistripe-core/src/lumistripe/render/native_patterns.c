@@ -1,4 +1,13 @@
 #include "native_common.h"
+#include <float.h>
+
+static int truncated_modulo_256(double value) {
+    double remainder = fmod(trunc(value), 256.0);
+    if (remainder < 0.0)
+        remainder += 256.0;
+    return (int)remainder;
+}
+
 PyObject *render_tunnel_rings_into(PyObject *module, PyObject *args) {
     (void)module;
     PyArrayObject *destination;
@@ -176,7 +185,9 @@ PyObject *render_rainbow_pattern_into(PyObject *module, PyObject *args) {
             lightness = (int)mid;
         } else if (mode == 0) {
             if (!audio_mode) {
-                hue = (int)(position * 256.0 * spread + (double)frame * 1.5);
+                hue = truncated_modulo_256(
+                    position * 256.0 * spread + (double)frame * 1.5
+                );
                 lightness = 50;
             } else {
                 hue = (int)(position * 256.0 * spread) + (int)base_hue + (int)(local * 44.0);
@@ -256,8 +267,8 @@ PyObject *render_theater_chase_into(PyObject *module, PyObject *args) {
             int center = (int)phase % stride;
             if (center < 0)
                 center += stride;
-            const int before = (center + stride - 1) % stride;
-            const int after = (center + 1) % stride;
+            const int before = center == 0 ? stride - 1 : center - 1;
+            const int after = center == stride - 1 ? 0 : center + 1;
             if (slot == center) {
                 alpha = 1.0;
             } else if (slot == before || slot == after) {
@@ -545,10 +556,26 @@ PyObject *render_wave_into(PyObject *module, PyObject *args) {
     if (validate_rgba(destination, "destination", 1) < 0)
         return NULL;
     if ((audio_mode != 0 && audio_mode != 1) || !isfinite(frequency) ||
-        !isfinite(speed) || !isfinite(low) || !isfinite(mid) || !isfinite(high) ||
-        !isfinite(accent) || !isfinite(brightness) || brightness < 0.0 ||
-        brightness > 1.0 || palette < 0 || palette > 3 || custom_rgb > 0xFFFFFFu) {
+        frequency <= 0.0 || frequency > DBL_MAX / 5.5 || !isfinite(speed) ||
+        !isfinite(low) || low < 0.0 || low > 1.0 || !isfinite(mid) || mid < 0.0 ||
+        mid > 1.0 || !isfinite(high) || high < 0.0 || high > 1.0 ||
+        !isfinite(accent) || accent < 0.0 || accent > 1.0 ||
+        !isfinite(brightness) || brightness < 0.0 || brightness > 1.0 ||
+        palette < 0 || palette > 3 || custom_rgb > 0xFFFFFFu) {
         PyErr_SetString(PyExc_ValueError, "invalid Wave render parameters");
+        return NULL;
+    }
+    const double frame_value = (double)frame;
+    if (fabs(speed) > 1.0 && fabs(frame_value) > DBL_MAX / fabs(speed)) {
+        PyErr_SetString(PyExc_ValueError, "Wave frame and speed exceed the phase range");
+        return NULL;
+    }
+    const double spatial_phase_bound = 5.5 * frequency;
+    const double static_frame_phase = frame_value * 0.28;
+    const double audio_frame_phase = frame_value * speed;
+    if (fabs(static_frame_phase) > DBL_MAX - spatial_phase_bound ||
+        fabs(audio_frame_phase) > DBL_MAX - spatial_phase_bound - 2.0) {
+        PyErr_SetString(PyExc_ValueError, "Wave frame and parameters exceed the phase range");
         return NULL;
     }
     double bands[8] = {0.0};
@@ -563,10 +590,13 @@ PyObject *render_wave_into(PyObject *module, PyObject *args) {
         }
         for (int band = 0; band < 8; band++) {
             bands[band] = PyFloat_AsDouble(PySequence_Fast_GET_ITEM(sequence, band));
-            if (PyErr_Occurred() || !isfinite(bands[band])) {
+            if (PyErr_Occurred() || !isfinite(bands[band]) || bands[band] < 0.0 ||
+                bands[band] > 1.0) {
                 Py_DECREF(sequence);
                 if (!PyErr_Occurred())
-                    PyErr_SetString(PyExc_ValueError, "bands must be finite values");
+                    PyErr_SetString(
+                        PyExc_ValueError, "bands must be finite values between zero and one"
+                    );
                 return NULL;
             }
         }
@@ -595,21 +625,23 @@ PyObject *render_wave_into(PyObject *module, PyObject *args) {
         uint8_t red, green, blue;
         double alpha;
         if (!audio_mode) {
-            const double phase = position * 5.5 * frequency + (double)frame * 0.28;
+            const double phase = position * spatial_phase_bound + static_frame_phase;
             const double crest = sin(phase) * 0.5 + 0.5;
-            const int hue = ((int)(frame + index) * 2) % 256;
+            const uint64_t frame_index_mod =
+                ((uint64_t)frame + (uint64_t)index) & UINT64_C(0x7F);
+            const int hue = (int)(frame_index_mod * 2u);
             red = 0u;
             green = (uint8_t)hue;
             blue = 255u;
             alpha = 0.22 + crest * 0.78;
         } else {
             const double amplitude = 0.24 + local * 0.76;
-            const double phase = position * 5.5 * frequency + (double)frame * speed + low * 2.0;
+            const double phase =
+                position * spatial_phase_bound + audio_frame_phase + low * 2.0;
             const double crest = (sin(phase) * 0.5 + 0.5) * amplitude;
             const double hue_rate = 0.08 + high * 3.0 + accent * 6.0;
-            int hue = (int)((double)(frame + index) * hue_rate) % 256;
-            if (hue < 0)
-                hue += 256;
+            const double frame_index = (double)((long double)frame + (long double)index);
+            int hue = truncated_modulo_256(frame_index * hue_rate);
             hue = (160 + hue / 6) % 256;
             const int lightness = (int)fmin(56.0 + mid * 8.0 + crest * 6.0, 68.0);
             hsl_to_rgb((double)hue, 100.0, (double)lightness, &red, &green, &blue);
@@ -653,6 +685,14 @@ PyObject *render_juggle_into(PyObject *module, PyObject *args) {
         PyErr_SetString(PyExc_ValueError, "invalid Juggle render parameters");
         return NULL;
     }
+    const npy_intp count = PyArray_DIM(destination, 0);
+    const long double max_index = count > 0 ? (long double)(count - 1) : 0.0L;
+    const long double max_frame_index = fabsl((long double)frame) + max_index;
+    if (hue_rate > 1.0 &&
+        max_frame_index > (long double)DBL_MAX / (long double)hue_rate) {
+        PyErr_SetString(PyExc_ValueError, "Juggle frame and hue rate exceed the hue range");
+        return NULL;
+    }
     PyObject *positions_sequence = PySequence_Fast(positions_object, "positions must be a sequence");
     if (positions_sequence == NULL)
         return NULL;
@@ -674,7 +714,6 @@ PyObject *render_juggle_into(PyObject *module, PyObject *args) {
     }
     Py_DECREF(positions_sequence);
     uint8_t *pixels = (uint8_t *)PyArray_DATA(destination);
-    const npy_intp count = PyArray_DIM(destination, 0);
     for (npy_intp index = 0; index < count; index++) {
         double composite = 0.0;
         for (Py_ssize_t ball = 0; ball < position_count; ball++) {
@@ -689,14 +728,16 @@ PyObject *render_juggle_into(PyObject *module, PyObject *args) {
             green = (uint8_t)((custom_rgb >> 8u) & 0xFFu);
             blue = (uint8_t)(custom_rgb & 0xFFu);
         } else if (audio_mode && alpha > 0.0) {
-            int hue = ((int)((double)(frame + index) * hue_rate) + (int)(index * 11 % 128)) % 256;
+            const double frame_index = (double)((long double)frame + (long double)index);
+            const int index_hue = (int)(((uint64_t)index * 11u) % 128u);
+            int hue = (truncated_modulo_256(frame_index * hue_rate) + index_hue) % 256;
             red = (uint8_t)hue;
             green = 255u;
             blue = 200u;
             if (palette == 1 || palette == 2)
                 map_palette(&red, &green, &blue, palette);
         } else if (!audio_mode && alpha > 0.0) {
-            red = (uint8_t)((index * 32 + 50) % 256);
+            red = (uint8_t)(((uint64_t)index * 32u + 50u) % 256u);
             green = 255u;
             blue = 200u;
             if (palette == 1 || palette == 2)

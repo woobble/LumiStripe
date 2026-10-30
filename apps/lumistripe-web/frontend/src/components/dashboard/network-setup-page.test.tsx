@@ -114,4 +114,42 @@ describe("NetworkSetupPage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Check the password")
     expect(screen.queryByText("bad-password")).not.toBeInTheDocument()
   })
+
+  it("clears networks and credentials when refresh moves to another adapter", async () => {
+    const user = userEvent.setup()
+    const refreshedStatus: NetworkStatusResponse = {
+      ...status,
+      adapters: [
+        status.adapters[0],
+        {
+          ...status.adapters[1],
+          state: "unavailable",
+          connectable: false,
+          reason: "Adapter is unavailable.",
+        },
+        {
+          ...status.adapters[1],
+          interface: "wlan2",
+        },
+      ],
+    }
+    vi.mocked(dashboardApi.getNetworkStatus)
+      .mockReset()
+      .mockResolvedValueOnce(status)
+      .mockResolvedValueOnce(refreshedStatus)
+    renderNetworkSetupPage()
+
+    await screen.findByRole("combobox", { name: "Internet adapter" })
+    await user.click(screen.getByRole("button", { name: "Scan for networks" }))
+    await user.click(await screen.findByRole("combobox", { name: "Wi-Fi network" }))
+    await user.click(await screen.findByRole("option", { name: /Home Network/ }))
+    await user.type(screen.getByLabelText("Wi-Fi password"), "private-password")
+
+    await user.click(screen.getByRole("button", { name: "Refresh adapters" }))
+
+    expect(await screen.findByRole("combobox", { name: "Internet adapter" })).toHaveTextContent("wlan2")
+    expect(screen.queryByRole("combobox", { name: "Wi-Fi network" })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText("Wi-Fi password")).not.toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Scan for networks" })).toBeInTheDocument()
+  })
 })

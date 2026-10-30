@@ -34,7 +34,7 @@ function StartupPanelView() {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not load startup behavior.")
     }
-  }, [])
+  }, [reset])
 
   useEffect(() => { void load() }, [load])
 

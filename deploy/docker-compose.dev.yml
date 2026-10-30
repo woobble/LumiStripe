@@ -8,16 +8,23 @@ services:
     network_mode: host
     restart: unless-stopped
     user: "${LUMI_DEV_UID:?Set LUMI_DEV_UID to the current user ID}:${LUMI_DEV_GID:?Set LUMI_DEV_GID to the current group ID}"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       lumistripe-spotify:
         condition: service_healthy
     environment:
-      HOME: /var/lib/lumistripe/home
+      HOME: /var/lib/lumistripe
       XDG_RUNTIME_DIR: /run/host-audio
       PULSE_SERVER: unix:/run/host-audio/pulse/native
     volumes:
-      - ../.docker-dev/data:/var/lib/lumistripe
-      - "${XDG_RUNTIME_DIR:?Run Docker Compose from a Linux desktop audio session}:/run/host-audio"
+      - ../.docker-dev/data/web:/var/lib/lumistripe
+      - "${XDG_RUNTIME_DIR:?Run Docker Compose from a Linux desktop audio session}:/run/host-audio:ro"
     command:
       - /opt/lumistripe/.venv/bin/lumistripe-web
       - --host
@@ -42,6 +49,13 @@ services:
     network_mode: host
     restart: unless-stopped
     user: "${LUMI_DEV_UID:?Set LUMI_DEV_UID to the current user ID}:${LUMI_DEV_GID:?Set LUMI_DEV_GID to the current group ID}"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     environment:
       HOME: /var/lib/lumistripe/home
       XDG_RUNTIME_DIR: /run/host-audio
@@ -51,8 +65,10 @@ services:
       LUMI_SPOTIFY_DATA_DIR: /var/lib/lumistripe/soloist
       LUMI_SPOTIFY_CACHE_DIR: /var/lib/lumistripe/soloist-cache
     volumes:
-      - ../.docker-dev/data:/var/lib/lumistripe
-      - "${XDG_RUNTIME_DIR:?Run Docker Compose from a Linux desktop audio session}:/run/host-audio"
+      - ../.docker-dev/data/soloist:/var/lib/lumistripe/soloist
+      - ../.docker-dev/data/soloist-cache:/var/lib/lumistripe/soloist-cache
+      - ../.docker-dev/data/spotify-home:/var/lib/lumistripe/home
+      - "${XDG_RUNTIME_DIR:?Run Docker Compose from a Linux desktop audio session}:/run/host-audio:ro"
     secrets:
       - spotify_api_key
     command: ["/usr/local/bin/lumistripe-spotify-entrypoint"]

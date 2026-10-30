@@ -40,12 +40,10 @@ def optimization_flags() -> tuple[list[str], list[str]]:
             [
                 "-O3",
                 "-flto",
-                "-ffinite-math-only",
                 "-fno-math-errno",
                 "-ftree-vectorize",
                 "-ftree-loop-vectorize",
                 "-ftree-slp-vectorize",
-                "-ffast-math",
                 "-march=native",
                 "-mtune=native",
                 "-mcpu=native",

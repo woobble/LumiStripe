@@ -68,19 +68,31 @@ static PyObject *sm16716_encode_into(PyObject *module, PyObject *args) {
         PyErr_SetString(PyExc_ValueError, "destination must contain one-byte elements");
         return NULL;
     }
-    if ((size_t)destination.len < frame_size) {
+    const Py_ssize_t destination_length = destination.len;
+    if (destination_length < 0 || (size_t)destination_length < frame_size) {
         PyBuffer_Release(&destination);
         PyErr_Format(
             PyExc_ValueError,
             "destination is too small: need %zu bytes, got %zd",
             frame_size,
-            destination.len
+            destination_length
         );
         return NULL;
     }
 
     const uint8_t *source = (const uint8_t *)PyArray_DATA(pixels);
     uint8_t *output = (uint8_t *)destination.buf;
+    const uintptr_t source_start = (uintptr_t)source;
+    const uintptr_t output_start = (uintptr_t)output;
+    const size_t source_size = (size_t)PyArray_NBYTES(pixels);
+    if (source_size != 0 && frame_size != 0 &&
+        (source_start <= output_start
+             ? output_start - source_start < source_size
+             : source_start - output_start < frame_size)) {
+        PyBuffer_Release(&destination);
+        PyErr_SetString(PyExc_ValueError, "pixels and destination must not overlap");
+        return NULL;
+    }
     memset(output, 0, frame_size);
 
     size_t bit_index = 50u;

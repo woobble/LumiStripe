@@ -138,13 +138,10 @@ static int GPIOMem_init(GPIOMem *self, PyObject *args, PyObject *kwds) {
     static char *kwlist[] = {"data_pin", "clock_pin", NULL};
     int data_pin, clock_pin;
 
-    self->fd = -1;
-    self->gpio_mem = NULL;
-    self->pins_configured = 0;
-    self->data_fsel = 0;
-    self->clock_fsel = 0;
-    self->rgb_buffer = NULL;
-    self->rgb_capacity = 0;
+    if (self->flushing || self->gpio_mem != NULL || self->fd >= 0) {
+        PyErr_SetString(PyExc_RuntimeError, "GPIOMem is already open or flushing");
+        return -1;
+    }
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "ii", kwlist, &data_pin, &clock_pin))
         return -1;
 
@@ -203,12 +200,25 @@ static void GPIOMem_dealloc(GPIOMem *self) {
     Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
+static PyObject *GPIOMem_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {
+    (void)args;
+    (void)kwds;
+    GPIOMem *self = (GPIOMem *)type->tp_alloc(type, 0);
+    if (self != NULL)
+        self->fd = -1;
+    return (PyObject *)self;
+}
+
 static PyObject *GPIOMem_set_values(GPIOMem *self, PyObject *args) {
     int data, clock;
     if (!PyArg_ParseTuple(args, "pp", &data, &clock))
         return NULL;
     if (self->gpio_mem == NULL) {
         PyErr_SetString(PyExc_RuntimeError, "GPIOMem is closed");
+        return NULL;
+    }
+    if (self->flushing) {
+        PyErr_SetString(PyExc_RuntimeError, "cannot set GPIO values while flush is active");
         return NULL;
     }
     gpio_set(self->gpio_mem, self->data_pin, data);
@@ -248,6 +258,10 @@ static PyObject *GPIOMem_flush(GPIOMem *self, PyObject *args) {
     }
     if (self->gpio_mem == NULL) {
         PyErr_SetString(PyExc_RuntimeError, "GPIOMem is closed");
+        return NULL;
+    }
+    if (self->flushing) {
+        PyErr_SetString(PyExc_RuntimeError, "cannot start another flush while flush is active");
         return NULL;
     }
 
@@ -306,7 +320,7 @@ static PyTypeObject GPIOMemType = {
     .tp_init        = (initproc)GPIOMem_init,
     .tp_dealloc     = (destructor)GPIOMem_dealloc,
     .tp_methods     = GPIOMem_methods,
-    .tp_new         = PyType_GenericNew,
+    .tp_new         = GPIOMem_new,
 };
 
 static struct PyModuleDef moduledef = {

@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
+from math import isfinite
 
 import numpy as np
 import numpy.typing as npt
@@ -51,6 +52,18 @@ class Controller(ABC):
 
     def close(self) -> None:
         """Release hardware resources owned by this controller."""
+
+
+def _close_all(controllers: Sequence[Controller]) -> None:
+    first_error: Exception | None = None
+    for controller in controllers:
+        try:
+            controller.close()
+        except Exception as exc:  # noqa: BLE001 - close every sibling after failures
+            if first_error is None:
+                first_error = exc
+    if first_error is not None:
+        raise first_error
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,7 +177,10 @@ class ColorCorrectionController(Controller):
 class BrightnessController(Controller):
     def __init__(self, inner: Controller, brightness: float) -> None:
         self._inner = inner
-        self._brightness = max(0.0, min(1.0, float(brightness)))
+        value = float(brightness)
+        if not isfinite(value):
+            raise ValueError("brightness must be finite")
+        self._brightness = max(0.0, min(1.0, value))
 
     @property
     def length(self) -> int:
@@ -332,8 +348,7 @@ class CompositeController(Controller):
             controller.force_flush()
 
     def close(self) -> None:
-        for controller in self._controllers:
-            controller.close()
+        _close_all(self._controllers)
 
     def _locate(self, index: int) -> tuple[Controller, int]:
         if not 0 <= index < self.length:
@@ -456,8 +471,7 @@ class ScaledMultiController(Controller):
         self._copy_and_flush(True)
 
     def close(self) -> None:
-        for controller in self._controllers:
-            controller.close()
+        _close_all(self._controllers)
 
     def _copy_and_flush(self, force: bool) -> None:
         for controller, indices, output in zip(
@@ -622,8 +636,7 @@ class MultiController(Controller):
             controller.force_flush()
 
     def close(self) -> None:
-        for controller in self._controllers:
-            controller.close()
+        _close_all(self._controllers)
 
 
 class DualController(MultiController):

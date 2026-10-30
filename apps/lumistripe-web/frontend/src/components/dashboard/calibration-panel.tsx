@@ -53,6 +53,7 @@ export function CalibrationPanel({ controller }: { controller: DashboardControll
   const pendingRef = useRef<PendingUpdate | null>(null)
   const timerRef = useRef<number | null>(null)
   const inFlightRef = useRef<Promise<boolean> | null>(null)
+  const drainUpdatesRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false))
   useUnsavedChangesGuard(sessionId !== null)
 
   const profile = useMemo(
@@ -81,10 +82,11 @@ export function CalibrationPanel({ controller }: { controller: DashboardControll
       return true
     })()
     inFlightRef.current = operation
-    void operation.finally(() => {
-      inFlightRef.current = null
-      if (pendingRef.current) void drainUpdates()
-    })
+    const continueQueuedUpdates = () => {
+      if (inFlightRef.current === operation) inFlightRef.current = null
+      if (pendingRef.current) void drainUpdatesRef.current()
+    }
+    void operation.then(continueQueuedUpdates, continueQueuedUpdates)
     return operation
   }, [updateCalibration])
 
@@ -107,6 +109,10 @@ export function CalibrationPanel({ controller }: { controller: DashboardControll
   }, [sessionId])
 
   useEffect(() => {
+    drainUpdatesRef.current = drainUpdates
+  }, [drainUpdates])
+
+  useEffect(() => {
     if (sessionId && state && !state.calibration.active) {
       sessionRef.current = null
       setSessionId(null)
@@ -114,7 +120,7 @@ export function CalibrationPanel({ controller }: { controller: DashboardControll
       resetCorrection({ red: 255, green: 255, blue: 255 })
       toast.info("The calibration session ended.")
     }
-  }, [sessionId, state])
+  }, [resetCorrection, sessionId, state])
 
   useEffect(() => {
     const warnBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -127,8 +133,15 @@ export function CalibrationPanel({ controller }: { controller: DashboardControll
 
   useEffect(() => () => {
     if (timerRef.current !== null) window.clearTimeout(timerRef.current)
+    pendingRef.current = null
     const activeSession = sessionRef.current
-    if (activeSession) void finishCalibration(activeSession, false)
+    sessionRef.current = null
+    if (activeSession) {
+      void (async () => {
+        await inFlightRef.current?.catch(() => false)
+        await finishCalibration(activeSession, false)
+      })()
+    }
   }, [finishCalibration])
 
   if (!state) return null

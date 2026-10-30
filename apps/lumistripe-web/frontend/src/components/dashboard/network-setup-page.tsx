@@ -32,6 +32,13 @@ export function NetworkSetupPage() {
     [interfaceName, status],
   )
   const selectedNetwork = networks.find((network) => network.ssid === ssid)
+  const clearNetworkDraft = () => {
+    setNetworks([])
+    setSsid("")
+    setPassword("")
+    setOperationError(null)
+    setConnectedMessage(null)
+  }
 
   useEffect(() => {
     const controller = new AbortController()
@@ -56,8 +63,13 @@ export function NetworkSetupPage() {
     try {
       const next = await dashboardApi.getNetworkStatus()
       setStatus(next)
-      if (!next.adapters.some((adapter) => adapter.interface === interfaceName && adapter.connectable)) {
-        setInterfaceName(next.adapters.find((adapter) => adapter.connectable)?.interface ?? "")
+      const currentAdapter = next.adapters.find(
+        (adapter) => adapter.interface === interfaceName,
+      )
+      if (!currentAdapter?.connectable) {
+        const nextInterface = next.adapters.find((adapter) => adapter.connectable)?.interface ?? ""
+        if (nextInterface !== interfaceName) setInterfaceName(nextInterface)
+        clearNetworkDraft()
       }
     } catch (error) {
       setStatusError(error instanceof Error ? error.message : "Could not load Wi-Fi adapters.")
@@ -130,12 +142,8 @@ export function NetworkSetupPage() {
                   <label htmlFor="wifi-adapter" className="text-sm font-medium">Internet adapter</label>
                   <Select value={interfaceName} onValueChange={(value) => {
                     setInterfaceName(value ?? "")
-                    setNetworks([])
-                    setSsid("")
-                    setPassword("")
-                    setOperationError(null)
-                    setConnectedMessage(null)
-                  }} disabled={busy || !status.manager_available}>
+                    clearNetworkDraft()
+                  }} disabled={loading || busy || !status.manager_available}>
                     <SelectTrigger id="wifi-adapter" aria-label="Internet adapter" className="h-11 w-full rounded-xl">
                       <SelectValue>{selectedAdapter ? `${selectedAdapter.interface}${selectedAdapter.hotspot ? " · Hotspot (protected)" : selectedAdapter.current_ssid ? ` · Connected to ${selectedAdapter.current_ssid}` : " · Available"}` : "Select an adapter"}</SelectValue>
                     </SelectTrigger>
@@ -154,7 +162,7 @@ export function NetworkSetupPage() {
               ) : null}
 
               <div className="flex flex-wrap items-center gap-2">
-                <Button type="button" variant="outline" disabled={busy || !selectedAdapter?.connectable || !status?.manager_available} onClick={() => { void scanNetworks() }}>
+                <Button type="button" variant="outline" disabled={loading || busy || !selectedAdapter?.connectable || !status?.manager_available} onClick={() => { void scanNetworks() }}>
                   <RefreshCwIcon aria-hidden="true" className={busy ? "animate-spin" : ""} />
                   {busy ? "Working…" : networks.length ? "Scan again" : "Scan for networks"}
                 </Button>
@@ -170,7 +178,7 @@ export function NetworkSetupPage() {
                       setPassword("")
                       setOperationError(null)
                       setConnectedMessage(null)
-                    }} disabled={busy}>
+                    }} disabled={loading || busy}>
                       <SelectTrigger id="wifi-network" aria-label="Wi-Fi network" className="h-11 w-full rounded-xl">
                         <SelectValue>{selectedNetwork ? `${selectedNetwork.ssid} · ${selectedNetwork.security} · ${signalLabel(selectedNetwork.signal)}` : "Select a network"}</SelectValue>
                       </SelectTrigger>
@@ -182,11 +190,11 @@ export function NetworkSetupPage() {
                   {selectedNetwork?.secured && (
                     <div className="space-y-2">
                       <label htmlFor="wifi-password" className="text-sm font-medium">Wi-Fi password</label>
-                      <Input id="wifi-password" type="password" autoComplete="new-password" maxLength={63} value={password} onChange={(event) => setPassword(event.target.value)} disabled={busy} className="h-11 rounded-xl" />
+                      <Input id="wifi-password" type="password" autoComplete="new-password" maxLength={63} value={password} onChange={(event) => setPassword(event.target.value)} disabled={loading || busy} className="h-11 rounded-xl" />
                       <p className="text-xs text-muted-foreground">The password is sent securely to NetworkManager and is not saved in LumiStripe.</p>
                     </div>
                   )}
-                  <Button type="button" disabled={busy || !selectedNetwork || Boolean(selectedNetwork?.secured && password.length < 8)} onClick={() => { void connect() }}>
+                  <Button type="button" disabled={loading || busy || !selectedNetwork || Boolean(selectedNetwork?.secured && password.length < 8)} onClick={() => { void connect() }}>
                     Connect
                   </Button>
                 </div>

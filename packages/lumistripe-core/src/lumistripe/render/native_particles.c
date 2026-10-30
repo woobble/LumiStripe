@@ -23,9 +23,11 @@ PyObject *render_confetti_into(PyObject *module, PyObject *args) {
     }
     if ((audio_mode != 0 && audio_mode != 1) || !isfinite(fade) || fade < 0.0 ||
         fade > 1.0 || !isfinite(spread) || spread < 0.0 || spread > 1.0 ||
-        !isfinite(trigger_rate) || trigger_rate < 0.0 || density < 0 ||
-        !isfinite(addition) || addition < 0.0 || !isfinite(accent) ||
-        !isfinite(high) || !isfinite(bloom) || !isfinite(brightness) ||
+        !isfinite(trigger_rate) || trigger_rate < 0.0 || trigger_rate > 100.0 ||
+        density < 0 || density > 100 || !isfinite(addition) || addition < 0.0 ||
+        addition > 1.0 || !isfinite(accent) || accent < 0.0 || accent > 1.0 ||
+        !isfinite(high) || high < 0.0 || high > 1.0 || !isfinite(bloom) ||
+        bloom < 0.0 || bloom > 1.0 || !isfinite(brightness) ||
         brightness < 0.0 || brightness > 1.0 || hue_shift < 0 || hue_shift > 255 ||
         palette < 0 || palette > 3 || custom_rgb > 0xFFFFFFu) {
         PyErr_SetString(PyExc_ValueError, "invalid Confetti render parameters");
@@ -43,10 +45,11 @@ PyObject *render_confetti_into(PyObject *module, PyObject *args) {
         }
         for (int band = 0; band < 8; band++) {
             bands[band] = PyFloat_AsDouble(PySequence_Fast_GET_ITEM(sequence, band));
-            if (PyErr_Occurred() || !isfinite(bands[band])) {
+            if (PyErr_Occurred() || !isfinite(bands[band]) ||
+                bands[band] < 0.0 || bands[band] > 1.0) {
                 Py_DECREF(sequence);
                 if (!PyErr_Occurred())
-                    PyErr_SetString(PyExc_ValueError, "bands must be finite values");
+                    PyErr_SetString(PyExc_ValueError, "bands must be normalized finite values");
                 return NULL;
             }
         }
@@ -58,7 +61,9 @@ PyObject *render_confetti_into(PyObject *module, PyObject *args) {
     const double decay = audio_mode
         ? fmax(0.68, 0.68 + fade * 0.30 - high * 0.03)
         : 0.72 + fade * 0.32;
-    const npy_intp center = count > 0 ? (npy_intp)(((uint64_t)frame * 37u) % (uint64_t)count) : 0;
+    const npy_intp center = count > 0
+        ? multiply_modulo_ssize(frame, 37u, count)
+        : 0;
     for (npy_intp index = 0; index < count; index++) {
         const uint64_t seed = (uint64_t)frame * UINT64_C(1103515245) +
                               (uint64_t)index * UINT64_C(12345);
@@ -151,7 +156,8 @@ PyObject *render_glow_rush_into(PyObject *module, PyObject *args) {
         !isfinite(pulse) || pulse < 0.0 || pulse > 1.0 ||
         !isfinite(glow_width) || glow_width <= 0.0 || !isfinite(brightness) ||
         brightness < 0.0 || brightness > 1.0 || (audio_mode != 0 && audio_mode != 1) ||
-        main_light < 0 || main_light > 100 || !isfinite(glow_alpha) || glow_alpha < 0.0 ||
+        main_light < 0 || main_light > 100 || !isfinite(glow_alpha) ||
+        glow_alpha < 0.0 || glow_alpha > 1.0 ||
         palette < 0 || palette > 3 || custom_rgb > 0xFFFFFFu) {
         PyErr_SetString(PyExc_ValueError, "invalid GlowRush render parameters");
         return NULL;
@@ -355,7 +361,8 @@ PyObject *render_twinkle_into(PyObject *module, PyObject *args) {
         reject_any_overlap(levels, hues, "levels", "hues") < 0) {
         return NULL;
     }
-    if (radius < 0 || !isfinite(bloom) || !isfinite(brightness) ||
+    if (radius < 0 || !isfinite(bloom) || bloom < 0.0 || bloom > 1.0 ||
+        !isfinite(brightness) ||
         brightness < 0.0 || brightness > 1.0 || palette < 0 || palette > 3 ||
         custom_rgb > 0xFFFFFFu) {
         PyErr_SetString(PyExc_ValueError, "invalid Twinkle render parameters");
@@ -364,13 +371,17 @@ PyObject *render_twinkle_into(PyObject *module, PyObject *args) {
     const float *level_values = (const float *)PyArray_DATA(levels);
     const int16_t *hue_values = (const int16_t *)PyArray_DATA(hues);
     uint8_t *output = (uint8_t *)PyArray_DATA(destination);
+    const npy_intp radius_value = (npy_intp)radius;
     for (npy_intp index = 0; index < count; index++) {
         const double position = count <= 1 ? 0.0 : (double)index / (double)(count - 1);
         const double drift = sin((double)frame * 0.018 + position * 4.2) * 0.5 + 0.5;
         double level = (double)level_values[index];
         if (radius > 1) {
-            const npy_intp left = index > radius ? index - radius : 0;
-            const npy_intp right = index + radius + 1 < count ? index + radius + 1 : count;
+            const npy_intp left = index > radius_value ? index - radius_value : 0;
+            const npy_intp remaining_right = count - index - 1;
+            const npy_intp right = radius_value >= remaining_right
+                ? count
+                : index + radius_value + 1;
             for (npy_intp neighbor = left; neighbor < right; neighbor++) {
                 const double neighbor_level = (double)level_values[neighbor] *
                     (1.0 - (double)llabs((long long)neighbor - (long long)index) /
@@ -416,7 +427,8 @@ PyObject *render_comet_into(PyObject *module, PyObject *args) {
     if (validate_rgba(destination, "destination", 1) < 0)
         return NULL;
     if (!isfinite(position) || !isfinite(tail) || tail <= 0.0 ||
-        !isfinite(shimmer) || !isfinite(hue) || !isfinite(intensity) ||
+        !isfinite(shimmer) || shimmer < 0.0 || shimmer > 1.0 ||
+        !isfinite(hue) || !isfinite(intensity) ||
         intensity < 0.0 || intensity > 1.0 || !isfinite(brightness) ||
         brightness < 0.0 || brightness > 1.0 || palette < 0 || palette > 3 ||
         custom_rgb > 0xFFFFFFu) {
@@ -445,11 +457,17 @@ PyObject *render_comet_into(PyObject *module, PyObject *args) {
             blue = (uint8_t)(custom_rgb & 0xFFu);
         } else {
             double selected_hue = fmod(hue, 360.0);
-            if (palette == 1)
-                selected_hue = (double)neon_hues[(int)(hue / 45.0) % 7];
-            else if (palette == 2) {
+            if (palette == 1) {
+                double palette_hue = fmod(hue, 315.0);
+                if (palette_hue < 0.0)
+                    palette_hue += 315.0;
+                selected_hue = (double)neon_hues[(int)(palette_hue / 45.0)];
+            } else if (palette == 2) {
                 static const int fire_hues[5] = {0, 10, 22, 35, 48};
-                selected_hue = (double)fire_hues[(int)(hue / 55.0) % 5];
+                double palette_hue = fmod(hue, 275.0);
+                if (palette_hue < 0.0)
+                    palette_hue += 275.0;
+                selected_hue = (double)fire_hues[(int)(palette_hue / 55.0)];
             }
             hsl_to_rgb(selected_hue, 100.0, (double)lightness,
                        &red, &green, &blue);
@@ -482,9 +500,13 @@ PyObject *render_disco_sparkle_into(PyObject *module, PyObject *args) {
         reject_any_overlap(destination, intensities, "destination", "intensities") < 0) {
         return NULL;
     }
-    if ((audio_mode != 0 && audio_mode != 1) || density < 0 || density > 100 ||
-        (accent_trigger != 0 && accent_trigger != 1) || !isfinite(decay) ||
-        !isfinite(variation) || !isfinite(hue_rate) || !isfinite(pulse) ||
+    if (frame < 0 || (audio_mode != 0 && audio_mode != 1) ||
+        density < 0 || density > 100 ||
+        (accent_trigger != 0 && accent_trigger != 1) ||
+        !isfinite(decay) || decay < 0.0 || decay > 1.0 ||
+        !isfinite(variation) || variation < 0.0 || variation > 1.0 ||
+        !isfinite(hue_rate) || hue_rate < 0.0 || hue_rate > 3.0 ||
+        !isfinite(pulse) || pulse < 0.0 || pulse > 10.0 ||
         !isfinite(brightness) || brightness < 0.0 || brightness > 1.0 ||
         palette < 0 || palette > 3 || custom_rgb > 0xFFFFFFu) {
         PyErr_SetString(PyExc_ValueError, "invalid DiscoSparkle render parameters");
@@ -522,8 +544,11 @@ PyObject *render_disco_sparkle_into(PyObject *module, PyObject *args) {
             pixels[offset + 3u] = 0u;
             continue;
         }
-        const int variation_value = (int)(((int)(seed % UINT64_C(21)) - 10) * variation);
-        const int animated_frame = audio_mode ? (int)((double)frame * hue_rate) : (int)frame * 3;
+        const int variation_value =
+            (int)(((int)(seed % UINT64_C(21)) - 10) * variation);
+        const int animated_frame = audio_mode
+            ? (int)fmod(trunc((double)frame * hue_rate), 256.0)
+            : (int)(((frame % 256LL) * 3LL) % 256LL);
         int hue = (int)((seed / UINT64_C(100)) % UINT64_C(256)) + animated_frame + variation_value;
         hue %= 256;
         if (hue < 0)
@@ -560,11 +585,12 @@ void write_transparent_palette_pixel(uint8_t *pixels, size_t offset,
 PyObject *render_firework_burst_into(PyObject *module, PyObject *args) {
     (void)module;
     PyArrayObject *destination, *phases, *bursts;
-    int phase_count, burst_count, frame, audio_mode, hue, palette;
+    int phase_count, burst_count, audio_mode, hue, palette;
+    long long frame;
     double center, fade_alpha, glow, mid, high, brightness;
     PyObject *bands_object;
     unsigned int custom_rgb;
-    if (!PyArg_ParseTuple(args, "O!O!O!iiiiddddddOiiI", &PyArray_Type,
+    if (!PyArg_ParseTuple(args, "O!O!O!iiLiddddddOiiI", &PyArray_Type,
                           &destination, &PyArray_Type, &phases, &PyArray_Type,
                           &bursts, &phase_count, &burst_count, &frame,
                           &audio_mode, &center, &fade_alpha, &glow, &mid,
@@ -611,7 +637,8 @@ PyObject *render_firework_burst_into(PyObject *module, PyObject *args) {
     if (phase_count < 0 || phase_count > 12 || burst_count < 0 || burst_count > 12 ||
         (audio_mode != 0 && audio_mode != 1) || !isfinite(center) || center < 0.0 ||
         !isfinite(fade_alpha) || fade_alpha < 0.0 || fade_alpha > 1.0 ||
-        !isfinite(glow) || glow < 0.0 || !isfinite(mid) || mid < 0.0 || mid > 1.0 ||
+        !isfinite(glow) || glow < 0.0 || glow > 1.0 ||
+        !isfinite(mid) || mid < 0.0 || mid > 1.0 ||
         !isfinite(high) || high < 0.0 || high > 1.0 || frame < 0 ||
         !isfinite(brightness) || brightness < 0.0 || brightness > 1.0 ||
         hue < 0 || hue > 255 || palette < 0 || palette > 3 ||
@@ -619,6 +646,7 @@ PyObject *render_firework_burst_into(PyObject *module, PyObject *args) {
         PyErr_SetString(PyExc_ValueError, "invalid FireworkBurst render parameters");
         return NULL;
     }
+    const int burst_cycle_index = (int)((frame / 36LL) % 5LL);
     double band_values[32] = {0.0};
     Py_ssize_t band_count = 0;
     if (bands_object != Py_None) {
@@ -637,7 +665,8 @@ PyObject *render_firework_burst_into(PyObject *module, PyObject *args) {
                 band_values[band] < 0.0 || band_values[band] > 1.0) {
                 Py_DECREF(sequence);
                 if (!PyErr_Occurred())
-                    PyErr_SetString(PyExc_ValueError, "bands must be finite values");
+                    PyErr_SetString(PyExc_ValueError,
+                                    "bands must be normalized finite values");
                 return NULL;
             }
         }
@@ -654,15 +683,13 @@ PyObject *render_firework_burst_into(PyObject *module, PyObject *args) {
         int pixel_hue = hue;
         int lightness = 60;
         if (!audio_mode) {
-            const int burst_id = (int)(frame / 36);
             for (int phase_index = 0; phase_index < phase_count; phase_index++) {
                 const double phase = phase_values[phase_index];
                 if (dist <= phase) {
                     const double sparkle_dist = (phase - dist) / fmax(phase, 1.0);
                     const double candidate = fmax(1.0 - sparkle_dist * 1.5, 0.0);
-                    int offset = ((int)index * 7 + burst_id * 13) % 5;
-                    if (offset < 0)
-                        offset += 5;
+                    const int offset = ((int)(index % 5) * 7 +
+                                        burst_cycle_index * 13) % 5;
                     const double variance = (double)(offset - 2) * 0.04;
                     alpha = fmax(alpha, fmax(candidate + variance, 0.0));
                 }
@@ -682,14 +709,16 @@ PyObject *render_firework_burst_into(PyObject *module, PyObject *args) {
                 if (dist <= phase) {
                     const double sparkle_dist = (phase - dist) / fmax(phase, 1.0);
                     double wave_alpha = fmax(1.0 - sparkle_dist * 1.8, 0.0) * strength;
-                    const int particle = ((int)index * 7 + (int)(phase * 10.0) * 13) % 7;
+                    const int phase_units = (int)(phase * 10.0);
+                    const int particle =
+                        ((int)(index % 7) * 7 + (phase_units % 7) * 13) % 7;
                     wave_alpha = fmax(wave_alpha + (double)(particle - 3) * 0.06, 0.0);
                     double band_sparkle = 0.0;
                     if (band_count > 0) {
-                        const Py_ssize_t band_index = length <= 1
-                            ? 0
-                            : fmin((double)(index * band_count / length),
-                                   (double)(band_count - 1));
+                        const double scaled_band_index =
+                            (double)index * (double)band_count / (double)length;
+                        const Py_ssize_t band_index = (Py_ssize_t)fmin(
+                            scaled_band_index, (double)(band_count - 1));
                         band_sparkle = band_values[band_index] * 0.2;
                     }
                     alpha = fmin(alpha + wave_alpha + band_sparkle, 1.0);
@@ -747,6 +776,16 @@ PyObject *render_color_burst_into(PyObject *module, PyObject *args) {
         return NULL;
     }
     const double *state = (const double *)PyArray_DATA(bursts);
+    for (int burst_index = 0; burst_index < burst_count; burst_index++) {
+        const double hue = state[burst_index * 5 + 2];
+        const double strength = state[burst_index * 5 + 3];
+        if (hue < (double)INT_MIN || hue > (double)INT_MAX ||
+            strength < 0.0 || strength > 1.0) {
+            PyErr_SetString(PyExc_ValueError,
+                            "active burst hue or strength is outside the supported range");
+            return NULL;
+        }
+    }
     const npy_intp length = PyArray_DIM(destination, 0);
     uint8_t *pixels = (uint8_t *)PyArray_DATA(destination);
     for (npy_intp index = 0; index < length; index++) {
@@ -756,11 +795,6 @@ PyObject *render_color_burst_into(PyObject *module, PyObject *args) {
     }
     static const int club_hues[7] = {330, 18, 48, 126, 190, 224, 286};
     for (int burst_index = 0; burst_index < burst_count; burst_index++) {
-        if (state[burst_index * 5 + 2] < (double)INT_MIN ||
-            state[burst_index * 5 + 2] > (double)INT_MAX) {
-            PyErr_SetString(PyExc_ValueError, "active burst hues must fit in a signed int");
-            return NULL;
-        }
         const double center = state[burst_index * 5];
         const double radius = state[burst_index * 5 + 1];
         const int hue_seed = (int)state[burst_index * 5 + 2];
@@ -813,7 +847,7 @@ PyObject *render_neon_confetti_into(PyObject *module, PyObject *args) {
         reject_any_overlap(levels, hues, "levels", "hues") < 0) {
         return NULL;
     }
-    if (!isfinite(fade_multiplier) || fade_multiplier < 0.0 ||
+    if (!isfinite(fade_multiplier) || fade_multiplier < 0.0 || fade_multiplier > 1.0 ||
         !isfinite(spawn_threshold) || spawn_threshold < 0.0 ||
         !isfinite(high) || high < 0.0 || high > 1.0 || !isfinite(spread) ||
         spread < 0.0 || spread > 1.0 || !isfinite(brightness) ||
@@ -826,8 +860,7 @@ PyObject *render_neon_confetti_into(PyObject *module, PyObject *args) {
     int16_t *hue_values = (int16_t *)PyArray_DATA(hues);
     uint8_t *pixels = (uint8_t *)PyArray_DATA(destination);
     const npy_intp safe_length = length > 0 ? length : 1;
-    const Py_ssize_t frame_mod = frame % safe_length;
-    const double center = (double)((frame_mod * 53) % safe_length);
+    const double center = (double)multiply_modulo_ssize(frame, 53u, safe_length);
     for (npy_intp index = 0; index < length; index++) {
         const size_t offset = (size_t)index * 4u;
         pixels[offset] = pixels[offset + 1u] = pixels[offset + 2u] = 0u;
@@ -901,9 +934,8 @@ PyObject *render_disco_comet_into(PyObject *module, PyObject *args) {
             continue;
         const double intensity = fmax(0.0, 1.0 - distance / width);
         uint8_t red, green, blue;
-        Py_ssize_t club_index = ((Py_ssize_t)hue + index * 5) % 7;
-        if (club_index < 0)
-            club_index += 7;
+        const int club_index =
+            (hue + (int)((index % 7) * 5)) % 7;
         palette_hsl_to_rgb((double)club_hues[club_index], 100.0, 58.0,
                            palette, custom_rgb, &red, &green, &blue);
         double alpha = fmin(1.0, trail + intensity * 0.85) * brightness;
@@ -918,7 +950,8 @@ PyObject *render_disco_comet_into(PyObject *module, PyObject *args) {
             (uint64_t)index * 31u + (uint64_t)(int)(high * 100.0);
         if (distance < width * 0.8 &&
             (int)(sparkle_seed % 100u) < sparkle_threshold) {
-            const Py_ssize_t neon_index = ((Py_ssize_t)hue + (Py_ssize_t)sparkle_seed) % 7;
+            const int seed_modulo = (int)(sparkle_seed % 7u);
+            const int neon_index = (hue + seed_modulo) % 7;
             const double sparkle_alpha = fmin(1.0, 0.65 + high * 0.35);
             palette_hsl_to_rgb((double)neon_hues[neon_index], 100.0, 62.0,
                                palette, custom_rgb, &red, &green, &blue);
@@ -928,8 +961,7 @@ PyObject *render_disco_comet_into(PyObject *module, PyObject *args) {
             pixels[offset + 2u] = blue;
             pixels[offset + 3u] = (uint8_t)(sparkle_alpha * brightness * 255.0);
             if (index + 1 < length && (sparkle_seed / 7u) % 2u == 0u) {
-                const Py_ssize_t neighbor_index =
-                    ((Py_ssize_t)hue + (Py_ssize_t)sparkle_seed + 13) % 7;
+                const int neighbor_index = (hue + seed_modulo + 13) % 7;
                 const double neighbor_alpha = fmin(1.0, 0.42 + high * 0.24);
                 palette_hsl_to_rgb((double)neon_hues[neighbor_index], 100.0, 62.0,
                                    palette, custom_rgb, &red, &green, &blue);
@@ -977,6 +1009,15 @@ PyObject *render_pixel_explosion_into(PyObject *module, PyObject *args) {
         return NULL;
     }
     const double *state = (const double *)PyArray_DATA(bursts);
+    for (int burst = 0; burst < burst_count; burst++) {
+        const double hue = state[burst * 4 + 2];
+        const double alpha = state[burst * 4 + 3];
+        if (hue < 0.0 || hue > 359.0 || alpha < 0.0 || alpha > 1.0) {
+            PyErr_SetString(PyExc_ValueError,
+                            "active explosion hues or alpha are outside the supported range");
+            return NULL;
+        }
+    }
     uint8_t *pixels = (uint8_t *)PyArray_DATA(destination);
     for (npy_intp index = 0; index < length; index++) {
         const size_t offset = (size_t)index * 4u;
@@ -984,10 +1025,6 @@ PyObject *render_pixel_explosion_into(PyObject *module, PyObject *args) {
         pixels[offset + 3u] = 0u;
     }
     for (int burst = 0; burst < burst_count; burst++) {
-        if (state[burst * 4 + 2] < 0.0 || state[burst * 4 + 2] > 359.0) {
-            PyErr_SetString(PyExc_ValueError, "active explosion hues must be between zero and 359");
-            return NULL;
-        }
         const double x = state[burst * 4];
         const double radius = state[burst * 4 + 1];
         const int hue = (int)state[burst * 4 + 2];

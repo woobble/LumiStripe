@@ -35,6 +35,25 @@ def test_bounded_audio_buffer_drops_oldest_batch() -> None:
     assert buffer.wait_until_idle(timeout=0.0) is True
 
 
+def test_audio_batch_buffer_carries_all_dropped_samples_to_next_batch() -> None:
+    buffer = BoundedAudioBatchBuffer(max_batches=2)
+    batches = [np.full(size, index, dtype=np.float32) for index, size in ((1, 2), (2, 3), (3, 4), (4, 5))]
+    for batch in batches:
+        assert buffer.push(batch) is True
+
+    received = buffer.pop_batch(timeout=0.0)
+    assert received is not None
+    np.testing.assert_array_equal(received.samples, batches[2])
+    assert received.dropped_samples_before == len(batches[0]) + len(batches[1])
+    buffer.task_done()
+
+    received = buffer.pop_batch(timeout=0.0)
+    assert received is not None
+    np.testing.assert_array_equal(received.samples, batches[3])
+    assert received.dropped_samples_before == 0
+    buffer.task_done()
+
+
 def test_audio_batch_buffer_preserves_capture_timestamp() -> None:
     buffer = BoundedAudioBatchBuffer(max_batches=2)
     samples = np.array([0.25], dtype=np.float32)

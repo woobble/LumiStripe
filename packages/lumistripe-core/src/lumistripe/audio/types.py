@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from math import isfinite
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -256,7 +257,8 @@ class AudioSnapshot:
 
     @property
     def bpm(self) -> float:
-        return self.features.bpm
+        value = self.features.bpm
+        return value if isfinite(value) and value > 0.0 else 0.0
 
     @property
     def activity(self) -> float:
@@ -319,6 +321,8 @@ def _low_mid_high(bands: tuple[float, ...]) -> tuple[float, float, float]:
 
 
 def _clamp01(value: float) -> float:
+    if not isfinite(value):
+        return 0.0
     return max(0.0, min(1.0, value))
 
 

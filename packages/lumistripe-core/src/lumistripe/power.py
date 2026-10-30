@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from math import isfinite
 
 import numpy as np
 import numpy.typing as npt
@@ -21,11 +22,13 @@ class OutputPowerEstimate:
     def __post_init__(self) -> None:
         if not self.output_id.strip():
             raise ValueError("output_id must not be empty")
-        if self.watts < 0.0:
-            raise ValueError("watts must not be negative")
-        if self.limit_watts is not None and self.limit_watts <= 0.0:
-            raise ValueError("limit_watts must be greater than zero")
-        if not 0.0 <= self.applied_scale <= 1.0:
+        if not isfinite(self.watts) or self.watts < 0.0:
+            raise ValueError("watts must be finite and not negative")
+        if self.limit_watts is not None and (
+            not isfinite(self.limit_watts) or self.limit_watts <= 0.0
+        ):
+            raise ValueError("limit_watts must be finite and greater than zero")
+        if not isfinite(self.applied_scale) or not 0.0 <= self.applied_scale <= 1.0:
             raise ValueError("applied_scale must be between zero and one")
 
 
@@ -55,19 +58,41 @@ def estimate_frame_power(
     representation.
     """
 
-    if voltage_v <= 0.0:
-        raise ValueError("voltage_v must be greater than zero")
-    if full_white_current_a <= 0.0:
-        raise ValueError("full_white_current_a must be greater than zero")
+    if not isfinite(voltage_v) or voltage_v <= 0.0:
+        raise ValueError("voltage_v must be finite and greater than zero")
+    if not isfinite(full_white_current_a) or full_white_current_a <= 0.0:
+        raise ValueError("full_white_current_a must be finite and greater than zero")
     frame = np.asarray(pixels)
     if frame.ndim != 2 or frame.shape[1] < 4:
         raise ValueError("power estimation requires an RGBA pixel buffer")
     if frame.shape[0] == 0:
         return 0.0
-    normalized = np.clip(frame[:, :4].astype(np.float64), 0.0, 255.0) / 255.0
-    channel_duty = normalized[:, :3].mean(axis=1) * normalized[:, 3]
-    current_a = float(channel_duty.sum()) * full_white_current_a
-    return current_a * voltage_v
+    if frame.dtype == np.uint8:
+        # Runtime LED frames use uint8, so contract RGB with alpha directly
+        # instead of allocating a normalized frame and per-pixel duty array.
+        weighted_channels = float(
+            np.einsum("ij,i->", frame[:, :3], frame[:, 3], dtype=np.float64)
+        )
+        channel_duty = weighted_channels / (3.0 * 255.0 * 255.0)
+        watts = channel_duty * full_white_current_a * voltage_v
+        if not isfinite(watts):
+            raise ValueError("power estimate is outside the finite numeric range")
+        return watts
+    if np.iscomplexobj(frame[:, :4]):
+        raise ValueError("power estimation requires real-valued pixel channels")
+    try:
+        channels = frame[:, :4].astype(np.float64)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("power estimation requires numeric pixel channels") from exc
+    if not np.isfinite(channels).all():
+        raise ValueError("pixel channels must be finite")
+    normalized = np.clip(channels, 0.0, 255.0) / 255.0
+    per_pixel_duty = normalized[:, :3].mean(axis=1) * normalized[:, 3]
+    current_a = float(per_pixel_duty.sum()) * full_white_current_a
+    watts = current_a * voltage_v
+    if not isfinite(watts):
+        raise ValueError("power estimate is outside the finite numeric range")
+    return watts
 
 
 def apply_power_budget(
@@ -78,10 +103,14 @@ def apply_power_budget(
 ) -> PowerBudgetResult:
     """Choose one global scale from global and per-output limits."""
 
-    if budget_watts is not None and budget_watts < 0.0:
-        raise ValueError("budget_watts must not be negative")
+    if budget_watts is not None and (
+        not isfinite(budget_watts) or budget_watts < 0.0
+    ):
+        raise ValueError("budget_watts must be finite and not negative")
     output_values = tuple(estimates)
     total_watts = sum(max(0.0, estimate.watts) for estimate in output_values)
+    if not isfinite(total_watts):
+        raise ValueError("total estimated watts exceed the finite numeric range")
     if not enabled:
         return PowerBudgetResult(
             enabled=False,

@@ -4,6 +4,10 @@
 #include <string.h>
 #include <math.h>
 #include <stdlib.h>
+#include <float.h>
+#include <limits.h>
+#include <stdint.h>
+#include <stdalign.h>
 #include "kiss_fftr.h"
 
 #define FFT_SIZE 2048
@@ -49,7 +53,7 @@ typedef struct {
     float normalization_gain;
     float input_rms;
     float musical_impact;
-    int feed_count;
+    long long feed_count;
     long long samples_seen;
     float sample_sum;
 
@@ -57,20 +61,20 @@ typedef struct {
     int buffer_pos;
 
     float rms_history[RMS_HISTORY_SIZE];
-    int rms_idx;
+    long long rms_idx;
     float onset_history[ONSET_HISTORY_SIZE];
-    int onset_idx;
+    long long onset_idx;
     float prev_rms;
     float prev_feature_bands[NUM_BANDS];
     float prev_onset;
     float smooth_onset;
-    int last_onset_frame;
+    long long last_onset_sample_position;
     float ioi_buffer[MAX_IOI_BUFFER];
     int ioi_buffer_len;
     float bpm;
     float brightness;
     float dynamic_range;
-    int fft_call_count;
+    long long fft_call_count;
 
     float window[FFT_SIZE];
     float frequencies[FFT_SIZE / 2];
@@ -155,33 +159,26 @@ static float _apply_noise_floor(float value, float floor) {
     return scaled;
 }
 
-static float _median(float *arr, int n) {
-    if (n <= 0) return 0.0f;
-    float *tmp = malloc(n * sizeof(float));
-    if (!tmp) return 0.0f;
-    memcpy(tmp, arr, n * sizeof(float));
-    qsort(tmp, n, sizeof(float), _cmp_float);
-    float result = tmp[n / 2];
-    free(tmp);
-    return result;
+static float _median(const float *arr, int n) {
+    if (n <= 0 || n > MAX_IOI_BUFFER) return 0.0f;
+    /* The IOI history is fixed-size; avoid heap failure in the DSP path. */
+    float sorted[MAX_IOI_BUFFER];
+    memcpy(sorted, arr, (size_t)n * sizeof(float));
+    qsort(sorted, (size_t)n, sizeof(float), _cmp_float);
+    return sorted[n / 2];
 }
 
-static float _percentile(float *arr, int n, float p) {
-    if (n <= 0) return 0.0f;
-    float *tmp = malloc(n * sizeof(float));
-    if (!tmp) return 0.0f;
-    memcpy(tmp, arr, n * sizeof(float));
-    qsort(tmp, n, sizeof(float), _cmp_float);
+/* The caller supplies a sorted, nonempty history. */
+static float _percentile_sorted(const float *sorted, int n, float p) {
     float idx = (p / 100.0f) * (float)(n - 1);
     int lo = (int)idx;
     float frac = idx - (float)lo;
     float result;
     if (lo + 1 < n) {
-        result = tmp[lo] + frac * (tmp[lo + 1] - tmp[lo]);
+        result = sorted[lo] + frac * (sorted[lo + 1] - sorted[lo]);
     } else {
-        result = tmp[lo];
+        result = sorted[lo];
     }
-    free(tmp);
     return result;
 }
 
@@ -261,8 +258,8 @@ static void _compute_features(AudioProcessor *self, float rms, float *bands,
     );
 
     if (!silent_now && s->smooth_onset > ONSET_THRESHOLD && s->smooth_onset > s->prev_onset * 1.4f) {
-        int interval = s->fft_call_count - s->last_onset_frame;
-        float interval_sec = (float)interval * (float)FFT_HOP_SIZE / s->sample_rate;
+        long long interval_samples = s->samples_seen - s->last_onset_sample_position;
+        float interval_sec = (float)interval_samples / s->sample_rate;
         if (interval_sec > BPM_INTERVAL_MIN && interval_sec < BPM_INTERVAL_MAX) {
             if (s->ioi_buffer_len < MAX_IOI_BUFFER) {
                 s->ioi_buffer[s->ioi_buffer_len++] = interval_sec;
@@ -274,7 +271,7 @@ static void _compute_features(AudioProcessor *self, float rms, float *bands,
                 s->bpm = 60.0f / _median(s->ioi_buffer, s->ioi_buffer_len);
             }
         }
-        s->last_onset_frame = s->fft_call_count;
+        s->last_onset_sample_position = s->samples_seen;
     }
     s->prev_onset = s->smooth_onset;
 
@@ -301,10 +298,13 @@ static void _compute_features(AudioProcessor *self, float rms, float *bands,
     s->brightness = centroid_norm * 0.35f + off_bass_share * 0.75f + high_share * 0.35f;
     if (s->brightness > 1.0f) s->brightness = 1.0f;
 
-    int window = (s->rms_idx < RMS_HISTORY_SIZE) ? s->rms_idx : RMS_HISTORY_SIZE;
+    int window = (s->rms_idx < RMS_HISTORY_SIZE) ? (int)s->rms_idx : RMS_HISTORY_SIZE;
     if (window > 10) {
-        float p95 = _percentile(s->rms_history, window, 95.0f);
-        float p10 = _percentile(s->rms_history, window, 10.0f);
+        float sorted_rms[RMS_HISTORY_SIZE];
+        memcpy(sorted_rms, s->rms_history, (size_t)window * sizeof(float));
+        qsort(sorted_rms, (size_t)window, sizeof(float), _cmp_float);
+        float p95 = _percentile_sorted(sorted_rms, window, 95.0f);
+        float p10 = _percentile_sorted(sorted_rms, window, 10.0f);
         s->dynamic_range = fmaxf(0.0f, p95 - p10);
     } else {
         s->dynamic_range = 0.0f;
@@ -316,7 +316,7 @@ static void _compute_features(AudioProcessor *self, float rms, float *bands,
     float bass_delta = bass - s->prev_drop_bass;
 
     if (silent_now) {
-        s->silence_frames++;
+        if (s->silence_frames < 8) s->silence_frames++;
     } else {
         s->silence_frames = 0;
     }
@@ -610,18 +610,27 @@ static void _process_fft(AudioProcessor *self) {
 
 static int AudioProcessor_init(AudioProcessor *self, PyObject *args, PyObject *kwds) {
     PyObject *config_dict = NULL;
-    float sample_rate = 44100.0f;
+    double sample_rate = 44100.0;
     static char *kwlist[] = {"config", "sample_rate", NULL};
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!|f", kwlist, &PyDict_Type, &config_dict, &sample_rate))
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!|d", kwlist, &PyDict_Type, &config_dict, &sample_rate))
         return -1;
+
+    if (self->fft_cfg != NULL) {
+        PyErr_SetString(PyExc_RuntimeError, "AudioProcessor is already initialized");
+        return -1;
+    }
+    if (!isfinite(sample_rate) || sample_rate < 1.0 || sample_rate > (double)INT_MAX) {
+        PyErr_SetString(PyExc_ValueError, "sample rate must be finite and between 1 and INT_MAX");
+        return -1;
+    }
 
     AudioProcessorState *s = &self->s;
     memset(s, 0, sizeof(AudioProcessorState));
     s->sample_rate = sample_rate;
     s->normalization_gain = 1.0f;
     s->bpm = 120.0f;
-    s->last_onset_frame = 0;
+    s->last_onset_sample_position = 0;
 
     s->noise_floor = 0.015f;
     s->rms_attack = 0.45f;
@@ -651,6 +660,7 @@ static int AudioProcessor_init(AudioProcessor *self, PyObject *args, PyObject *k
     while (PyDict_Next(config_dict, &pos, &key, &value)) {
         if (!PyUnicode_Check(key)) continue;
         const char *k = PyUnicode_AsUTF8(key);
+        if (k == NULL) return -1;
         double v = PyFloat_AsDouble(value);
         if (PyErr_Occurred()) {
             if (PyBool_Check(value)) {
@@ -661,35 +671,45 @@ static int AudioProcessor_init(AudioProcessor *self, PyObject *args, PyObject *k
                 continue;
             }
         }
-        #define SET_FLOAT(field) else if (strcmp(k, #field) == 0) s->field = (float)v
-        #define SET_INT(field) else if (strcmp(k, #field) == 0) s->field = (int)v
+        #define SET_FLOAT(field) else if (strcmp(k, #field) == 0) { \
+            if (!isfinite(v) || fabs(v) > FLT_MAX) { \
+                PyErr_Format(PyExc_ValueError, "%s must be a finite float", k); return -1; \
+            } \
+            s->field = (float)v; \
+        }
+        #define SET_INT(field) else if (strcmp(k, #field) == 0) { \
+            if (!isfinite(v) || v < INT_MIN || v > INT_MAX) { \
+                PyErr_Format(PyExc_ValueError, "%s must fit in an integer", k); return -1; \
+            } \
+            s->field = (int)v; \
+        }
 
         if (0) {}
-        SET_FLOAT(noise_floor);
-        SET_FLOAT(rms_attack);
-        SET_FLOAT(rms_release);
-        SET_FLOAT(band_attack);
-        SET_FLOAT(band_release);
-        SET_FLOAT(beat_release);
-        SET_INT(smoothing_enabled);
-        SET_FLOAT(target_level);
-        SET_FLOAT(min_gain);
-        SET_FLOAT(max_gain);
-        SET_FLOAT(adapt_attack);
-        SET_FLOAT(adapt_release);
-        SET_FLOAT(music_threshold);
-        SET_FLOAT(music_max_gain);
-        SET_FLOAT(silence_floor);
-        SET_INT(normalization_enabled);
-        SET_INT(dc_block_enabled);
-        SET_INT(microphone_enabled);
-        SET_FLOAT(input_noise_floor);
-        SET_FLOAT(high_pass_hz);
-        SET_FLOAT(drop_bass_threshold);
-        SET_FLOAT(drop_bass_delta_threshold);
-        SET_FLOAT(drop_onset_threshold);
-        SET_FLOAT(section_change_threshold);
-        SET_FLOAT(section_onset_threshold);
+        SET_FLOAT(noise_floor)
+        SET_FLOAT(rms_attack)
+        SET_FLOAT(rms_release)
+        SET_FLOAT(band_attack)
+        SET_FLOAT(band_release)
+        SET_FLOAT(beat_release)
+        SET_INT(smoothing_enabled)
+        SET_FLOAT(target_level)
+        SET_FLOAT(min_gain)
+        SET_FLOAT(max_gain)
+        SET_FLOAT(adapt_attack)
+        SET_FLOAT(adapt_release)
+        SET_FLOAT(music_threshold)
+        SET_FLOAT(music_max_gain)
+        SET_FLOAT(silence_floor)
+        SET_INT(normalization_enabled)
+        SET_INT(dc_block_enabled)
+        SET_INT(microphone_enabled)
+        SET_FLOAT(input_noise_floor)
+        SET_FLOAT(high_pass_hz)
+        SET_FLOAT(drop_bass_threshold)
+        SET_FLOAT(drop_bass_delta_threshold)
+        SET_FLOAT(drop_onset_threshold)
+        SET_FLOAT(section_change_threshold)
+        SET_FLOAT(section_onset_threshold)
 
         #undef SET_FLOAT
         #undef SET_INT
@@ -721,6 +741,8 @@ static void AudioProcessor_dealloc(AudioProcessor *self) {
 }
 
 static PyObject* AudioProcessor_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {
+    (void)args;
+    (void)kwds;
     AudioProcessor *self = (AudioProcessor *)type->tp_alloc(type, 0);
     if (self) {
         self->fft_cfg = NULL;
@@ -732,12 +754,18 @@ static PyObject* AudioProcessor_feed_samples(AudioProcessor *self, PyObject *arg
     PyObject *obj;
     if (!PyArg_ParseTuple(args, "O", &obj))
         return NULL;
+    if (self->fft_cfg == NULL) {
+        PyErr_SetString(PyExc_RuntimeError, "AudioProcessor is not initialized");
+        return NULL;
+    }
 
     Py_buffer view;
     if (PyObject_GetBuffer(obj, &view, PyBUF_FORMAT | PyBUF_ND | PyBUF_C_CONTIGUOUS) != 0)
         return NULL;
 
-    if (view.ndim != 1 || view.format[0] != 'f') {
+    if (view.ndim != 1 || view.format == NULL || strcmp(view.format, "f") != 0 ||
+        view.itemsize != sizeof(float) || view.len % sizeof(float) != 0 ||
+        (uintptr_t)view.buf % alignof(float) != 0) {
         PyErr_SetString(PyExc_TypeError, "expected a 1-D float32 array");
         PyBuffer_Release(&view);
         return NULL;
@@ -749,18 +777,34 @@ static PyObject* AudioProcessor_feed_samples(AudioProcessor *self, PyObject *arg
         PyBuffer_Release(&view);
         Py_RETURN_NONE;
     }
+    if (size > LLONG_MAX - self->s.samples_seen) {
+        PyBuffer_Release(&view);
+        PyErr_SetString(PyExc_OverflowError, "audio sample counter overflow");
+        return NULL;
+    }
 
     self->s.feed_count++;
     float abs_sum = 0.0f;
-    for (Py_ssize_t i = 0; i < size; i++) abs_sum += fabsf(samples[i]);
-    self->s.sample_sum += abs_sum;
+    for (Py_ssize_t i = 0; i < size; i++) {
+        if (!isfinite(samples[i]))
+            continue;
+        const float magnitude = fabsf(samples[i]);
+        if (magnitude >= FLT_MAX - abs_sum) {
+            abs_sum = FLT_MAX;
+            break;
+        }
+        abs_sum += magnitude;
+    }
+    if (abs_sum >= FLT_MAX - self->s.sample_sum)
+        self->s.sample_sum = FLT_MAX;
+    else
+        self->s.sample_sum += abs_sum;
 
     Py_ssize_t offset = 0;
     float high_pass_coefficient = expf(-2.0f * (float)M_PI * self->s.high_pass_hz / self->s.sample_rate);
     while (offset < size) {
         int remaining = FFT_SIZE - self->s.buffer_pos;
-        int chunk = (int)(size - offset);
-        if (chunk > remaining) chunk = remaining;
+        int chunk = size - offset > remaining ? remaining : (int)(size - offset);
         for (int i = 0; i < chunk; i++) {
             float sample = samples[offset + i];
             if (!isfinite(sample)) sample = 0.0f;
@@ -905,10 +949,15 @@ static PyObject* AudioProcessor_features(AudioProcessor *self, PyObject *Py_UNUS
 }
 
 static PyObject* AudioProcessor_state_copy(AudioProcessor *self, PyObject *Py_UNUSED(ignored)) {
+    if (self->fft_cfg == NULL) {
+        PyErr_SetString(PyExc_RuntimeError, "AudioProcessor is not initialized");
+        return NULL;
+    }
     PyTypeObject *type = Py_TYPE(self);
     AudioProcessor *clone = (AudioProcessor *)type->tp_alloc(type, 0);
     if (!clone) return NULL;
 
+    clone->fft_cfg = NULL;
     clone->s = self->s;
 
     clone->fft_cfg = kiss_fftr_alloc(FFT_SIZE, 0, NULL, NULL);
@@ -957,6 +1006,29 @@ static PyObject* AudioProcessor_reset(AudioProcessor *self, PyObject *Py_UNUSED(
     Py_RETURN_NONE;
 }
 
+static PyObject* AudioProcessor_mark_discontinuity(
+    AudioProcessor *self, PyObject *args
+) {
+    long long dropped_samples = 0;
+    if (!PyArg_ParseTuple(args, "L", &dropped_samples)) return NULL;
+    if (dropped_samples < 0) {
+        PyErr_SetString(PyExc_ValueError, "dropped samples must be non-negative");
+        return NULL;
+    }
+    if (dropped_samples == 0) Py_RETURN_NONE;
+
+    AudioProcessorState *s = &self->s;
+    if (
+        dropped_samples > LLONG_MAX - s->samples_seen
+        || s->samples_seen + dropped_samples > LLONG_MAX - FFT_SIZE
+    ) {
+        PyErr_SetString(PyExc_OverflowError, "audio sample counter overflow");
+        return NULL;
+    }
+    s->samples_seen += dropped_samples;
+    Py_RETURN_NONE;
+}
+
 static PyObject* AudioProcessor_normalization_gain(AudioProcessor *self, PyObject *Py_UNUSED(ignored)) {
     return PyFloat_FromDouble((double)self->s.normalization_gain);
 }
@@ -989,6 +1061,7 @@ static PyMethodDef AudioProcessor_methods[] = {
     {"features", (PyCFunction)AudioProcessor_features, METH_NOARGS, "Get current MusicFeatures as named fields"},
     {"state_copy", (PyCFunction)AudioProcessor_state_copy, METH_NOARGS, "Deep clone state"},
     {"reset", (PyCFunction)AudioProcessor_reset, METH_NOARGS, "Reset state to initial values"},
+    {"mark_discontinuity", (PyCFunction)AudioProcessor_mark_discontinuity, METH_VARARGS, "Account for dropped samples in the audio timeline"},
     {"normalization_gain", (PyCFunction)AudioProcessor_normalization_gain, METH_NOARGS, "Current AGC gain value"},
     {"stats", (PyCFunction)AudioProcessor_stats, METH_NOARGS, "Get processor counters and gain as named fields"},
     {NULL, NULL, 0, NULL},
@@ -1012,10 +1085,9 @@ static PyMethodDef module_methods[] = {
 
 static struct PyModuleDef audiomodule = {
     PyModuleDef_HEAD_INIT,
-    "lumistripe.audio._audio",
-    NULL,
-    -1,
-    module_methods,
+    .m_name = "lumistripe.audio._audio",
+    .m_size = -1,
+    .m_methods = module_methods,
 };
 
 PyMODINIT_FUNC PyInit__audio(void) {

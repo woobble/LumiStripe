@@ -11,5 +11,13 @@ Environment=HOME=@LUMI_SERVICE_HOME@
 Environment=PATH=@LUMI_SERVICE_HOME@/.bun/bin:@LUMI_SERVICE_HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=LUMI_UPDATE_STATE_FILE=/var/lib/lumistripe/update/status.json
 ExecStart=/usr/bin/python3 @LUMI_PROJECT_DIR@/deploy/update_state.py check --project-dir @LUMI_PROJECT_DIR@ --state-file /var/lib/lumistripe/update/status.json
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
 TimeoutStartSec=40
 

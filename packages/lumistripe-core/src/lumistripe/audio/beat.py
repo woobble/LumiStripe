@@ -8,6 +8,9 @@ from dataclasses import dataclass, field
 
 from .types import BeatClockState, BeatEvent
 
+_MIN_BEAT_INTERVAL_SECONDS = 0.18
+_MAX_CONTIGUOUS_BEAT_GAP_SECONDS = 2.0
+
 
 @dataclass(slots=True)
 class BeatClockTracker:
@@ -26,8 +29,29 @@ class BeatClockTracker:
     _candidate_period: float | None = field(default=None, init=False)
     _candidate_count: int = field(default=0, init=False)
 
+    def __post_init__(self) -> None:
+        if (
+            not math.isfinite(self.min_bpm)
+            or not math.isfinite(self.max_bpm)
+            or self.min_bpm <= 0.0
+            or self.max_bpm < self.min_bpm
+        ):
+            raise ValueError("BPM bounds must be finite, positive, and ordered")
+        if (
+            not math.isfinite(self.tempo_gain)
+            or not 0.0 <= self.tempo_gain <= 1.0
+            or not math.isfinite(self.phase_gain)
+            or not 0.0 <= self.phase_gain <= 1.0
+        ):
+            raise ValueError("beat-clock gains must be finite values in [0, 1]")
+        self._period = self._initial_period()
+
+    def _initial_period(self) -> float:
+        initial_bpm = min(self.max_bpm, max(self.min_bpm, 120.0))
+        return 60.0 / initial_bpm
+
     def reset(self) -> None:
-        self._period = 0.5
+        self._period = self._initial_period()
         self._last_beat_at = None
         self._last_event_at = None
         self._last_sequence = 0
@@ -43,6 +67,15 @@ class BeatClockTracker:
         now_s: float,
         fallback_bpm: float | None = None,
     ) -> BeatClockState:
+        if not math.isfinite(now_s):
+            raise ValueError("now_s must be finite")
+        next_sequence = self._last_sequence
+        for event in events:
+            if event.sequence <= next_sequence:
+                continue
+            if not math.isfinite(event.timestamp):
+                raise ValueError("beat event timestamps must be finite")
+            next_sequence = event.sequence
         for event in events:
             if event.sequence <= self._last_sequence:
                 continue
@@ -51,6 +84,8 @@ class BeatClockTracker:
         return self.state(now_s)
 
     def state(self, now_s: float) -> BeatClockState:
+        if not math.isfinite(now_s):
+            raise ValueError("now_s must be finite")
         last = self._last_beat_at
         if last is None:
             return BeatClockState(bpm=60.0 / self._period)
@@ -90,9 +125,23 @@ class BeatClockTracker:
             self._beat_index += 1
             return
 
+        if event.timestamp <= self._last_event_at:
+            return
         interval = event.timestamp - self._last_event_at
         self._last_event_at = event.timestamp
-        if not 0.18 <= interval <= 2.0:
+        if interval > _MAX_CONTIGUOUS_BEAT_GAP_SECONDS:
+            previous_beat_at = self._last_beat_at
+            if previous_beat_at is not None:
+                elapsed_beats = int(
+                    (event.timestamp - previous_beat_at) / self._period
+                )
+                self._beat_index += max(1, elapsed_beats)
+            self._last_beat_at = event.timestamp
+            self._interval_errors.clear()
+            self._candidate_period = None
+            self._candidate_count = 0
+            return
+        if interval < _MIN_BEAT_INTERVAL_SECONDS:
             return
 
         current_period = self._period

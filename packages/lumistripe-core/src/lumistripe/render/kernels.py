@@ -427,8 +427,8 @@ def render_drop_explosion_into(
         raise ValueError("destination must be writable")
     if not np.isfinite((flash_alpha, tension, preview, low, high, brightness)).all():
         raise ValueError("drop explosion render values must be finite")
-    if not 0.0 <= brightness <= 1.0:
-        raise ValueError("brightness must be between zero and one")
+    if not all(0.0 <= value <= 1.0 for value in (flash_alpha, tension, preview, low, high, brightness)):
+        raise ValueError("drop explosion render values must be between zero and one")
     assert _native_module is not None
     _native_module.render_drop_explosion_into(
         destination,
@@ -476,8 +476,12 @@ def render_fire_into(
         ):
             raise ValueError(f"{name} must be a writable float32 vector matching destination")
     values = (cooling, sparking, drive, bass, shimmer, accent, brightness)
-    if not np.isfinite(values).all() or not 0.0 <= brightness <= 1.0:
-        raise ValueError("fire render values must be finite and brightness between zero and one")
+    if (
+        not np.isfinite(values).all()
+        or any(not 0.0 <= value <= 1.0 for value in values[:-1])
+        or not 0.0 <= brightness <= 1.0
+    ):
+        raise ValueError("fire render values must be finite and normalized")
     assert _native_module is not None
     _native_module.render_fire_into(
         destination,
@@ -958,8 +962,20 @@ def render_confetti_into(
     values = (fade, spread, trigger_rate, addition, accent, high, bloom, brightness)
     if not np.isfinite(values).all():
         raise ValueError("Confetti render parameters must be finite")
-    if not 0.0 <= fade <= 1.0 or not 0.0 <= spread <= 1.0 or not 0.0 <= brightness <= 1.0:
-        raise ValueError("Confetti fade, spread, or brightness is outside its valid range")
+    if (
+        not 0.0 <= fade <= 1.0
+        or not 0.0 <= spread <= 1.0
+        or not 0.0 <= trigger_rate <= 100.0
+        or not 0 <= density <= 100
+        or not 0.0 <= addition <= 1.0
+        or not 0.0 <= accent <= 1.0
+        or not 0.0 <= high <= 1.0
+        or not 0.0 <= bloom <= 1.0
+        or not 0.0 <= brightness <= 1.0
+    ):
+        raise ValueError("Confetti render parameters are outside their normalized ranges")
+    if bands is not None and any(not 0.0 <= value <= 1.0 for value in bands):
+        raise ValueError("Confetti bands must be normalized")
     assert _native_module is not None
     _native_module.render_confetti_into(
         destination,
@@ -1027,7 +1043,7 @@ def render_glow_rush_into(
         or glow_width <= 0
         or not 0 <= brightness <= 1
         or not 0 <= main_light <= 100
-        or glow_alpha < 0
+        or not 0.0 <= glow_alpha <= 1.0
     ):
         raise ValueError("GlowRush render parameters are outside their valid ranges")
     assert _native_module is not None
@@ -1259,7 +1275,14 @@ def render_disco_sparkle_into(
     ):
         raise ValueError("intensities must be writable contiguous float32 matching destination")
     values = (decay, variation, hue_rate, pulse, brightness)
-    if not np.isfinite(values).all() or not 0.0 <= brightness <= 1.0:
+    if (
+        not np.isfinite(values).all()
+        or not 0.0 <= decay <= 1.0
+        or not 0.0 <= variation <= 1.0
+        or not 0.0 <= hue_rate <= 3.0
+        or not 0.0 <= pulse <= 10.0
+        or not 0.0 <= brightness <= 1.0
+    ):
         raise ValueError("DiscoSparkle render parameters must be finite and valid")
     palette_id, custom_rgb = _palette_parameters(palette, custom_color)
     assert _native_module is not None
@@ -1397,7 +1420,14 @@ def render_beat_explosion_into(
     if not destination.flags.writeable:
         raise ValueError("destination must be writable")
     values = (center, radius, width, hit, low, mid, high, brightness)
-    if not np.isfinite(values).all() or center < 0.0 or width <= 0.0:
+    if (
+        not np.isfinite(values).all()
+        or center < 0.0
+        or width <= 0.0
+        or not 0.0 <= low <= 1.0
+        or not 0.0 <= mid <= 1.0
+        or not 0.0 <= high <= 1.0
+    ):
         raise ValueError("BeatExplosion render parameters must be finite and valid")
     if not 0.0 <= hit <= 1.0 or not 0.0 <= brightness <= 1.0:
         raise ValueError("BeatExplosion hit and brightness must be between zero and one")
@@ -1464,9 +1494,19 @@ def render_firework_burst_into(
     values = (center, fade_alpha, glow, mid, high, brightness)
     if not np.isfinite(values).all() or center < 0.0:
         raise ValueError("FireworkBurst parameters must be finite and valid")
-    if not 0.0 <= fade_alpha <= 1.0 or not 0.0 <= brightness <= 1.0:
-        raise ValueError("FireworkBurst fade and brightness must be between zero and one")
-    if bands is not None and (len(bands) > 32 or not np.isfinite(bands).all()):
+    if (
+        not 0.0 <= fade_alpha <= 1.0
+        or not 0.0 <= glow <= 1.0
+        or not 0.0 <= mid <= 1.0
+        or not 0.0 <= high <= 1.0
+        or not 0.0 <= brightness <= 1.0
+    ):
+        raise ValueError("FireworkBurst render values must be between zero and one")
+    if bands is not None and (
+        len(bands) > 32
+        or not np.isfinite(bands).all()
+        or any(not 0.0 <= band <= 1.0 for band in bands)
+    ):
         raise ValueError("FireworkBurst audio bands are invalid")
     palette_id, custom_rgb = _palette_parameters(palette, custom_color)
     assert _native_module is not None
@@ -1520,6 +1560,8 @@ def render_color_burst_into(
         raise ValueError("ColorBurst parameters must be finite and valid")
     if not 0.0 <= brightness <= 1.0:
         raise ValueError("ColorBurst brightness must be between zero and one")
+    if np.any((bursts[:burst_count, 3] < 0.0) | (bursts[:burst_count, 3] > 1.0)):
+        raise ValueError("ColorBurst active strengths must be between zero and one")
     palette_id, custom_rgb = _palette_parameters(palette, custom_color)
     assert _native_module is not None
     _native_module.render_color_burst_into(
@@ -1667,6 +1709,7 @@ def render_neon_confetti_into(
         raise ValueError("NeonConfetti parameters must be finite")
     if (
         fade_multiplier < 0.0
+        or fade_multiplier > 1.0
         or spawn_threshold < 0.0
         or not 0.0 <= high <= 1.0
         or not 0.0 <= spread <= 1.0
@@ -2056,6 +2099,8 @@ def render_pixel_explosion_into(
         raise ValueError("PixelExplosion parameters must be finite and valid")
     if not 0.0 <= brightness <= 1.0:
         raise ValueError("PixelExplosion brightness must be between zero and one")
+    if np.any((bursts[:burst_count, 3] < 0.0) | (bursts[:burst_count, 3] > 1.0)):
+        raise ValueError("PixelExplosion active alpha must be between zero and one")
     palette_id, custom_rgb = _palette_parameters(palette, custom_color)
     assert _native_module is not None
     _native_module.render_pixel_explosion_into(
@@ -2099,7 +2144,7 @@ def render_lightning_strike_into(
         strike_length < 0
         or not 0 <= hue <= 255
         or not 0.0 <= flash_alpha <= 1.0
-        or all_flash < 0.0
+        or not 0.0 <= all_flash <= 1.5
         or not 0.0 <= brightness <= 1.0
     ):
         raise ValueError("LightningStrike values are out of range")
@@ -2140,8 +2185,12 @@ def render_comet_into(
     values = (position, tail, shimmer, hue, intensity, brightness)
     if not np.isfinite(values).all() or tail <= 0.0:
         raise ValueError("Comet render parameters must be finite and valid")
-    if not 0.0 <= intensity <= 1.0 or not 0.0 <= brightness <= 1.0:
-        raise ValueError("Comet intensity and brightness must be between zero and one")
+    if (
+        not 0.0 <= shimmer <= 1.0
+        or not 0.0 <= intensity <= 1.0
+        or not 0.0 <= brightness <= 1.0
+    ):
+        raise ValueError("Comet shimmer, intensity, and brightness must be between zero and one")
     palette_id = {"rainbow": 0, "neon": 1, "fire": 2, "custom": 3}.get(palette)
     if palette_id is None or len(custom_color) != 7 or not custom_color.startswith("#"):
         raise ValueError("palette or custom color is invalid")
@@ -2274,8 +2323,13 @@ def render_color_wipe_into(
     if direction not in (-1, 1) or tail <= 0.0:
         raise ValueError("color wipe direction or tail is invalid")
     values = (head, tail, hue, saturation, local, boost, brightness)
-    if not np.isfinite(values).all() or not 0.0 <= brightness <= 1.0:
-        raise ValueError("color wipe values must be finite and brightness in range")
+    if (
+        not np.isfinite(values).all()
+        or not 0.0 <= local <= 1.0
+        or not 0.0 <= boost <= 1.0
+        or not 0.0 <= brightness <= 1.0
+    ):
+        raise ValueError("color wipe values must be finite and normalized")
     assert _native_module is not None
     _native_module.render_color_wipe_into(
         destination,
@@ -2353,8 +2407,12 @@ def render_twinkle_into(
         raise ValueError("levels and hues must be contiguous")
     if radius < 0 or not np.isfinite((bloom, brightness)).all():
         raise ValueError("radius must be non-negative and parameters finite")
-    if not 0.0 <= brightness <= 1.0 or palette not in (0, 1, 2, 3):
-        raise ValueError("brightness or palette is invalid")
+    if (
+        not 0.0 <= bloom <= 1.0
+        or not 0.0 <= brightness <= 1.0
+        or palette not in (0, 1, 2, 3)
+    ):
+        raise ValueError("bloom, brightness, or palette is invalid")
     if not 0 <= custom_rgb <= 0xFFFFFF:
         raise ValueError("custom color is invalid")
     assert _native_module is not None

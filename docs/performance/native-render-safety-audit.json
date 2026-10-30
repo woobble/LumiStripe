@@ -3,7 +3,7 @@
   "scope": "All methods registered by the four native renderer method tables; shared helper functions reachable from these entries.",
   "export_count": 51,
   "export_count_expected_by_request": 51,
-  "count_note": "Repository method tables currently register 52 callable entries; inventory includes all discovered exports.",
+  "count_note": "The four native method tables register 51 named callable entries; inventory records all of them.",
   "overall_status": "incomplete_safety_proof",
   "shared_risks": [
     {
@@ -24,7 +24,7 @@
     {
       "area": "cpython_references",
       "status": "source_inspected_not_exhaustive",
-      "details": "Sequence references observed in relevant paths are decref-ed, but allocation-failure injection and exhaustive control-flow ownership proof were not completed."
+      "details": "All nine project-owned C translation units were scanned for owned references, object construction, and buffer acquisition. All nine renderer PySequence_Fast sites release acquired references on length, conversion, and success paths; audio result constructors and state copies, GPIO allocation cleanup, module ownership, and SM16716 buffer release were source-reviewed. No unmatched owned reference was found. Python allocator fault injection was not performed, and every low-level failure path has not been exhaustively exercised."
     },
     {
       "area": "numpy_buffers",
@@ -34,7 +34,7 @@
     {
       "area": "process_termination",
       "status": "not_proven",
-      "details": "Focused ASan/UBSan tests do not prove invalid input cannot terminate the process across all 52 entry points."
+      "details": "Focused ASan/UBSan tests do not prove invalid input cannot terminate the process across all 51 entry points."
     }
   ],
   "entries": [
@@ -194,59 +194,75 @@
       "export": "render_drop_explosion_into",
       "symbol": "render_drop_explosion_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_composite.c",
-      "line": 237,
+      "line": 242,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
-      "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
+      "unresolved_risk": "Signed frame arithmetic now uses bounded modular reduction and audio levels are range checked. RGBA offsets are bounded by validated array storage; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 257,
+          "line": 238,
+          "expression": "const Py_ssize_t remainder = value % modulus;"
+        },
+        {
+          "line": 264,
           "expression": "for (npy_intp index = 0; index < count; index++) {"
         },
         {
-          "line": 261,
-          "expression": "const double flicker = (double)((frame + index * 7) % 6) / 6.0;"
+          "line": 267,
+          "expression": "const int index_mod_6 = (int)(index % 6);"
         },
         {
-          "line": 269,
-          "expression": "const double pulse = (double)((frame * 3 + index) % 30) / 30.0;"
+          "line": 268,
+          "expression": "const int index_mod_5 = (int)(index % 5);"
         },
         {
-          "line": 274,
-          "expression": "const double flicker = (double)((frame + index * 7) % 5) / 5.0 * high * 0.3;"
-        },
-        {
-          "line": 276,
-          "expression": "const int warmth = (int)(low * 80.0 + 175.0);"
-        },
-        {
-          "line": 277,
-          "expression": "red = 255u; green = (unsigned int)warmth; blue = (unsigned int)(warmth / 2);"
-        },
-        {
-          "line": 280,
-          "expression": "const int warmth = (int)(40.0 + low * 60.0);"
+          "line": 271,
+          "expression": "(positive_modulo(frame, 6) + index_mod_6) % 6;"
         },
         {
           "line": 281,
+          "expression": "(positive_modulo(frame, 30) * 3 + (int)(index % 30)) % 30;"
+        },
+        {
+          "line": 288,
+          "expression": "(positive_modulo(frame, 5) + index_mod_5 * 2) % 5;"
+        },
+        {
+          "line": 292,
+          "expression": "const int warmth = (int)(low * 80.0 + 175.0);"
+        },
+        {
+          "line": 293,
+          "expression": "red = 255u; green = (unsigned int)warmth; blue = (unsigned int)(warmth / 2);"
+        },
+        {
+          "line": 296,
+          "expression": "const int warmth = (int)(40.0 + low * 60.0);"
+        },
+        {
+          "line": 297,
           "expression": "red = (unsigned int)warmth;"
         },
         {
-          "line": 282,
+          "line": 298,
           "expression": "green = (unsigned int)(warmth / 3);"
         },
         {
-          "line": 283,
+          "line": 299,
           "expression": "blue = (unsigned int)(warmth / 6);"
         },
         {
-          "line": 287,
-          "expression": "const double pulse = (double)((frame * 2 + index) % 24) / 24.0;"
+          "line": 304,
+          "expression": "(positive_modulo(frame, 24) * 2 + (int)(index % 24)) % 24;"
         },
         {
-          "line": 294,
+          "line": 312,
           "expression": "const size_t offset = (size_t)index * 4u;"
+        },
+        {
+          "line": 316,
+          "expression": "(uint8_t)(alpha * brightness * 255.0)"
         }
       ]
     },
@@ -254,66 +270,66 @@
       "export": "render_fire_into",
       "symbol": "render_fire_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_composite.c",
-      "line": 303,
+      "line": 321,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
-      "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
+      "unresolved_risk": "All six control values are normalized before the double-to-float calculations, and the color ramp uses clamped heat values. RGBA offset bounds still need the full per-expression proof.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 338,
+          "line": 359,
           "expression": "const uint64_t seed_base = (uint64_t)frame * UINT64_C(2654435761);"
         },
         {
-          "line": 339,
+          "line": 360,
           "expression": "for (npy_intp index = 0; index < count; index++) {"
         },
         {
-          "line": 340,
+          "line": 361,
           "expression": "const uint64_t seed = seed_base + (uint64_t)index * UINT64_C(314159);"
         },
         {
-          "line": 343,
+          "line": 364,
           "expression": "const float left = index > 0 ? heat[index - 1] : heat[index];"
         },
         {
-          "line": 344,
+          "line": 365,
           "expression": "const float right = index + 1 < count ? heat[index + 1] : heat[index];"
         },
         {
-          "line": 356,
+          "line": 377,
           "expression": "for (npy_intp index = 0; index < count; index++) {"
         },
         {
-          "line": 364,
+          "line": 385,
           "expression": "red = (unsigned int)(35.0 + phase * 140.0);"
         },
         {
-          "line": 365,
+          "line": 386,
           "expression": "green = (unsigned int)(phase * 15.0);"
         },
         {
-          "line": 368,
+          "line": 389,
           "expression": "red = (unsigned int)(175.0 + phase * 80.0);"
         },
         {
-          "line": 369,
+          "line": 390,
           "expression": "green = (unsigned int)(15.0 + phase * 100.0);"
         },
         {
-          "line": 370,
+          "line": 391,
           "expression": "blue = (unsigned int)(phase * 8.0);"
         },
         {
-          "line": 374,
+          "line": 395,
           "expression": "green = (unsigned int)(115.0 + phase * 100.0);"
         },
         {
-          "line": 375,
+          "line": 396,
           "expression": "blue = (unsigned int)(8.0 + phase * 18.0);"
         },
         {
-          "line": 377,
+          "line": 398,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -322,26 +338,26 @@
       "export": "render_color_wipe_into",
       "symbol": "render_color_wipe_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_composite.c",
-      "line": 386,
+      "line": 407,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
-      "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
+      "unresolved_risk": "The local and boost values are range checked before the floating-to-integer lightness conversion. RGBA offsets and remaining arithmetic still need the full per-expression proof; allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 408,
+          "line": 430,
           "expression": "for (npy_intp index = 0; index < length; index++) {"
         },
         {
-          "line": 411,
+          "line": 433,
           "expression": ": fmod((double)index - head, (double)length);"
         },
         {
-          "line": 415,
+          "line": 437,
           "expression": "int lightness = 44 + (int)(fade * 18.0 + local * 12.0 + boost * 10.0);"
         },
         {
-          "line": 420,
+          "line": 442,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -350,18 +366,30 @@
       "export": "composite_screen_rgba_into",
       "symbol": "composite_screen_rgba_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_composite.c",
-      "line": 460,
+      "line": 482,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
-      "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
+      "unresolved_risk": "Finite scalars are saturated to the representable float range before narrowing, preserving the Python path's final channel clipping. RGBA offset bounds still need the full per-expression proof.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 521,
+          "line": 539,
+          "expression": "const float base_scale = (float)fmax(-FLT_MAX, fmin(FLT_MAX, base_intensity));"
+        },
+        {
+          "line": 540,
+          "expression": "const float first_scale = (float)fmin(FLT_MAX, strength_1);"
+        },
+        {
+          "line": 541,
+          "expression": "const float second_scale = (float)fmin(FLT_MAX, strength_2);"
+        },
+        {
+          "line": 543,
           "expression": "for (npy_intp index = 0; index < count; index++) {"
         },
         {
-          "line": 522,
+          "line": 544,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -377,63 +405,63 @@
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 61,
-          "expression": "const npy_intp center = count > 0 ? (npy_intp)(((uint64_t)frame * 37u) % (uint64_t)count) : 0;"
-        },
-        {
-          "line": 62,
-          "expression": "for (npy_intp index = 0; index < count; index++) {"
-        },
-        {
-          "line": 63,
-          "expression": "const uint64_t seed = (uint64_t)frame * UINT64_C(1103515245) +"
-        },
-        {
           "line": 64,
-          "expression": "(uint64_t)index * UINT64_C(12345);"
+          "expression": "const npy_intp center = count > 0 ? multiply_modulo_ssize(frame, 37u, count) : 0;"
         },
         {
           "line": 65,
-          "expression": "const npy_intp direct = llabs((long long)index - (long long)center);"
+          "expression": "for (npy_intp index = 0; index < count; index++) {"
         },
         {
           "line": 66,
-          "expression": "const npy_intp wrapped = count - direct;"
+          "expression": "const uint64_t seed = (uint64_t)frame * UINT64_C(1103515245) +"
+        },
+        {
+          "line": 67,
+          "expression": "(uint64_t)index * UINT64_C(12345);"
+        },
+        {
+          "line": 68,
+          "expression": "const npy_intp direct = llabs((long long)index - (long long)center);"
         },
         {
           "line": 69,
+          "expression": "const npy_intp wrapped = count - direct;"
+        },
+        {
+          "line": 72,
           "expression": "fmax(0.0, 1.0 - (double)distance / fmax((double)count * 0.5, 1.0));"
         },
         {
-          "line": 95,
+          "line": 98,
           "expression": "const double band_position = (double)index * 8.0 / (double)(count - 1);"
         },
         {
-          "line": 96,
+          "line": 99,
           "expression": "const int band_center = (int)band_position;"
         },
         {
-          "line": 104,
+          "line": 107,
           "expression": "hue = (int)((seed / 100u + (uint64_t)hue_shift +"
         },
         {
-          "line": 105,
+          "line": 108,
           "expression": "(uint64_t)(int)(local * 18.0)) % 256u);"
         },
         {
-          "line": 106,
+          "line": 109,
           "expression": "lightness = 46 + (int)((double)intensity * 20.0 + high * 8.0);"
         },
         {
-          "line": 109,
+          "line": 112,
           "expression": "hue = (int)((seed / 100u + (uint64_t)frame * 2u) % 256u);"
         },
         {
-          "line": 110,
+          "line": 113,
           "expression": "lightness = 48 + (int)((double)intensity * 16.0);"
         },
         {
-          "line": 128,
+          "line": 131,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -442,22 +470,22 @@
       "export": "render_glow_rush_into",
       "symbol": "render_glow_rush_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_particles.c",
-      "line": 137,
+      "line": 142,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 161,
+          "line": 165,
           "expression": "for (npy_intp index = 0; index < count; index++) {"
         },
         {
-          "line": 162,
+          "line": 166,
           "expression": "const double distance = fabs((double)index - position);"
         },
         {
-          "line": 186,
+          "line": 190,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -466,30 +494,30 @@
       "export": "render_dual_comet_into",
       "symbol": "render_dual_comet_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_particles.c",
-      "line": 195,
+      "line": 201,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 216,
+          "line": 220,
           "expression": "const double max_pos = (double)(count > 0 ? count - 1 : 0);"
         },
         {
-          "line": 221,
+          "line": 225,
           "expression": "for (npy_intp index = 0; index < count; index++) {"
         },
         {
-          "line": 222,
+          "line": 226,
           "expression": "const double distance_a = fabs((double)index - phase);"
         },
         {
-          "line": 223,
+          "line": 227,
           "expression": "const double distance_b = fabs((double)index - other);"
         },
         {
-          "line": 247,
+          "line": 251,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -498,30 +526,30 @@
       "export": "render_comet_storm_into",
       "symbol": "render_comet_storm_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_particles.c",
-      "line": 256,
+      "line": 262,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 292,
+          "line": 296,
           "expression": "for (npy_intp index = 0; index < led_count; index++) {"
         },
         {
-          "line": 293,
+          "line": 297,
           "expression": "const size_t offset = (size_t)index * 4u;"
         },
         {
-          "line": 300,
+          "line": 304,
           "expression": "const size_t base = (size_t)comet * 4u;"
         },
         {
-          "line": 305,
+          "line": 309,
           "expression": "for (npy_intp index = 0; index < led_count; index++) {"
         },
         {
-          "line": 312,
+          "line": 316,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -530,42 +558,42 @@
       "export": "render_twinkle_into",
       "symbol": "render_twinkle_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_particles.c",
-      "line": 334,
+      "line": 340,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 367,
+          "line": 372,
           "expression": "for (npy_intp index = 0; index < count; index++) {"
         },
         {
-          "line": 368,
+          "line": 373,
           "expression": "const double position = count <= 1 ? 0.0 : (double)index / (double)(count - 1);"
         },
         {
-          "line": 369,
+          "line": 374,
           "expression": "const double drift = sin((double)frame * 0.018 + position * 4.2) * 0.5 + 0.5;"
         },
         {
-          "line": 372,
-          "expression": "const npy_intp left = index > radius ? index - radius : 0;"
+          "line": 377,
+          "expression": "const npy_intp left = index > radius_value ? index - radius_value : 0;"
         },
         {
-          "line": 373,
-          "expression": "const npy_intp right = index + radius + 1 < count ? index + radius + 1 : count;"
+          "line": 378,
+          "expression": "const npy_intp right = radius_value >= remaining_right ? count : index + radius_value + 1;"
         },
         {
-          "line": 384,
+          "line": 389,
           "expression": ": 154.0 + (double)(int)(drift * 8.0);"
         },
         {
-          "line": 386,
+          "line": 391,
           "expression": "const double lightness = 28.0 + (double)(int)(drift * 5.0 + level * 34.0);"
         },
         {
-          "line": 396,
+          "line": 401,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -574,31 +602,31 @@
       "export": "render_comet_into",
       "symbol": "render_comet_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_particles.c",
-      "line": 406,
+      "line": 417,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 429,
+          "line": 435,
           "expression": "for (npy_intp index = 0; index < count; index++) {"
         },
         {
-          "line": 431,
+          "line": 437,
           "expression": "const size_t offset = (size_t)index * 4u;"
         },
         {
-          "line": 438,
+          "line": 444,
           "expression": "int lightness = 48 + (int)(strength * 12.0 + shimmer * 10.0);"
         },
         {
-          "line": 449,
-          "expression": "selected_hue = (double)neon_hues[(int)(hue / 45.0) % 7];"
+          "line": 458,
+          "expression": "selected_hue = (double)neon_hues[(int)(palette_hue / 45.0)];"
         },
         {
-          "line": 452,
-          "expression": "selected_hue = (double)fire_hues[(int)(hue / 55.0) % 5];"
+          "line": 464,
+          "expression": "selected_hue = (double)fire_hues[(int)(palette_hue / 55.0)];"
         }
       ]
     },
@@ -606,43 +634,43 @@
       "export": "render_disco_sparkle_into",
       "symbol": "render_disco_sparkle_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_particles.c",
-      "line": 465,
+      "line": 483,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
-      "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
+      "unresolved_risk": "Scalar range checks dominate the conversions and NumPy contiguous-array validation bounds pixel/state access. Unsigned seed arithmetic intentionally wraps; allocation failures while constructing Python error messages were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 496,
+          "line": 512,
           "expression": "const uint64_t frame_seed = (uint64_t)frame * UINT64_C(1103515245);"
         },
         {
-          "line": 498,
+          "line": 514,
           "expression": "for (npy_intp index = 0; index < count; index++) {"
         },
         {
-          "line": 501,
+          "line": 517,
           "expression": "const uint64_t seed = frame_seed + (uint64_t)index * UINT64_C(12345);"
         },
         {
-          "line": 511,
+          "line": 527,
           "expression": "const size_t offset = (size_t)index * 4u;"
         },
         {
-          "line": 525,
-          "expression": "const int variation_value = (int)(((int)(seed % UINT64_C(21)) - 10) * variation);"
+          "line": 542,
+          "expression": "(int)(((int)(seed % UINT64_C(21)) - 10) * variation)"
         },
         {
-          "line": 526,
-          "expression": "const int animated_frame = audio_mode ? (int)((double)frame * hue_rate) : (int)frame * 3;"
+          "line": 544,
+          "expression": "audio_mode ? (int)fmod(trunc((double)frame * hue_rate), 256.0) : (int)(((frame % 256LL) * 3LL) % 256LL)"
         },
         {
-          "line": 527,
+          "line": 546,
           "expression": "int hue = (int)((seed / UINT64_C(100)) % UINT64_C(256)) + animated_frame + variation_value;"
         },
         {
-          "line": 532,
-          "expression": "? (int)(40.0 + (double)strength * 25.0 + pulse)"
+          "line": 551,
+          "expression": "(int)(40.0 + (double)strength * 25.0 + pulse)"
         }
       ]
     },
@@ -650,58 +678,70 @@
       "export": "render_firework_burst_into",
       "symbol": "render_firework_burst_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_particles.c",
-      "line": 560,
+      "line": 585,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 587,
+          "line": 607,
           "expression": "validate_finite_prefix(bursts, (npy_intp)burst_count * 3,"
         },
         {
-          "line": 651,
+          "line": 643,
+          "expression": "const int burst_cycle_index = (int)((frame / 36LL) % 5LL);"
+        },
+        {
+          "line": 674,
           "expression": "for (npy_intp index = 0; index < length; index++) {"
         },
         {
-          "line": 652,
+          "line": 675,
           "expression": "const double dist = fabs((double)index - center);"
         },
         {
-          "line": 657,
-          "expression": "const int burst_id = (int)(frame / 36);"
+          "line": 685,
+          "expression": "const int offset = ((int)(index % 5) * 7 +"
         },
         {
-          "line": 663,
-          "expression": "int offset = ((int)index * 7 + burst_id * 13) % 5;"
+          "line": 686,
+          "expression": "burst_cycle_index * 13) % 5;"
         },
         {
-          "line": 671,
+          "line": 692,
           "expression": "write_transparent_palette_pixel(pixels, (size_t)index * 4u,"
         },
         {
-          "line": 681,
+          "line": 702,
           "expression": "const int burst_hue = (int)burst_values[burst_index * 3 + 2];"
         },
         {
-          "line": 685,
-          "expression": "const int particle = ((int)index * 7 + (int)(phase * 10.0) * 13) % 7;"
+          "line": 706,
+          "expression": "const int phase_units = (int)(phase * 10.0);"
         },
         {
-          "line": 691,
-          "expression": ": fmin((double)(index * band_count / length),"
+          "line": 708,
+          "expression": "((int)(index % 7) * 7 + (phase_units % 7) * 13) % 7;"
         },
         {
-          "line": 701,
+          "line": 713,
+          "expression": "(double)index * (double)band_count / (double)length;"
+        },
+        {
+          "line": 715,
+          "expression": "scaled_band_index, (double)(band_count - 1));"
+        },
+        {
+          "line": 724,
           "expression": "write_transparent_palette_pixel(pixels, (size_t)index * 4u,"
         },
         {
-          "line": 705,
+          "line": 728,
           "expression": "lightness = (int)(45.0 + mid * 20.0 + high * 10.0);"
         },
         {
-          "line": 710,
+          "line": 733,
           "expression": "const size_t output_offset = (size_t)index * 4u;"
         }
       ]
@@ -710,42 +750,42 @@
       "export": "render_color_burst_into",
       "symbol": "render_color_burst_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_particles.c",
-      "line": 719,
+      "line": 748,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 738,
+          "line": 761,
           "expression": "validate_finite_prefix(bursts, (npy_intp)burst_count * 5,"
         },
         {
-          "line": 752,
+          "line": 785,
           "expression": "for (npy_intp index = 0; index < length; index++) {"
         },
         {
-          "line": 753,
+          "line": 786,
           "expression": "const size_t offset = (size_t)index * 4u;"
         },
         {
-          "line": 766,
+          "line": 794,
           "expression": "const int hue_seed = (int)state[burst_index * 5 + 2];"
         },
         {
-          "line": 770,
+          "line": 785,
           "expression": "for (npy_intp index = 0; index < length; index++) {"
         },
         {
-          "line": 771,
+          "line": 799,
           "expression": "const double distance = fabs((double)index - center);"
         },
         {
-          "line": 775,
+          "line": 803,
           "expression": "int hue_index = (hue_seed % 7 + (int)(index % 7)) % 7;"
         },
         {
-          "line": 781,
+          "line": 786,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -754,46 +794,46 @@
       "export": "render_neon_confetti_into",
       "symbol": "render_neon_confetti_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_particles.c",
-      "line": 792,
+      "line": 826,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 831,
+          "line": 859,
           "expression": "for (npy_intp index = 0; index < length; index++) {"
         },
         {
-          "line": 832,
+          "line": 860,
           "expression": "const size_t offset = (size_t)index * 4u;"
         },
         {
-          "line": 836,
+          "line": 864,
           "expression": "const uint32_t seed = (uint32_t)((uint64_t)frame * 48271u +"
         },
         {
-          "line": 837,
+          "line": 865,
           "expression": "(uint64_t)index * 69621u);"
         },
         {
-          "line": 838,
+          "line": 866,
           "expression": "const double direct_distance = fabs((double)index - center);"
         },
         {
-          "line": 839,
+          "line": 867,
           "expression": "const double distance = fmin(direct_distance, (double)length - direct_distance);"
         },
         {
-          "line": 841,
+          "line": 869,
           "expression": "fmax(0.0, 1.0 - distance / fmax((double)length * 0.5, 1.0));"
         },
         {
-          "line": 846,
+          "line": 874,
           "expression": "(uint32_t)index * 13u) % 360u);"
         },
         {
-          "line": 851,
+          "line": 879,
           "expression": "const int hue_index = (int)hue_values[index] % 7;"
         }
       ]
@@ -802,66 +842,66 @@
       "export": "render_disco_comet_into",
       "symbol": "render_disco_comet_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_particles.c",
-      "line": 867,
+      "line": 900,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 893,
+          "line": 921,
           "expression": "for (npy_intp index = 0; index < length; index++) {"
         },
         {
-          "line": 894,
+          "line": 922,
           "expression": "const size_t offset = (size_t)index * 4u;"
         },
         {
-          "line": 898,
+          "line": 921,
           "expression": "for (npy_intp index = 0; index < length; index++) {"
         },
         {
-          "line": 899,
+          "line": 927,
           "expression": "const double distance = fabs((double)index - phase);"
         },
         {
-          "line": 904,
-          "expression": "Py_ssize_t club_index = ((Py_ssize_t)hue + index * 5) % 7;"
+          "line": 932,
+          "expression": "const int club_index = (hue + (int)((index % 7) * 5)) % 7;"
         },
         {
-          "line": 912,
+          "line": 922,
           "expression": "size_t offset = (size_t)index * 4u;"
         },
         {
-          "line": 917,
+          "line": 945,
           "expression": "const uint64_t sparkle_seed = (uint64_t)frame * 97u +"
         },
         {
-          "line": 918,
+          "line": 946,
           "expression": "(uint64_t)index * 31u + (uint64_t)(int)(high * 100.0);"
         },
         {
-          "line": 920,
+          "line": 948,
           "expression": "(int)(sparkle_seed % 100u) < sparkle_threshold) {"
         },
         {
-          "line": 921,
-          "expression": "const Py_ssize_t neon_index = ((Py_ssize_t)hue + (Py_ssize_t)sparkle_seed) % 7;"
+          "line": 949,
+          "expression": "const int neon_index = (hue + seed_modulo) % 7;"
         },
         {
-          "line": 925,
+          "line": 940,
           "expression": "offset = (size_t)index * 4u;"
         },
         {
-          "line": 930,
+          "line": 958,
           "expression": "if (index + 1 < length && (sparkle_seed / 7u) % 2u == 0u) {"
         },
         {
-          "line": 932,
-          "expression": "((Py_ssize_t)hue + (Py_ssize_t)sparkle_seed + 13) % 7;"
+          "line": 960,
+          "expression": "const int neighbor_index = (hue + seed_modulo + 13) % 7;"
         },
         {
-          "line": 936,
+          "line": 964,
           "expression": "offset = (size_t)(index + 1) * 4u;"
         }
       ]
@@ -870,38 +910,38 @@
       "export": "render_pixel_explosion_into",
       "symbol": "render_pixel_explosion_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_particles.c",
-      "line": 947,
+      "line": 979,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 969,
+          "line": 997,
           "expression": "validate_finite_prefix(bursts, (npy_intp)burst_count * 4,"
         },
         {
-          "line": 981,
+          "line": 1018,
           "expression": "for (npy_intp index = 0; index < length; index++) {"
         },
         {
-          "line": 982,
+          "line": 1019,
           "expression": "const size_t offset = (size_t)index * 4u;"
         },
         {
-          "line": 993,
+          "line": 1026,
           "expression": "const int hue = (int)state[burst * 4 + 2];"
         },
         {
-          "line": 995,
+          "line": 1018,
           "expression": "for (npy_intp index = 0; index < length; index++) {"
         },
         {
-          "line": 996,
+          "line": 1029,
           "expression": "const double distance = fabs((double)index - x);"
         },
         {
-          "line": 1004,
+          "line": 1019,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -910,82 +950,82 @@
       "export": "render_rainbow_pattern_into",
       "symbol": "render_rainbow_pattern_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_patterns.c",
-      "line": 95,
+      "line": 104,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 115,
+          "line": 124,
           "expression": "spread > safe_spread || frame < (Py_ssize_t)(INT_MIN / 2) ||"
         },
         {
-          "line": 116,
+          "line": 125,
           "expression": "frame > (Py_ssize_t)(INT_MAX / 2) ||"
         },
         {
-          "line": 139,
+          "line": 148,
           "expression": "for (Py_ssize_t index = 0; index < 8; index++) {"
         },
         {
-          "line": 153,
+          "line": 162,
           "expression": "for (npy_intp index = 0; index < count; index++) {"
         },
         {
-          "line": 154,
+          "line": 163,
           "expression": "const double position = count <= 1 ? 0.0 : (double)index / (double)(count - 1);"
         },
         {
-          "line": 160,
+          "line": 169,
           "expression": "const double band_position = (double)index * 8.0 / (double)(count - 1);"
         },
         {
-          "line": 161,
+          "line": 170,
           "expression": "const int center = (int)band_position;"
         },
         {
-          "line": 175,
+          "line": 184,
           "expression": "hue = (int)base_hue + (int)((double)index * spread);"
         },
         {
-          "line": 176,
+          "line": 185,
           "expression": "lightness = (int)mid;"
         },
         {
-          "line": 179,
-          "expression": "hue = (int)(position * 256.0 * spread + (double)frame * 1.5);"
-        },
-        {
-          "line": 182,
-          "expression": "hue = (int)(position * 256.0 * spread) + (int)base_hue + (int)(local * 44.0);"
-        },
-        {
-          "line": 183,
-          "expression": "lightness = 48 + (int)(mid * 6.0 + local * 6.0);"
-        },
-        {
-          "line": 186,
-          "expression": "const int wave = (int)(sin((double)frame * 0.035) * 10.0);"
-        },
-        {
-          "line": 187,
-          "expression": "hue = (int)(frame % 256) + (int)(position * 256.0 * spread) + wave;"
-        },
-        {
           "line": 188,
-          "expression": "lightness = 48 + (int)((sin((double)frame * 0.06 + position * 6.0) * 0.5 + 0.5) * 4.0);"
-        },
-        {
-          "line": 190,
-          "expression": "hue = (int)base_hue + (int)(position * 256.0 * spread) + (int)(local * 22.0);"
+          "expression": "hue = truncated_modulo_256( position * 256.0 * spread + (double)frame * 1.5 );"
         },
         {
           "line": 191,
+          "expression": "hue = (int)(position * 256.0 * spread) + (int)base_hue + (int)(local * 44.0);"
+        },
+        {
+          "line": 192,
+          "expression": "lightness = 48 + (int)(mid * 6.0 + local * 6.0);"
+        },
+        {
+          "line": 195,
+          "expression": "const int wave = (int)(sin((double)frame * 0.035) * 10.0);"
+        },
+        {
+          "line": 196,
+          "expression": "hue = (int)(frame % 256) + (int)(position * 256.0 * spread) + wave;"
+        },
+        {
+          "line": 197,
+          "expression": "lightness = 48 + (int)((sin((double)frame * 0.06 + position * 6.0) * 0.5 + 0.5) * 4.0);"
+        },
+        {
+          "line": 199,
+          "expression": "hue = (int)base_hue + (int)(position * 256.0 * spread) + (int)(local * 22.0);"
+        },
+        {
+          "line": 200,
           "expression": "lightness = 48 + (int)(low * 6.0 + local * 6.0 + beat_pulse * 8.0);"
         },
         {
-          "line": 210,
+          "line": 219,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -994,35 +1034,39 @@
       "export": "render_theater_chase_into",
       "symbol": "render_theater_chase_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_patterns.c",
-      "line": 219,
+      "line": 230,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 241,
+          "line": 250,
           "expression": "for (npy_intp index = 0; index < count; index++) {"
         },
         {
-          "line": 242,
+          "line": 251,
           "expression": "const int slot = (int)(index % stride);"
         },
         {
-          "line": 248,
+          "line": 257,
           "expression": "const double distance = fmin(direct, (double)stride - direct);"
         },
         {
-          "line": 256,
+          "line": 265,
           "expression": "int center = (int)phase % stride;"
         },
         {
-          "line": 259,
-          "expression": "const int before = (center + stride - 1) % stride;"
+          "line": 268,
+          "expression": "const int before = center == 0 ? stride - 1 : center - 1;"
         },
         {
-          "line": 269,
+          "line": 278,
           "expression": "const size_t offset = (size_t)index * 4u;"
+        },
+        {
+          "line": 264,
+          "expression": "const int after = center == stride - 1 ? 0 : center + 1;"
         }
       ]
     },
@@ -1030,22 +1074,22 @@
       "export": "render_laser_sweep_into",
       "symbol": "render_laser_sweep_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_patterns.c",
-      "line": 293,
+      "line": 304,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 314,
+          "line": 323,
           "expression": "for (npy_intp index = 0; index < count; index++) {"
         },
         {
-          "line": 315,
+          "line": 324,
           "expression": "const double distance = fabs((double)index - position);"
         },
         {
-          "line": 331,
+          "line": 340,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -1054,22 +1098,22 @@
       "export": "render_sinelon_into",
       "symbol": "render_sinelon_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_patterns.c",
-      "line": 340,
+      "line": 351,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 363,
+          "line": 372,
           "expression": "for (npy_intp index = 0; index < count; index++) {"
         },
         {
-          "line": 364,
+          "line": 373,
           "expression": "const double distance = fabs((double)index - center);"
         },
         {
-          "line": 376,
+          "line": 385,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -1078,42 +1122,42 @@
       "export": "render_peak_mirror_into",
       "symbol": "render_peak_mirror_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_patterns.c",
-      "line": 385,
+      "line": 396,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 425,
+          "line": 434,
           "expression": "const npy_intp mirror_span = count > 1 ? (count - 1) / 2 > 1 ? (count - 1) / 2 : 1 : 1;"
         },
         {
-          "line": 426,
+          "line": 435,
           "expression": "const double center = (double)(count - 1) / 2.0;"
         },
         {
-          "line": 428,
+          "line": 437,
           "expression": "for (npy_intp index = 0; index < count; index++) {"
         },
         {
-          "line": 429,
+          "line": 438,
           "expression": "const npy_intp mirrored = index < count - 1 - index ? index : count - 1 - index;"
         },
         {
-          "line": 432,
+          "line": 441,
           "expression": "const int lower = (int)band_position;"
         },
         {
-          "line": 436,
+          "line": 445,
           "expression": "const double center_glow = fmax(0.0, 1.0 - fabs((double)index - center) / width);"
         },
         {
-          "line": 439,
+          "line": 448,
           "expression": "const size_t offset = (size_t)index * 4u;"
         },
         {
-          "line": 443,
+          "line": 452,
           "expression": "int hue = (hue_shift + (int)(band_position * 28.0)) % 360;"
         }
       ]
@@ -1122,22 +1166,22 @@
       "export": "render_bouncing_ball_into",
       "symbol": "render_bouncing_ball_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_patterns.c",
-      "line": 470,
+      "line": 481,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 493,
+          "line": 502,
           "expression": "for (npy_intp index = 0; index < count; index++) {"
         },
         {
-          "line": 494,
+          "line": 503,
           "expression": "const double distance = fabs((double)index - position);"
         },
         {
-          "line": 523,
+          "line": 532,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -1146,50 +1190,74 @@
       "export": "render_wave_into",
       "symbol": "render_wave_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_patterns.c",
-      "line": 532,
+      "line": 543,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
-      "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
+      "unresolved_risk": "Frame hue arithmetic now avoids signed frame/index addition and out-of-range integer casts after bounded feature and phase checks. Other array-offset expressions and CPython allocation-failure paths still need review.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 577,
+          "line": 566,
+          "expression": "const double frame_value = (double)frame;"
+        },
+        {
+          "line": 571,
+          "expression": "const double spatial_phase_bound = 5.5 * frequency;"
+        },
+        {
+          "line": 572,
+          "expression": "const double static_frame_phase = frame_value * 0.28;"
+        },
+        {
+          "line": 573,
+          "expression": "const double audio_frame_phase = frame_value * speed;"
+        },
+        {
+          "line": 605,
           "expression": "for (npy_intp index = 0; index < count; index++) {"
         },
         {
-          "line": 578,
+          "line": 606,
           "expression": "const double position = count <= 1 ? 0.0 : (double)index / (double)(count - 1);"
         },
         {
-          "line": 584,
+          "line": 612,
           "expression": "const double band_position = (double)index * 8.0 / (double)(count - 1);"
         },
         {
-          "line": 585,
+          "line": 613,
           "expression": "const int center = (int)band_position;"
         },
         {
-          "line": 598,
-          "expression": "const double phase = position * 5.5 * frequency + (double)frame * 0.28;"
+          "line": 626,
+          "expression": "const double phase = position * spatial_phase_bound + static_frame_phase;"
         },
         {
-          "line": 600,
-          "expression": "const int hue = ((int)(frame + index) * 2) % 256;"
+          "line": 628,
+          "expression": "const uint64_t frame_index_mod = ((uint64_t)frame + (uint64_t)index) & UINT64_C(0x7F);"
         },
         {
-          "line": 607,
-          "expression": "const double phase = position * 5.5 * frequency + (double)frame * speed + low * 2.0;"
+          "line": 630,
+          "expression": "const int hue = (int)(frame_index_mod * 2u);"
         },
         {
-          "line": 610,
-          "expression": "int hue = (int)((double)(frame + index) * hue_rate) % 256;"
+          "line": 637,
+          "expression": "const double phase = position * spatial_phase_bound + audio_frame_phase + low * 2.0;"
         },
         {
-          "line": 614,
+          "line": 641,
+          "expression": "const double frame_index = (double)((long double)frame + (long double)index);"
+        },
+        {
+          "line": 642,
+          "expression": "int hue = truncated_modulo_256(frame_index * hue_rate);"
+        },
+        {
+          "line": 644,
           "expression": "const int lightness = (int)fmin(56.0 + mid * 8.0 + crest * 6.0, 68.0);"
         },
         {
-          "line": 626,
+          "line": 656,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -1198,30 +1266,50 @@
       "export": "render_juggle_into",
       "symbol": "render_juggle_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_patterns.c",
-      "line": 635,
+      "line": 667,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
-      "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
+      "unresolved_risk": "Hue arithmetic now avoids signed frame/index addition and bounds large finite hue rates before conversion. Other geometry/offset expressions and CPython allocation-failure paths still need review.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 678,
+          "line": 687,
+          "expression": "const long double max_index = count > 0 ? (long double)(count - 1) : 0.0L;"
+        },
+        {
+          "line": 688,
+          "expression": "const long double max_frame_index = fabsl((long double)frame) + max_index;"
+        },
+        {
+          "line": 689,
+          "expression": "if (hue_rate > 1.0 && max_frame_index > (long double)DBL_MAX / (long double)hue_rate) {"
+        },
+        {
+          "line": 715,
           "expression": "for (npy_intp index = 0; index < count; index++) {"
         },
         {
-          "line": 681,
+          "line": 718,
           "expression": "const double distance = fabs((double)index - positions[ball]);"
         },
         {
-          "line": 692,
-          "expression": "int hue = ((int)((double)(frame + index) * hue_rate) + (int)(index * 11 % 128)) % 256;"
+          "line": 729,
+          "expression": "const double frame_index = (double)((long double)frame + (long double)index);"
         },
         {
-          "line": 699,
-          "expression": "red = (uint8_t)((index * 32 + 50) % 256);"
+          "line": 730,
+          "expression": "const int index_hue = (int)(((uint64_t)index * 11u) % 128u);"
         },
         {
-          "line": 707,
+          "line": 731,
+          "expression": "int hue = (truncated_modulo_256(frame_index * hue_rate) + index_hue) % 256;"
+        },
+        {
+          "line": 738,
+          "expression": "red = (uint8_t)(((uint64_t)index * 32u + 50u) % 256u);"
+        },
+        {
+          "line": 746,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -1230,42 +1318,42 @@
       "export": "render_tunnel_rings_into",
       "symbol": "render_tunnel_rings_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_patterns.c",
-      "line": 2,
+      "line": 11,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 37,
+          "line": 46,
           "expression": "const size_t parameter_offset = (size_t)ring_index * 5u;"
-        },
-        {
-          "line": 51,
-          "expression": "for (npy_intp index = 0; index < led_count; index++) {"
-        },
-        {
-          "line": 52,
-          "expression": "const size_t offset = (size_t)index * 4u;"
         },
         {
           "line": 60,
-          "expression": "const size_t parameter_offset = (size_t)ring_index * 5u;"
-        },
-        {
-          "line": 66,
-          "expression": "const size_t color_offset = (size_t)ring_index * 3u;"
-        },
-        {
-          "line": 68,
           "expression": "for (npy_intp index = 0; index < led_count; index++) {"
         },
         {
+          "line": 61,
+          "expression": "const size_t offset = (size_t)index * 4u;"
+        },
+        {
           "line": 69,
+          "expression": "const size_t parameter_offset = (size_t)ring_index * 5u;"
+        },
+        {
+          "line": 75,
+          "expression": "const size_t color_offset = (size_t)ring_index * 3u;"
+        },
+        {
+          "line": 77,
+          "expression": "for (npy_intp index = 0; index < led_count; index++) {"
+        },
+        {
+          "line": 78,
           "expression": "const double distance = fabs((double)index - center);"
         },
         {
-          "line": 76,
+          "line": 85,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -1314,62 +1402,62 @@
       "export": "render_aurora_into",
       "symbol": "render_aurora_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_reactive.c",
-      "line": 93,
+      "line": 96,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 140,
+          "line": 159,
           "expression": "for (npy_intp index = 0; index < count; index++) {"
         },
         {
-          "line": 141,
+          "line": 160,
           "expression": "const double position = count <= 1 ? 0.0 : (double)index / (double)(count - 1);"
         },
         {
-          "line": 145,
+          "line": 164,
           "expression": "const double phase = (double)frame * 0.038 + position * 7.5 * frequency;"
         },
         {
-          "line": 149,
+          "line": 168,
           "expression": "hue = (double)(int)(132.0 + cos(phase * 0.75) * 24.0 + position * 10.0);"
         },
         {
-          "line": 157,
+          "line": 176,
           "expression": "const double band_position = (double)index * 8.0 / (double)(count - 1);"
         },
         {
-          "line": 158,
+          "line": 177,
           "expression": "const int band_center = (int)band_position;"
         },
         {
-          "line": 166,
+          "line": 185,
           "expression": "const double low_wave = sin((double)frame * speed + position * 5.8 * frequency + low * 4.0);"
         },
         {
-          "line": 167,
+          "line": 186,
           "expression": "const double mid_wave = sin((double)frame * (speed * 0.9) + position * 8.5 * frequency + mid * 5.0);"
         },
         {
-          "line": 168,
+          "line": 187,
           "expression": "const double high_wave = cos((double)frame * (speed * 1.7) - position * 11.5 * frequency + high * 7.0);"
         },
         {
-          "line": 171,
+          "line": 190,
           "expression": "hue = (double)((hue_offset + 120 + (int)(position * 34.0) +"
         },
         {
-          "line": 172,
+          "line": 191,
           "expression": "(int)(mid * 16.0) + (int)(local * 10.0)) % 256);"
         },
         {
-          "line": 174,
+          "line": 193,
           "expression": "lightness = (int)fmin(50.0 + high * 12.0 + local * 8.0 + beat_glow * 8.0, 68.0);"
         },
         {
-          "line": 186,
+          "line": 205,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -1378,34 +1466,34 @@
       "export": "render_spectrum_flash_into",
       "symbol": "render_spectrum_flash_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_reactive.c",
-      "line": 195,
+      "line": 221,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 243,
+          "line": 263,
           "expression": "for (npy_intp index = 0; index < count; index++) {"
         },
         {
-          "line": 244,
+          "line": 264,
           "expression": "const double ratio = count <= 1 ? 0.0 : (double)index / (double)(count - 1);"
         },
         {
-          "line": 245,
+          "line": 265,
           "expression": "const int band_index = (int)(ratio * 8.0) < 8 ? (int)(ratio * 8.0) : 7;"
         },
         {
-          "line": 259,
+          "line": 279,
           "expression": "const int hue_seed = (int)(hue_phase / 8.0);"
         },
         {
-          "line": 260,
+          "line": 280,
           "expression": "int seed_mod = (hue_seed % 4 + (int)(index % 4)) % 4;"
         },
         {
-          "line": 276,
+          "line": 296,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -1414,34 +1502,34 @@
       "export": "render_pulse_into",
       "symbol": "render_pulse_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_reactive.c",
-      "line": 287,
+      "line": 314,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 310,
+          "line": 331,
           "expression": "for (npy_intp index = 0; index < count; index++) {"
         },
         {
-          "line": 312,
+          "line": 333,
           "expression": "(double)index * 0.05) * 0.5 + 0.5;"
         },
         {
-          "line": 313,
+          "line": 334,
           "expression": "const int lightness = 46 + (int)(spatial * 5.0);"
         },
         {
-          "line": 322,
-          "expression": "selected_hue = (double)neon_hues[(int)(hue / 45.0) % 7];"
+          "line": 343,
+          "expression": "selected_hue = (double)neon_hues[truncated_modulo_int(hue / 45.0, 7)];"
         },
         {
-          "line": 324,
-          "expression": "selected_hue = (double)fire_hues[(int)(hue / 55.0) % 5];"
+          "line": 345,
+          "expression": "selected_hue = (double)fire_hues[truncated_modulo_int(hue / 55.0, 5)];"
         },
         {
-          "line": 328,
+          "line": 349,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -1450,50 +1538,50 @@
       "export": "render_dance_floor_into",
       "symbol": "render_dance_floor_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_reactive.c",
-      "line": 337,
+      "line": 365,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 361,
-          "expression": "? (int)((count + segment_width - 1) / segment_width)"
+          "line": 387,
+          "expression": "const npy_intp segments = count > 0 ? count / width + (count % width != 0) : 1;"
         },
         {
-          "line": 364,
+          "line": 400,
           "expression": "for (npy_intp index = 0; index < count; index++) {"
         },
         {
-          "line": 365,
-          "expression": "const int segment = (int)index / segment_width;"
+          "line": 401,
+          "expression": "const npy_intp segment = index / width;"
         },
         {
-          "line": 369,
-          "expression": "hue = (segment * 40 + (int)hue_shift) % 256;"
+          "line": 406,
+          "expression": "hue = (segment_hue + hue_shift_mod) % 256;"
         },
         {
-          "line": 371,
+          "line": 390,
           "expression": "(double)frame * 0.08;"
         },
         {
-          "line": 373,
+          "line": 409,
           "expression": "lightness = (int)(30.0 + mid * 20.0 +"
         },
         {
-          "line": 378,
-          "expression": "hue = (segment * 40 + frame * 2) % 256;"
+          "line": 414,
+          "expression": "hue = (segment_hue + frame_mod * 2) % 256;"
         },
         {
-          "line": 380,
+          "line": 390,
           "expression": "(double)frame * 0.08;"
         },
         {
-          "line": 381,
+          "line": 416,
           "expression": "lightness = 40 + (int)((1.0 + sin(phase)) * 15.0);"
         },
         {
-          "line": 386,
+          "line": 421,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -1502,42 +1590,42 @@
       "export": "render_club_flash_into",
       "symbol": "render_club_flash_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_reactive.c",
-      "line": 395,
+      "line": 437,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 420,
+          "line": 461,
           "expression": "for (npy_intp index = 0; index < count; index++) {"
-        },
-        {
-          "line": 421,
-          "expression": "const size_t offset = (size_t)index * 4u;"
-        },
-        {
-          "line": 433,
-          "expression": "for (npy_intp index = 0; index < count; index++) {"
-        },
-        {
-          "line": 434,
-          "expression": "const size_t offset = (size_t)index * 4u;"
-        },
-        {
-          "line": 450,
-          "expression": "const npy_intp index = (segment_start + offset) % count;"
-        },
-        {
-          "line": 451,
-          "expression": "const size_t pixel_offset = (size_t)index * 4u;"
-        },
-        {
-          "line": 457,
-          "expression": "const npy_intp mirror = (count - 1 - index) > 0 ? count - 1 - index : 0;"
         },
         {
           "line": 462,
+          "expression": "const size_t offset = (size_t)index * 4u;"
+        },
+        {
+          "line": 461,
+          "expression": "for (npy_intp index = 0; index < count; index++) {"
+        },
+        {
+          "line": 462,
+          "expression": "const size_t offset = (size_t)index * 4u;"
+        },
+        {
+          "line": 490,
+          "expression": "npy_intp index = positive_modulo_ssize((Py_ssize_t)segment_start, count);"
+        },
+        {
+          "line": 492,
+          "expression": "const size_t pixel_offset = (size_t)index * 4u;"
+        },
+        {
+          "line": 498,
+          "expression": "const npy_intp mirror = (count - 1 - index) > 0 ? count - 1 - index : 0;"
+        },
+        {
+          "line": 505,
           "expression": "const size_t mirror_offset = (size_t)mirror * 4u;"
         }
       ]
@@ -1546,22 +1634,22 @@
       "export": "render_beat_wave_into",
       "symbol": "render_beat_wave_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_reactive.c",
-      "line": 472,
+      "line": 523,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 500,
+          "line": 544,
           "expression": "for (npy_intp index = 0; index < length; index++) {"
         },
         {
-          "line": 505,
+          "line": 549,
           "expression": "const double distance = fabs((double)index - pos);"
         },
         {
-          "line": 511,
+          "line": 555,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -1570,34 +1658,34 @@
       "export": "render_beat_explosion_into",
       "symbol": "render_beat_explosion_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_reactive.c",
-      "line": 536,
+      "line": 587,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 560,
+          "line": 605,
           "expression": "for (npy_intp index = 0; index < length; index++) {"
         },
         {
-          "line": 561,
+          "line": 606,
           "expression": "const double dist = fabs((double)index - center);"
         },
         {
-          "line": 569,
-          "expression": "hue = (int)((10 + (int)(low * 30.0) + (int64_t)frame * 2) % 256);"
+          "line": 616,
+          "expression": "hue = (10 + (int)(low * 30.0) + frame_mod * 2) % 256;"
         },
         {
-          "line": 570,
+          "line": 617,
           "expression": "lightness = (int)(50.0 + mid * 15.0 + hit * 15.0);"
         },
         {
-          "line": 574,
-          "expression": "hue = (int)(((int64_t)frame * 4 + (int64_t)(index % 128) * 2) % 256);"
+          "line": 623,
+          "expression": "hue = (frame_mod * 4 + (int)(index % 128) * 2) % 256;"
         },
         {
-          "line": 580,
+          "line": 629,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -1606,30 +1694,30 @@
       "export": "render_plasma_rave_into",
       "symbol": "render_plasma_rave_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_reactive.c",
-      "line": 589,
+      "line": 645,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 619,
+          "line": 682,
           "expression": "for (npy_intp index = 0; index < length; index++) {"
         },
         {
-          "line": 620,
+          "line": 683,
           "expression": "const double position = (double)index / (double)(length > 1 ? length - 1 : 1);"
         },
         {
-          "line": 627,
+          "line": 690,
           "expression": "? (int)(hue_value + hue_base)"
         },
         {
-          "line": 628,
+          "line": 691,
           "expression": ": (int)hue_value + (int)hue_base;"
         },
         {
-          "line": 638,
+          "line": 701,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -1638,34 +1726,34 @@
       "export": "render_beat_ripple_into",
       "symbol": "render_beat_ripple_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_reactive.c",
-      "line": 650,
+      "line": 720,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 674,
+          "line": 737,
           "expression": "for (npy_intp index = 0; index < length; index++) {"
         },
         {
-          "line": 675,
+          "line": 738,
           "expression": "const size_t offset = (size_t)index * 4u;"
         },
         {
-          "line": 679,
+          "line": 737,
           "expression": "for (npy_intp index = 0; index < length; index++) {"
         },
         {
-          "line": 682,
+          "line": 745,
           "expression": "const double left = fabs((double)index - radius_or_offset);"
         },
         {
-          "line": 686,
+          "line": 749,
           "expression": "const double distance = fabs((double)index - center);"
         },
         {
-          "line": 698,
+          "line": 738,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -1674,42 +1762,42 @@
       "export": "render_strobe_chase_into",
       "symbol": "render_strobe_chase_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_reactive.c",
-      "line": 708,
+      "line": 778,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 735,
+          "line": 798,
           "expression": "int warm_index = (int)(((int64_t)hue + (int64_t)(frame % 4)) % 4);"
         },
         {
-          "line": 744,
+          "line": 807,
           "expression": "for (npy_intp index = 0; index < length; index++) {"
         },
         {
-          "line": 745,
+          "line": 808,
           "expression": "const size_t offset = (size_t)index * 4u;"
         },
         {
-          "line": 753,
+          "line": 807,
           "expression": "for (npy_intp index = 0; index < length; index++) {"
         },
         {
-          "line": 754,
+          "line": 808,
           "expression": "const size_t offset = (size_t)index * 4u;"
         },
         {
-          "line": 757,
+          "line": 820,
           "expression": "const int slot = (int)(index % stride);"
         },
         {
-          "line": 759,
+          "line": 822,
           "expression": "const double distance = fmin(direct, (double)stride - direct);"
         },
         {
-          "line": 763,
+          "line": 826,
           "expression": "const int hue_index = (hue + (int)(index % 7) * 11) % 7;"
         }
       ]
@@ -1718,27 +1806,27 @@
       "export": "render_rave_scanner_into",
       "symbol": "render_rave_scanner_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_reactive.c",
-      "line": 778,
+      "line": 848,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 801,
+          "line": 864,
           "expression": "for (npy_intp index = 0; index < length; index++) {"
         },
         {
-          "line": 802,
+          "line": 865,
           "expression": "const size_t offset = (size_t)index * 4u;"
         },
         {
-          "line": 805,
+          "line": 868,
           "expression": "const double distance = fabs((double)index - phase);"
         },
         {
-          "line": 811,
-          "expression": "const int color_index = (hue + (int)(distance * 18.0)) % 7;"
+          "line": 877,
+          "expression": "const int color_index = (hue % 7 + distance_hue) % 7;"
         }
       ]
     },
@@ -1746,27 +1834,27 @@
       "export": "render_center_burst_into",
       "symbol": "render_center_burst_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_reactive.c",
-      "line": 823,
+      "line": 896,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 846,
+          "line": 912,
           "expression": "for (npy_intp index = 0; index < length; index++) {"
         },
         {
-          "line": 847,
+          "line": 913,
           "expression": "const size_t offset = (size_t)index * 4u;"
         },
         {
-          "line": 850,
+          "line": 916,
           "expression": "const double distance = fabs((double)index - center);"
         },
         {
-          "line": 854,
-          "expression": "const size_t hue_index = (size_t)((hue_seed + index) % 7);"
+          "line": 922,
+          "expression": "const size_t hue_index = (size_t)positive_modulo_ssize( positive_modulo_ssize(hue_seed, 7) + index % 7, 7 );"
         }
       ]
     },
@@ -1774,30 +1862,30 @@
       "export": "render_dual_laser_into",
       "symbol": "render_dual_laser_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_reactive.c",
-      "line": 867,
+      "line": 942,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 889,
+          "line": 957,
           "expression": "for (npy_intp index = 0; index < length; index++) {"
         },
         {
-          "line": 890,
+          "line": 958,
           "expression": "const size_t offset = (size_t)index * 4u;"
         },
         {
-          "line": 897,
+          "line": 957,
           "expression": "for (npy_intp index = 0; index < length; index++) {"
         },
         {
-          "line": 898,
+          "line": 966,
           "expression": "const double distance = fabs((double)index - position);"
         },
         {
-          "line": 905,
+          "line": 958,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -1806,42 +1894,42 @@
       "export": "render_mirror_flash_into",
       "symbol": "render_mirror_flash_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_reactive.c",
-      "line": 915,
+      "line": 990,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 940,
+          "line": 1008,
           "expression": "for (npy_intp index = 0; index < length; index++) {"
         },
         {
-          "line": 941,
+          "line": 1009,
           "expression": "const size_t offset = (size_t)index * 4u;"
         },
         {
-          "line": 945,
+          "line": 1013,
           "expression": "for (npy_intp index = 0; index < (length + 1) / 2; index++) {"
         },
         {
-          "line": 946,
+          "line": 1014,
           "expression": "const double distance = fabs((double)index - center);"
         },
         {
-          "line": 950,
-          "expression": "const Py_ssize_t hue = hue_seed + (alternate ? index * 13 : -index * 9);"
+          "line": 1026,
+          "expression": "const Py_ssize_t color_hue = positive_modulo_ssize( positive_modulo_ssize(hue_seed, 7) + color_offset, 7 );"
         },
         {
-          "line": 952,
+          "line": 1019,
           "expression": "const npy_intp mirror = length - 1 - index > 0 ? length - 1 - index : 0;"
         },
         {
-          "line": 959,
+          "line": 1009,
           "expression": "size_t offset = (size_t)index * 4u;"
         },
         {
-          "line": 972,
+          "line": 1043,
           "expression": "offset = (size_t)mirror * 4u;"
         }
       ]
@@ -1850,22 +1938,22 @@
       "export": "render_drop_wave_into",
       "symbol": "render_drop_wave_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_reactive.c",
-      "line": 982,
+      "line": 1060,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 1007,
+          "line": 1078,
           "expression": "for (npy_intp index = 0; index < length; index++) {"
         },
         {
-          "line": 1008,
+          "line": 1079,
           "expression": "const size_t offset = (size_t)index * 4u;"
         },
         {
-          "line": 1011,
+          "line": 1082,
           "expression": "const double distance = fabs((double)index - center);"
         }
       ]
@@ -1874,26 +1962,26 @@
       "export": "render_lightning_strike_into",
       "symbol": "render_lightning_strike_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_reactive.c",
-      "line": 1050,
+      "line": 1128,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 1075,
+          "line": 1147,
           "expression": "for (npy_intp index = 0; index < length; index++) {"
         },
         {
-          "line": 1076,
+          "line": 1148,
           "expression": "const double distance = fabs((double)index - (double)strike_position);"
         },
         {
-          "line": 1091,
+          "line": 1163,
           "expression": "const size_t offset = (size_t)index * 4u;"
         },
         {
-          "line": 1106,
+          "line": 1163,
           "expression": "const size_t offset = (size_t)index * 4u;"
         }
       ]
@@ -1902,31 +1990,31 @@
       "export": "render_neon_storm_into",
       "symbol": "render_neon_storm_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_reactive.c",
-      "line": 1115,
+      "line": 1194,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 1154,
+          "line": 1226,
           "expression": "for (npy_intp index = 0; index < count; index++) {"
         },
         {
-          "line": 1158,
+          "line": 1230,
           "expression": "double distance = fabs((double)index - streaks[s]);"
         },
         {
-          "line": 1159,
+          "line": 1231,
           "expression": "const double wrapped = (double)count - distance;"
         },
         {
-          "line": 1168,
+          "line": 1240,
           "expression": "const size_t offset = (size_t)index * 4u;"
         },
         {
-          "line": 1181,
-          "expression": "int selected = (p >= streak ? particle_hue[index] : (int)streak_seed) % 5;"
+          "line": 1255,
+          "expression": "int selected = (p >= streak ? particle_hue[index] : (int)(streak_seed % 5)) % 5;"
         }
       ]
     },
@@ -1934,26 +2022,26 @@
       "export": "render_electric_storm_into",
       "symbol": "render_electric_storm_into",
       "source": "packages/lumistripe-core/src/lumistripe/render/native_reactive.c",
-      "line": 1193,
+      "line": 1274,
       "argument_parse_checked": true,
       "array_validation_observed": true,
       "status": "reviewed_with_unresolved_risk",
       "unresolved_risk": "Every listed conversion/arithmetic site must be checked against its dominating range validation; CPython allocation-failure paths were not fault-injected.",
       "conversion_or_integer_arithmetic_sites": [
         {
-          "line": 1238,
+          "line": 1312,
           "expression": "const size_t offset = (size_t)i * 4u;"
         },
         {
-          "line": 1246,
+          "line": 1320,
           "expression": "const npy_intp length = (npy_intp)streaks[s * 4 + 1];"
         },
         {
-          "line": 1252,
+          "line": 1326,
           "expression": "const npy_intp pixel = (npy_intp)pos - j;"
         },
         {
-          "line": 1255,
+          "line": 1329,
           "expression": "const size_t offset = (size_t)pixel * 4u;"
         }
       ]

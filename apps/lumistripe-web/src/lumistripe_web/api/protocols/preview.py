@@ -18,11 +18,15 @@ PREVIEW_HEADER = struct.Struct("<4sBBIH")
 PREVIEW_OUTPUT_HEADER = struct.Struct("<I")
 PREVIEW_MAGIC = b"LSFP"
 PREVIEW_VERSION = 1
+PREVIEW_MAX_OUTPUTS = 2
+PREVIEW_MAX_PIXELS = 4096
 
 
 def encode_preview_frame(frame: _PreviewFrame) -> bytes:
     """Encode an immutable runtime frame for the browser preview stream."""
 
+    if len(frame.outputs) > PREVIEW_MAX_OUTPUTS:
+        raise ValueError("preview frame cannot contain more than two outputs")
     packet = bytearray(
         PREVIEW_HEADER.pack(
             PREVIEW_MAGIC,
@@ -35,7 +39,10 @@ def encode_preview_frame(frame: _PreviewFrame) -> bytes:
     for output in frame.outputs:
         if len(output) % 4:
             raise ValueError("preview output must contain complete RGBA pixels")
-        packet.extend(PREVIEW_OUTPUT_HEADER.pack(len(output) // 4))
+        pixel_count = len(output) // 4
+        if pixel_count > PREVIEW_MAX_PIXELS:
+            raise ValueError("preview output cannot contain more than 4096 pixels")
+        packet.extend(PREVIEW_OUTPUT_HEADER.pack(pixel_count))
         packet.extend(output)
     return bytes(packet)
 

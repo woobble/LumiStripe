@@ -5014,6 +5014,9 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "description": "Too many pairing attempts; retry after the indicated delay."
           }
         },
         "summary": "Pair"

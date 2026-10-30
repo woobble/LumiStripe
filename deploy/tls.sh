@@ -1,5 +1,18 @@
 # Shared TLS certificate lifecycle for the systemd installer and updater.
 
+# Read generated files with the service account's permissions. The temporary
+# directory used by mkcert is writable by that account, so root must not follow
+# paths in it directly when importing files into the protected TLS directory.
+copy_lumistripe_tls_file() {
+  local service_user="$1" source="$2" destination="$3"
+  local size
+  if ! timeout 10s runuser -u "$service_user" -- /usr/bin/head -c 1048577 -- "$source" > "$destination"; then
+    return 1
+  fi
+  size="$(wc -c < "$destination")" || return 1
+  [[ "$size" -gt 0 && "$size" -le 1048576 ]]
+}
+
 ensure_lumistripe_tls_certificate() {
   local tls_dir="$1"
   local tls_cert="$2"
@@ -8,6 +21,7 @@ ensure_lumistripe_tls_certificate() {
   local service_group="$5"
   local service_home="$6"
   local cert_tmp_dir
+  local secure_tmp_dir
   local host_address
   local -a certificate_names=(led.controller localhost 127.0.0.1)
   local -a host_addresses=()
@@ -49,16 +63,24 @@ ensure_lumistripe_tls_certificate() {
       rm -rf -- "$cert_tmp_dir"
       return 1
     fi
-    if [[ ! -s "$cert_tmp_dir/cert.pem" || ! -s "$cert_tmp_dir/key.pem" ]]; then
-      echo "mkcert did not create both TLS files." >&2
+    secure_tmp_dir="$(mktemp -d /tmp/lumistripe-certificate-import.XXXXXX)" || {
+      rm -rf -- "$cert_tmp_dir"
+      return 1
+    }
+    if ! copy_lumistripe_tls_file "$service_user" "$cert_tmp_dir/cert.pem" "$secure_tmp_dir/cert.pem" || \
+      ! copy_lumistripe_tls_file "$service_user" "$cert_tmp_dir/key.pem" "$secure_tmp_dir/key.pem"; then
+      echo "mkcert did not create usable TLS files." >&2
+      rm -rf -- "$secure_tmp_dir"
       rm -rf -- "$cert_tmp_dir"
       return 1
     fi
-    if ! install -o root -g root -m 644 "$cert_tmp_dir/cert.pem" "$tls_cert" || \
-      ! install -o root -g root -m 600 "$cert_tmp_dir/key.pem" "$tls_key"; then
+    if ! install -o root -g root -m 644 "$secure_tmp_dir/cert.pem" "$tls_cert" || \
+      ! install -o root -g root -m 600 "$secure_tmp_dir/key.pem" "$tls_key"; then
+      rm -rf -- "$secure_tmp_dir"
       rm -rf -- "$cert_tmp_dir"
       return 1
     fi
+    rm -rf -- "$secure_tmp_dir"
     rm -rf -- "$cert_tmp_dir"
   fi
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import lumistripe_web.settings as settings_module
 import pytest
 from lumistripe import (
     AnimationSequence,
@@ -48,6 +49,9 @@ def test_music_idle_settings_persist_per_target(tmp_path: Path) -> None:
         ("zone_count", True),
         ("zone_count", 81),
         ("zone_pattern", "shift"),
+        ("voltage_v", float("nan")),
+        ("full_white_current_a", float("inf")),
+        ("power_limit_watts", float("-inf")),
     ],
 )
 def test_malformed_stripe_settings_preserve_other_settings(tmp_path: Path, field: str, value: object) -> None:
@@ -65,6 +69,46 @@ def test_invalid_utf8_settings_use_defaults(tmp_path: Path) -> None:
     settings, warning = CalibrationSettingsStore(path).load_all()
     assert settings.stripe_topology is None
     assert warning is not None
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [
+        b"{invalid json",
+        b"\xff",
+        b'{"version":999,"future_setting":"preserve"}',
+        b'{"version":true}',
+        b'{"version":10,"stripes":{"outputs":[{"pixels":true}]}}',
+        b"[" * 2000 + b"]" * 2000,
+    ],
+)
+def test_partial_update_preserves_unreadable_or_invalid_settings(
+    tmp_path: Path, contents: bytes
+) -> None:
+    path = tmp_path / "settings.json"
+    path.write_bytes(contents)
+    store = CalibrationSettingsStore(path)
+    with pytest.raises(OSError, match="without losing data"):
+        store.save_audio_sync_offset("mic|device|output", 10.0)
+    assert path.read_bytes() == contents
+
+
+def test_failed_atomic_replace_preserves_settings_and_cleans_temporary_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "settings.json"
+    store = CalibrationSettingsStore(path)
+    store.save_audio_sync_offset("route", 20.0)
+    original = path.read_bytes()
+
+    def fail_replace(*args: object) -> None:
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(settings_module.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="replace failed"):
+        store.save_audio_sync_offset("route", 30.0)
+    assert path.read_bytes() == original
+    assert list(tmp_path.glob(".settings.json.*.tmp")) == []
 
 
 def test_missing_settings_use_neutral_profiles(tmp_path: Path) -> None:
@@ -178,6 +222,30 @@ def test_power_budget_round_trip_and_legacy_defaults(tmp_path: Path) -> None:
     assert legacy.stripe_topology == StripeTopologySettings(
         outputs=(StripeOutputSettings(id="legacy", name="Legacy", pixels=10),)
     )
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize(
+    "field",
+    ["voltage_v", "full_white_current_a", "power_limit_watts"],
+)
+def test_stripe_output_settings_reject_nonfinite_power_calibration(
+    field: str, invalid: float
+) -> None:
+    with pytest.raises(ValueError, match="finite"):
+        StripeOutputSettings(id="left", name="Left", pixels=5, **{field: invalid})
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize(
+    "field",
+    ["power_budget_watts", "supply_capacity_watts", "pi_reserve_watts"],
+)
+def test_stripe_topology_settings_reject_nonfinite_power_limits(
+    field: str, invalid: float
+) -> None:
+    with pytest.raises(ValueError, match="finite"):
+        StripeTopologySettings(**{field: invalid})
 
 
 def test_audio_sync_offsets_persist_per_route_and_migrate_from_v5(

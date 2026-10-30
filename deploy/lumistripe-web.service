@@ -25,6 +25,15 @@ Environment=LUMI_UPDATE_STATE_FILE=/var/lib/lumistripe/update/status.json
 Environment=XDG_RUNTIME_DIR=/run/user/@LUMI_SERVICE_UID@
 EnvironmentFile=/etc/lumistripe/lumistripe-web.env
 
+# The paired network UI uses a sudoers-constrained root helper, so this unit
+# cannot use NoNewPrivileges without disabling that authorized operation.
+PrivateTmp=yes
+ProtectSystem=full
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+
 # Rebuild the bundled frontend on every service start so FastAPI serves the
 # current UI, manifest, and service worker from its static directory.
 # ExecStartPre=/bin/bash -c 'cd "@LUMI_PROJECT_DIR@/apps/lumistripe-web/frontend" && bun run build'

@@ -9,7 +9,9 @@ import re
 import shutil
 import sys
 import time
+from contextlib import ExitStack
 from dataclasses import dataclass, field
+from math import isfinite
 from pathlib import Path
 from typing import Self, TextIO
 
@@ -283,8 +285,19 @@ class HeadlessApp:
     def _close_audio_input(self) -> None:
         if self.audio_input is None:
             return
-        self.audio_input.close()
+        audio_input = self.audio_input
         self.audio_input = None
+        audio_input.close()
+
+    def _cleanup(self, *, finish_status: bool) -> None:
+        with ExitStack() as cleanup:
+            cleanup.callback(self._close_audio_input)
+            cleanup.callback(self.encoder_backend.close)
+            if finish_status:
+                cleanup.callback(self._finish_status)
+            cleanup.callback(self.controller.close)
+            self.controller.clear()
+            self.controller.force_flush()
 
     def step(self) -> float:
         source = self.audio_source or (AudioSource.MIC if self.mode is PlaybackMode.DYNAMIC else AudioSource.OFF)
@@ -384,14 +397,7 @@ class HeadlessApp:
         except KeyboardInterrupt:
             self.running = False
         finally:
-            try:
-                self.controller.clear()
-                self.controller.force_flush()
-            finally:
-                self.controller.close()
-                self._finish_status()
-                self.encoder_backend.close()
-                self._close_audio_input()
+            self._cleanup(finish_status=True)
 
     def _render_status(self, now: float) -> None:
         if not self._status_enabled:
@@ -800,8 +806,8 @@ class HeadlessApp:
         next_frame_at = started_at
         self._last_debug_class = self.class_label
         self._reset_event_state()
-        print(self.debug_header(), flush=True)
         try:
+            print(self.debug_header(), flush=True)
             while self.running:
                 now = time.monotonic()
                 if now < next_frame_at:
@@ -827,18 +833,12 @@ class HeadlessApp:
         except KeyboardInterrupt:
             self.running = False
         finally:
-            try:
-                self.controller.clear()
-                self.controller.force_flush()
-            finally:
-                self.controller.close()
-                self.encoder_backend.close()
-                self._close_audio_input()
+            self._cleanup(finish_status=False)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="lumistripe")
-    parser.add_argument("--pixels", type=int, default=80, help="Number of LEDs per stripe")
+    parser.add_argument("--pixels", type=_positive_int, default=80, help="Number of LEDs per stripe")
     parser.add_argument(
         "--mode",
         type=_parse_mode,
@@ -1035,26 +1035,32 @@ def build_output_controller(args: argparse.Namespace) -> Controller:
 
     if args.spi_device_2 is not None or args.spi_speed_2 is not None:
         raise ValueError("secondary SPI flags require --output-backend spi")
+    secondary_requested = _secondary_stripe_requested(args)
+    if secondary_requested and (args.data_pin_2 is None or args.clock_pin_2 is None):
+        raise ValueError("secondary stripe requires both --data-pin-2 and --clock-pin-2")
     _ensure_gpio_ready(args.chip)
     primary = GPIOStripe(
         Config(chip=args.chip, gpio_data=args.data_pin, gpio_clock=args.clock_pin, consumer="lumistripe"),
         args.pixels,
     )
-    if not _secondary_stripe_requested(args):
+    if not secondary_requested:
         return primary
-    if args.data_pin_2 is None or args.clock_pin_2 is None:
-        raise ValueError("secondary stripe requires both --data-pin-2 and --clock-pin-2")
+    assert args.data_pin_2 is not None and args.clock_pin_2 is not None
     secondary_chip = args.chip_2 or args.chip
-    _ensure_gpio_ready(secondary_chip)
-    secondary = GPIOStripe(
-        Config(
-            chip=secondary_chip,
-            gpio_data=args.data_pin_2,
-            gpio_clock=args.clock_pin_2,
-            consumer="lumistripe_2",
-        ),
-        args.pixels,
-    )
+    try:
+        _ensure_gpio_ready(secondary_chip)
+        secondary = GPIOStripe(
+            Config(
+                chip=secondary_chip,
+                gpio_data=args.data_pin_2,
+                gpio_clock=args.clock_pin_2,
+                consumer="lumistripe_2",
+            ),
+            args.pixels,
+        )
+    except Exception:
+        primary.close()
+        raise
     return MultiController([primary, secondary])
 
 
@@ -1247,15 +1253,15 @@ def _parse_audio_source(value: str) -> AudioSource:
 
 def _positive_float(value: str) -> float:
     parsed = float(value)
-    if parsed <= 0.0:
-        raise argparse.ArgumentTypeError("must be > 0")
+    if not isfinite(parsed) or parsed <= 0.0:
+        raise argparse.ArgumentTypeError("must be a finite number > 0")
     return parsed
 
 
 def _non_negative_float(value: str) -> float:
     parsed = float(value)
-    if parsed < 0.0:
-        raise argparse.ArgumentTypeError("must be >= 0")
+    if not isfinite(parsed) or parsed < 0.0:
+        raise argparse.ArgumentTypeError("must be a finite number >= 0")
     return parsed
 
 

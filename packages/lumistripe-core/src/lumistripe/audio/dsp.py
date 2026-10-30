@@ -6,6 +6,7 @@ import time
 from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass
+from math import isfinite
 from types import ModuleType
 from typing import Any, cast
 
@@ -257,6 +258,7 @@ class AudioState:
         self._features = MusicFeatures()
         self._last_sequence = 0
         self._samples_seen = 0
+        self._native_sample_position_offset = 0
         self._beat_events: deque[BeatEvent] = deque()
         self._queued_dropped_beat_events = 0
 
@@ -305,6 +307,7 @@ class AudioState:
         self._features = MusicFeatures()
         self._last_sequence = 0
         self._samples_seen = 0
+        self._native_sample_position_offset = 0
         self._beat_events.clear()
         self._queued_dropped_beat_events = 0
 
@@ -317,6 +320,7 @@ class AudioState:
         clone._features = self._features
         clone._last_sequence = self._last_sequence
         clone._samples_seen = self._samples_seen
+        clone._native_sample_position_offset = self._native_sample_position_offset
         clone._beat_events = deque(self._beat_events)
         clone._queued_dropped_beat_events = self._queued_dropped_beat_events
         return clone
@@ -327,12 +331,39 @@ class AudioState:
             self._queued_dropped_beat_events += 1
         self._beat_events.append(event)
 
-    def feed_samples(self, samples: npt.ArrayLike, *, captured_at: float | None = None) -> None:
-        array = np.asarray(samples, dtype=np.float32).reshape(-1)
+    def feed_samples(
+        self,
+        samples: npt.ArrayLike,
+        *,
+        captured_at: float | None = None,
+        dropped_samples_before: int = 0,
+    ) -> None:
+        if (
+            isinstance(dropped_samples_before, bool)
+            or not isinstance(dropped_samples_before, int)
+            or dropped_samples_before < 0
+        ):
+            raise ValueError("dropped_samples_before must be a non-negative integer")
+        array = np.require(
+            np.asarray(samples, dtype=np.float32).reshape(-1), requirements=["C", "A"]
+        )
         if array.size == 0:
             return
 
-        batch_end_at = time.monotonic() if captured_at is None else captured_at
+        batch_end_at = (
+            captured_at
+            if captured_at is not None and isfinite(captured_at)
+            else time.monotonic()
+        )
+        if dropped_samples_before:
+            mark_discontinuity = getattr(self._processor, "mark_discontinuity", None)
+            if callable(mark_discontinuity):
+                mark_discontinuity(dropped_samples_before)
+            else:
+                # Keep sample-position timestamps correct with an older native
+                # extension that does not expose discontinuity accounting.
+                self._native_sample_position_offset += dropped_samples_before
+            self._samples_seen += dropped_samples_before
         self._processor.feed_samples(array)
         self._samples_seen += int(array.size)
         frame = NativeFrameResult.from_native(self._processor.frame())
@@ -359,8 +390,11 @@ class AudioState:
                 NativeBeatEventResult.from_native(event) for event in drain_events()
             )
             for event in native_events:
+                sample_position = (
+                    event.sample_position + self._native_sample_position_offset
+                )
                 event_at = batch_end_at + (
-                    event.sample_position - self._samples_seen
+                    sample_position - self._samples_seen
                 ) / self._sample_rate
                 self._queue_beat_event(
                     BeatEvent(

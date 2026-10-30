@@ -217,5 +217,7 @@ class DynamicSelector:
             return
         self.recent_names = [item for item in self.recent_names if item != name]
         self.recent_names.append(name)
-        if len(self.recent_names) > self.config.history_size:
+        if self.config.history_size == 0:
+            self.recent_names.clear()
+        elif len(self.recent_names) > self.config.history_size:
             self.recent_names = self.recent_names[-self.config.history_size :]

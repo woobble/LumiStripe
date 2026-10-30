@@ -8,13 +8,17 @@ import math
 import queue
 import threading
 import time
-from concurrent.futures import Future
+from concurrent.futures import Future, InvalidStateError
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, replace
 from typing import Any, Literal, Protocol
 
 from websockets.sync.client import connect
 
 logger = logging.getLogger(__name__)
+SPOTIFY_COMMAND_TIMEOUT_SECONDS = 3.0
+MAX_PENDING_SPOTIFY_COMMANDS = 64
+MAX_POSITION_MS = 2**53 - 1
 
 SpotifyPlaybackStatus = Literal["idle", "playing", "paused", "buffering"]
 SpotifyRepeat = Literal["off", "context", "track"]
@@ -86,8 +90,9 @@ class SpotifyClient:
         self._reconnect_delay = max(0.25, reconnect_delay)
         self._state_lock = threading.RLock()
         self._state = SpotifyStatus(configured=enabled)
-        self._commands: queue.Queue[_PendingCommand] = queue.Queue()
+        self._commands: queue.Queue[_PendingCommand] = queue.Queue(maxsize=MAX_PENDING_SPOTIFY_COMMANDS)
         self._stop_event = threading.Event()
+        self._lifecycle_lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._socket: Any = None
         self._socket_lock = threading.Lock()
@@ -96,19 +101,24 @@ class SpotifyClient:
         self._position_speed = 0.0
 
     def start(self) -> None:
-        if not self._enabled or (
-            self._thread is not None and self._thread.is_alive()
-        ):
-            return
-        self._stop_event.clear()
-        self._thread = threading.Thread(
-            target=self._run,
-            name="lumistripe-spotify",
-            daemon=True,
-        )
-        self._thread.start()
+        with self._lifecycle_lock:
+            if not self._enabled or (
+                self._thread is not None and self._thread.is_alive()
+            ):
+                return
+            self._stop_event.clear()
+            self._thread = threading.Thread(
+                target=self._run,
+                name="lumistripe-spotify",
+                daemon=True,
+            )
+            self._thread.start()
 
     def stop(self) -> None:
+        with self._lifecycle_lock:
+            self._stop_locked()
+
+    def _stop_locked(self) -> None:
         self._stop_event.set()
         with self._socket_lock:
             socket = self._socket
@@ -120,14 +130,10 @@ class SpotifyClient:
         thread = self._thread
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=2.0)
-        self._thread = None
+        if thread is None or not thread.is_alive():
+            self._thread = None
         self._fail_queued(SpotifyCommandError("Spotify client stopped"))
-        with self._state_lock:
-            self._state = replace(
-                self._state,
-                connected=False,
-                error=None if not self._enabled else self._state.error,
-            )
+        self._mark_disconnected()
 
     def status(self) -> SpotifyStatus:
         with self._state_lock:
@@ -139,14 +145,25 @@ class SpotifyClient:
     def control(self, action: str, value: object | None = None) -> SpotifyStatus:
         if not self._enabled:
             raise SpotifyCommandError("Spotify is unavailable in this runtime")
-        if self._thread is None or not self._thread.is_alive():
-            raise SpotifyCommandError("Spotify Soloist is not connected")
         payloads = control_payloads(action, value)
         for payload in payloads:
             future: Future[None] = Future()
-            self._commands.put(_PendingCommand(payload, future))
+            with self._socket_lock:
+                if self._stop_event.is_set() or self._socket is None:
+                    raise SpotifyCommandError("Spotify Soloist is not connected")
+                try:
+                    self._commands.put_nowait(_PendingCommand(payload, future))
+                except queue.Full as exc:
+                    raise SpotifyCommandError("Spotify command queue is full") from exc
             try:
-                future.result(timeout=3.0)
+                future.result(timeout=SPOTIFY_COMMAND_TIMEOUT_SECONDS)
+            except FutureTimeoutError as exc:
+                cancelled = future.cancel()
+                message = (
+                    "Spotify command timed out before delivery"
+                    if cancelled else "Spotify command timed out; delivery may still complete"
+                )
+                raise SpotifyCommandError(message) from exc
             except Exception as exc:
                 if isinstance(exc, SpotifyCommandError):
                     raise
@@ -158,8 +175,10 @@ class SpotifyClient:
             try:
                 with connect(self._uri, open_timeout=1.5, close_timeout=1.0) as socket:
                     with self._socket_lock:
+                        if self._stop_event.is_set():
+                            return
                         self._socket = socket
-                    self._set_state(connected=True, error=None)
+                        self._set_state(connected=True, error=None)
                     self._receive_loop(socket)
             except Exception as exc:  # noqa: BLE001 - third-party socket errors vary
                 if not self._stop_event.is_set():
@@ -169,7 +188,7 @@ class SpotifyClient:
                 with self._socket_lock:
                     self._socket = None
                 self._fail_queued(SpotifyCommandError("Spotify Soloist is disconnected"))
-                self._set_state(connected=False)
+                self._mark_disconnected()
             self._stop_event.wait(self._reconnect_delay)
 
     def _receive_loop(self, socket: Any) -> None:
@@ -182,7 +201,11 @@ class SpotifyClient:
             if message is None:
                 return
             if isinstance(message, bytes):
-                message = message.decode("utf-8")
+                try:
+                    message = message.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    self._set_state(error=f"invalid Soloist event encoding: {exc}")
+                    continue
             try:
                 event = json.loads(message)
             except (TypeError, json.JSONDecodeError) as exc:
@@ -197,6 +220,8 @@ class SpotifyClient:
                 pending = self._commands.get_nowait()
             except queue.Empty:
                 return
+            if not pending.future.set_running_or_notify_cancel():
+                continue
             try:
                 socket.send(json.dumps(pending.payload))
             except Exception as exc:
@@ -283,12 +308,15 @@ class SpotifyClient:
             )
 
     def _queue_playback_state_request(self) -> None:
-        self._commands.put(
-            _PendingCommand(
-                {"type": "command", "command": "get_state"},
-                Future(),
+        try:
+            self._commands.put_nowait(
+                _PendingCommand(
+                    {"type": "command", "command": "get_state"},
+                    Future(),
+                )
             )
-        )
+        except queue.Full:
+            logger.warning("Spotify command queue is full; could not request playback state")
 
     def _set_position_anchor(self, position_ms: int, speed: float) -> None:
         with self._state_lock:
@@ -307,11 +335,28 @@ class SpotifyClient:
             position_ms += int(elapsed_ms * self._position_speed)
         if self._state.duration_ms is not None:
             position_ms = min(position_ms, self._state.duration_ms)
-        return max(0, position_ms)
+        return min(MAX_POSITION_MS, max(0, position_ms))
 
     def _set_state(self, **changes: Any) -> None:
         with self._state_lock:
             self._state = replace(self._state, **changes)
+
+    def _mark_disconnected(self) -> None:
+        with self._state_lock:
+            self._position_anchor_ms = 0
+            self._position_anchor_monotonic = time.monotonic()
+            self._position_speed = 0.0
+            self._state = replace(
+                self._state,
+                connected=False,
+                logged_in=False,
+                is_active=False,
+                status="idle",
+                track=None,
+                position_ms=0,
+                duration_ms=None,
+                error=None if not self._enabled else self._state.error,
+            )
 
     def _fail_queued(self, error: Exception) -> None:
         while True:
@@ -319,8 +364,11 @@ class SpotifyClient:
                 pending = self._commands.get_nowait()
             except queue.Empty:
                 return
-            if not pending.future.done():
+            try:
                 pending.future.set_exception(error)
+            except InvalidStateError:
+                # A waiting caller may cancel concurrently with disconnect.
+                pass
 
 
 def control_payloads(action: str, value: object | None = None) -> tuple[dict[str, Any], ...]:
@@ -346,7 +394,7 @@ def control_payloads(action: str, value: object | None = None) -> tuple[dict[str
             raise SpotifyCommandError("shuffle requires a boolean value")
         return (base | {"command": "set_shuffle", "enabled": value},)
     if action == "set_repeat":
-        if value not in {"off", "context", "track"}:
+        if not isinstance(value, str) or value not in {"off", "context", "track"}:
             raise SpotifyCommandError("repeat must be off, context, or track")
         return (
             base | {"command": "set_repeat_track", "enabled": value == "track"},
@@ -408,37 +456,50 @@ def _parse_track(value: object) -> SpotifyTrack | None:
 
 
 def _playback_status(value: object) -> SpotifyPlaybackStatus:
-    return value if value in {"idle", "playing", "paused", "buffering"} else "idle"  # type: ignore[return-value]
+    return value if isinstance(value, str) and value in {"idle", "playing", "paused", "buffering"} else "idle"  # type: ignore[return-value]
 
 
 def _repeat(value: object) -> SpotifyRepeat:
-    return value if value in {"off", "context", "track"} else "off"  # type: ignore[return-value]
+    return value if isinstance(value, str) and value in {"off", "context", "track"} else "off"  # type: ignore[return-value]
 
 
 def _volume(value: object) -> int:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if isinstance(value, float) and not math.isfinite(value):
+            return 0
         return min(100, max(0, int(value)))
     return 0
 
 
 def _nonnegative_int(value: object) -> int:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return max(0, int(value))
+        if isinstance(value, float) and not math.isfinite(value):
+            return 0
+        return min(MAX_POSITION_MS, max(0, int(value)))
     return 0
 
 
 def _playback_speed(value: object) -> float:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        speed = float(value)
+        try:
+            speed = float(value)
+        except OverflowError:
+            return 1.0
         if math.isfinite(speed):
-            return max(0.0, speed)
+            return min(16.0, max(0.0, speed))
     return 1.0
 
 
 def _required_number(value: object | None, label: str) -> float:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         raise SpotifyCommandError(f"{label} requires a number")
-    return float(value)
+    try:
+        number = float(value)
+    except OverflowError as exc:
+        raise SpotifyCommandError(f"{label} must be finite") from exc
+    if not math.isfinite(number):
+        raise SpotifyCommandError(f"{label} must be finite")
+    return number
 
 
 def _optional_string(value: object) -> str | None:

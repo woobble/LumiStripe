@@ -112,6 +112,32 @@ def test_handle_key_changes_animation_and_exit_state() -> None:
     assert app.running is False
 
 
+def test_shutdown_closes_audio_when_led_flush_fails() -> None:
+    class FakeAudioInput:
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    class BrokenStripe:
+        def clear(self) -> None:
+            return None
+
+        def force_flush(self) -> None:
+            raise OSError("output disconnected")
+
+    app = SimulatorApp(pixel_count=12)
+    audio_input = FakeAudioInput()
+    app.audio_input = audio_input  # type: ignore[assignment]
+    app.stripe = BrokenStripe()  # type: ignore[assignment]
+
+    with pytest.raises(OSError, match="output disconnected"):
+        app._shutdown_resources()
+
+    assert audio_input.closed
+    assert app.audio_input is None
+
+
 def test_handle_key_switches_modes_and_calibrates(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeAudioInput:
         def read(self) -> AudioFrame:
@@ -509,6 +535,22 @@ def test_parser_rejects_invalid_mic_tuning_values() -> None:
         parser.parse_args(["--idle-threshold-scale", "0"])
     with pytest.raises(SystemExit):
         parser.parse_args(["--auto-calibrate-audio", "0"])
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+@pytest.mark.parametrize(
+    "option",
+    ["--mic-target-level", "--mic-noise-floor", "--cycle-interval", "--dynamic-randomness"],
+)
+def test_parser_rejects_non_finite_float_options(option: str, value: str) -> None:
+    with pytest.raises(SystemExit):
+        build_parser().parse_args([option, value])
+
+
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_parser_rejects_non_positive_pixel_counts(value: str) -> None:
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["--pixels", value])
 
 
 def test_parser_rejects_invalid_mode() -> None:

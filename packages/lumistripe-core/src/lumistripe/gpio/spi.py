@@ -28,6 +28,13 @@ class _SPIDevice(Protocol):
     def close(self) -> None: ...
 
 
+def _close_after_failure(device: _SPIDevice, error: Exception) -> None:
+    try:
+        device.close()
+    except Exception as close_exc:  # noqa: BLE001 - preserve the original failure
+        error.add_note(f"also failed to close SPI device: {close_exc}")
+
+
 @dataclass(frozen=True, slots=True)
 class SPIConfig:
     device: str = "/dev/spidev0.0"
@@ -111,13 +118,17 @@ class SPIStripe(Stripe):
         self._config = config
         self._closed = False
         self._device = _device or self._open_device(config)
-        self._configure_device(self._device, config)
-        self._max_transfer_bytes = (
-            config.max_transfer_bytes
-            if config.max_transfer_bytes is not None
-            else _kernel_spi_buffer_size()
-        )
-        self._encoder = _FrameEncoder(length)
+        try:
+            self._configure_device(self._device, config)
+            self._max_transfer_bytes = (
+                config.max_transfer_bytes
+                if config.max_transfer_bytes is not None
+                else _kernel_spi_buffer_size()
+            )
+            self._encoder = _FrameEncoder(length)
+        except Exception as exc:
+            _close_after_failure(self._device, exc)
+            raise
 
     @property
     def spi_device_path(self) -> str:
@@ -163,8 +174,11 @@ class SPIStripe(Stripe):
         try:
             device.open_path(config.device)
         except OSError as exc:
-            device.close()
+            _close_after_failure(device, exc)
             raise RuntimeError(f'cannot open SPI device "{config.device}": {exc}') from exc
+        except Exception as exc:
+            _close_after_failure(device, exc)
+            raise
         return device
 
     @staticmethod
@@ -184,7 +198,6 @@ class SPIStripe(Stripe):
                 if exc.errno != errno.EINVAL:
                     raise
         except OSError as exc:
-            device.close()
             raise RuntimeError(
                 f'cannot configure SPI device "{config.device}": {exc}'
             ) from exc

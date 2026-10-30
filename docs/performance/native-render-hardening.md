@@ -15,7 +15,8 @@ capture or SPI transmission.
 Build the extension from the core package with:
 
 ```bash
-LUMISTRIPE_BUILD_EXTENSIONS=render uv run --no-sync --with setuptools \
+LUMISTRIPE_BUILD_EXTENSIONS=render uv run --no-sync \
+  --directory packages/lumistripe-core --with setuptools \
   python setup.py build_ext --inplace --force
 ```
 
@@ -95,6 +96,29 @@ CPU-frequency or thermal study.
 - NeonConfetti validates palette indices before indexing its seven-color table;
   its frame-center multiplication now reduces the frame before multiplying to
   avoid signed overflow.
+- Wave and Juggle now avoid signed frame/index addition and out-of-range hue
+  conversions for large frames. Phase, feature, and band values are checked
+  before rendering, and hue conversion reduces the finite value before casting.
+- DropExplosion now reduces frame and pixel indices before its small modulo
+  arithmetic in both static and audio paths. Its normalized state inputs are
+  range checked before any floating-point conversion to an integer.
+- ColorWipe now checks that its audio `local` and `boost` values are normalized
+  before using them in a floating-point-to-integer lightness conversion.
+- Fire bounds its normalized controls before computing values narrowed to
+  `float`; Confetti bounds its controls and all eight audio bands before its
+  hue and lightness integer conversions.
+- NeonConfetti limits its fade multiplier to `[0, 1]` before narrowing state
+  values to `float`. Screen composition saturates finite scalar inputs at
+  `FLT_MAX` before converting them to `float`.
+- Comet constrains shimmer before its integer lightness calculation and reduces
+  large or negative neon/fire hues with `fmod` before indexing the palette.
+- FireworkBurst constrains glow, mid/high audio levels, and bands to normalized
+  ranges in both its C entry point and Python wrapper. GlowRush, ColorBurst,
+  and PixelExplosion also bound alpha/strength values before byte conversion;
+  those direct native functions reject invalid active state before modifying
+  the destination. Twinkle bloom now follows the same normalized contract.
+- Fire's `next_heat` scratch array is now layout-validated only; the native
+  kernel no longer reads its contents before overwriting every element.
 - Added adversarial cases for misalignment, read-only output, invalid mutable
   state, negative palette indices, active-prefix validation, and state/output
   overlap.
@@ -165,19 +189,35 @@ The machine-readable entry inventory is
 [`native-render-safety-audit.json`](native-render-safety-audit.json). It lists
 all 51 methods registered by the four native method tables. Source inspection
 and targeted fixes in this pass addressed extreme palette hue conversion,
-ElectricStorm geometry casts, and signed frame/index products in reactive
-kernels. The full core suite confirms normal rendering parity after these
-changes.
+ElectricStorm geometry casts, signed frame/index products in reactive
+kernels, and FireworkBurst frame and particle arithmetic. The full core suite
+confirms normal rendering parity after these changes.
 
-The final validation on x86-64 Python 3.12 was: full native core suite **6,164
+An earlier validation on x86-64 Python 3.12 was: native core suite **6,164
 passed, 168 skipped**; focused kernel/catalog/SpectrumFlash parity **2,720
 passed, 168 skipped**; targeted UBSan **4 passed**; targeted ASan **4 passed**
 with leak detection disabled; and isolated no-render playback/render tests
 **228 passed, 31 native-only skipped**. The native extension exports 51
 functions. Ruff, core mypy, and `git diff --check` pass.
 
+After the DiscoSparkle, FireworkBurst, Wave, and Juggle arithmetic fixes, the
+renderer was rebuilt with AddressSanitizer, UndefinedBehaviorSanitizer, and
+float-cast-overflow checks. The focused `test_render_kernels.py`,
+`test_catalog_native_parity.py`, and `test_spectrum_flash_native.py` suites
+passed **2,722 tests with 168 expected fallback skips** in 114.17 seconds.
+Leak detection was disabled. This covers selected render paths; the full
+invalid-input matrix, allocation failure injection, and per-expression proof
+for all 51 entries remain open.
+
+The latest repository-wide Python suites, including Wave and Juggle extreme
+frame regressions, passed **6,735 tests with 168 skipped** at 87% aggregate
+coverage on Python 3.12.15 in 202.08 seconds, Python 3.13.18 in 199.68 seconds,
+and Python 3.14.8 in 74.19 seconds. All runs used x86-64.
+
 GCC `-fanalyzer` built the extension and reported no warnings in project C
-sources; its warnings were confined to NumPy's C API headers.
+sources; its warnings were confined to NumPy's C API headers. After the
+FireworkBurst arithmetic change, the targeted renderer `-fanalyzer` build also
+completed without project-owned C diagnostics.
 
 Preloading ASan into the `uv` launcher crashed inside its jemalloc before Python
 started. Preloading ASan into the project Python directly succeeded. The ASan
@@ -192,3 +232,12 @@ the full invalid-input matrix was not executed separately for each method.
 Sanitizers exercise selected boundary cases only. The inventory records these
 remaining risks for each entry rather than implying sanitizer coverage proves
 memory safety. No Raspberry Pi or physical-output tests ran.
+
+After the broader arithmetic pass, `test_render_kernels.py` passed **160
+tests** in both release and ASan/UBSan/float-cast-overflow builds. This includes
+new regression coverage for extreme frame and seed arithmetic, phase-to-int
+conversion bounds, segment wrapping, and normalized audio controls. The
+machine-readable inventory's 51 declarations and 349 arithmetic references
+were refreshed to 400 source-line anchors that match the current renderer C
+files. This refresh does not close the per-expression, reference-ownership,
+allocation-failure, or full invalid-input review.

@@ -4,6 +4,7 @@ import argparse
 import sys
 import time
 from dataclasses import dataclass, field
+from math import isfinite
 from typing import Any
 
 from lumistripe import Stripe
@@ -286,10 +287,18 @@ class SimulatorApp:
         self.audio_status = f"Input: {self.audio_input.device_name()}"
 
     def _close_audio_input(self) -> None:
-        if self.audio_input is None:
-            return
-        self.audio_input.close()
+        audio_input = self.audio_input
         self.audio_input = None
+        if audio_input is None:
+            return
+        audio_input.close()
+
+    def _shutdown_resources(self) -> None:
+        try:
+            self.stripe.clear()
+            self.stripe.force_flush()
+        finally:
+            self._close_audio_input()
 
     def step(self) -> float:
         source = self.audio_source or (AudioSource.MIC if self.mode is PlaybackMode.DYNAMIC else AudioSource.OFF)
@@ -484,28 +493,34 @@ class SimulatorApp:
         def tick() -> None:
             nonlocal next_frame_at
             if not self.running:
-                self.stripe.clear()
-                self.stripe.force_flush()
-                self._close_audio_input()
-                root.destroy()
+                try:
+                    self._shutdown_resources()
+                finally:
+                    root.destroy()
                 return
 
-            now = time.monotonic()
-            if now >= next_frame_at:
-                next_frame_at = now + self.step()
+            try:
+                now = time.monotonic()
+                if now >= next_frame_at:
+                    next_frame_at = now + self.step()
 
-            animation_label.configure(text=f"ANIM: {self.animation_name}")
-            mode_label.configure(text=f"MODE: {self.mode_label}")
-            source_text = f"SOURCE: {self.audio_status}"
-            source = self.audio_source or (AudioSource.MIC if self.mode is PlaybackMode.DYNAMIC else AudioSource.OFF)
-            if source is AudioSource.MIC:
-                source_text = f"{source_text}\n{self.mic_tuning_label}"
-            source_label.configure(text=source_text)
-            family_label.configure(text=f"CLASS: {self.class_label}")
-            analysis_label.configure(text=self.analysis_text())
-            error_label.configure(text=f"ERROR: {self.audio_error}" if self.audio_error else "")
-            refresh_mode_buttons()
-            self.render(canvas, width, height - HEADER_H)
+                animation_label.configure(text=f"ANIM: {self.animation_name}")
+                mode_label.configure(text=f"MODE: {self.mode_label}")
+                source_text = f"SOURCE: {self.audio_status}"
+                source = self.audio_source or (AudioSource.MIC if self.mode is PlaybackMode.DYNAMIC else AudioSource.OFF)
+                if source is AudioSource.MIC:
+                    source_text = f"{source_text}\n{self.mic_tuning_label}"
+                source_label.configure(text=source_text)
+                family_label.configure(text=f"CLASS: {self.class_label}")
+                analysis_label.configure(text=self.analysis_text())
+                error_label.configure(text=f"ERROR: {self.audio_error}" if self.audio_error else "")
+                refresh_mode_buttons()
+                self.render(canvas, width, height - HEADER_H)
+            except Exception as exc:  # noqa: BLE001 - Tk callbacks must shut down cleanly after any failure.
+                self.audio_error = f"Simulator stopped after an error: {exc}"
+                self.running = False
+                root.after_idle(tick)
+                return
             root.after(8, tick)
 
         tick()
@@ -513,13 +528,13 @@ class SimulatorApp:
             root.mainloop()
         except KeyboardInterrupt:
             self.running = False
-            self.stripe.clear()
-            self.stripe.force_flush()
-            self._close_audio_input()
             try:
-                root.destroy()
-            except tkinter.TclError:
-                pass
+                self._shutdown_resources()
+            finally:
+                try:
+                    root.destroy()
+                except tkinter.TclError:
+                    pass
 
     def analysis_text(self) -> str:
         frame = self.audio_frame
@@ -616,7 +631,7 @@ class SimulatorApp:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="lumistripe-sim")
-    parser.add_argument("--pixels", type=int, default=80, help="Number of simulated LEDs")
+    parser.add_argument("--pixels", type=_positive_int, default=80, help="Number of simulated LEDs")
     parser.add_argument(
         "--mode",
         type=_parse_mode,
@@ -728,15 +743,15 @@ def _parse_audio_source(value: str) -> AudioSource:
 
 def _positive_float(value: str) -> float:
     parsed = float(value)
-    if parsed <= 0.0:
-        raise argparse.ArgumentTypeError("must be > 0")
+    if not isfinite(parsed) or parsed <= 0.0:
+        raise argparse.ArgumentTypeError("must be a finite number > 0")
     return parsed
 
 
 def _non_negative_float(value: str) -> float:
     parsed = float(value)
-    if parsed < 0.0:
-        raise argparse.ArgumentTypeError("must be >= 0")
+    if not isfinite(parsed) or parsed < 0.0:
+        raise argparse.ArgumentTypeError("must be a finite number >= 0")
     return parsed
 
 

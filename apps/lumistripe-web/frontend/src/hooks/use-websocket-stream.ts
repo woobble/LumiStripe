@@ -37,29 +37,48 @@ export function useWebSocketStream<T>({
     const connect = () => {
       if (disposed) return
       setStatus(attempts === 0 ? "connecting" : "reconnecting")
-      socket = new WebSocket(url)
-      socket.binaryType = binaryType
-      socket.onopen = () => {
+      const current = new WebSocket(url)
+      socket = current
+      current.binaryType = binaryType
+      let alive = true
+      let closing = false
+      let receivedSequence = 0
+      let appliedSequence = 0
+      const apply = (parsed: T | null, sequence: number) => {
+        if (!disposed && alive && !closing && parsed !== null && sequence > appliedSequence) {
+          appliedSequence = sequence
+          setData(parsed)
+        }
+      }
+      const closeCurrent = () => {
+        if (!disposed && alive && !closing) {
+          closing = true
+          current.close()
+        }
+      }
+      current.onopen = () => {
+        if (disposed || !alive || closing) return
         attempts = 0
         setStatus("connected")
       }
-      socket.onmessage = (event) => {
+      current.onmessage = (event) => {
+        if (disposed || !alive || closing) return
+        const sequence = ++receivedSequence
         try {
           const next = parse(event.data)
           if (next instanceof Promise) {
-            next.then((parsed) => {
-              if (!disposed && parsed !== null) setData(parsed)
-            }).catch(() => socket?.close())
-          } else if (!disposed && next !== null) {
-            setData(next)
+            next.then((parsed) => apply(parsed, sequence)).catch(closeCurrent)
+          } else {
+            apply(next, sequence)
           }
         } catch {
-          socket?.close()
+          closeCurrent()
         }
       }
-      socket.onerror = () => socket?.close()
-      socket.onclose = (event) => {
-        if (disposed) return
+      current.onerror = closeCurrent
+      current.onclose = (event) => {
+        if (disposed || !alive) return
+        alive = false
         if (event.code === 4401) {
           window.dispatchEvent(new Event(ACCESS_REVOKED_EVENT))
           return

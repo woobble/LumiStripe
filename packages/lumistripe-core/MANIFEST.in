@@ -1,2 +1,6 @@
 include src/lumistripe/audio/kissfft/*.h
 include src/lumistripe/audio/kissfft/*.c
+include src/lumistripe/audio/_audio.c
+include src/lumistripe/gpio/*.c
+include src/lumistripe/render/*.c
+include src/lumistripe/render/*.h

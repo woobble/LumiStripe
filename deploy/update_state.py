@@ -17,7 +17,7 @@ from typing import Any
 BRANCH_REF = "refs/heads/main"
 UPDATE_REMOTE_URL = "https://github.com/woobble/LumiStripe.git"
 CHECK_TIMEOUT_SECONDS = 25
-UPDATE_LOCK_FILE = Path("/run/lock/lumistripe-update.lock")
+UPDATE_LOCK_FILE = Path("/run/lumistripe-update/update.lock")
 
 
 def now() -> str:

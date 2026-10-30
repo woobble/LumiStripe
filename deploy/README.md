@@ -16,7 +16,10 @@ the dashboard, connect the Pi and clients to a trusted network and configure
 its DNS to resolve `led.controller` to the Pi's address. Alternatively, provide
 an independently configured hotspot with the same DNS record. Keep SSH or a
 local console available for initial setup and recovery. The dashboard uses a
-four-digit code without rate limiting, so restrict access to trusted clients.
+four-digit code and limits failed pairing attempts across all clients. Restrict
+access to trusted clients: the short code remains unsuitable for an exposed
+public service, and an attacker can temporarily block pairing for everyone.
+The in-memory limit resets when the web service restarts and is per process.
 
 After installation, install and trust the service user's mkcert CA on each
 client, then open `https://led.controller/` and pair. Verify that port 8000 is
@@ -38,7 +41,7 @@ sudo ./deploy/install.sh
 
 In a terminal, the installer asks for a four-digit pairing code and the
 Spotify Soloist API key. Leave the pairing-code prompt blank to generate a
-secure code. Leave the Spotify-key prompt blank to install without Spotify.
+random code. Leave the Spotify-key prompt blank to install without Spotify.
 For unattended installation, provide the pairing code and optional API key in
 the environment:
 
@@ -53,14 +56,17 @@ build tools, the service user and GPIO/SPI/audio permissions, Raspberry Pi SPI,
 uv 0.13.0 or newer with managed Python 3.12, the native audio, GPIO, and SPI
 extensions, Bun, NetworkManager and Wi-Fi adapter tools, locked Python and
 frontend dependencies, the frontend production build,
-and the Bluetooth/WirePlumber configuration. It installs the official Spotify
-Soloist binary when configured, plus a local mkcert CA and HTTPS certificate,
-Nginx, and the required systemd services. Without a Spotify key the Spotify
-service remains disabled. Existing
+and the Bluetooth/WirePlumber configuration. It installs the Spotify Soloist
+binary under the non-root service account when configured, plus a local mkcert
+CA and HTTPS certificate, Nginx, and the required systemd services. Without a
+Spotify key the Spotify service remains disabled. Existing
 `/etc/lumistripe/lumistripe-web.env` and
 `/etc/lumistripe/lumistripe-spotify.env` files are preserved. Spotify's
 official builds are downloaded on the Pi and are not bundled or redistributed
-by LumiStripe.
+by LumiStripe. The updater streams the archive with a 512 MiB byte limit,
+permits HTTPS-only redirects, validates that it contains one regular
+`soloist` file, and installs it under the service user's `.local/bin`; it does
+not install the downloaded binary with root ownership.
 
 The systemd service uses the same Python version selected by the installer and
 syncs only production dependencies. Set `LUMI_PYTHON_VERSION` when installing
@@ -74,6 +80,14 @@ owner when run from a root shell). For another account or checkout, set
 sudo env LUMI_SERVICE_USER=pi LUMI_PROJECT_DIR=/home/pi/lumistripe \
   ./deploy/install.sh
 ```
+
+`LUMI_PROJECT_DIR` must point to the top-level LumiStripe checkout. The
+installer resolves symlinks and validates the checkout before it changes
+ownership or installs services.
+Because installation runs as root and installs privileged deployment files
+from that checkout, use a trusted administrator-controlled copy. If the
+service account may have been compromised, do not rerun the installer from its
+writable checkout; restore a trusted copy first.
 
 On Trixie the installer selects `libgpiod3`; older supported Debian-based Pi
 images are handled with `libgpiod2` when that is the available runtime package.
@@ -121,8 +135,40 @@ sudo ./deploy/install.sh
 ```
 
 This is safe to rerun; it preserves the existing pairing and Spotify settings.
-For a manual update, use `sudo ./deploy/update.sh`. Check background updater
-logs with:
+Existing installations must rerun the installer once after acquiring this
+version to replace the old updater, which could install privileged files from
+the service-user-writable checkout. Review and trust the checkout before
+running the installer as root. A clean-tree check does not prevent a
+service-user process from changing files while the installer stages its
+root-owned snapshot. The installer also makes the checkout service-user-writable
+before snapshotting it, so stopping the web and updater services alone does not
+close that race. If the service account may be compromised, restore from
+trusted administrator-controlled media instead of relying on this migration.
+During migration, prevent the old dashboard trigger and updater from running
+while the trusted installer replaces them:
+
+```bash
+sudo mv /etc/sudoers.d/lumistripe-update /etc/lumistripe/lumistripe-update.sudoers.disabled
+sudo systemctl stop lumistripe-web.service lumistripe-update.service lumistripe-update-check.timer
+sudo ./deploy/install.sh
+```
+
+The installer reinstalls the validated sudoers file and starts the services.
+If the updater sudoers file is absent on an older installation, omit the first
+command. The updater thereafter uses the root-owned
+deployment snapshot installed by that command; changes to privileged helper,
+service, and Nginx files take effect only when an administrator reruns the
+installer from a trusted checkout. If the TLS certificate or key is missing,
+the updater stops and the administrator must rerun the installer to repair it.
+For a manual update, run this from the checkout root so the installed updater
+receives the checkout path:
+
+```bash
+sudo env LUMI_PROJECT_DIR="$PWD" \
+  /usr/local/libexec/lumistripe/deploy/update.sh
+```
+
+Check background updater logs with:
 
 ```bash
 sudo journalctl -u lumistripe-update-check.service \
@@ -140,7 +186,8 @@ a PipeWire PulseAudio-compatible server in the active desktop session.
 Create a local Spotify Soloist API key file and export the current user IDs:
 
 ```bash
-mkdir -p .docker-dev/data
+mkdir -p .docker-dev/data/web .docker-dev/data/soloist \
+  .docker-dev/data/soloist-cache .docker-dev/data/spotify-home
 umask 077
 printf 'Spotify Soloist API key: '
 read -r -s SPOTIFY_API_KEY
@@ -173,8 +220,10 @@ docker compose --project-name lumistripe-dev \
 
 The Compose file uses host networking so the web runtime can connect to
 Soloist's local WebSocket on `127.0.0.1:9090`. It binds the dashboard to
-`127.0.0.1:8000` and mounts the active desktop audio runtime directory into the
-two containers. If Docker cannot access the host audio socket, confirm that
+`127.0.0.1:8000`, runs both containers as the current user's UID/GID with a
+read-only root filesystem and no Linux capabilities, and mounts the active
+desktop audio runtime directory read-only. Web settings and Soloist state use
+separate bind mounts. If Docker cannot access the host audio socket, confirm that
 `XDG_RUNTIME_DIR` points to the logged-in desktop session and that
 `$XDG_RUNTIME_DIR/pulse/native` exists. The Spotify container creates a
 temporary `lumistripe_spotify` virtual sink and removes it when the stack stops.

@@ -6,6 +6,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field, replace
 from enum import Enum
+from math import isfinite
 from typing import cast
 
 from ..audio.types import AudioFrame, BandTuple, MusicFeatures
@@ -34,13 +35,13 @@ class MusicActivityConfig:
     def __post_init__(self) -> None:
         if self.idle_enter_frames <= 0:
             raise ValueError("idle_enter_frames must be greater than zero")
-        if self.activation_delay_s < 0.0:
+        if not isfinite(self.activation_delay_s) or self.activation_delay_s < 0.0:
             raise ValueError("activation_delay_s must not be negative")
         if not 0.0 <= self.spectral_balance_ratio <= 1.0:
             raise ValueError("spectral_balance_ratio must be between zero and one")
-        if self.activation_hysteresis_ratio < 1.0:
+        if not isfinite(self.activation_hysteresis_ratio) or self.activation_hysteresis_ratio < 1.0:
             raise ValueError("activation_hysteresis_ratio must be at least one")
-        if self.beat_density_window_s <= 0.0:
+        if not isfinite(self.beat_density_window_s) or self.beat_density_window_s <= 0.0:
             raise ValueError("beat_density_window_s must be greater than zero")
         for name in (
             "feature_attack",
@@ -87,6 +88,8 @@ class MusicActivityDetector:
     def update(self, features: MusicFeatures, *, now_s: float | None = None) -> bool:
         cfg = self.config
         now = time.monotonic() if now_s is None else now_s
+        if not isfinite(now):
+            raise ValueError("now_s must be finite")
         self.energy = _smooth(self.energy, features.energy, cfg.feature_attack, cfg.feature_release)
         self.onset = _smooth(
             self.onset,

@@ -9,6 +9,9 @@ controls whether the C extension is compiled.
 Portable compiler flags are used by default. `-march=native` is opt-in through
 `LUMISTRIPE_NATIVE_OPTIMIZATION=1` for device-local builds and must not be used
 for distributable wheels.
+The device-local profile keeps IEEE non-finite checks: fast-math and
+finite-math-only flags are excluded because native input validation depends on
+detecting NaN and infinity. CI exercises those checks in the optimized profile.
 
 The source tree keeps a development symlink to the KISS FFT submodule. The
 custom sdist command copies the required sources into the release tree, which

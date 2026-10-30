@@ -25,7 +25,7 @@ UPDATE_LIBEXEC_DIR=/usr/local/libexec/lumistripe/deploy
 NETWORK_SUDOERS_FILE=/etc/sudoers.d/lumistripe-network
 NETWORK_HELPER_FILE=/usr/local/sbin/lumistripe-network
 NETWORK_LIBEXEC_DIR=/usr/local/libexec/lumistripe/network
-SOLOIST_BIN=/usr/local/bin/soloist
+LEGACY_SOLOIST_BIN=/usr/local/bin/soloist
 STATE_DIR=/var/lib/lumistripe
 STATE_FILE="$STATE_DIR/install-state"
 NGINX_AVAILABLE=/etc/nginx/sites-available/led-controller
@@ -104,6 +104,7 @@ fi
 
 WIREPLUMBER_FILE="$SERVICE_HOME/.config/wireplumber/wireplumber.conf.d/90-lumistripe-bluetooth.conf"
 PIPEWIRE_FILE="$SERVICE_HOME/.config/pipewire/pipewire.conf.d/90-lumistripe-spotify.conf"
+SOLOIST_BIN="$SERVICE_HOME/.local/bin/soloist"
 USER_RUNTIME_DIR="/run/user/$SERVICE_UID"
 PROJECT_STATIC_DIR="$PROJECT_DIR/apps/lumistripe-web/src/lumistripe_web/static"
 PROJECT_FRONTEND_DIR="$PROJECT_DIR/apps/lumistripe-web/frontend"
@@ -217,6 +218,7 @@ remove_empty_directory "$(dirname -- "$(dirname -- "$PIPEWIRE_FILE")")"
 restart_user_audio
 
 remove_file "$SOLOIST_BIN"
+remove_file "$LEGACY_SOLOIST_BIN"
 remove_soloist_directory "$spotify_data_dir"
 remove_soloist_directory "$spotify_cache_dir"
 

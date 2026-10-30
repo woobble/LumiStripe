@@ -6,6 +6,7 @@
 #endif
 #include <Python.h>
 #include <numpy/arrayobject.h>
+#include <float.h>
 #include <math.h>
 #include <limits.h>
 #include <stdint.h>
@@ -44,6 +45,11 @@ int validate_finite_prefix(PyArrayObject *array, npy_intp elements,
                            const char *name);
 int reject_any_overlap(const PyArrayObject *left, const PyArrayObject *right,
                        const char *left_name, const char *right_name);
+Py_ssize_t positive_modulo_ssize(Py_ssize_t value, Py_ssize_t modulus);
+long long positive_modulo_i64(long long value, int modulus);
+Py_ssize_t multiply_modulo_ssize(Py_ssize_t value, unsigned int multiplier,
+                                 Py_ssize_t modulus);
+int truncated_modulo_int(double value, int modulus);
 PyObject *render_tunnel_rings_into(PyObject *module, PyObject *args);
 void hsl_to_rgb(double hue, double saturation, double lightness,
                        uint8_t *red, uint8_t *green, uint8_t *blue);

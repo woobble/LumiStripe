@@ -72,6 +72,50 @@ def _coordinator(
     )
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+def test_quantized_switch_rejects_nonfinite_timing(value: float) -> None:
+    coordinator = _coordinator(SwitchQuantization.BEAT)
+    timeline = _timeline(1, next_beat_at=10.5)
+
+    with pytest.raises(ValueError, match="now_s must be finite"):
+        coordinator.update(_decision(), timeline, now_s=value, sync_offset_s=0.0)
+    with pytest.raises(ValueError, match="sync_offset_s must be finite"):
+        coordinator.update(_decision(), timeline, now_s=10.0, sync_offset_s=value)
+
+    assert coordinator.pending_decision is None
+
+
+@pytest.mark.parametrize("offset", [-1.0, 1.0, -1e308, 1e308])
+def test_quantized_switch_rejects_offsets_outside_runtime_range(offset: float) -> None:
+    coordinator = _coordinator(SwitchQuantization.BEAT)
+
+    with pytest.raises(ValueError, match="between -0.5 and 0.5"):
+        coordinator.update(
+            _decision(), _timeline(1, next_beat_at=10.5), now_s=10.0,
+            sync_offset_s=offset,
+        )
+
+
+@pytest.mark.parametrize("confidence", [float("nan"), float("inf"), -0.1, 1.1])
+def test_quantized_switch_rejects_invalid_confidence_threshold(confidence: float) -> None:
+    with pytest.raises(ValueError, match="confidence_threshold"):
+        QuantizedSwitchCoordinator(
+            SwitchQuantization.BEAT,
+            confidence_threshold=confidence,
+            subdivisions_per_beat=1,
+        )
+
+
+@pytest.mark.parametrize("subdivisions", [True, 0, 3])
+def test_quantized_switch_rejects_invalid_subdivisions(subdivisions: int) -> None:
+    with pytest.raises(ValueError, match="subdivisions_per_beat"):
+        QuantizedSwitchCoordinator(
+            SwitchQuantization.BEAT,
+            confidence_threshold=0.65,
+            subdivisions_per_beat=subdivisions,
+        )
+
+
 @pytest.mark.parametrize(
     ("mode", "boundary_at"),
     [

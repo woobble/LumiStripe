@@ -25,6 +25,9 @@ from lumistripe.render.kernels import apply_alpha_scale_into, correct_rgba_into
 from ..models import PowerBudgetState, PowerOutputState
 from ..settings import StripeTopologySettings
 
+_OUTPUT_RETRY_INITIAL_SECONDS = 0.1
+_OUTPUT_RETRY_MAX_SECONDS = 5.0
+
 
 class OutputGateController(Controller):
     """Suppress output flushes while preserving the latest rendered frame."""
@@ -34,6 +37,9 @@ class OutputGateController(Controller):
         self._blackout = False
         self._last_successful_update_at: datetime | None = None
         self._last_successful_update_monotonic: float | None = None
+        self._last_error: str | None = None
+        self._consecutive_flush_failures = 0
+        self._retry_flush_at_monotonic = 0.0
 
     @property
     def blackout(self) -> bool:
@@ -49,19 +55,42 @@ class OutputGateController(Controller):
             return None
         return max(0.0, time.monotonic() - self._last_successful_update_monotonic)
 
+    @property
+    def last_error(self) -> str | None:
+        return self._last_error
+
     def _record_successful_update(self) -> None:
         self._last_successful_update_at = datetime.now(UTC)
         self._last_successful_update_monotonic = time.monotonic()
+        self._last_error = None
+        self._consecutive_flush_failures = 0
+        self._retry_flush_at_monotonic = 0.0
+
+    def _record_flush_failure(self, exc: OSError) -> None:
+        self._consecutive_flush_failures += 1
+        retry_delay = min(
+            _OUTPUT_RETRY_MAX_SECONDS,
+            _OUTPUT_RETRY_INITIAL_SECONDS
+            * 2 ** min(self._consecutive_flush_failures - 1, 6),
+        )
+        detail = str(exc).strip().replace("\n", " ")
+        self._last_error = f"{type(exc).__name__}: {detail}"[:256]
+        self._retry_flush_at_monotonic = time.monotonic() + retry_delay
 
     def set_blackout(self, enabled: bool) -> None:
         if enabled == self._blackout:
             return
         if enabled:
             buffered_frame = self._inner.pixels().copy()
-            self._inner.clear()
-            self._inner.force_flush()
+            try:
+                self._inner.clear()
+                self._inner.force_flush()
+            except OSError as exc:
+                self._record_flush_failure(exc)
+                raise
+            finally:
+                self._inner.set_pixels(buffered_frame)
             self._record_successful_update()
-            self._inner.set_pixels(buffered_frame)
             self._blackout = True
             return
         self._blackout = False
@@ -91,12 +120,22 @@ class OutputGateController(Controller):
 
     def flush(self) -> None:
         if not self._blackout:
-            self._inner.flush()
+            if time.monotonic() < self._retry_flush_at_monotonic:
+                return
+            try:
+                self._inner.flush()
+            except OSError as exc:
+                self._record_flush_failure(exc)
+                return
             self._record_successful_update()
 
     def force_flush(self) -> None:
         if not self._blackout:
-            self._inner.force_flush()
+            try:
+                self._inner.force_flush()
+            except OSError as exc:
+                self._record_flush_failure(exc)
+                raise
             self._record_successful_update()
 
     def close(self) -> None:

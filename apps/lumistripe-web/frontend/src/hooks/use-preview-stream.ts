@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 
 import { previewWebsocketUrl } from "@/lib/api"
-import { decodePreviewFrame, type PreviewFrame } from "@/lib/preview"
+import {
+  decodePreviewFrame,
+  isNewerPreviewSequence,
+  type PreviewFrame,
+} from "@/lib/preview"
 import { useWebSocketStream } from "@/hooks/use-websocket-stream"
 
 export type PreviewConnectionStatus = "connecting" | "connected" | "reconnecting"
@@ -39,7 +43,7 @@ export function usePreviewStream(enabled = true) {
     if (
       incoming === null
       || status !== "connected"
-      || incoming.sequence < lastSequence.current
+      || !isNewerPreviewSequence(incoming.sequence, lastSequence.current)
     ) return
     lastSequence.current = incoming.sequence
     setLatestFrame({ session: streamSession, frame: incoming })

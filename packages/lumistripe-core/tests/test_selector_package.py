@@ -11,6 +11,22 @@ from lumistripe import (
 )
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf"), -1.0])
+@pytest.mark.parametrize(
+    "field", ["min_duration_s", "max_duration_s", "switch_cooldown_s", "drop_cooldown_s", "randomness", "switch_margin"]
+)
+def test_selector_rejects_invalid_numeric_configuration(field: str, value: float) -> None:
+    with pytest.raises(ValueError):
+        DynamicSelectorConfig(**{field: value})
+
+
+def test_zero_selector_history_does_not_accumulate_names() -> None:
+    selector = DynamicSelector(DynamicSelectorConfig(history_size=0))
+    for index in range(100):
+        selector._remember(str(index))
+    assert selector.recent_names == []
+
+
 def _bass_drop_features() -> MusicFeatures:
     return MusicFeatures(
         bpm=128.0,

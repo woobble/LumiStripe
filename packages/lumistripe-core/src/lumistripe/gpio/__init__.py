@@ -205,7 +205,6 @@ class GPIOStripe(Stripe):
                 int(rgba[2]),
                 float(rgba[3]) / 255.0,
             ).as_scaled_rgb_array()
-            self._dirty[index] = False
 
         self._write(False, False)
 
@@ -220,6 +219,8 @@ class GPIOStripe(Stripe):
 
         for _ in range(self.length):
             self._pulse(False)
+
+        self._dirty[dirty_indices] = False
 
     def clear(self) -> None:
         self._pixels[:] = np.array([0, 0, 0, 0], dtype=np.uint8)

@@ -18,7 +18,6 @@ ENV_FILE="$ENV_DIR/lumistripe-web.env"
 SERVICE_FILE=/etc/systemd/system/lumistripe-web.service
 SPOTIFY_ENV_FILE="$ENV_DIR/lumistripe-spotify.env"
 SPOTIFY_SERVICE_FILE=/etc/systemd/system/lumistripe-spotify.service
-SOLOIST_BIN=/usr/local/bin/soloist
 STATE_DIR=/var/lib/lumistripe
 STATE_FILE="$STATE_DIR/install-state"
 WIREPLUMBER_DIR=
@@ -36,10 +35,9 @@ if [[ $EUID -ne 0 ]]; then
   echo "Run this installer as root (for example: sudo $0)." >&2
   exit 1
 fi
-[[ -d "$PROJECT_DIR" ]] || {
-  echo "Project directory not found: $PROJECT_DIR" >&2
-  exit 1
-}
+# shellcheck source=deploy/update-support.sh
+source "$SCRIPT_DIR/update-support.sh"
+PROJECT_DIR="$(canonical_project_directory "$PROJECT_DIR")" || exit 1
 
 if [[ -z "$SERVICE_USER" || "$SERVICE_USER" == root ]]; then
   # When invoked by a root shell, use the existing owner of the checkout. A
@@ -89,7 +87,9 @@ for required_file in \
   "$PROJECT_DIR/deploy/lumistripe-network" \
   "$PROJECT_DIR/deploy/lumistripe-network.sudoers" \
   "$PROJECT_DIR/deploy/nginx/led-controller.conf" \
-  "$PROJECT_DIR/deploy/tls.sh"; do
+  "$PROJECT_DIR/deploy/tls.sh" \
+  "$PROJECT_DIR/deploy/soloist.sh" \
+  "$PROJECT_DIR/deploy/extract_soloist.py"; do
   [[ -f "$required_file" ]] || {
     echo "Required deployment file is missing: $required_file" >&2
     exit 1
@@ -98,8 +98,8 @@ done
 
 # shellcheck source=deploy/tls.sh
 source "$SCRIPT_DIR/tls.sh"
-# shellcheck source=deploy/update-support.sh
-source "$SCRIPT_DIR/update-support.sh"
+# shellcheck source=deploy/soloist.sh
+source "$SCRIPT_DIR/soloist.sh"
 
 command -v apt-get >/dev/null 2>&1 || {
   echo "This installer requires apt-get (Raspberry Pi OS/Debian)." >&2
@@ -211,7 +211,8 @@ install_mkcert() {
 
   echo "Installing mkcert ($version) from the official release..."
   installer_file="$(mktemp /tmp/lumistripe-mkcert.XXXXXX)"
-  curl --fail --silent --show-error --location --retry 3 --retry-delay 2 \
+  curl --disable --proto '=https' --proto-redir '=https' \
+    --fail --silent --show-error --location --retry 3 --retry-delay 2 \
     "https://github.com/FiloSottile/mkcert/releases/download/$version/mkcert-$version-$asset" \
     -o "$installer_file"
   install -o root -g root -m 755 "$installer_file" /usr/local/bin/mkcert
@@ -245,7 +246,8 @@ download_and_run_as_user() {
   local installer_file
   installer_file="$(mktemp /tmp/lumistripe-tool-installer.XXXXXX)"
 
-  curl --fail --silent --show-error --location --retry 3 --retry-delay 2 \
+  curl --disable --proto '=https' --proto-redir '=https' \
+    --fail --silent --show-error --location --retry 3 --retry-delay 2 \
     "$url" -o "$installer_file"
   chown "$SERVICE_USER:$SERVICE_GROUP" "$installer_file"
   chmod 700 "$installer_file"
@@ -284,40 +286,6 @@ install_toolchains() {
       "This may be an unsupported 32-bit Pi image." >&2
     exit 1
   }
-}
-
-install_spotify_soloist() {
-  local architecture
-  local archive_arch
-  local archive_url
-  local archive_file
-  local extract_dir
-  architecture="$(uname -m)"
-  case "$architecture" in
-    aarch64) archive_arch=arm64 ;;
-    armv7l) archive_arch=arm32 ;;
-    x86_64) archive_arch=x86_64 ;;
-    *)
-      echo "Spotify Soloist has no configured build for $architecture." >&2
-      exit 1
-      ;;
-  esac
-  archive_url="https://soloist-builds.spotifycdn.com/soloist_release_${archive_arch}.tar.gz"
-  archive_file="$(mktemp /tmp/lumistripe-soloist.XXXXXX.tar.gz)"
-  extract_dir="$(mktemp -d /tmp/lumistripe-soloist.XXXXXX)"
-  echo "Downloading Spotify Soloist for $architecture..."
-  curl --fail --silent --show-error --location --retry 3 --retry-delay 2 \
-    "$archive_url" -o "$archive_file"
-  tar -xzf "$archive_file" -C "$extract_dir"
-  [[ -x "$extract_dir/soloist" ]] || {
-    echo "Spotify Soloist archive did not contain an executable soloist file." >&2
-    rm -f -- "$archive_file"
-    rm -rf -- "$extract_dir"
-    exit 1
-  }
-  install -o root -g root -m 755 "$extract_dir/soloist" "$SOLOIST_BIN"
-  rm -f -- "$archive_file"
-  rm -rf -- "$extract_dir"
 }
 
 install_project_dependencies() {
@@ -641,7 +609,7 @@ install_toolchains
 create_environment_file
 create_spotify_environment_file
 if spotify_environment_ready; then
-  install_spotify_soloist
+  install_spotify_soloist "$SERVICE_HOME"
 fi
 install_project_dependencies
 create_tls_certificate

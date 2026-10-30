@@ -53,6 +53,18 @@ class QuantizedSwitchCoordinator:
         confidence_threshold: float,
         subdivisions_per_beat: int,
     ) -> None:
+        if not isinstance(mode, SwitchQuantization):
+            raise TypeError("mode must be a SwitchQuantization")
+        if (
+            not math.isfinite(confidence_threshold)
+            or not 0.0 <= confidence_threshold <= 1.0
+        ):
+            raise ValueError("confidence_threshold must be finite and between zero and one")
+        if (
+            isinstance(subdivisions_per_beat, bool)
+            or subdivisions_per_beat not in (1, 2, 4)
+        ):
+            raise ValueError("subdivisions_per_beat must be 1, 2, or 4")
         self.mode = mode
         self.confidence_threshold = confidence_threshold
         self.subdivisions_per_beat = subdivisions_per_beat
@@ -81,6 +93,7 @@ class QuantizedSwitchCoordinator:
     ) -> QuantizedSwitchDiagnostics:
         """Return public state without exposing the pending-switch record."""
 
+        _validate_timing_inputs(now_s, sync_offset_s)
         pending = self._pending
         next_switch_at = (
             None
@@ -133,6 +146,7 @@ class QuantizedSwitchCoordinator:
         Clock stalls, regressions, or lost confidence discard stale work.
         """
 
+        _validate_timing_inputs(now_s, sync_offset_s)
         if self.mode is SwitchQuantization.OFF:
             self.reset()
             return None
@@ -287,6 +301,13 @@ class QuantizedSwitchCoordinator:
         # the same per-frame timing tolerance as synchronized effects.
         subdivision_s = 60.0 / bpm / self.subdivisions_per_beat
         return min(0.05, subdivision_s / 2.0)
+
+
+def _validate_timing_inputs(now_s: float, sync_offset_s: float) -> None:
+    if not math.isfinite(now_s):
+        raise ValueError("now_s must be finite")
+    if not math.isfinite(sync_offset_s) or not -0.5 <= sync_offset_s <= 0.5:
+        raise ValueError("sync_offset_s must be finite and between -0.5 and 0.5 seconds")
 
 
 __all__ = ["QuantizedSwitchCoordinator", "QuantizedSwitchDiagnostics"]

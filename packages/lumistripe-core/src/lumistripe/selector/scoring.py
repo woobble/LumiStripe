@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import isfinite
 from random import Random
 from typing import Any
 
@@ -18,6 +19,17 @@ class DynamicSelectorConfig:
     history_size: int = 5
     seed: int | None = None
     switch_margin: float = 0.12
+
+    def __post_init__(self) -> None:
+        for name in (
+            "min_duration_s", "max_duration_s", "switch_cooldown_s",
+            "drop_cooldown_s", "randomness", "switch_margin",
+        ):
+            value = getattr(self, name)
+            if not isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be finite and nonnegative")
+        if isinstance(self.history_size, bool) or not isinstance(self.history_size, int) or self.history_size < 0:
+            raise ValueError("history_size must be a nonnegative integer")
 
 
 @dataclass(frozen=True, slots=True)

@@ -14,7 +14,8 @@ PyObject *render_shockwave_into(PyObject *module, PyObject *args) {
         return NULL;
     if (!isfinite(radius) || !isfinite(width) || width <= 0.0 ||
         !isfinite(accent) || accent < 0.0 || accent > 1.0 || hue < 0 || hue > 255 ||
-        !isfinite(mid) || !isfinite(brightness) || brightness < 0.0 || brightness > 1.0 ||
+        !isfinite(mid) || mid < 0.0 || mid > 1.0 ||
+        !isfinite(brightness) || brightness < 0.0 || brightness > 1.0 ||
         (audio_mode != 0 && audio_mode != 1) || palette < 0 || palette > 3 ||
         custom_rgb > 0xFFFFFFu) {
         PyErr_SetString(PyExc_ValueError, "invalid Shockwave render parameters");
@@ -32,10 +33,12 @@ PyObject *render_shockwave_into(PyObject *module, PyObject *args) {
         }
         for (int band = 0; band < 8; band++) {
             bands[band] = PyFloat_AsDouble(PySequence_Fast_GET_ITEM(sequence, band));
-            if (PyErr_Occurred() || !isfinite(bands[band])) {
+            if (PyErr_Occurred() || !isfinite(bands[band]) ||
+                bands[band] < 0.0 || bands[band] > 1.0) {
                 Py_DECREF(sequence);
                 if (!PyErr_Occurred())
-                    PyErr_SetString(PyExc_ValueError, "bands must be finite values");
+                    PyErr_SetString(PyExc_ValueError,
+                                    "bands must be normalized finite values");
                 return NULL;
             }
         }
@@ -106,7 +109,9 @@ PyObject *render_aurora_into(PyObject *module, PyObject *args) {
     if (validate_rgba(destination, "destination", 1) < 0)
         return NULL;
     if ((audio_mode != 0 && audio_mode != 1) || !isfinite(frequency) || frequency <= 0.0 ||
-        !isfinite(speed) || !isfinite(low) || !isfinite(mid) || !isfinite(high) ||
+        !isfinite(speed) || !isfinite(low) || low < 0.0 || low > 1.0 ||
+        !isfinite(mid) || mid < 0.0 || mid > 1.0 ||
+        !isfinite(high) || high < 0.0 || high > 1.0 ||
         !isfinite(beat_glow) || beat_glow < 0.0 || beat_glow > 1.0 ||
         !isfinite(brightness) || brightness < 0.0 || brightness > 1.0 ||
         hue_offset < 0 || hue_offset > 255 || palette < 0 || palette > 3 ||
@@ -126,16 +131,37 @@ PyObject *render_aurora_into(PyObject *module, PyObject *args) {
         }
         for (int band = 0; band < 8; band++) {
             bands[band] = PyFloat_AsDouble(PySequence_Fast_GET_ITEM(sequence, band));
-            if (PyErr_Occurred() || !isfinite(bands[band])) {
+            if (PyErr_Occurred() || !isfinite(bands[band]) ||
+                bands[band] < 0.0 || bands[band] > 1.0) {
                 Py_DECREF(sequence);
                 if (!PyErr_Occurred())
-                    PyErr_SetString(PyExc_ValueError, "bands must be finite values");
+                    PyErr_SetString(PyExc_ValueError,
+                                    "bands must be normalized finite values");
                 return NULL;
             }
         }
         Py_DECREF(sequence);
     }
     const npy_intp count = PyArray_DIM(destination, 0);
+    const double max_position = count > 1 ? 1.0 : 0.0;
+    const double static_phase_start = (double)frame * 0.038;
+    const double static_phase_end = static_phase_start + max_position * 7.5 * frequency;
+    const double audio_low_start = (double)frame * speed + low * 4.0;
+    const double audio_low_end =
+        (double)frame * speed + max_position * 5.8 * frequency + low * 4.0;
+    const double audio_mid_start = (double)frame * (speed * 0.9) + mid * 5.0;
+    const double audio_mid_end =
+        (double)frame * (speed * 0.9) + max_position * 8.5 * frequency + mid * 5.0;
+    const double audio_high_start = (double)frame * (speed * 1.7) + high * 7.0;
+    const double audio_high_end =
+        (double)frame * (speed * 1.7) - max_position * 11.5 * frequency + high * 7.0;
+    if (!isfinite(static_phase_start) || !isfinite(static_phase_end) ||
+        !isfinite(audio_low_start) || !isfinite(audio_low_end) ||
+        !isfinite(audio_mid_start) || !isfinite(audio_mid_end) ||
+        !isfinite(audio_high_start) || !isfinite(audio_high_end)) {
+        PyErr_SetString(PyExc_ValueError, "Aurora phase values exceed the finite range");
+        return NULL;
+    }
     uint8_t *pixels = (uint8_t *)PyArray_DATA(destination);
     for (npy_intp index = 0; index < count; index++) {
         const double position = count <= 1 ? 0.0 : (double)index / (double)(count - 1);
@@ -216,7 +242,8 @@ PyObject *render_spectrum_flash_into(PyObject *module, PyObject *args) {
     const npy_intp count = PyArray_DIM(destination, 0);
     if (!isfinite(width) || !isfinite(hue_phase) ||
         fabs(hue_phase / 8.0) > (double)INT_MAX || !isfinite(flash) ||
-        !isfinite(brightness) || width < 0.0 || brightness < 0.0 ||
+        !isfinite(brightness) || width < 0.0 || flash < 0.0 || flash > 1.0 ||
+        brightness < 0.0 ||
         brightness > 1.0 || palette < 0 || palette > 3 ||
         custom_rgb > 0xFFFFFFu) {
         Py_DECREF(bands);
@@ -306,9 +333,10 @@ PyObject *render_pulse_into(PyObject *module, PyObject *args) {
     static const int neon_hues[7] = {300, 160, 52, 206, 12, 268, 132};
     static const int fire_hues[5] = {0, 10, 22, 35, 48};
     const npy_intp count = PyArray_DIM(destination, 0);
+    const double wrapped_phase = fmod(phase, 1.0);
     uint8_t *pixels = (uint8_t *)PyArray_DATA(destination);
     for (npy_intp index = 0; index < count; index++) {
-        const double spatial = cos(phase * 6.283185307179586 +
+        const double spatial = cos(wrapped_phase * 6.283185307179586 +
                                    (double)index * 0.05) * 0.5 + 0.5;
         const int lightness = 46 + (int)(spatial * 5.0);
         uint8_t red, green, blue;
@@ -319,9 +347,9 @@ PyObject *render_pulse_into(PyObject *module, PyObject *args) {
         } else {
             double selected_hue = fmod(hue, 360.0);
             if (palette == 1)
-                selected_hue = (double)neon_hues[(int)(hue / 45.0) % 7];
+                selected_hue = (double)neon_hues[truncated_modulo_int(hue / 45.0, 7)];
             else if (palette == 2)
-                selected_hue = (double)fire_hues[(int)(hue / 55.0) % 5];
+                selected_hue = (double)fire_hues[truncated_modulo_int(hue / 55.0, 5)];
             hsl_to_rgb(selected_hue, 82.0, (double)lightness,
                        &red, &green, &blue);
         }
@@ -349,35 +377,49 @@ PyObject *render_dance_floor_into(PyObject *module, PyObject *args) {
         return NULL;
     if (segment_width < 1 || !isfinite(frequency) ||
         (audio_mode != 0 && audio_mode != 1) || !isfinite(hue_shift) ||
-        !isfinite(mid) || !isfinite(high) || !isfinite(drive) ||
-        !isfinite(beat_boost) || !isfinite(brightness) || brightness < 0.0 ||
+        !isfinite(mid) || mid < 0.0 || mid > 1.0 ||
+        !isfinite(high) || high < 0.0 || high > 1.0 ||
+        !isfinite(drive) || drive < 0.0 || drive > 1.0 ||
+        !isfinite(beat_boost) || beat_boost < 0.0 || beat_boost > 1.0 ||
+        !isfinite(brightness) || brightness < 0.0 ||
         brightness > 1.0 || palette < 0 || palette > 3 ||
         custom_rgb > 0xFFFFFFu) {
         PyErr_SetString(PyExc_ValueError, "invalid DanceFloor render parameters");
         return NULL;
     }
     const npy_intp count = PyArray_DIM(destination, 0);
-    const int segments = count > 0
-        ? (int)((count + segment_width - 1) / segment_width)
+    const npy_intp width = (npy_intp)segment_width;
+    const npy_intp segments = count > 0
+        ? count / width + (count % width != 0)
         : 1;
+    const double spatial_rate = 0.4 + frequency / 50.0;
+    const double max_spatial_phase = (double)(segments - 1) * spatial_rate;
+    const double frame_phase = (double)frame * 0.08;
+    if (!isfinite(spatial_rate) || !isfinite(max_spatial_phase) ||
+        !isfinite(frame_phase) ||
+        fabs(frame_phase) > DBL_MAX - fabs(max_spatial_phase)) {
+        PyErr_SetString(PyExc_ValueError, "DanceFloor phase exceeds the finite range");
+        return NULL;
+    }
+    const int hue_shift_mod = truncated_modulo_int(hue_shift, 256);
+    const int frame_mod = (int)positive_modulo_ssize((Py_ssize_t)frame, 128);
     uint8_t *pixels = (uint8_t *)PyArray_DATA(destination);
     for (npy_intp index = 0; index < count; index++) {
-        const int segment = (int)index / segment_width;
+        const npy_intp segment = index / width;
+        const int segment_hue = (int)((segment % 256) * 40 % 256);
         int hue, lightness;
         double alpha = 1.0;
         if (audio_mode) {
-            hue = (segment * 40 + (int)hue_shift) % 256;
-            const double phase = (double)segment * (0.4 + frequency / 50.0) +
-                                 (double)frame * 0.08;
+            hue = (segment_hue + hue_shift_mod) % 256;
+            const double phase = (double)segment * spatial_rate + frame_phase;
             const double breathing = (sin(phase) * 0.5 + 0.5);
             lightness = (int)(30.0 + mid * 20.0 +
                               (double)segment / (double)segments * high * 25.0 +
                               beat_boost * 25.0 + breathing * 4.0);
             alpha = fmin(0.6 + drive * 0.4 + beat_boost * 0.3, 1.0);
         } else {
-            hue = (segment * 40 + frame * 2) % 256;
-            const double phase = (double)segment * (0.4 + frequency / 50.0) +
-                                 (double)frame * 0.08;
+            hue = (segment_hue + frame_mod * 2) % 256;
+            const double phase = (double)segment * spatial_rate + frame_phase;
             lightness = 40 + (int)((1.0 + sin(phase)) * 15.0);
         }
         uint8_t red, green, blue;
@@ -416,6 +458,12 @@ PyObject *render_club_flash_into(PyObject *module, PyObject *args) {
     static const int club_hues[7] = {330, 18, 48, 126, 190, 224, 286};
     static const int warm_hues[4] = {0, 20, 38, 320};
     const npy_intp count = PyArray_DIM(destination, 0);
+    if (!whole_strip && count > 0 &&
+        segment_width > (count > 3 ? count : 3)) {
+        PyErr_SetString(PyExc_ValueError,
+                        "ClubFlash segment is wider than its supported range");
+        return NULL;
+    }
     uint8_t *pixels = (uint8_t *)PyArray_DATA(destination);
     for (npy_intp index = 0; index < count; index++) {
         const size_t offset = (size_t)index * 4u;
@@ -426,7 +474,7 @@ PyObject *render_club_flash_into(PyObject *module, PyObject *args) {
         Py_RETURN_NONE;
     if (whole_strip) {
         const double alpha = fmin(1.0, 0.2 + flash * 0.8);
-        const int hue = warm_hues[(uint64_t)hue_seed % UINT64_C(4)];
+        const int hue = warm_hues[positive_modulo_i64(hue_seed, 4)];
         uint8_t red, green, blue;
         palette_hsl_to_rgb((double)hue, 100.0, 60.0, palette,
                            custom_rgb, &red, &green, &blue);
@@ -440,14 +488,14 @@ PyObject *render_club_flash_into(PyObject *module, PyObject *args) {
         Py_RETURN_NONE;
     }
     const double base_alpha = fmin(1.0, 0.12 + flash * 0.88);
-    const int base_hue = club_hues[(uint64_t)hue_seed % UINT64_C(7)];
+    const int base_hue = club_hues[positive_modulo_i64(hue_seed, 7)];
     uint8_t base_red, base_green, base_blue;
     palette_hsl_to_rgb((double)base_hue, 100.0, 58.0, palette,
                        custom_rgb, &base_red, &base_green, &base_blue);
     const int mirror_enabled = flash > 0.6 && count > 6;
     const double mirror_alpha = fmin(1.0, 0.1 + flash * 0.7);
+    npy_intp index = positive_modulo_ssize((Py_ssize_t)segment_start, count);
     for (int offset = 0; offset < segment_width; offset++) {
-        const npy_intp index = (segment_start + offset) % count;
         const size_t pixel_offset = (size_t)index * 4u;
         pixels[pixel_offset] = base_red;
         pixels[pixel_offset + 1u] = base_green;
@@ -455,7 +503,9 @@ PyObject *render_club_flash_into(PyObject *module, PyObject *args) {
         pixels[pixel_offset + 3u] = (uint8_t)(base_alpha * brightness * 255.0);
         if (mirror_enabled) {
             const npy_intp mirror = (count - 1 - index) > 0 ? count - 1 - index : 0;
-            const int warm_hue = warm_hues[((uint64_t)hue_seed + (uint64_t)offset) % UINT64_C(4)];
+            const int warm_index =
+                (int)((positive_modulo_i64(hue_seed, 4) + offset % 4) % 4);
+            const int warm_hue = warm_hues[warm_index];
             uint8_t red, green, blue;
             palette_hsl_to_rgb((double)warm_hue, 100.0, 60.0,
                                palette, custom_rgb, &red, &green, &blue);
@@ -465,6 +515,7 @@ PyObject *render_club_flash_into(PyObject *module, PyObject *args) {
             pixels[mirror_offset + 2u] = blue;
             pixels[mirror_offset + 3u] = (uint8_t)(mirror_alpha * brightness * 255.0);
         }
+        index = index == count - 1 ? 0 : index + 1;
     }
     Py_RETURN_NONE;
 }
@@ -549,7 +600,8 @@ PyObject *render_beat_explosion_into(PyObject *module, PyObject *args) {
     if ((audio_mode != 0 && audio_mode != 1) || !isfinite(center) ||
         center < 0.0 || !isfinite(radius) || !isfinite(width) || width <= 0.0 ||
         !isfinite(hit) || hit < 0.0 || hit > 1.0 || !isfinite(low) ||
-        !isfinite(mid) || !isfinite(high) || !isfinite(brightness) ||
+        low < 0.0 || low > 1.0 || !isfinite(mid) || mid < 0.0 || mid > 1.0 ||
+        !isfinite(high) || high < 0.0 || high > 1.0 || !isfinite(brightness) ||
         brightness < 0.0 || brightness > 1.0 || palette < 0 || palette > 3 ||
         custom_rgb > 0xFFFFFFu) {
         PyErr_SetString(PyExc_ValueError, "invalid BeatExplosion render parameters");
@@ -566,12 +618,16 @@ PyObject *render_beat_explosion_into(PyObject *module, PyObject *args) {
                                      (width + high * 2.0), 0.0);
             const double ambient = fmax(1.0 - dist / fmax(center, 1.0), 0.0) * 0.08;
             alpha = fmin(ambient + ring * (0.15 + hit * 0.75), 1.0);
-            hue = (int)((10 + (int)(low * 30.0) + (int64_t)frame * 2) % 256);
+            const int frame_mod =
+                (int)positive_modulo_ssize((Py_ssize_t)frame, 128);
+            hue = (10 + (int)(low * 30.0) + frame_mod * 2) % 256;
             lightness = (int)(50.0 + mid * 15.0 + hit * 15.0);
         } else {
             const double ring = fmax(1.0 - fabs(dist - radius) / width, 0.0);
             alpha = ring * ((frame % 30) < 3 ? 0.9 : 0.0);
-            hue = (int)(((int64_t)frame * 4 + (int64_t)(index % 128) * 2) % 256);
+            const int frame_mod =
+                (int)positive_modulo_ssize((Py_ssize_t)frame, 64);
+            hue = (frame_mod * 4 + (int)(index % 128) * 2) % 256;
             lightness = 55;
         }
         uint8_t red, green, blue;
@@ -615,6 +671,20 @@ PyObject *render_plasma_rave_into(PyObject *module, PyObject *args) {
         return NULL;
     }
     const npy_intp length = PyArray_DIM(destination, 0);
+    const double max_position = length > 1 ? 1.0 : 0.0;
+    const double phase_one_start = time_one;
+    const double phase_one_end = max_position * 4.0 * frequency + time_one;
+    const double phase_two_start = time_two;
+    const double phase_two_end = max_position * 8.0 * frequency + time_two;
+    const double phase_three_start = time_three * 12.0 * frequency;
+    const double phase_three_end =
+        (max_position + time_three) * 12.0 * frequency;
+    if (!isfinite(phase_one_start) || !isfinite(phase_one_end) ||
+        !isfinite(phase_two_start) || !isfinite(phase_two_end) ||
+        !isfinite(phase_three_start) || !isfinite(phase_three_end)) {
+        PyErr_SetString(PyExc_ValueError, "PlasmaRave phases exceed the finite range");
+        return NULL;
+    }
     uint8_t *pixels = (uint8_t *)PyArray_DATA(destination);
     for (npy_intp index = 0; index < length; index++) {
         const double position = (double)index / (double)(length > 1 ? length - 1 : 1);
@@ -808,7 +878,10 @@ PyObject *render_rave_scanner_into(PyObject *module, PyObject *args) {
         const double intensity = fmax(0.0, 1.0 - distance / width);
         const double alpha = fmin(
             1.0, beam_brightness * (0.25 + intensity * 0.75));
-        const int color_index = (hue + (int)(distance * 18.0)) % 7;
+        const int distance_hue = distance < (double)INT_MAX / 18.0
+            ? (int)(distance * 18.0) % 7
+            : truncated_modulo_int(fmod(distance, 7.0 / 18.0) * 18.0, 7);
+        const int color_index = (hue % 7 + distance_hue) % 7;
         uint8_t red, green, blue;
         palette_hsl_to_rgb((double)club_hues[color_index], 100.0, 60.0,
                            palette, custom_rgb, &red, &green, &blue);
@@ -851,7 +924,9 @@ PyObject *render_center_burst_into(PyObject *module, PyObject *args) {
         const double intensity = fmax(0.0, 1.0 - fabs(distance - radius) / width);
         if (intensity <= 0.0)
             continue;
-        const size_t hue_index = (size_t)((hue_seed + index) % 7);
+        const size_t hue_index = (size_t)positive_modulo_ssize(
+            positive_modulo_ssize(hue_seed, 7) + index % 7, 7
+        );
         uint8_t red, green, blue;
         palette_hsl_to_rgb((double)club_hues[hue_index], 100.0, 60.0,
                            palette, custom_rgb, &red, &green, &blue);
@@ -947,13 +1022,15 @@ PyObject *render_mirror_flash_into(PyObject *module, PyObject *args) {
         const double intensity = fmax(0.0, 1.0 - distance / span) * flash;
         if (intensity <= 0.0)
             continue;
-        const Py_ssize_t hue = hue_seed + (alternate ? index * 13 : -index * 9);
         const double alpha = fmin(1.0, 0.14 + intensity * 0.86);
         const npy_intp mirror = length - 1 - index > 0 ? length - 1 - index : 0;
         uint8_t red, green, blue;
-        Py_ssize_t color_hue = hue % 7;
-        if (color_hue < 0)
-            color_hue += 7;
+        const Py_ssize_t color_offset = alternate
+            ? (index % 7) * 13
+            : -(index % 7) * 9;
+        const Py_ssize_t color_hue = positive_modulo_ssize(
+            positive_modulo_ssize(hue_seed, 7) + color_offset, 7
+        );
         palette_hsl_to_rgb((double)club_hues[color_hue], 100.0, 62.0,
                            palette, custom_rgb, &red, &green, &blue);
         size_t offset = (size_t)index * 4u;
@@ -963,9 +1040,10 @@ PyObject *render_mirror_flash_into(PyObject *module, PyObject *args) {
         pixels[offset + 3u] = (uint8_t)(alpha * brightness * 255.0);
         if (mirror != index) {
             if (alternate) {
-                Py_ssize_t warm_index = (hue + 11) % 4;
-                if (warm_index < 0)
-                    warm_index += 4;
+                const Py_ssize_t warm_index = positive_modulo_ssize(
+                    positive_modulo_ssize(hue_seed, 4) + (index % 4) * 13 + 11,
+                    4
+                );
                 palette_hsl_to_rgb((double)warm_hues[warm_index], 100.0, 60.0,
                                    palette, custom_rgb, &red, &green, &blue);
             }
@@ -1018,9 +1096,9 @@ PyObject *render_drop_wave_into(PyObject *module, PyObject *args) {
             if (intensity <= 0.0)
                 continue;
             alpha = fmin(1.0, intensity * (0.22 + flash * 0.78));
-            Py_ssize_t color_index = (hue_seed + index) % 4;
-            if (color_index < 0)
-                color_index += 4;
+            const Py_ssize_t color_index = positive_modulo_ssize(
+                positive_modulo_ssize(hue_seed, 4) + index % 4, 4
+            );
             hue = warm_hues[color_index];
             lightness = 60;
         } else if (charge > 0.35) {
@@ -1028,9 +1106,9 @@ PyObject *render_drop_wave_into(PyObject *module, PyObject *args) {
             alpha = fmin(1.0, pre * (0.08 + charge * 0.2));
             if (alpha <= 0.0)
                 continue;
-            Py_ssize_t color_index = (hue_seed + index) % 7;
-            if (color_index < 0)
-                color_index += 7;
+            const Py_ssize_t color_index = positive_modulo_ssize(
+                positive_modulo_ssize(hue_seed, 7) + index % 7, 7
+            );
             hue = club_hues[color_index];
             lightness = 48;
         } else {
@@ -1063,7 +1141,8 @@ PyObject *render_lightning_strike_into(PyObject *module, PyObject *args) {
         return NULL;
     if (strike_length < 0 || hue < 0 || hue > 255 || !isfinite(flash_alpha) ||
         flash_alpha < 0.0 || flash_alpha > 1.0 || !isfinite(all_flash) ||
-        all_flash < 0.0 || !isfinite(brightness) || brightness < 0.0 ||
+        all_flash < 0.0 || all_flash > 1.5 ||
+        !isfinite(brightness) || brightness < 0.0 ||
         brightness > 1.0 || (audio_mode != 0 && audio_mode != 1) ||
         palette < 0 || palette > 3 || custom_rgb > 0xFFFFFFu) {
         PyErr_SetString(PyExc_ValueError, "invalid LightningStrike parameters");
@@ -1178,7 +1257,9 @@ PyObject *render_neon_storm_into(PyObject *module, PyObject *args) {
             pixels[offset + 2u] = clear_b; pixels[offset + 3u] = 0u;
             continue;
         }
-        int selected = (p >= streak ? particle_hue[index] : (int)streak_seed) % 5;
+        int selected = (p >= streak
+            ? particle_hue[index]
+            : (int)(streak_seed % 5)) % 5;
         if (selected < 0) selected += 5;
         uint8_t red, green, blue;
         catalog_palette_hsl_to_rgb((double)palette_hues[selected], 100.0,

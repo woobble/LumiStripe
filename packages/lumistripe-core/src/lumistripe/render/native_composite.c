@@ -234,6 +234,11 @@ PyObject *render_red_chase_into(PyObject *module, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+static int positive_modulo(Py_ssize_t value, int modulus) {
+    const Py_ssize_t remainder = value % modulus;
+    return (int)(remainder < 0 ? remainder + modulus : remainder);
+}
+
 PyObject *render_drop_explosion_into(PyObject *module, PyObject *args) {
     (void)module;
     PyArrayObject *destination;
@@ -248,7 +253,9 @@ PyObject *render_drop_explosion_into(PyObject *module, PyObject *args) {
         return NULL;
     if (!isfinite(flash_alpha) || !isfinite(tension) || !isfinite(preview) ||
         !isfinite(low) || !isfinite(high) || !isfinite(brightness) ||
-        flash_alpha < 0.0 || tension < 0.0 || brightness < 0.0 || brightness > 1.0) {
+        flash_alpha < 0.0 || flash_alpha > 1.0 || tension < 0.0 || tension > 1.0 ||
+        preview < 0.0 || preview > 1.0 || low < 0.0 || low > 1.0 ||
+        high < 0.0 || high > 1.0 || brightness < 0.0 || brightness > 1.0) {
         PyErr_SetString(PyExc_ValueError, "drop explosion render values are out of range");
         return NULL;
     }
@@ -257,8 +264,12 @@ PyObject *render_drop_explosion_into(PyObject *module, PyObject *args) {
     for (npy_intp index = 0; index < count; index++) {
         unsigned int red = 0u, green = 0u, blue = 0u;
         double alpha = 0.0;
+        const int index_mod_6 = (int)(index % 6);
+        const int index_mod_5 = (int)(index % 5);
         if (!audio_mode) {
-            const double flicker = (double)((frame + index * 7) % 6) / 6.0;
+            const int flicker_mod =
+                (positive_modulo(frame, 6) + index_mod_6) % 6;
+            const double flicker = (double)flicker_mod / 6.0;
             if (flash_alpha > 0.5) {
                 red = green = blue = 255u;
                 alpha = flash_alpha;
@@ -266,12 +277,17 @@ PyObject *render_drop_explosion_into(PyObject *module, PyObject *args) {
                 red = 80u; green = 40u; blue = 20u;
                 alpha = preview * 0.5 + flicker * 0.2;
             } else if (tension > 0.3) {
-                const double pulse = (double)((frame * 3 + index) % 30) / 30.0;
+                const int pulse_mod =
+                    (positive_modulo(frame, 30) * 3 + (int)(index % 30)) % 30;
+                const double pulse = (double)pulse_mod / 30.0;
                 red = 30u; green = 10u; blue = 5u;
                 alpha = tension * 0.15 + pulse * 0.08;
             }
         } else {
-            const double flicker = (double)((frame + index * 7) % 5) / 5.0 * high * 0.3;
+            const int flicker_mod =
+                (positive_modulo(frame, 5) + index_mod_5 * 2) % 5;
+            const double flicker =
+                (double)flicker_mod / 5.0 * high * 0.3;
             if (flash_alpha > 0.4) {
                 const int warmth = (int)(low * 80.0 + 175.0);
                 red = 255u; green = (unsigned int)warmth; blue = (unsigned int)(warmth / 2);
@@ -284,7 +300,9 @@ PyObject *render_drop_explosion_into(PyObject *module, PyObject *args) {
                 alpha = preview * 0.6 + flicker;
                 if (alpha > 1.0) alpha = 1.0;
             } else if (tension > 0.3) {
-                const double pulse = (double)((frame * 2 + index) % 24) / 24.0;
+                const int pulse_mod =
+                    (positive_modulo(frame, 24) * 2 + (int)(index % 24)) % 24;
+                const double pulse = (double)pulse_mod / 24.0;
                 red = 20u; green = 8u; blue = 3u;
                 alpha = tension * 0.12 + pulse * 0.06;
             }
@@ -316,8 +334,8 @@ PyObject *render_fire_into(PyObject *module, PyObject *args) {
     const npy_intp state_shape[1] = {count};
     if (validate_array(heat_array, NPY_FLOAT32, 1, state_shape, 0, 0.0, 1.0,
                        "heat") < 0 ||
-        validate_array(next_array, NPY_FLOAT32, 1, state_shape, 1, -INFINITY,
-                       INFINITY, "next heat") < 0 ||
+        validate_array_layout(next_array, NPY_FLOAT32, 1, state_shape, 1,
+                              "next heat") < 0 ||
         reject_any_overlap(destination, heat_array, "destination", "heat") < 0 ||
         reject_any_overlap(destination, next_array, "destination", "next heat") < 0 ||
         reject_any_overlap(heat_array, next_array, "heat", "next heat") < 0) {
@@ -325,8 +343,11 @@ PyObject *render_fire_into(PyObject *module, PyObject *args) {
     }
     if (!isfinite(cooling) || !isfinite(sparking) || !isfinite(drive) ||
         !isfinite(bass) || !isfinite(shimmer) || !isfinite(accent) ||
-        !isfinite(brightness) || brightness < 0.0 || brightness > 1.0) {
-        PyErr_SetString(PyExc_ValueError, "fire render parameters must be finite and brightness in range");
+        !isfinite(brightness) || cooling < 0.0 || cooling > 1.0 ||
+        sparking < 0.0 || sparking > 1.0 || drive < 0.0 || drive > 1.0 ||
+        bass < 0.0 || bass > 1.0 || shimmer < 0.0 || shimmer > 1.0 ||
+        accent < 0.0 || accent > 1.0 || brightness < 0.0 || brightness > 1.0) {
+        PyErr_SetString(PyExc_ValueError, "fire render parameters must be normalized");
         return NULL;
     }
     const float *heat = (const float *)PyArray_DATA(heat_array);
@@ -399,6 +420,7 @@ PyObject *render_color_wipe_into(PyObject *module, PyObject *args) {
         (direction != -1 && direction != 1) || !isfinite(head) ||
         !isfinite(tail) || !isfinite(hue) || !isfinite(saturation) ||
         !isfinite(local) || !isfinite(boost) || !isfinite(brightness) ||
+        local < 0.0 || local > 1.0 || boost < 0.0 || boost > 1.0 ||
         brightness < 0.0 || brightness > 1.0) {
         PyErr_SetString(PyExc_ValueError, "color wipe render geometry is invalid");
         return NULL;
@@ -514,9 +536,9 @@ PyObject *composite_screen_rgba_into(PyObject *module, PyObject *args) {
         ? NULL
         : (const uint8_t *)PyArray_DATA(overlay_2);
     uint8_t *output = (uint8_t *)PyArray_DATA(destination);
-    const float base_scale = (float)base_intensity;
-    const float first_scale = (float)strength_1;
-    const float second_scale = (float)strength_2;
+    const float base_scale = (float)fmax(-FLT_MAX, fmin(FLT_MAX, base_intensity));
+    const float first_scale = (float)fmin(FLT_MAX, strength_1);
+    const float second_scale = (float)fmin(FLT_MAX, strength_2);
 
     for (npy_intp index = 0; index < count; index++) {
         const size_t offset = (size_t)index * 4u;

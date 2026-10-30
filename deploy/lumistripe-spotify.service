@@ -17,7 +17,15 @@ WorkingDirectory=@LUMI_HOME@
 Environment=PATH=@LUMI_HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=XDG_RUNTIME_DIR=/run/user/@LUMI_SERVICE_UID@
 EnvironmentFile=/etc/lumistripe/lumistripe-spotify.env
-ExecStart=/bin/bash -c 'exec /usr/local/bin/soloist --device-name "$LUMI_SPOTIFY_DEVICE_NAME" --api-key "$LUMI_SPOTIFY_API_KEY" --ws "$LUMI_SPOTIFY_WS" --pipewire-device "$LUMI_SPOTIFY_PIPEWIRE_DEVICE" --data-dir "$LUMI_SPOTIFY_DATA_DIR" --cache-dir "$LUMI_SPOTIFY_CACHE_DIR"'
+ExecStart=/bin/bash -c 'exec soloist --device-name "$LUMI_SPOTIFY_DEVICE_NAME" --api-key "$LUMI_SPOTIFY_API_KEY" --ws "$LUMI_SPOTIFY_WS" --pipewire-device "$LUMI_SPOTIFY_PIPEWIRE_DEVICE" --data-dir "$LUMI_SPOTIFY_DATA_DIR" --cache-dir "$LUMI_SPOTIFY_CACHE_DIR"'
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=15

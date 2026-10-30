@@ -48,7 +48,7 @@ class FireworkBurst(Effect):
         ]
         fade = self.setting("fade_time", 50) / 100.0
         fade_alpha = max(0.25, 1.0 - (frame % 36) / 36.0 * (1.0 - fade * 0.75))
-        burst_id = int(frame / 36)
+        burst_id = frame // 36
         seed = burst_id * 1103515245 + 12345
         hue = ((seed // 100) % 256 + frame * 2) % 256
         for i in range(controller.length):
@@ -149,7 +149,7 @@ class FireworkBurst(Effect):
                 0.25,
                 1.0 - (frame % 36) / 36.0 * (1.0 - fade * 0.75),
             )
-            burst_id = int(frame / 36)
+            burst_id = frame // 36
             seed = burst_id * 1103515245 + 12345
             hue = ((seed // 100) % 256 + frame * 2) % 256
         else:

@@ -35,6 +35,7 @@ _CALLBACK_TIMING_SAMPLE_CAPACITY = 512
 class CapturedAudioBatch:
     samples: npt.NDArray[np.float32]
     captured_at: float | None
+    dropped_samples_before: int = 0
 
 
 class BoundedBeatEventBuffer:
@@ -73,7 +74,7 @@ class BoundedBeatEventBuffer:
 
 
 class BoundedAudioBatchBuffer:
-    """Drop-oldest sample buffer designed for real-time producers."""
+    """Drop-oldest buffer; ``pop_batch`` reports skipped samples to DSP."""
 
     def __init__(self, max_batches: int = 8) -> None:
         if max_batches <= 0:
@@ -83,6 +84,7 @@ class BoundedAudioBatchBuffer:
         self._condition = threading.Condition()
         self._unfinished = 0
         self._dropped = 0
+        self._pending_dropped_samples = 0
         self._closed = False
 
     def push(
@@ -92,7 +94,10 @@ class BoundedAudioBatchBuffer:
             if self._closed:
                 return False
             if len(self._items) >= self._max_batches:
-                self._items.popleft()
+                dropped = self._items.popleft()
+                self._pending_dropped_samples += (
+                    dropped.dropped_samples_before + int(dropped.samples.size)
+                )
                 self._unfinished -= 1
                 self._dropped += 1
             self._items.append(CapturedAudioBatch(samples, captured_at))
@@ -101,6 +106,8 @@ class BoundedAudioBatchBuffer:
             return True
 
     def pop(self, timeout: float | None = None) -> npt.NDArray[np.float32] | None:
+        """Return samples only for compatibility with legacy buffer readers."""
+
         batch = self.pop_batch(timeout)
         return None if batch is None else batch.samples
 
@@ -117,7 +124,16 @@ class BoundedAudioBatchBuffer:
                 if remaining <= 0.0:
                     return None
                 self._condition.wait(remaining)
-            return self._items.popleft()
+            batch = self._items.popleft()
+            dropped_samples_before = self._pending_dropped_samples
+            self._pending_dropped_samples = 0
+            if dropped_samples_before:
+                return CapturedAudioBatch(
+                    batch.samples,
+                    batch.captured_at,
+                    batch.dropped_samples_before + dropped_samples_before,
+                )
+            return batch
 
     def task_done(self) -> None:
         with self._condition:
@@ -238,8 +254,9 @@ class AudioInput:
                     elapsed_ns = time.perf_counter_ns() - timing_started_ns
                     self._record_callback_duration(elapsed_ns)
 
+        stream = None
         try:
-            self._stream = sounddevice.InputStream(
+            stream = sounddevice.InputStream(
                 device=device_id_value,
                 samplerate=sample_rate,
                 channels=1,
@@ -247,10 +264,20 @@ class AudioInput:
                 blocksize=FFT_HOP_SIZE,
                 callback=callback,
             )
-            self._stream.start()
+            stream.start()
+            self._stream = stream
         except Exception as exc:
-            self._buffer.close()
-            self._worker.join(timeout=1.0)
+            try:
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except Exception as close_exc:  # noqa: BLE001 - preserve the startup error
+                        exc.add_note(f"also failed to close the audio stream: {close_exc}")
+            finally:
+                try:
+                    self._buffer.close()
+                finally:
+                    self._worker.join(timeout=1.0)
             raise RuntimeError(
                 f'failed to open audio input "{self._device_name}": {exc}'
             ) from exc
@@ -280,12 +307,18 @@ class AudioInput:
             if isinstance(item, CapturedAudioBatch):
                 samples = item.samples
                 captured_at = item.captured_at
+                dropped_samples_before = item.dropped_samples_before
             else:
                 samples = item
                 captured_at = None
+                dropped_samples_before = 0
             try:
                 with self._state_lock:
-                    self._state.feed_samples(samples, captured_at=captured_at)
+                    self._state.feed_samples(
+                        samples,
+                        captured_at=captured_at,
+                        dropped_samples_before=dropped_samples_before,
+                    )
                     events = self._state.take_beat_events()
                 for event in events:
                     self._publish_beat_event(event)
@@ -304,7 +337,6 @@ class AudioInput:
             return self._state.copy()
 
     def read(self) -> AudioFrame:
-        self._wait_for_worker()
         with self._state_lock:
             frame = self._state.frame()
             age = self._state.frame_age()
@@ -320,14 +352,24 @@ class AudioInput:
             )
 
     def read_features(self) -> MusicFeatures:
-        self._wait_for_worker()
         with self._state_lock:
             return self._state.music_features()
 
     def read_beat_events(self) -> tuple[BeatEvent, ...]:
         """Consume pending onset events once for the single playback reader."""
-        self._wait_for_worker()
         return self._beat_events.drain()
+
+    @property
+    def last_callback_age(self) -> float | None:
+        """Return callback age without waiting for queued DSP work to finish."""
+
+        with self._health_lock:
+            last_callback_at = self._last_callback_at
+        return (
+            None
+            if last_callback_at is None
+            else max(0.0, time.monotonic() - last_callback_at)
+        )
 
     def _publish_beat_event(self, event: BeatEvent) -> None:
         self._beat_events.push(
@@ -340,7 +382,6 @@ class AudioInput:
         )
 
     def health(self) -> AudioInputHealth:
-        self._wait_for_worker()
         with self._health_lock:
             callback_count = self._callback_count
             status_count = self._status_count
@@ -424,9 +465,13 @@ class AudioInput:
         try:
             self._stream.stop()
         finally:
-            self._stream.close()
-            self._buffer.close()
-            self._worker.join(timeout=1.0)
+            try:
+                self._stream.close()
+            finally:
+                try:
+                    self._buffer.close()
+                finally:
+                    self._worker.join(timeout=1.0)
 
     def __enter__(self) -> Self:
         return self
@@ -450,7 +495,15 @@ def _capture_timestamp(time_info: Any, frames: int, sample_rate: float, fallback
         if frames <= 0 or not all(isfinite(value) for value in values) or sample_rate <= 0:
             return fallback
         adc_end = adc_start + max(0, frames - 1) / sample_rate
-        return fallback - (callback_time - adc_end)
+        callback_delay = callback_time - adc_end
+        if (
+            not isfinite(adc_end)
+            or not isfinite(callback_delay)
+            or callback_delay < 0.0
+        ):
+            return fallback
+        captured_at = fallback - callback_delay
+        return captured_at if isfinite(captured_at) else fallback
     except (AttributeError, TypeError, ValueError):
         return fallback
 

@@ -1,5 +1,59 @@
 #include "native_common.h"
 #include <stddef.h>
+
+Py_ssize_t positive_modulo_ssize(Py_ssize_t value, Py_ssize_t modulus) {
+    if (modulus <= 0)
+        return 0;
+    const Py_ssize_t remainder = value % modulus;
+    return remainder < 0 ? remainder + modulus : remainder;
+}
+
+long long positive_modulo_i64(long long value, int modulus) {
+    if (modulus <= 0)
+        return 0;
+    const long long remainder = value % (long long)modulus;
+    return remainder < 0 ? remainder + (long long)modulus : remainder;
+}
+
+static Py_ssize_t add_modulo_ssize(Py_ssize_t left, Py_ssize_t right,
+                                   Py_ssize_t modulus) {
+    const Py_ssize_t distance_to_modulus = modulus - right;
+    return left >= distance_to_modulus
+        ? left - distance_to_modulus
+        : left + right;
+}
+
+Py_ssize_t multiply_modulo_ssize(Py_ssize_t value, unsigned int multiplier,
+                                 Py_ssize_t modulus) {
+    if (modulus <= 0)
+        return 0;
+    Py_ssize_t addend = positive_modulo_ssize(value, modulus);
+    Py_ssize_t result = 0;
+    while (multiplier > 0u) {
+        if ((multiplier & 1u) != 0u)
+            result = add_modulo_ssize(result, addend, modulus);
+        multiplier >>= 1u;
+        if (multiplier > 0u)
+            addend = add_modulo_ssize(addend, addend, modulus);
+    }
+    return result;
+}
+
+int truncated_modulo_int(double value, int modulus) {
+    if (modulus <= 0 || !isfinite(value))
+        return 0;
+    if (value >= (double)INT_MIN && value <= (double)INT_MAX) {
+        int remainder = (int)value % modulus;
+        if (remainder < 0)
+            remainder += modulus;
+        return remainder;
+    }
+    double remainder = fmod(trunc(value), (double)modulus);
+    if (remainder < 0.0)
+        remainder += (double)modulus;
+    return (int)remainder;
+}
+
 int validate_rgba(PyArrayObject *array, const char *name, int writable) {
     const npy_intp shape[2] = {-1, 4};
     return validate_array(array, NPY_UINT8, 2, shape, writable,

@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from lumistripe.animation.reactive import AudioReactive
 from lumistripe.audio import (
     FFT_HOP_SIZE,
     FFT_SIZE,
@@ -21,6 +22,7 @@ from lumistripe.audio import (
     list_input_devices,
     recommend_audio_calibration,
 )
+from lumistripe.audio.capture import _capture_timestamp
 
 
 def _drop_like_chunk(frame: int, sample_rate: float = 44_100.0) -> np.ndarray:
@@ -48,6 +50,120 @@ def test_audio_state_silence_produces_zeroish_frame() -> None:
     assert len(frame.bands) == 8
     assert features.silence is True
     assert features.rolling_loudness == pytest.approx(0.0, abs=1e-6)
+
+
+def test_audio_dynamic_range_matches_rolling_rms_percentiles() -> None:
+    state = AudioState(AudioConfig.raw())
+    rng = np.random.default_rng(413)
+    history: list[float] = []
+    for index in range(240):
+        samples = rng.standard_normal(512) * ((index % 37 + 1) / 80)
+        previous_sequence = state.frame().sequence
+        state.feed_samples(samples.astype(np.float32))
+        frame = state.frame()
+        if frame.sequence == previous_sequence:
+            continue
+        history.append(frame.rms)
+        if len(history) > 10:
+            recent = history[-200:]
+            expected = np.percentile(recent, 95) - np.percentile(recent, 10)
+            assert state.music_features().dynamic_range == pytest.approx(expected, abs=1e-6)
+
+
+def test_audio_state_accepts_strided_and_unaligned_samples() -> None:
+    state = AudioState(AudioConfig.raw())
+    samples = np.full(FFT_SIZE * 2, 0.25, dtype=np.float32)[::2]
+    state.feed_samples(samples)
+    assert state.frame().rms > 0
+    unaligned = np.ndarray((FFT_SIZE,), dtype=np.float32, buffer=bytearray(FFT_SIZE * 4 + 1), offset=1)
+    unaligned[:] = 0.2
+    state.feed_samples(unaligned)
+    assert state.stats().samples_seen == FFT_SIZE * 2
+
+
+def test_native_audio_rejects_invalid_configuration_and_unaligned_buffers() -> None:
+    from lumistripe.audio._audio import AudioProcessor
+
+    for rate in (
+        0.0,
+        -1.0,
+        1e-20,
+        1e30,
+        2_147_483_649.0,
+        float("nan"),
+        float("inf"),
+    ):
+        with pytest.raises(ValueError, match="sample rate"):
+            AudioProcessor({}, rate)
+    for config in ({"smoothing_enabled": float("nan")}, {"noise_floor": float("inf")}):
+        with pytest.raises(ValueError):
+            AudioProcessor(config)
+    with pytest.raises(UnicodeEncodeError):
+        AudioProcessor({"\ud800": 1})
+    processor = AudioProcessor({})
+    with pytest.raises(RuntimeError, match="already initialized"):
+        processor.__init__({})
+    unaligned = np.ndarray((4,), dtype=np.float32, buffer=bytearray(17), offset=1)
+    with pytest.raises(TypeError, match="float32"):
+        processor.feed_samples(unaligned)
+    uninitialized = AudioProcessor.__new__(AudioProcessor)
+    with pytest.raises(RuntimeError, match="not initialized"):
+        uninitialized.feed_samples(np.zeros(FFT_SIZE, dtype=np.float32))
+    with pytest.raises(RuntimeError, match="not initialized"):
+        uninitialized.state_copy()
+
+
+def test_native_audio_accounts_for_dropped_stream_samples() -> None:
+    from lumistripe.audio._audio import AudioProcessor
+
+    processor = AudioProcessor({})
+    processor.feed_samples(np.zeros(FFT_SIZE, dtype=np.float32))
+    previous_samples_seen = processor.stats()["samples_seen"]
+
+    processor.mark_discontinuity(512)
+
+    assert processor.stats()["samples_seen"] == previous_samples_seen + 512
+    with pytest.raises(ValueError, match="non-negative"):
+        processor.mark_discontinuity(-1)
+
+
+def test_native_audio_nonfinite_samples_do_not_poison_statistics() -> None:
+    state = AudioState()
+    samples = np.zeros(FFT_SIZE, dtype=np.float32)
+    samples[:3] = [np.nan, np.inf, -np.inf]
+    state.feed_samples(samples)
+    assert np.isfinite(state.stats().sample_abs_sum)
+    assert np.isfinite(state.frame().rms)
+
+
+def test_native_audio_saturates_sample_sum_for_large_finite_samples() -> None:
+    from lumistripe.audio._audio import AudioProcessor
+
+    processor = AudioProcessor({})
+    samples = np.full(FFT_SIZE, np.finfo(np.float32).max, dtype=np.float32)
+
+    processor.feed_samples(samples)
+
+    assert processor.stats()["sample_abs_sum"] == float(np.finfo(np.float32).max)
+    assert np.isfinite(processor.frame()["rms"])
+
+
+def test_native_audio_rejects_sample_counter_overflow_atomically() -> None:
+    from lumistripe.audio._audio import AudioProcessor
+
+    processor = AudioProcessor({})
+    max_samples = np.iinfo(np.int64).max
+    processor.mark_discontinuity(max_samples - FFT_SIZE)
+    processor.feed_samples(np.zeros(FFT_SIZE, dtype=np.float32))
+    before = processor.stats()
+    assert before["samples_seen"] == max_samples
+
+    with pytest.raises(OverflowError, match="sample counter"):
+        processor.feed_samples(np.zeros(1, dtype=np.float32))
+
+    after = processor.stats()
+    assert after["samples_seen"] == max_samples
+    assert after["feed_count"] == before["feed_count"]
 
 
 def test_audio_state_low_frequency_pulse_drives_first_bands() -> None:
@@ -307,6 +423,23 @@ def test_audio_state_drop_like_input_produces_measurable_onsets() -> None:
 
     assert max(drop_onsets) > 0.12
     assert sum(drop_onsets) / len(drop_onsets) > 0.05
+
+
+def test_audio_state_keeps_bpm_finite_during_repeated_onsets() -> None:
+    sample_rate = 44_100.0
+    state = AudioState(AudioConfig.raw())
+    silence = np.zeros(FFT_HOP_SIZE, dtype=np.float32)
+    t = np.arange(FFT_HOP_SIZE, dtype=np.float32) / sample_rate
+    pulse = (0.8 * np.sin(2.0 * np.pi * 80.0 * t)).astype(np.float32)
+
+    for _ in range(6):
+        for _ in range(44):
+            state.feed_samples(silence)
+        for _ in range(4):
+            state.feed_samples(pulse)
+        assert np.isfinite(state.music_features().bpm)
+
+    assert state.music_features().bpm != 120.0
 
 
 def test_audio_state_drop_like_input_has_higher_brightness_than_low_tone() -> None:
@@ -663,6 +796,51 @@ def test_audio_state_drains_each_synthetic_onset_from_a_large_batch() -> None:
     assert state.stats().native_dropped_beat_events == 0
 
 
+def test_audio_state_preserves_bpm_timing_across_dropped_capture_samples() -> None:
+    sample_rate = 44_100.0
+    batch_size = 512
+    sample_count = int(sample_rate * 4.0)
+    times = np.arange(sample_count, dtype=np.float64) / sample_rate
+    samples = np.zeros(sample_count, dtype=np.float32)
+    onset_times = np.arange(0.25, 3.76, 0.5)
+    for onset_at in onset_times:
+        start = int(onset_at * sample_rate)
+        end = min(sample_count, start + int(0.14 * sample_rate))
+        samples[start:end] = 0.9 * np.sin(2.0 * np.pi * 80.0 * times[start:end])
+
+    dropped_at = batch_size * 39
+    dropped_samples = batch_size * 9
+
+    def process(
+        stream: np.ndarray, *, has_gap: bool
+    ) -> tuple[list[float], list[float]]:
+        state = AudioState(AudioConfig.raw(), sample_rate=sample_rate)
+        event_times: list[float] = []
+        event_bpms: list[float] = []
+        for offset in range(0, stream.size, batch_size):
+            end = min(stream.size, offset + batch_size)
+            missing = dropped_samples if has_gap and offset == dropped_at else 0
+            gap_offset = dropped_samples if has_gap and offset >= dropped_at else 0
+            state.feed_samples(
+                stream[offset:end],
+                captured_at=50.0 + (end + gap_offset) / sample_rate,
+                dropped_samples_before=missing,
+            )
+            for event in state.take_beat_events():
+                event_times.append(event.timestamp - 50.0)
+                event_bpms.append(state.music_features().bpm)
+        return event_times, event_bpms
+
+    reference_times, reference_bpms = process(samples, has_gap=False)
+    gap_stop = dropped_at + dropped_samples
+    gap_stream = np.concatenate((samples[:dropped_at], samples[gap_stop:]))
+    gap_times, gap_bpms = process(gap_stream, has_gap=True)
+
+    assert gap_times == pytest.approx(reference_times, abs=0.01)
+    assert len(gap_bpms) > 1
+    assert gap_bpms[1] == pytest.approx(reference_bpms[1], abs=1.0)
+
+
 def test_audio_stats_expose_level_before_noise_floor() -> None:
     state = AudioState(
         AudioConfig(
@@ -886,6 +1064,59 @@ def test_audio_snapshot_exposes_semantic_feature_properties() -> None:
     assert snapshot.section_change is True
 
 
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), -float("inf")])
+def test_audio_snapshot_non_finite_features_do_not_become_full_scale(
+    invalid: float,
+) -> None:
+    features = MusicFeatures(
+        energy=invalid,
+        bass_energy=invalid,
+        mid_energy=invalid,
+        treble_energy=invalid,
+        brightness=invalid,
+        onset_strength=invalid,
+        beat_strength=invalid,
+        bands=(invalid,) * 8,
+        spectral_centroid=invalid,
+        spectral_flux=invalid,
+        beat_confidence=invalid,
+        rolling_loudness=invalid,
+        musical_impact=invalid,
+        bpm=invalid,
+    )
+    frame = AudioFrame(
+        rms=invalid,
+        bands=(invalid,) * 8,
+        beat=True,
+        beat_strength=invalid,
+    )
+    snapshot = AudioSnapshot.from_parts(frame, features)
+
+    assert snapshot.low == 0.0
+    assert snapshot.mid == 0.0
+    assert snapshot.high == 0.0
+    assert snapshot.drive == 0.0
+    assert snapshot.accent == 0.0
+    assert snapshot.activity == 0.0
+    assert snapshot.brightness == 0.0
+    assert snapshot.onset_strength == 0.0
+    assert snapshot.spectral_centroid == 0.0
+    assert snapshot.spectral_flux == 0.0
+    assert snapshot.beat_confidence == 0.0
+    assert snapshot.rolling_loudness == 0.0
+    assert snapshot.musical_impact == 0.0
+    assert snapshot.bpm == 0.0
+
+    for reactive in (AudioReactive.from_frame(frame), AudioReactive.from_snapshot(snapshot)):
+        assert reactive.rms == 0.0
+        assert reactive.accent == 0.0
+        assert reactive.low == 0.0
+        assert reactive.mid == 0.0
+        assert reactive.high == 0.0
+        assert reactive.brightness == 0.0
+        assert reactive.activity() == 0.0
+
+
 class FakeInputStream:
     def __init__(self, *, device, samplerate, channels, dtype, blocksize, callback):
         self.device = device
@@ -996,6 +1227,7 @@ def test_audio_input_reads_callback_samples(monkeypatch: pytest.MonkeyPatch) -> 
         2.0 * np.pi * 4.0 * np.arange(FFT_SIZE, dtype=np.float32) / float(FFT_SIZE)
     ).reshape(FFT_SIZE, 1)
     fake.streams[0].callback(samples, FFT_SIZE, None, None)
+    assert audio_input._buffer.wait_until_idle(timeout=1.0)
     frame = audio_input.read()
 
     assert frame.rms > 0.0
@@ -1014,6 +1246,7 @@ def test_audio_input_health_tracks_callback_status(monkeypatch: pytest.MonkeyPat
         2.0 * np.pi * 4.0 * np.arange(FFT_SIZE, dtype=np.float32) / float(FFT_SIZE)
     ).reshape(FFT_SIZE, 1)
     fake.streams[0].callback(samples, FFT_SIZE, None, "input overflow")
+    assert audio_input._buffer.wait_until_idle(timeout=1.0)
     health = audio_input.health()
 
     assert health.callback_count == 1
@@ -1025,6 +1258,79 @@ def test_audio_input_health_tracks_callback_status(monkeypatch: pytest.MonkeyPat
     assert health.processor.samples_seen == FFT_SIZE
     assert health.processor.fft_count == 1
     audio_input.close()
+
+
+def test_audio_input_callback_age_is_available_without_dsp_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeSoundDevice()
+    monkeypatch.setattr("lumistripe.audio.importlib.import_module", lambda name: fake)
+    audio_input = AudioInput.with_device("usb")
+    samples = np.zeros((FFT_SIZE, 1), dtype=np.float32)
+
+    assert audio_input.last_callback_age is None
+    fake.streams[0].callback(samples, FFT_SIZE, None, None)
+    age = audio_input.last_callback_age
+
+    assert age is not None
+    assert 0.0 <= age < 1.0
+    audio_input.close()
+
+
+def test_audio_input_snapshot_reads_do_not_wait_for_the_batch_queue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeSoundDevice()
+    monkeypatch.setattr("lumistripe.audio.importlib.import_module", lambda name: fake)
+    audio_input = AudioInput.with_device("usb")
+
+    def unexpected_wait() -> None:
+        pytest.fail("real-time audio snapshots must not wait for the batch queue")
+
+    monkeypatch.setattr(audio_input, "_wait_for_worker", unexpected_wait)
+    try:
+        audio_input.read()
+        audio_input.read_features()
+        audio_input.read_beat_events()
+        audio_input.health()
+    finally:
+        audio_input.close()
+
+
+def test_capture_timestamp_maps_portaudio_clock_into_monotonic_time() -> None:
+    time_info = SimpleNamespace(inputBufferAdcTime=100.0, currentTime=100.02)
+
+    captured_at = _capture_timestamp(
+        time_info,
+        frames=512,
+        sample_rate=48_000.0,
+        fallback=50.0,
+    )
+
+    assert captured_at == pytest.approx(50.0 - (0.02 - 511 / 48_000.0))
+
+
+def test_capture_timestamp_falls_back_when_portaudio_times_are_impossible() -> None:
+    time_info = SimpleNamespace(inputBufferAdcTime=100.0, currentTime=100.0)
+
+    assert _capture_timestamp(
+        time_info,
+        frames=512,
+        sample_rate=48_000.0,
+        fallback=50.0,
+    ) == 50.0
+
+
+@pytest.mark.parametrize("captured_at", [float("nan"), float("inf"), -float("inf")])
+def test_audio_state_replaces_nonfinite_capture_timestamp(
+    captured_at: float,
+) -> None:
+    state = AudioState(AudioConfig.raw())
+    state.feed_samples(np.zeros(FFT_SIZE, dtype=np.float32), captured_at=captured_at)
+
+    assert np.isfinite(state.frame().timestamp)
+    assert state.frame_age() is not None
+    assert state.frame_age() < 1.0
 
 
 def test_audio_input_callback_timing_is_opt_in_and_bounded(
@@ -1101,3 +1407,53 @@ def test_audio_input_open_failure_becomes_runtime_error(monkeypatch: pytest.Monk
     monkeypatch.setattr("lumistripe.audio.importlib.import_module", lambda name: fake)
     with pytest.raises(RuntimeError, match='failed to open audio input "USB Mic"'):
         AudioInput.new()
+
+
+def test_audio_input_closes_stream_when_start_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeSoundDevice()
+    monkeypatch.setattr("lumistripe.audio.importlib.import_module", lambda name: fake)
+
+    def fail_start(self: FakeInputStream) -> None:
+        raise RuntimeError("start failed")
+
+    monkeypatch.setattr(FakeInputStream, "start", fail_start)
+    with pytest.raises(RuntimeError, match="start failed"):
+        AudioInput.new()
+    assert fake.streams[0].closed
+
+
+def test_audio_input_preserves_start_error_if_stream_cleanup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeSoundDevice()
+    monkeypatch.setattr("lumistripe.audio.importlib.import_module", lambda name: fake)
+
+    def fail_start(self: FakeInputStream) -> None:
+        raise RuntimeError("start failed")
+
+    def fail_close(self: FakeInputStream) -> None:
+        raise RuntimeError("close failed")
+
+    monkeypatch.setattr(FakeInputStream, "start", fail_start)
+    monkeypatch.setattr(FakeInputStream, "close", fail_close)
+    with pytest.raises(RuntimeError, match="start failed") as exc:
+        AudioInput.new()
+    assert exc.value.__cause__ is not None
+    assert any("close failed" in note for note in exc.value.__cause__.__notes__)
+
+
+def test_audio_input_stops_worker_even_when_stream_close_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeSoundDevice()
+    monkeypatch.setattr("lumistripe.audio.importlib.import_module", lambda name: fake)
+    audio_input = AudioInput.new()
+
+    def fail_close() -> None:
+        raise RuntimeError("close failed")
+
+    monkeypatch.setattr(fake.streams[0], "close", fail_close)
+    with pytest.raises(RuntimeError, match="close failed"):
+        audio_input.close()
+    assert not audio_input._worker.is_alive()
+    assert not audio_input._buffer.push(np.zeros(1, dtype=np.float32))

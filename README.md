@@ -5,16 +5,21 @@
 
 **Python-powered LED animation engine with audio-reactive lighting.**
 
-LumiStripe drives 2-wire addressable LED strips from a Raspberry Pi or other Linux single-board computer via GPIO bit-banging, and provides a rich animation engine with **38+ built-in effects**, real-time **FFT audio analysis**, **music-driven animation selection**, and a cross-platform **Tkinter GUI simulator**.
+LumiStripe drives 2-wire addressable LED strips from a Raspberry Pi or other
+Linux single-board computer via GPIO bit-banging, and provides a rich animation
+engine with **54 catalogued animations**, real-time **FFT audio analysis**,
+**music-driven animation selection**, and a cross-platform **Tkinter GUI
+simulator**.
 
 ## Features
 
 - **GPIO Driver** — Bit-bangs a 2-wire protocol on any two GPIO lines using `libgpiod` (v2.x)
-- **38+ Animations** — Fire, Rainbow, Confetti, Aurora, LightningStrike, PlasmaRave, and many more, with `tick` and `tick_audio` modes
+- **54 Animations** — Fire, Rainbow, Confetti, Aurora, LightningStrike, PlasmaRave, and many more, with `tick` and `tick_audio` modes
 - **Audio Reactive** — Real-time FFT analysis with 8 frequency bands, beat detection, BPM estimation, and onset/transient detection
 - **Layered Dynamic Selection** — Selects a smooth base animation and independently schedules up to two compatible beat/drop effects from live music features
 - **Three Playback Modes** — Static, Cycling, and music-driven Dynamic playback in both the CLI and simulator
-- **CLI** — Launch the simulator from the terminal with `lumistripe`
+- **CLI** — Run headless GPIO playback with `lumistripe-cli` (also available as `lumistripe`)
+- **Simulator** — Launch the Tkinter GUI with `lumistripe-sim`
 
 ## Raspberry Pi party appliance
 
@@ -199,8 +204,8 @@ lumistripe --audio-debug --audio-debug-verbose
 ## Development
 
 ```bash
-# Setup
-uv sync
+# Normal native-audio development/test setup
+LUMISTRIPE_BUILD_EXTENSIONS=audio uv sync --locked --all-extras --dev
 
 # Run tests
 uv run python -m pytest -q

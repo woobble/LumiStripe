@@ -48,11 +48,12 @@ ARG TARGETARCH
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+COPY deploy/extract_soloist.py /opt/extract_soloist.py
+
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
         ca-certificates \
-        curl \
-        tar \
+        python3 \
     && rm -rf /var/lib/apt/lists/* \
     && case "${TARGETARCH}" in \
         arm64) archive_arch=arm64 ;; \
@@ -61,10 +62,9 @@ RUN apt-get update \
         *) echo "Unsupported Docker architecture: ${TARGETARCH}" >&2; exit 1 ;; \
        esac \
     && mkdir -p /tmp/soloist \
-    && curl --fail --silent --show-error --location --retry 3 --retry-delay 2 \
+    && python3 /opt/extract_soloist.py --download \
         "https://soloist-builds.spotifycdn.com/soloist_release_${archive_arch}.tar.gz" \
-        --output /tmp/soloist/soloist.tar.gz \
-    && tar -xzf /tmp/soloist/soloist.tar.gz -C /tmp/soloist \
+        /tmp/soloist/soloist.tar.gz /tmp/soloist/soloist \
     && test -x /tmp/soloist/soloist \
     && install -o root -g root -m 755 /tmp/soloist/soloist /usr/local/bin/soloist \
     && rm -rf /tmp/soloist
@@ -99,4 +99,10 @@ COPY deploy/docker/spotify-entrypoint.sh /usr/local/bin/lumistripe-spotify-entry
 
 RUN chmod 755 /usr/local/bin/lumistripe-spotify-entrypoint
 
+RUN groupadd --system --gid 10001 lumistripe \
+    && useradd --system --uid 10001 --gid lumistripe \
+        --home-dir /var/lib/lumistripe --no-create-home lumistripe \
+    && chown lumistripe:lumistripe /var/lib/lumistripe
+
 WORKDIR /opt/lumistripe
+USER 10001:10001

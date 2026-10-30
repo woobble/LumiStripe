@@ -1,14 +1,19 @@
 import { describe, expect, it } from "vitest"
 
-import { buildPreviewLayout, decodePreviewFrame } from "@/lib/preview"
+import {
+  buildPreviewLayout,
+  decodePreviewFrame,
+  isNewerPreviewSequence,
+} from "@/lib/preview"
 import { initialState } from "@/test/fixtures"
 
-function packet(sequence: number, outputs: Uint8Array[]) {
+function packet(sequence: number, outputs: Uint8Array[], flags = 0, version = 1) {
   const size = 12 + outputs.reduce((total, output) => total + 4 + output.byteLength, 0)
   const buffer = new ArrayBuffer(size)
   const view = new DataView(buffer)
   new Uint8Array(buffer, 0, 4).set([0x4c, 0x53, 0x46, 0x50])
-  view.setUint8(4, 1)
+  view.setUint8(4, version)
+  view.setUint8(5, flags)
   view.setUint32(6, sequence, true)
   view.setUint16(10, outputs.length, true)
   let offset = 12
@@ -35,6 +40,35 @@ describe("preview protocol and layout", () => {
   it("rejects malformed and unsupported packets", async () => {
     await expect(decodePreviewFrame(new ArrayBuffer(12))).resolves.toBeNull()
     await expect(decodePreviewFrame(packet(1, [new Uint8Array([1, 2, 3])]))).resolves.toBeNull()
+    await expect(decodePreviewFrame(packet(1, [], 0, 2))).resolves.toBeNull()
+    await expect(decodePreviewFrame(packet(1, [], 1))).resolves.toBeNull()
+    await expect(decodePreviewFrame(packet(1, [new Uint8Array(4097 * 4)]))).resolves.toBeNull()
+    await expect(decodePreviewFrame(packet(1, [new Uint8Array(0), new Uint8Array(0), new Uint8Array(0)])))
+      .resolves.toBeNull()
+
+    const badMagic = packet(1, [])
+    new Uint8Array(badMagic)[0] = 0
+    await expect(decodePreviewFrame(badMagic)).resolves.toBeNull()
+
+    const valid = packet(1, [])
+    const trailing = new Uint8Array(valid.byteLength + 1)
+    trailing.set(new Uint8Array(valid))
+    await expect(decodePreviewFrame(trailing.buffer)).resolves.toBeNull()
+  })
+
+  it("accepts the documented maximum frame dimensions", async () => {
+    const maxOutput = new Uint8Array(4096 * 4)
+    const decoded = await decodePreviewFrame(packet(1, [maxOutput, maxOutput]))
+
+    expect(decoded?.sequence).toBe(1)
+    expect(decoded?.outputs.map((output) => output.byteLength)).toEqual([4096 * 4, 4096 * 4])
+  })
+
+  it("orders preview sequences across uint32 wraparound", () => {
+    expect(isNewerPreviewSequence(0, 0xffffffff)).toBe(true)
+    expect(isNewerPreviewSequence(0xffffffff, 0)).toBe(false)
+    expect(isNewerPreviewSequence(23, 23)).toBe(false)
+    expect(isNewerPreviewSequence(0x80000000, 0)).toBe(false)
   })
 
   it("keeps continuous output boundaries in pixel order", () => {

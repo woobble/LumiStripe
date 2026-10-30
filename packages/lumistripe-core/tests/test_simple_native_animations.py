@@ -181,6 +181,25 @@ def test_native_firework_burst_matches_python(
 
 
 @pytest.mark.skipif(
+    not kernels.native_firework_burst_available(),
+    reason="render extension with FireworkBurst kernel is not built",
+)
+@pytest.mark.parametrize("frame", [2**31 + 17, 2**40 + 123])
+def test_native_firework_burst_matches_python_for_long_running_frames(frame: int) -> None:
+    settings = {"count": 5, "spread": 73, "fade_time": 62}
+    native, python = FireworkBurst(), FireworkBurst()
+    native.configure(settings)
+    python.configure(settings)
+    destination = np.empty((40, 4), dtype=np.uint8)
+    stripe = Stripe(40)
+
+    assert native._render_native(frame, destination, None, 0.73)
+    python.tick(frame, python.output_controller(stripe, 0.73))
+
+    np.testing.assert_array_equal(destination, stripe.pixels())
+
+
+@pytest.mark.skipif(
     not kernels.native_beat_explosion_available(),
     reason="render extension with BeatExplosion kernel is not built",
 )
@@ -334,6 +353,111 @@ def test_native_disco_sparkle_matches_python(
             python.tick(frame, controller)
         np.testing.assert_array_equal(destination, stripe.pixels())
         np.testing.assert_array_equal(native._intensities, python._intensities)
+
+
+@pytest.mark.skipif(
+    not kernels.native_disco_sparkle_available(),
+    reason="render extension with DiscoSparkle kernel is not built",
+)
+def test_native_disco_sparkle_max_fade_keeps_intensities_bounded() -> None:
+    settings = {
+        "density": 0,
+        "fade_time": 100,
+        "variation": 50,
+        "music_reactivity": 100,
+        "sensitivity": 50,
+    }
+    native, python = DiscoSparkle(), DiscoSparkle()
+    native.configure(settings)
+    python.configure(settings)
+    destination = np.empty((1, 4), dtype=np.uint8)
+    stripe = Stripe(1)
+
+    for frame in range(24):
+        assert native._render_native(frame, destination, None, 1.0)
+        python.tick(frame, python.output_controller(stripe, 1.0))
+        np.testing.assert_array_equal(destination, stripe.pixels())
+        np.testing.assert_array_equal(native._intensities, python._intensities)
+        assert np.all(native._intensities <= 1.0)
+
+
+@pytest.mark.skipif(
+    not kernels.native_disco_sparkle_available(),
+    reason="render extension with DiscoSparkle kernel is not built",
+)
+@pytest.mark.parametrize("audio_mode", [False, True])
+def test_native_disco_sparkle_handles_large_frame_indices(audio_mode: bool) -> None:
+    settings = {
+        "density": 67,
+        "fade_time": 63,
+        "variation": 81,
+        "music_reactivity": 100,
+        "sensitivity": 50,
+    }
+    native, python = DiscoSparkle(), DiscoSparkle()
+    native.configure(settings)
+    python.configure(settings)
+    destination = np.empty((3, 4), dtype=np.uint8)
+    stripe = Stripe(3)
+    frame = 2**62 + 123
+    audio = (
+        AudioFrame(rms=0.42, bands=(0.2, 0.4, 0.7, 0.8, 0.4, 0.3, 0.5, 0.6))
+        if audio_mode
+        else None
+    )
+
+    configured = native.effective_audio(audio) if audio is not None else None
+    assert native._render_native(frame, destination, configured, 0.73)
+    controller = python.output_controller(stripe, 0.73)
+    if audio is None:
+        python.tick(frame, controller)
+    else:
+        assert configured is not None
+        python.tick_audio(frame, controller, configured)
+
+    np.testing.assert_array_equal(destination, stripe.pixels())
+    np.testing.assert_array_equal(native._intensities, python._intensities)
+
+
+@pytest.mark.skipif(
+    not kernels.native_disco_sparkle_available(),
+    reason="render extension with DiscoSparkle kernel is not built",
+)
+@pytest.mark.parametrize(
+    ("frame", "decay", "variation", "hue_rate", "pulse"),
+    [
+        (-1, 0.9, 0.5, 0.6, 5.0),
+        (0, -0.1, 0.5, 0.6, 5.0),
+        (0, 1.1, 0.5, 0.6, 5.0),
+        (0, 0.9, 1.1, 0.6, 5.0),
+        (0, 0.9, 0.5, 3.1, 5.0),
+        (0, 0.9, 0.5, 0.6, 10.1),
+    ],
+)
+def test_native_disco_sparkle_rejects_unsafe_scalar_ranges(
+    frame: int, decay: float, variation: float, hue_rate: float, pulse: float
+) -> None:
+    module = kernels._native_module
+    assert module is not None
+    destination = np.zeros((1, 4), dtype=np.uint8)
+    intensities = np.zeros(1, dtype=np.float32)
+
+    with pytest.raises(ValueError, match="invalid DiscoSparkle"):
+        module.render_disco_sparkle_into(
+            destination,
+            intensities,
+            frame,
+            0,
+            5,
+            0,
+            decay,
+            variation,
+            hue_rate,
+            pulse,
+            1.0,
+            0,
+            0,
+        )
 
 
 @pytest.mark.skipif(

@@ -27,6 +27,12 @@ export interface PreviewLayout {
   strips: PreviewStripLayout[]
 }
 
+export function isNewerPreviewSequence(sequence: number, previous: number): boolean {
+  if (previous < 0) return true
+  const distance = (sequence - previous) >>> 0
+  return distance > 0 && distance < 0x80000000
+}
+
 export async function decodePreviewFrame(data: unknown): Promise<PreviewFrame | null> {
   let buffer: ArrayBuffer
   if (data instanceof ArrayBuffer) {
@@ -41,6 +47,7 @@ export async function decodePreviewFrame(data: unknown): Promise<PreviewFrame | 
   const view = new DataView(buffer)
   if (PREVIEW_MAGIC.some((value, index) => view.getUint8(index) !== value)) return null
   if (view.getUint8(4) !== PREVIEW_PROTOCOL_VERSION) return null
+  if (view.getUint8(5) !== 0) return null
 
   const outputCount = view.getUint16(10, true)
   if (outputCount > MAX_OUTPUTS) return null
