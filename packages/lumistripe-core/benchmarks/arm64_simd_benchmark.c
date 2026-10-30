@@ -11,6 +11,11 @@
 
 typedef void (*correction_kernel)(const uint8_t *, uint8_t *, size_t,
                                   const uint16_t[3]);
+typedef void (*alpha_scale_kernel)(const uint8_t *, uint8_t *, uint8_t *,
+                                   size_t, double);
+typedef void (*screen_composite_kernel)(const uint8_t *, uint8_t *,
+                                        const uint8_t *, const uint8_t *,
+                                        size_t, float, float, float);
 
 static double wall_seconds(void) {
     struct timespec value;
@@ -34,6 +39,19 @@ static uint64_t checksum(const uint8_t *bytes, size_t byte_count) {
     for (size_t index = 0; index < byte_count; index++)
         result = (result * 131u) + bytes[index];
     return result;
+}
+
+static unsigned int max_byte_delta(const uint8_t *left, const uint8_t *right,
+                                   size_t byte_count) {
+    unsigned int maximum = 0u;
+    for (size_t index = 0; index < byte_count; index++) {
+        const unsigned int a = left[index];
+        const unsigned int b = right[index];
+        const unsigned int delta = a > b ? a - b : b - a;
+        if (delta > maximum)
+            maximum = delta;
+    }
+    return maximum;
 }
 
 static int verify_byte_domain(void) {
@@ -81,6 +99,43 @@ static void measure(const char *name, correction_kernel kernel,
            checksum(destination, pixels * 4u));
 }
 
+static double measure_alpha(const char *name, alpha_scale_kernel kernel,
+                            const uint8_t *source, uint8_t *corrected,
+                            uint8_t *destination, size_t pixels,
+                            size_t iterations, double scale) {
+    const double cpu_start = process_cpu_seconds();
+    const double wall_start = wall_seconds();
+    for (size_t index = 0; index < iterations; index++)
+        kernel(source, corrected, destination, pixels, scale);
+    const double elapsed = wall_seconds() - wall_start;
+    const double cpu_elapsed = process_cpu_seconds() - cpu_start;
+    printf("  %-10s %8.3f ms  CPU %5.1f%%  checksum=%" PRIu64 "\n",
+           name, elapsed * 1000.0,
+           elapsed > 0.0 ? cpu_elapsed * 100.0 / elapsed : 0.0,
+           checksum(destination, pixels * 4u));
+    return elapsed;
+}
+
+static double measure_composite(const char *name, screen_composite_kernel kernel,
+                                const uint8_t *base, uint8_t *destination,
+                                const uint8_t *overlay_1,
+                                const uint8_t *overlay_2, size_t pixels,
+                                size_t iterations, float base_intensity,
+                                float strength_1, float strength_2) {
+    const double cpu_start = process_cpu_seconds();
+    const double wall_start = wall_seconds();
+    for (size_t index = 0; index < iterations; index++)
+        kernel(base, destination, overlay_1, overlay_2, pixels,
+               base_intensity, strength_1, strength_2);
+    const double elapsed = wall_seconds() - wall_start;
+    const double cpu_elapsed = process_cpu_seconds() - cpu_start;
+    printf("  %-10s %8.3f ms  CPU %5.1f%%  checksum=%" PRIu64 "\n",
+           name, elapsed * 1000.0,
+           elapsed > 0.0 ? cpu_elapsed * 100.0 / elapsed : 0.0,
+           checksum(destination, pixels * 4u));
+    return elapsed;
+}
+
 static int run_case(size_t pixels, size_t iterations) {
     uint8_t *source = (uint8_t *)malloc(pixels * 4u);
     uint8_t *scalar = (uint8_t *)malloc(pixels * 4u);
@@ -122,6 +177,127 @@ static int run_case(size_t pixels, size_t iterations) {
     return 0;
 }
 
+static int run_alpha_case(size_t pixels, size_t iterations) {
+    const size_t bytes = pixels * 4u;
+    uint8_t *source = (uint8_t *)malloc(bytes);
+    uint8_t *corrected_scalar = (uint8_t *)malloc(bytes);
+    uint8_t *corrected_dispatch = (uint8_t *)malloc(bytes);
+    uint8_t *scalar = (uint8_t *)malloc(bytes);
+    uint8_t *dispatched = (uint8_t *)malloc(bytes);
+    if (source == NULL || corrected_scalar == NULL || corrected_dispatch == NULL ||
+        scalar == NULL || dispatched == NULL) {
+        fprintf(stderr, "alpha allocation failed for %zu pixels\n", pixels);
+        free(source);
+        free(corrected_scalar);
+        free(corrected_dispatch);
+        free(scalar);
+        free(dispatched);
+        return 1;
+    }
+    for (size_t index = 0; index < bytes; index++)
+        source[index] = (uint8_t)(index * 31u + index / 11u + 23u);
+    memset(corrected_scalar, 0x5a, bytes);
+    memcpy(corrected_dispatch, corrected_scalar, bytes);
+    lumistripe_apply_alpha_scale_scalar(source, corrected_scalar, scalar,
+                                        pixels, 0.63);
+    lumistripe_apply_alpha_scale(source, corrected_dispatch, dispatched,
+                                 pixels, 0.63);
+    const unsigned int destination_delta = max_byte_delta(scalar, dispatched, bytes);
+    const unsigned int corrected_delta = max_byte_delta(
+        corrected_scalar, corrected_dispatch, bytes);
+    const unsigned int delta = destination_delta > corrected_delta
+        ? destination_delta
+        : corrected_delta;
+    if (delta > 1u) {
+        fprintf(stderr, "alpha scalar/dispatch differs by %u for %zu pixels\n",
+                delta, pixels);
+        free(source);
+        free(corrected_scalar);
+        free(corrected_dispatch);
+        free(scalar);
+        free(dispatched);
+        return 1;
+    }
+    printf("alpha scale: %zu pixels x %zu iterations (max delta %u)\n",
+           pixels, iterations, delta);
+    const double scalar_seconds = measure_alpha(
+        "scalar", lumistripe_apply_alpha_scale_scalar, source,
+        corrected_scalar, scalar, pixels, iterations, 0.63);
+    const double dispatch_seconds = measure_alpha(
+        "dispatch", lumistripe_apply_alpha_scale, source,
+        corrected_dispatch, dispatched, pixels, iterations, 0.63);
+    printf("  dispatch/scalar speed ratio: %.3fx\n",
+           dispatch_seconds > 0.0 ? scalar_seconds / dispatch_seconds : 0.0);
+    free(source);
+    free(corrected_scalar);
+    free(corrected_dispatch);
+    free(scalar);
+    free(dispatched);
+    return 0;
+}
+
+static int run_composite_case(size_t pixels, size_t iterations) {
+    const size_t bytes = pixels * 4u;
+    uint8_t *base = (uint8_t *)malloc(bytes);
+    uint8_t *overlay_1 = (uint8_t *)malloc(bytes);
+    uint8_t *overlay_2 = (uint8_t *)malloc(bytes);
+    uint8_t *scalar = (uint8_t *)malloc(bytes);
+    uint8_t *dispatched = (uint8_t *)malloc(bytes);
+    if (base == NULL || overlay_1 == NULL || overlay_2 == NULL ||
+        scalar == NULL || dispatched == NULL) {
+        fprintf(stderr, "composite allocation failed for %zu pixels\n", pixels);
+        free(base);
+        free(overlay_1);
+        free(overlay_2);
+        free(scalar);
+        free(dispatched);
+        return 1;
+    }
+    for (size_t index = 0; index < bytes; index++) {
+        base[index] = (uint8_t)(index * 43u + index / 9u + 7u);
+        overlay_1[index] = (uint8_t)(index * 17u + index / 5u + 53u);
+        overlay_2[index] = (uint8_t)(index * 61u + index / 13u + 101u);
+    }
+    const float base_intensity = 0.82f;
+    const float strength_1 = 0.35f;
+    const float strength_2 = 0.4f;
+    lumistripe_composite_screen_rgba_scalar(
+        base, scalar, overlay_1, overlay_2, pixels,
+        base_intensity, strength_1, strength_2);
+    lumistripe_composite_screen_rgba(
+        base, dispatched, overlay_1, overlay_2, pixels,
+        base_intensity, strength_1, strength_2);
+    const unsigned int delta = max_byte_delta(scalar, dispatched, bytes);
+    if (delta > 1u) {
+        fprintf(stderr, "composite scalar/dispatch differs by %u for %zu pixels\n",
+                delta, pixels);
+        free(base);
+        free(overlay_1);
+        free(overlay_2);
+        free(scalar);
+        free(dispatched);
+        return 1;
+    }
+    printf("screen composite: %zu pixels x %zu iterations (max delta %u)\n",
+           pixels, iterations, delta);
+    const double scalar_seconds = measure_composite(
+        "scalar", lumistripe_composite_screen_rgba_scalar,
+        base, scalar, overlay_1, overlay_2, pixels, iterations,
+        base_intensity, strength_1, strength_2);
+    const double dispatch_seconds = measure_composite(
+        "dispatch", lumistripe_composite_screen_rgba,
+        base, dispatched, overlay_1, overlay_2, pixels, iterations,
+        base_intensity, strength_1, strength_2);
+    printf("  dispatch/scalar speed ratio: %.3fx\n",
+           dispatch_seconds > 0.0 ? scalar_seconds / dispatch_seconds : 0.0);
+    free(base);
+    free(overlay_1);
+    free(overlay_2);
+    free(scalar);
+    free(dispatched);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     size_t iterations = 2000u;
     if (argc > 2) {
@@ -142,6 +318,10 @@ int main(int argc, char **argv) {
     const size_t sizes[] = {600u, 4096u, 16384u};
     for (size_t index = 0; index < sizeof(sizes) / sizeof(sizes[0]); index++) {
         if (run_case(sizes[index], iterations) != 0)
+            return 1;
+        if (run_alpha_case(sizes[index], iterations) != 0)
+            return 1;
+        if (run_composite_case(sizes[index], iterations) != 0)
             return 1;
     }
     return 0;

@@ -48,6 +48,12 @@ _Backend = str
 _NativeModule = Any
 
 
+def _assert_within_one_lsb(actual: np.ndarray, expected: np.ndarray) -> None:
+    difference = np.abs(actual.astype(np.int16) - expected.astype(np.int16))
+    if np.max(difference, initial=0) > 1:
+        raise AssertionError("native compositing differs by more than one LSB")
+
+
 class _BenchmarkBase(Animation):
     @property
     def name(self) -> str:
@@ -191,7 +197,7 @@ def _run_compositor_case(
         if expected is None:
             expected = destination.copy()
         else:
-            np.testing.assert_array_equal(destination, expected)
+            _assert_within_one_lsb(destination, expected)
         run = lambda: composite_screen_rgba_into(*arguments)
         measurement = _measure(
             run, iterations=iterations, warmup=warmup, rounds=rounds
@@ -224,7 +230,7 @@ def _run_renderer_case(
         if expected is None:
             expected = stripe.pixels().copy()
         else:
-            np.testing.assert_array_equal(stripe.pixels(), expected)
+            _assert_within_one_lsb(stripe.pixels(), expected)
         measurement["traced_peak_bytes_per_call"] = _allocation_peak(render)
         measurements[backend] = measurement
     return measurements

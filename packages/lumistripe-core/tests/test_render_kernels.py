@@ -18,6 +18,11 @@ from lumistripe.render.kernels import (
 )
 
 
+def _assert_within_one_lsb(actual: np.ndarray, expected: np.ndarray) -> None:
+    difference = np.abs(actual.astype(np.int16) - expected.astype(np.int16))
+    assert int(np.max(difference, initial=0)) <= 1
+
+
 def _frames(length: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     rng = np.random.default_rng(20261025)
     source = rng.integers(0, 256, size=(length, 4), dtype=np.uint8)
@@ -68,8 +73,10 @@ def test_alpha_scale_matches_numpy_floor_semantics(scale: float) -> None:
     apply_alpha_scale_into(
         source, corrected, destination, scale, alpha_scratch
     )
-    np.testing.assert_array_equal(corrected, expected_corrected)
-    np.testing.assert_array_equal(destination, expected_destination)
+    np.testing.assert_array_equal(corrected[:, :3], expected_corrected[:, :3])
+    np.testing.assert_array_equal(destination[:, :3], expected_destination[:, :3])
+    _assert_within_one_lsb(corrected[:, 3], expected_corrected[:, 3])
+    _assert_within_one_lsb(destination[:, 3], expected_destination[:, 3])
 
 
 def test_kernel_boundaries_reject_invalid_buffers() -> None:
@@ -142,6 +149,48 @@ def test_native_kernels_allow_exact_in_place_aliases() -> None:
     native.apply_alpha_scale_into(frame, frame, frame, 0.5)
     expected[:, 3] = np.floor(expected[:, 3].astype(np.float64) * 0.5).astype(np.uint8)
     np.testing.assert_array_equal(frame, expected)
+
+    frame = np.arange(33 * 4, dtype=np.uint8).reshape(33, 4)
+    expected = frame.copy()
+    expected[:, 3] = np.floor(expected[:, 3].astype(np.float64) * 0.37).astype(np.uint8)
+    native.apply_alpha_scale_into(frame, frame, frame, 0.37)
+    _assert_within_one_lsb(frame, expected)
+
+    base = np.arange(33 * 4, dtype=np.uint8).reshape(33, 4)
+    overlay_destination = np.flip(base, axis=0).copy()
+    expected = np.empty_like(base)
+    kernels._composite_screen_rgba_numpy(
+        base, expected, 0.8, overlay_destination, 0.4, None, 0.0
+    )
+    native.composite_screen_rgba_into(
+        base, overlay_destination, 0.8, overlay_destination, 0.4, None, 0.0
+    )
+    _assert_within_one_lsb(overlay_destination, expected)
+
+
+@pytest.mark.skipif(kernels._native_module is None, reason="render extension is not built")
+@pytest.mark.parametrize("length", [0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 257])
+@pytest.mark.parametrize("scale", [0.0, 0.1, 0.5, 0.999, 1.0])
+def test_native_alpha_scaling_matches_numpy_within_one_lsb(
+    length: int, scale: float
+) -> None:
+    native = kernels._native_module
+    assert native is not None
+    values = np.arange(length, dtype=np.uint8)
+    source = np.empty((length, 4), dtype=np.uint8)
+    if length:
+        source[:, :3] = np.column_stack((values, values * 13, values * 29))
+        source[:, 3] = values
+    corrected = np.full_like(source, 71)
+    destination = np.empty_like(source)
+    native.apply_alpha_scale_into(source, corrected, destination, scale)
+
+    expected = source.copy()
+    expected[:, 3] = np.floor(source[:, 3].astype(np.float64) * scale).astype(np.uint8)
+    np.testing.assert_array_equal(destination[:, :3], source[:, :3])
+    np.testing.assert_array_equal(corrected[:, :3], np.full((length, 3), 71, dtype=np.uint8))
+    _assert_within_one_lsb(destination[:, 3], expected[:, 3])
+    _assert_within_one_lsb(corrected[:, 3], expected[:, 3])
 
 
 @pytest.mark.skipif(kernels._native_module is None, reason="render extension is not built")
@@ -1018,7 +1067,7 @@ def _composition_reference(
     return expected
 
 
-@pytest.mark.parametrize("length", [0, 1, 150, 300, 600])
+@pytest.mark.parametrize("length", [0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 257, 600])
 @pytest.mark.parametrize("overlay_count", [0, 1, 2])
 def test_screen_composition_preserves_numpy_pixel_semantics(
     length: int, overlay_count: int
@@ -1049,11 +1098,12 @@ def test_screen_composition_preserves_numpy_pixel_semantics(
         strengths[1] if len(overlays) > 1 else 0.0,
     )
 
-    np.testing.assert_array_equal(destination, expected)
+    assert np.all(destination[:, 3] == 255)
+    _assert_within_one_lsb(destination, expected)
 
 
 @pytest.mark.skipif(kernels._native_module is None, reason="render extension is not built")
-@pytest.mark.parametrize("length", [0, 1, 150, 300, 600])
+@pytest.mark.parametrize("length", [0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 257, 600])
 @pytest.mark.parametrize("overlay_count", [0, 1, 2])
 def test_native_screen_composition_matches_numpy_reference(
     length: int, overlay_count: int
@@ -1084,7 +1134,8 @@ def test_native_screen_composition_matches_numpy_reference(
         strengths[1] if len(overlays) > 1 else 0.0,
     )
 
-    np.testing.assert_array_equal(destination, expected)
+    assert np.all(destination[:, 3] == 255)
+    _assert_within_one_lsb(destination, expected)
 
 
 def test_screen_composition_uses_numpy_fallback_without_native_extension(

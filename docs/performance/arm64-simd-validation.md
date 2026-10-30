@@ -35,9 +35,9 @@ Non-AArch64 builds and AArch64 builds with
 `LUMISTRIPE_DISABLE_RENDER_NEON=1` use the scalar function.
 
 The benchmark harness verifies all 256 gains against all 256 source values,
-including unchanged alpha, then compares direct scalar and dispatched calls at
-600, 4,096, and 16,384 pixels. The Python regression test also covers vector
-boundaries at 0, 1, 15, 16, 17, 31, 32, 33, and 257 pixels.
+including unchanged alpha, then compares scalar and dispatched correction,
+alpha-scaling, and screen-composition calls at 600, 4,096, and 16,384 pixels.
+The Python regression tests cover vector boundaries for all three kernels.
 
 ## Compiler and instruction checks
 
@@ -99,6 +99,26 @@ only and do not predict Raspberry Pi speedups.
 | Cortex-A76 | 600 | normal `-O3` scalar | 8.287 | 1.412 | 5.87x | 100.7% / 100.0% |
 | Cortex-A76 | 4,096 | normal `-O3` scalar | 56.334 | 9.645 | 5.84x | 98.8% / 98.0% |
 | Cortex-A76 | 16,384 | normal `-O3` scalar | 227.103 | 42.118 | 5.39x | 97.8% / 92.9% |
+
+The updated harness also measured the new alpha-scale and screen-composition
+paths under QEMU on Cortex-A72. These 1,000-iteration timings are emulator
+results, not Pi performance:
+
+| Kernel | Pixels | Scalar ms | Dispatch ms | Ratio |
+| --- | ---: | ---: | ---: | ---: |
+| Alpha scale | 600 | 13.855 | 10.099 | 1.37x |
+| Alpha scale | 4,096 | 87.691 | 62.331 | 1.41x |
+| Alpha scale | 16,384 | 348.541 | 249.777 | 1.40x |
+| Screen composite | 600 | 121.883 | 141.865 | 0.86x |
+| Screen composite | 4,096 | 768.740 | 948.668 | 0.81x |
+| Screen composite | 16,384 | 3,069.466 | 3,812.514 | 0.81x |
+
+The Cortex-A76 QEMU ratios were 1.18x, 1.18x, and 1.16x for alpha scaling;
+screen compositing measured 1.15x, 1.14x, and 1.15x. The screen path was slower
+on A72 QEMU but faster on A76 QEMU, so emulator results are model-sensitive and
+do not resolve the native-device acceptance criterion. Keep the screen path
+only if the benchmark on `rpi02` shows a repeatable gain of at least 10%;
+otherwise remove its NEON branch and retain the scalar implementation.
 
 The large difference between the two scalar baselines is another reason not to
 use emulator timings to forecast device performance. Native measurements from
@@ -173,10 +193,12 @@ successfully with Oxlint warnings. OpenAPI generation produced no changes to
 now compare persisted data with the current `SETTINGS_VERSION`; all 66 settings
 tests passed.
 
-Native kernel performance was measured on `rpi02`, but its model and runtime
-conditions were not recorded. GPIO/SPI hardware output and Bluetooth/PipeWire
-audio smoke tests were not part of the reported run. QEMU checks validate
-target-architecture loading and behavior, but do not substitute for those
-device checks. The broader expression-level renderer safety audit and its
-remaining risks are tracked in
+The RGBA correction kernel was benchmarked natively on `rpi02`, but its model
+and runtime conditions were not recorded. The new alpha-scale and screen
+compositing kernels still need the same native-device benchmark before their
+10% performance acceptance criterion is resolved. GPIO/SPI hardware output
+and Bluetooth/PipeWire audio smoke tests were not part of the reported run.
+QEMU checks validate target-architecture loading and behavior, but do not
+substitute for those device checks. The broader expression-level renderer
+safety audit and its remaining risks are tracked in
 [`native-render-hardening.md`](native-render-hardening.md).

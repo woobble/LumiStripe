@@ -73,15 +73,7 @@ PyObject *apply_alpha_scale_into(PyObject *module, PyObject *args) {
     uint8_t *preview = (uint8_t *)PyArray_DATA(corrected);
     uint8_t *dst = (uint8_t *)PyArray_DATA(destination);
     const npy_intp count = PyArray_DIM(source, 0);
-    for (npy_intp index = 0; index < count; index++) {
-        const size_t offset = (size_t)index * 4u;
-        const uint8_t alpha = (uint8_t)((double)src[offset + 3u] * scale);
-        dst[offset] = src[offset];
-        dst[offset + 1u] = src[offset + 1u];
-        dst[offset + 2u] = src[offset + 2u];
-        dst[offset + 3u] = alpha;
-        preview[offset + 3u] = alpha;
-    }
+    lumistripe_apply_alpha_scale(src, preview, dst, (size_t)count, scale);
     Py_RETURN_NONE;
 }
 
@@ -461,19 +453,6 @@ static PyArrayObject *optional_rgba_array(PyObject *value, const char *name,
     return array;
 }
 
-static float visible_channel(const uint8_t *pixel, size_t channel) {
-    const float normalized = (float)pixel[channel] / 255.0f;
-    const float alpha = (float)pixel[3u] / 255.0f;
-    return normalized * alpha;
-}
-
-static float screen_blend(float composed, float overlay) {
-    const float base_remaining = 1.0f - composed;
-    const float overlay_remaining = 1.0f - overlay;
-    volatile float remaining = base_remaining * overlay_remaining;
-    return 1.0f - remaining;
-}
-
 PyObject *composite_screen_rgba_into(PyObject *module, PyObject *args) {
     (void)module;
     PyArrayObject *base;
@@ -534,38 +513,9 @@ PyObject *composite_screen_rgba_into(PyObject *module, PyObject *args) {
     const float base_scale = (float)fmax(-FLT_MAX, fmin(FLT_MAX, base_intensity));
     const float first_scale = (float)fmin(FLT_MAX, strength_1);
     const float second_scale = (float)fmin(FLT_MAX, strength_2);
-
-    for (npy_intp index = 0; index < count; index++) {
-        const size_t offset = (size_t)index * 4u;
-        const uint8_t *base_pixel = base_pixels + offset;
-        const uint8_t *first_pixel = overlay_1_pixels == NULL
-            ? NULL
-            : overlay_1_pixels + offset;
-        const uint8_t *second_pixel = overlay_2_pixels == NULL
-            ? NULL
-            : overlay_2_pixels + offset;
-        for (size_t channel = 0; channel < 3u; channel++) {
-            float composed = visible_channel(base_pixel, channel) * base_scale;
-            if (first_pixel != NULL && first_scale > 0.0f) {
-                const float visible = visible_channel(first_pixel, channel) * first_scale;
-                composed = screen_blend(composed, visible);
-            }
-            if (second_pixel != NULL && second_scale > 0.0f) {
-                const float visible = visible_channel(second_pixel, channel) * second_scale;
-                composed = screen_blend(composed, visible);
-            }
-            const float scaled = composed * 255.0f;
-            uint8_t value;
-            if (!(scaled > 0.0f))
-                value = 0u;
-            else if (scaled >= 255.0f)
-                value = 255u;
-            else
-                value = (uint8_t)scaled;
-            output[offset + channel] = value;
-        }
-        output[offset + 3u] = 255u;
-    }
+    lumistripe_composite_screen_rgba(
+        base_pixels, output, overlay_1_pixels, overlay_2_pixels,
+        (size_t)count, base_scale, first_scale, second_scale);
     Py_RETURN_NONE;
 }
 
