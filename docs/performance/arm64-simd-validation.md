@@ -6,7 +6,9 @@ This pass added an ARM64 Advanced SIMD implementation for the native RGBA
 color-correction kernel and checked the native extension profile for Raspberry
 Pi 4 and Pi 5 compiler targets. The validation host was x86-64 Linux. It had
 `aarch64-linux-gnu-gcc` 16.2.0, GNU binutils 2.47, QEMU user emulator 11.1.2,
-and the `/usr/aarch64-linux-gnu` sysroot. No physical Pi was attached.
+and the `/usr/aarch64-linux-gnu` sysroot. The native Pi benchmark results
+below were collected separately on `rpi02`; its exact Pi model was not
+included with the output.
 
 The cross sysroot has no AArch64 Python installation, so an isolated AArch64
 CPython 3.12.16 runtime and NumPy 2.5.4 were assembled under `/tmp`. The full
@@ -99,10 +101,32 @@ only and do not predict Raspberry Pi speedups.
 | Cortex-A76 | 16,384 | normal `-O3` scalar | 227.103 | 42.118 | 5.39x | 97.8% / 92.9% |
 
 The large difference between the two scalar baselines is another reason not to
-use emulator timings to forecast device performance. The optimization is
-retained because the explicit implementation is byte-exact, uses baseline
-ARM64 SIMD, and has no portability cost on other targets; its on-device
-benefit still needs measurement on a Pi.
+use emulator timings to forecast device performance. Native measurements from
+`rpi02` follow.
+
+## Raspberry Pi benchmark results
+
+The standalone C harness was run four times per build with 10,000 iterations.
+The table reports medians across those runs. Both binaries passed exhaustive
+byte-domain parity, and every scalar/dispatch pair produced identical
+checksums. CPU use stayed near 100%, as expected for this single-threaded
+kernel. The Pi model, clock governor, temperature, and cooling conditions were
+not recorded. One 600-pixel no-autovectorization run and one 4,096-pixel
+optimized run were clear timing outliers, so the table uses medians.
+
+| Scalar build | Pixels | Scalar median ms | Dispatch median ms | Median speedup |
+| --- | ---: | ---: | ---: | ---: |
+| `-O3 -fno-tree-vectorize` | 600 | 30.209 | 8.055 | 3.77x |
+| `-O3 -fno-tree-vectorize` | 4,096 | 205.459 | 52.341 | 3.93x |
+| `-O3 -fno-tree-vectorize` | 16,384 | 828.287 | 213.372 | 3.88x |
+| normal `-O3` (autovectorization enabled) | 600 | 13.779 | 8.004 | 1.72x |
+| normal `-O3` (autovectorization enabled) | 4,096 | 93.547 | 54.826 | 1.71x |
+| normal `-O3` (autovectorization enabled) | 16,384 | 374.556 | 214.826 | 1.74x |
+
+The explicit NEON path is about 3.8–3.9x faster than the non-vectorized scalar
+build and about 1.7x faster than the normally optimized scalar build in these
+measurements. These are kernel-only timings; they do not measure the full
+rendering pipeline or GPIO/SPI output.
 
 ## Validation
 
@@ -149,9 +173,10 @@ successfully with Oxlint warnings. OpenAPI generation produced no changes to
 now compare persisted data with the current `SETTINGS_VERSION`; all 66 settings
 tests passed.
 
-No physical Pi was attached, so real-device performance, GPIO/SPI hardware
-output, and Bluetooth/PipeWire audio smoke tests were unavailable. QEMU checks
-validate target-architecture loading and behavior, but do not substitute for
-those device checks. The broader expression-level renderer safety audit and
-its remaining risks are tracked in
+Native kernel performance was measured on `rpi02`, but its model and runtime
+conditions were not recorded. GPIO/SPI hardware output and Bluetooth/PipeWire
+audio smoke tests were not part of the reported run. QEMU checks validate
+target-architecture loading and behavior, but do not substitute for those
+device checks. The broader expression-level renderer safety audit and its
+remaining risks are tracked in
 [`native-render-hardening.md`](native-render-hardening.md).

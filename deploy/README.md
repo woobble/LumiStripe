@@ -91,12 +91,14 @@ syncs only production dependencies. Set `LUMI_PYTHON_VERSION` when installing
 or updating to choose a different supported interpreter version.
 
 The installer uses the non-root account that invoked `sudo` (or the checkout
-owner when run from a root shell). For another account or checkout, set
-`LUMI_SERVICE_USER` and/or `LUMI_PROJECT_DIR`:
+owner when run from a root shell). To install for another account, set
+`LUMI_SERVICE_USER`. `LUMI_PROJECT_DIR` must point to a reviewed,
+administrator-controlled checkout as described above; a normal checkout in a
+user's home directory is intentionally rejected:
 
 ```bash
-sudo env LUMI_SERVICE_USER=pi LUMI_PROJECT_DIR=/home/pi/lumistripe \
-  ./deploy/install.sh
+sudo env LUMI_SERVICE_USER=woobb LUMI_PROJECT_DIR=/opt/lumistripe-install \
+  /opt/lumistripe-install/deploy/install.sh
 ```
 
 `LUMI_PROJECT_DIR` must point to the top-level LumiStripe checkout. The
