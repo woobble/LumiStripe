@@ -256,10 +256,13 @@ export function StripeManagementPanel({ controller }: { controller: DashboardCon
       </div>
 
       <div className="grid gap-4 2xl:grid-cols-2">
-      {fields.map((field, index) => {
+      {fields.map((_, index) => {
         const output = draft.outputs[index]
         if (!output) return null
-        return <Card key={field.id} className="border-border/70 bg-card shadow-none">
+        // useFieldArray regenerates its internal key on reset(). Keep the card
+        // keyed to the stable output ID so native disclosure state survives a
+        // topology sync when focus leaves the form.
+        return <Card key={output.id} className="border-border/70 bg-card shadow-none">
           <CardHeader>
             <div className="flex items-start justify-between gap-3">
               <div><CardTitle>{output.name || `Stripe ${index + 1}`}</CardTitle><CardDescription>{output.backend === "spi" ? output.spi_device : `${output.chip} · GPIO ${output.data_pin}/${output.clock_pin}`}</CardDescription></div>
