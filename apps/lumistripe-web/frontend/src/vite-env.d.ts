@@ -4,6 +4,7 @@
 declare global {
   interface Window {
     __lumistripeUpdatePwa?: () => Promise<void>
+    __lumistripeReloadLatestPwa?: () => Promise<void>
   }
 }
 

@@ -303,6 +303,7 @@ describe("App", () => {
 
   beforeEach(() => {
     MockWebSocket.instances = []
+    window.__lumistripeReloadLatestPwa = undefined
     pendingBrightnessResponse = null
     pendingSpotifyControlResponse = null
     pendingSyncCalibrationStart = null
@@ -1529,6 +1530,25 @@ describe("App", () => {
     expect(await screen.findByText("LumiStripe is unavailable")).toBeInTheDocument()
     expect(screen.getByText("Network unreachable")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Reload Page" })).toBeInTheDocument()
+  })
+
+  it("uses the PWA reload action from the unavailable screen", async () => {
+    const reloadLatestPwa = vi.fn().mockResolvedValue(undefined)
+    window.__lumistripeReloadLatestPwa = reloadLatestPwa
+    vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => {
+      if (String(input) === "/api/auth/status") {
+        return jsonResponse({ required: false, authenticated: true })
+      }
+      return Promise.reject(new Error("Network unreachable"))
+    }))
+    const user = userEvent.setup()
+    render(<App />, { wrapper: Router })
+
+    await screen.findByText("LumiStripe is unavailable")
+    await user.click(screen.getByRole("button", { name: "Reload Page" }))
+
+    expect(reloadLatestPwa).toHaveBeenCalledOnce()
   })
 
   it("shows an unavailable retry state when access status cannot be checked", async () => {

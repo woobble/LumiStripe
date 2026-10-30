@@ -33,7 +33,22 @@ function Unavailable({ message, retry }: { message: string; retry: () => void })
         </div>
         <h2 className="text-xl font-semibold">LumiStripe is unavailable</h2>
         <p className="mx-auto mt-2 max-w-xs text-sm text-muted-foreground">{message}</p>
-        <Button className="mt-5 h-11 rounded-xl px-5" onClick={retry}>Try again</Button>
+        <div className="mt-5 flex flex-wrap justify-center gap-3">
+          <Button className="h-11 rounded-xl px-5" onClick={retry}>Try again</Button>
+          <Button
+            className="h-11 rounded-xl px-5"
+            variant="outline"
+            onClick={() => {
+              if (window.__lumistripeReloadLatestPwa) {
+                void window.__lumistripeReloadLatestPwa()
+              } else {
+                window.location.reload()
+              }
+            }}
+          >
+            Reload Page
+          </Button>
+        </div>
       </div>
     </div>
   )

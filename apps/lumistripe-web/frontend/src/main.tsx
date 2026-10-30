@@ -5,6 +5,7 @@ import { BrowserRouter } from 'react-router'
 import { registerSW } from 'virtual:pwa-register'
 import './index.css'
 import App from './App.tsx'
+import { reloadLatestFrontend } from './pwa-update'
 
 const updateServiceWorker = registerSW({
   onNeedRefresh() {
@@ -13,6 +14,7 @@ const updateServiceWorker = registerSW({
 })
 
 window.__lumistripeUpdatePwa = () => updateServiceWorker(true)
+window.__lumistripeReloadLatestPwa = () => reloadLatestFrontend(updateServiceWorker)
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
