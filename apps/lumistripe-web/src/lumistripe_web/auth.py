@@ -1,31 +1,17 @@
 from __future__ import annotations
 
-import math
 import secrets
 import threading
 import time
-from collections import defaultdict, deque
 
 SESSION_COOKIE = "lumistripe_session"
 SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
-FAILED_ATTEMPT_WINDOW_SECONDS = 5 * 60
-FAILED_ATTEMPT_LIMIT = 5
-LOCKOUT_SECONDS = 60
 CLEANUP_INTERVAL_SECONDS = 60
 MAX_SESSIONS = 1024
-MAX_CLIENTS = 4096
 
 
 class InvalidPairingCodeError(ValueError):
     pass
-
-
-class PairingRateLimitedError(RuntimeError):
-    def __init__(self, retry_after_seconds: int) -> None:
-        self.retry_after_seconds = retry_after_seconds
-        super().__init__(
-            f"Too many attempts. Try again in {retry_after_seconds} seconds."
-        )
 
 
 class PairingAuth:
@@ -38,8 +24,6 @@ class PairingAuth:
             raise ValueError("pairing code must contain exactly four digits")
         self._pairing_code = pairing_code
         self._sessions: dict[str, float] = {}
-        self._failed_attempts: dict[str, deque[float]] = defaultdict(deque)
-        self._blocked_until: dict[str, float] = {}
         self._lock = threading.Lock()
         self._next_cleanup_s = 0.0
 
@@ -51,15 +35,6 @@ class PairingAuth:
         self._sessions = {
             token: expiry for token, expiry in self._sessions.items() if expiry > now
         }
-        self._blocked_until = {
-            client: expiry for client, expiry in self._blocked_until.items()
-            if expiry > now
-        }
-        for client, attempts in list(self._failed_attempts.items()):
-            while attempts and now - attempts[0] > FAILED_ATTEMPT_WINDOW_SECONDS:
-                attempts.popleft()
-            if not attempts and client not in self._blocked_until:
-                del self._failed_attempts[client]
 
     @property
     def required(self) -> bool:
@@ -93,32 +68,14 @@ class PairingAuth:
         now = time.monotonic() if now_s is None else now_s
         with self._lock:
             self._cleanup(now)
-            blocked_until = self._blocked_until.get(client_id, 0.0)
-            if blocked_until > now:
-                raise PairingRateLimitedError(math.ceil(blocked_until - now))
-
-            if client_id not in self._failed_attempts and len(self._failed_attempts) >= MAX_CLIENTS:
-                raise PairingRateLimitedError(CLEANUP_INTERVAL_SECONDS)
-            attempts = self._failed_attempts[client_id]
-            while attempts and now - attempts[0] > FAILED_ATTEMPT_WINDOW_SECONDS:
-                attempts.popleft()
-
             assert self._pairing_code is not None
             if secrets.compare_digest(code, self._pairing_code):
-                attempts.clear()
-                self._failed_attempts.pop(client_id, None)
-                self._blocked_until.pop(client_id, None)
                 token = secrets.token_urlsafe(32)
                 if len(self._sessions) >= MAX_SESSIONS:
                     del self._sessions[next(iter(self._sessions))]
                 self._sessions[token] = now + SESSION_MAX_AGE_SECONDS
                 return token
 
-            attempts.append(now)
-            if len(attempts) >= FAILED_ATTEMPT_LIMIT:
-                self._blocked_until[client_id] = now + LOCKOUT_SECONDS
-                attempts.clear()
-                raise PairingRateLimitedError(LOCKOUT_SECONDS)
             raise InvalidPairingCodeError("The pairing code is incorrect.")
 
     def revoke(self, session: str | None) -> None:

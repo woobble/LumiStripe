@@ -30,7 +30,7 @@ EnvironmentFile=/etc/lumistripe/lumistripe-web.env
 # ExecStartPre=/bin/bash -c 'cd "@LUMI_PROJECT_DIR@/apps/lumistripe-web/frontend" && bun run build'
 
 # Match the installer-selected interpreter and production dependency profile.
-ExecStart=/bin/bash -c 'exec "@LUMI_HOME@/.local/bin/uv" run --python "@LUMI_PYTHON_VERSION@" --no-dev --extra hardware-gain lumistripe-web --hardware --pairing-code "$LUMI_PAIRING_CODE"'
+ExecStart=/bin/bash -c 'exec "@LUMI_HOME@/.local/bin/uv" run --python "@LUMI_PYTHON_VERSION@" --no-dev --extra hardware-gain lumistripe-web --host 127.0.0.1 --hardware --pairing-code "$LUMI_PAIRING_CODE"'
 
 Restart=on-failure
 RestartSec=3

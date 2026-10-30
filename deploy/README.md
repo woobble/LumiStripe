@@ -9,6 +9,25 @@ The Pi can send audio to USB, HDMI, wired, or Bluetooth speaker outputs. It
 can also receive music from phones and other Bluetooth audio sources; the
 same routed stream drives the music-reactive animation.
 
+## Network prerequisites and commissioning
+
+The installer does not create a Wi-Fi hotspot or DNS records. Before opening
+the dashboard, connect the Pi and clients to a trusted network and configure
+its DNS to resolve `led.controller` to the Pi's address. Alternatively, provide
+an independently configured hotspot with the same DNS record. Keep SSH or a
+local console available for initial setup and recovery. The dashboard uses a
+four-digit code without rate limiting, so restrict access to trusted clients.
+
+After installation, install and trust the service user's mkcert CA on each
+client, then open `https://led.controller/` and pair. Verify that port 8000 is
+not reachable from another host, and confirm the dashboard, LED output and
+selected audio source work. Reboot and repeat these checks, including Bluetooth
+or Spotify reconnects if used. Before an update, keep console access and a
+backup of appliance configuration and settings. Afterward, check the dashboard
+and hardware again; if recovery fails, inspect the updater and web service
+journals and restore the previous checkout and its recursive submodules before
+rebuilding dependencies and restarting services.
+
 ## One-command installation
 
 From the LumiStripe checkout on the Pi, run:

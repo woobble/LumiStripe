@@ -306,12 +306,26 @@ rollback() {
   [[ -n "$PREVIOUS_REF" && "$ROLLING_BACK" -eq 0 ]] || return 0
   ROLLING_BACK=1
   echo "Update failed; rolling back to $PREVIOUS_REF..." >&2
-  git_user switch --detach "$PREVIOUS_REF" || true
-  sync_dependencies || true
-  build_frontend || true
-  refresh_deployment_files || true
-  systemctl restart lumistripe-web.service || true
-  systemctl restart lumistripe-spotify.service || true
+  local failed=0
+  if ! git_user switch --detach "$PREVIOUS_REF"; then
+    echo "Rollback could not restore the previous revision; manual recovery is required." >&2
+    return 1
+  fi
+  if ! git_user submodule update --init --recursive; then
+    echo "Rollback could not restore submodules; manual recovery is required." >&2
+    return 1
+  fi
+  sync_dependencies || failed=1
+  build_frontend || failed=1
+  refresh_deployment_files || failed=1
+  systemctl restart lumistripe-web.service || failed=1
+  if spotify_environment_ready; then
+    systemctl restart lumistripe-spotify.service || failed=1
+  fi
+  if (( failed )); then
+    echo "Rollback failed; manual recovery is required." >&2
+    return 1
+  fi
 }
 
 record_update_state() {
@@ -323,7 +337,7 @@ record_update_state() {
 handle_update_error() {
   local exit_status=$?
   trap - ERR
-  rollback
+  rollback || echo "Inspect the updater and service logs before retrying." >&2
   record_update_state install-failed
   exit "$exit_status"
 }
@@ -339,6 +353,7 @@ git_user -c core.hooksPath=/dev/null fetch --prune \
   +refs/heads/main:refs/remotes/lumistripe-upstream/main
 TARGET_COMMIT=$(git_user rev-parse --verify "${TARGET_REF}^{commit}")
 git_user -c core.hooksPath=/dev/null switch --detach "$TARGET_COMMIT"
+git_user submodule update --init --recursive
 
 install_audio_bridge_packages
 create_spotify_environment_file
@@ -366,4 +381,4 @@ for _ in {1..30}; do
   sleep 1
 done
 echo "Service did not become healthy in time." >&2
-exit 1
+false

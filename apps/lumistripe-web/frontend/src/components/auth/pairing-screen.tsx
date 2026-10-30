@@ -66,7 +66,7 @@ export function PairingScreen({ access }: { access: AccessController }) {
         </form>
 
         <p className="mt-5 text-center text-xs text-muted-foreground">
-          Failed attempts are temporarily rate limited.
+          Use this dashboard only on a trusted network.
         </p>
       </div>
     </div>

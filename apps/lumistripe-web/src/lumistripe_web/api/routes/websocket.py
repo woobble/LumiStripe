@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, WebSocketException
 
@@ -24,6 +25,16 @@ router = APIRouter()
 
 
 def _require_access(websocket: WebSocket) -> PairingAuth:
+    origin = websocket.headers.get("origin")
+    if origin is not None:
+        try:
+            parsed = urlsplit(origin)
+        except ValueError as exc:
+            raise WebSocketException(code=1008, reason="invalid origin") from exc
+        scheme = "https" if websocket.url.scheme == "wss" else "http"
+        if (parsed.scheme != scheme or parsed.netloc != websocket.headers.get("host")
+                or parsed.path or parsed.query or parsed.fragment):
+            raise WebSocketException(code=1008, reason="invalid origin")
     access: PairingAuth = websocket.app.state.access
     if not access.authenticated(websocket.cookies.get(SESSION_COOKIE)):
         raise WebSocketException(code=4401, reason="pairing required")

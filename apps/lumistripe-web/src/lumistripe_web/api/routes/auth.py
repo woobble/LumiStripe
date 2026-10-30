@@ -8,7 +8,6 @@ from ...auth import (
     SESSION_COOKIE,
     SESSION_MAX_AGE_SECONDS,
     InvalidPairingCodeError,
-    PairingRateLimitedError,
 )
 from ...contracts.common import AccessStatus, PairingRequest
 
@@ -42,12 +41,6 @@ async def pair(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(exc),
-        ) from exc
-    except PairingRateLimitedError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=str(exc),
-            headers={"Retry-After": str(exc.retry_after_seconds)},
         ) from exc
     response.set_cookie(
         key=SESSION_COOKIE,

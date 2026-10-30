@@ -1400,16 +1400,32 @@ def test_open_websocket_closes_when_session_invalidated(stream: str, invalidate:
                     break
 
 
-def test_pairing_endpoint_rate_limits_fifth_failure() -> None:
+def test_pairing_endpoint_allows_repeated_attempts() -> None:
     app = create_app(RuntimeSettings(pixels=8), pairing_code="1234")
     with TestClient(app) as client:
-        for _ in range(4):
+        for _ in range(10):
             assert (
                 client.post("/api/auth/pair", json={"code": "0000"}).status_code == 401
             )
-        limited = client.post("/api/auth/pair", json={"code": "0000"})
-        assert limited.status_code == 429
-        assert limited.headers["retry-after"] == "60"
+        assert client.post("/api/auth/pair", json={"code": "1234"}).status_code == 200
+
+
+def test_websocket_rejects_cross_origin() -> None:
+    app = create_app(RuntimeSettings(pixels=8))
+    with TestClient(app) as client:
+        with pytest.raises(WebSocketDisconnect), client.websocket_connect(
+            "/ws/state", headers={"origin": "http://evil.example"}
+        ):
+            pass
+        with client.websocket_connect("/ws/state", headers={"origin": "http://testserver"}) as websocket:
+            assert websocket.receive_json()["running"] is True
+
+
+def test_pairing_cookie_is_secure_over_https() -> None:
+    app = create_app(RuntimeSettings(pixels=8), pairing_code="1234")
+    with TestClient(app, base_url="https://testserver") as client:
+        response = client.post("/api/auth/pair", json={"code": "1234"})
+        assert "Secure" in response.headers["set-cookie"]
 
 
 def test_cli_validates_pairing_code() -> None:
