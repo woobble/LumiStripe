@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import queue
+import subprocess
 import threading
 import time
 from collections import deque
@@ -11,6 +12,7 @@ from concurrent.futures import Future, InvalidStateError
 from dataclasses import dataclass, replace
 from datetime import datetime
 from importlib import metadata
+from pathlib import Path
 from typing import Literal, NoReturn, TypedDict, cast
 from uuid import uuid4
 
@@ -96,6 +98,7 @@ from ..models import (
     ColorCorrectionProfile,
     DashboardState,
     DiagnosticIssue,
+    IdentitySettingsResponse,
     MusicIdleRequest,
     MusicIdleState,
     SequenceLibraryEntry,
@@ -150,6 +153,7 @@ from .commands import (
     _CalibrationStartCommand,
     _CalibrationUpdateCommand,
     _Command,
+    _IdentitySettingsCommand,
     _ModeCommand,
     _SequenceLibraryCommand,
     _SequencerSettingsCommand,
@@ -355,6 +359,8 @@ class RuntimeWorker:
         self._settings_store = CalibrationSettingsStore(self.settings.settings_file)
         loaded_settings, self._settings_warning = self._settings_store.load_all()
         self._saved_corrections = loaded_settings.color_corrections
+        self._application_name = loaded_settings.application_name
+        self._spotify_device_name = loaded_settings.spotify_device_name
         self._topology = (
             _topology_from_runtime(self.settings)
             if self.settings.ignore_saved_stripes
@@ -460,6 +466,7 @@ class RuntimeWorker:
         self._power_budget_state = _power_budget_state_for(self._topology)
         self._snapshot = DashboardState(
             runtime=self.settings.kind,
+            application_name=self._application_name,
             mode=PlaybackMode.STATIC,
             animation=self._current_animation(),
             configured_audio_source=self.settings.audio_source,
@@ -972,6 +979,24 @@ class RuntimeWorker:
                 animation=remembered.animation,
                 brightness=remembered.brightness,
                 blackout=remembered.blackout,
+            ),
+        )
+
+    def identity_settings(self) -> IdentitySettingsResponse:
+        return IdentitySettingsResponse(
+            application_name=self._application_name,
+            spotify_device_name=self._spotify_device_name,
+            spotify_restart_requested=False,
+        )
+
+    def set_identity_settings(
+        self, application_name: str, spotify_device_name: str
+    ) -> Future[IdentitySettingsResponse]:
+        return cast(
+            Future[IdentitySettingsResponse],
+            self._submit(
+                "identity_settings",
+                _IdentitySettingsCommand(application_name.strip(), spotify_device_name.strip()),
             ),
         )
 
@@ -1806,6 +1831,9 @@ class RuntimeWorker:
                 startup = _expect(command.value, _StartupSettingsCommand)
                 self._set_startup_restore(startup.restore_last_state)
                 result = self.startup_settings()
+            elif command.name == "identity_settings":
+                identity = _expect(command.value, _IdentitySettingsCommand)
+                result = self._set_identity_settings(identity)
             elif command.name == "stripe_topology":
                 topology_update = _expect(command.value, _StripeTopologyCommand)
                 self._apply_stripe_topology(topology_update.topology)
@@ -3143,6 +3171,55 @@ profile.audio_config(microphone=True),
         except OSError as exc:
             raise RuntimeCommandError(f"could not save startup behavior: {exc}") from exc
 
+    def _set_identity_settings(
+        self, identity: _IdentitySettingsCommand
+    ) -> IdentitySettingsResponse:
+        application_name = identity.application_name.strip()
+        spotify_device_name = identity.spotify_device_name.strip()
+        for label, value in (
+            ("application name", application_name),
+            ("Spotify player name", spotify_device_name),
+        ):
+            if (
+                not value
+                or len(value) > 64
+                or any(not char.isprintable() for char in value)
+            ):
+                raise RuntimeCommandError(f"{label} must be 1 to 64 printable characters")
+
+        spotify_restart_requested = False
+        if spotify_device_name != self._spotify_device_name and self.settings.hardware:
+            helper = Path("/usr/local/sbin/lumistripe-spotify-device-name")
+            if helper.is_file():
+                try:
+                    subprocess.run(
+                        ["/usr/bin/sudo", "-n", str(helper), spotify_device_name],
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    spotify_restart_requested = True
+                except (OSError, subprocess.SubprocessError) as exc:
+                    detail = getattr(exc, "stderr", None)
+                    raise RuntimeCommandError(
+                        f"Could not apply Spotify player name: {detail or exc}"
+                    ) from exc
+
+        try:
+            with self._settings_io_lock:
+                self._settings_store.save_identity(application_name, spotify_device_name)
+            self._application_name = application_name
+            self._spotify_device_name = spotify_device_name
+        except (OSError, ValueError) as exc:
+            raise RuntimeCommandError(f"could not save identity settings: {exc}") from exc
+        self._publish(running=True)
+        return IdentitySettingsResponse(
+            application_name=application_name,
+            spotify_device_name=spotify_device_name,
+            spotify_restart_requested=spotify_restart_requested,
+        )
+
     def _capture_shared_playback(self) -> StartupPlaybackSettings:
         if self._topology.layout == "independent" and self._topology.outputs:
             player, playback = self._playbacks[self._topology.outputs[0].id]
@@ -3789,6 +3866,7 @@ profile.audio_config(microphone=True),
             last_output_at=(self._last_output_at()),
             last_output_age_seconds=(self._last_output_age()),
             application_version=APPLICATION_VERSION,
+            application_name=self._application_name,
             color_corrections=self._color_correction_profiles(),
             calibration=self._calibration_status(),
             stripe_topology=self._stripe_topology_state(),

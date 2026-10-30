@@ -61,6 +61,7 @@ install_update_support() {
   install -d -o root -g root -m 755 "$NETWORK_LIBEXEC_DIR"
   for template in \
     update.sh update_state.py update-support.sh tls.sh soloist.sh extract_soloist.py \
+    spotify_device_name.py lumistripe-spotify-name.sudoers lumistripe-spotify-device-name \
     90-lumistripe-bluetooth.conf 90-lumistripe-spotify.conf \
     lumistripe-spotify.env.example \
     lumistripe-web.service lumistripe-spotify.service \
@@ -69,7 +70,7 @@ install_update_support() {
     lumistripe-update-trigger; do
     local mode=644
     case "$template" in
-      update.sh|update_state.py|lumistripe-update-trigger) mode=755 ;;
+      update.sh|update_state.py|lumistripe-update-trigger|lumistripe-spotify-device-name) mode=755 ;;
     esac
     install -o root -g root -m "$mode" \
       "$PROJECT_DIR/deploy/$template" "$UPDATE_LIBEXEC_DIR/$template"
@@ -85,6 +86,22 @@ install_update_support() {
   install -o root -g root -m 755 \
     "$PROJECT_DIR/deploy/lumistripe-network" \
     /usr/local/sbin/lumistripe-network
+  install -o root -g root -m 755 \
+    "$PROJECT_DIR/deploy/lumistripe-spotify-device-name" \
+    /usr/local/sbin/lumistripe-spotify-device-name
+  sed \
+    -e "s|@LUMI_SERVICE_USER@|$user_replacement|g" \
+    "$PROJECT_DIR/deploy/lumistripe-spotify-name.sudoers" \
+    > "$rendered_dir/lumistripe-spotify-name.sudoers"
+  chmod 440 "$rendered_dir/lumistripe-spotify-name.sudoers"
+  if ! visudo -cf "$rendered_dir/lumistripe-spotify-name.sudoers" >/dev/null; then
+    rm -rf -- "$rendered_dir"
+    echo "The Spotify player-name permission did not pass visudo validation." >&2
+    return 1
+  fi
+  install -o root -g root -m 440 \
+    "$rendered_dir/lumistripe-spotify-name.sudoers" \
+    /etc/sudoers.d/lumistripe-spotify-name
   sed \
     -e "s|@LUMI_SERVICE_USER@|$user_replacement|g" \
     "$PROJECT_DIR/deploy/lumistripe-network.sudoers" \

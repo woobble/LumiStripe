@@ -136,6 +136,12 @@ class _StartupSettingsCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class _IdentitySettingsCommand:
+    application_name: str
+    spotify_device_name: str
+
+
+@dataclass(frozen=True, slots=True)
 class _SequencerSettingsCommand:
     switch_quantization: SwitchQuantization
     bars_per_phrase: int
@@ -177,6 +183,7 @@ __all__ = [
     "_CalibrationStartCommand",
     "_CalibrationUpdateCommand",
     "_Command",
+    "_IdentitySettingsCommand",
     "_ModeCommand",
     "_SequenceLibraryCommand",
     "_SequencerSettingsCommand",

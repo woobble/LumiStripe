@@ -277,6 +277,7 @@ const dashboardStateSchema = z.object({
   last_output_at: z.string().nullable().optional(),
   last_output_age_seconds: z.number().nullable().optional(),
   application_version: z.string(),
+  application_name: z.string().default("LumiStripe"),
   color_corrections: z.array(colorCorrectionProfileSchema),
   calibration: calibrationStatusSchema,
   stripe_topology: stripeTopologySchema,
@@ -574,6 +575,11 @@ const startupSettingsSchema = z.object({
     brightness: z.number(),
     blackout: z.boolean(),
   }).strict(),
+}).strict()
+const identitySettingsSchema = z.object({
+  application_name: z.string(),
+  spotify_device_name: z.string(),
+  spotify_restart_requested: z.boolean(),
 }).strict()
 const updateStatusSchema = z.object({
   supported: z.boolean(),
@@ -919,6 +925,12 @@ export const dashboardApi = {
       method: "PUT",
       body: JSON.stringify({ restore_last_state: restoreLastState }),
     }, startupSettingsSchema),
+  getIdentitySettings: () => request("/api/identity", undefined, identitySettingsSchema),
+  updateIdentitySettings: (applicationName: string, spotifyDeviceName: string) =>
+    request("/api/identity", {
+      method: "PUT",
+      body: JSON.stringify({ application_name: applicationName, spotify_device_name: spotifyDeviceName }),
+    }, identitySettingsSchema),
 }
 
 export const accessApi = {

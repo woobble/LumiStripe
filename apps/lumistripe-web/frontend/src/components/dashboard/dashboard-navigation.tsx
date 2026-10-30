@@ -11,7 +11,7 @@ const items = [
   { to: "/diagnostics", label: "System", icon: ActivityIcon },
 ]
 
-export function DashboardNavigation() {
+export function DashboardNavigation({ applicationName = "LumiStripe" }: { applicationName?: string }) {
   const location = useLocation()
   return (
     <aside className="fixed inset-x-0 bottom-0 z-40 border-t border-border/80 bg-background/95 pb-[max(0.5rem,env(safe-area-inset-bottom))] backdrop-blur-xl lg:inset-y-0 lg:right-auto lg:w-64 lg:border-r lg:border-t-0 lg:pb-0">
@@ -21,7 +21,7 @@ export function DashboardNavigation() {
             <LightbulbIcon className="size-5" aria-hidden="true" />
           </div>
           <div>
-            <p className="font-semibold tracking-tight">LumiStripe</p>
+            <p className="font-semibold tracking-tight">{applicationName}</p>
             <p className="text-xs text-muted-foreground">Lighting control</p>
           </div>
         </div>

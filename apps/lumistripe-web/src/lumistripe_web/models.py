@@ -283,6 +283,7 @@ class DashboardState(BaseModel):
     last_output_at: datetime | None = None
     last_output_age_seconds: float | None = None
     application_version: str = "development"
+    application_name: str = "LumiStripe"
     color_corrections: tuple[ColorCorrectionProfile, ...] = ()
     calibration: CalibrationStatus = CalibrationStatus()
     stripe_topology: StripeTopology = StripeTopology()
@@ -705,6 +706,19 @@ class StartupSettingsResponse(BaseModel):
 
 class StartupSettingsRequest(BaseModel):
     restore_last_state: bool
+
+
+class IdentitySettingsRequest(BaseModel):
+    application_name: str = Field(min_length=1, max_length=64)
+    spotify_device_name: str = Field(min_length=1, max_length=64)
+
+
+class IdentitySettingsResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    application_name: str
+    spotify_device_name: str
+    spotify_restart_requested: bool
 
 
 class AudioTelemetry(BaseModel):

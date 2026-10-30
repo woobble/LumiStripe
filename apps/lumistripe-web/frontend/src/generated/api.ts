@@ -618,6 +618,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/identity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Identity Settings */
+        get: operations["identity_settings_api_identity_get"];
+        /** Update Identity Settings */
+        put: operations["update_identity_settings_api_identity_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/mode": {
         parameters: {
             query?: never;
@@ -1605,6 +1623,11 @@ export interface components {
              */
             animation: string;
             /**
+             * Application Name
+             * @default LumiStripe
+             */
+            application_name: string;
+            /**
              * Application Version
              * @default development
              */
@@ -1787,6 +1810,22 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** IdentitySettingsRequest */
+        IdentitySettingsRequest: {
+            /** Application Name */
+            application_name: string;
+            /** Spotify Device Name */
+            spotify_device_name: string;
+        };
+        /** IdentitySettingsResponse */
+        IdentitySettingsResponse: {
+            /** Application Name */
+            application_name: string;
+            /** Spotify Device Name */
+            spotify_device_name: string;
+            /** Spotify Restart Requested */
+            spotify_restart_requested: boolean;
         };
         /** ModeRequest */
         ModeRequest: {
@@ -3724,6 +3763,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    identity_settings_api_identity_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdentitySettingsResponse"];
+                };
+            };
+        };
+    };
+    update_identity_settings_api_identity_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IdentitySettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdentitySettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

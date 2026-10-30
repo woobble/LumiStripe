@@ -27,7 +27,7 @@ from lumistripe.playback import (
 )
 from lumistripe_app_support import build_audio_config
 
-SETTINGS_VERSION = 11
+SETTINGS_VERSION = 12
 SHARED_ANIMATION_SETTINGS_KEY = "shared"
 MAX_SAVED_ANIMATION_SEQUENCES = 20
 PROFILE_NAMES = ("primary", "secondary")
@@ -329,6 +329,8 @@ class AudioTuningProfile:
 
 @dataclass(slots=True)
 class DashboardSettings:
+    application_name: str = "LumiStripe"
+    spotify_device_name: str = "LumiStripe"
     music_idle: dict[str, MusicIdleSettings] = field(default_factory=dict)
     color_corrections: dict[str, ColorCorrection] = field(
         default_factory=lambda: {name: ColorCorrection() for name in PROFILE_NAMES}
@@ -376,12 +378,24 @@ class CalibrationSettingsStore:
             if not isinstance(payload, dict):
                 raise TypeError("settings must be an object")
             version = payload.get("version")
-            if type(version) is not int or version not in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, SETTINGS_VERSION}:
+            if type(version) is not int or version not in set(range(1, SETTINGS_VERSION + 1)):
                 raise ValueError(
                     f"expected settings version 1 through {SETTINGS_VERSION}"
                 )
         except (json.JSONDecodeError, TypeError, ValueError, RecursionError) as exc:
             return settings, f"Dashboard settings are invalid: {exc}"
+
+        for field_name in ("application_name", "spotify_device_name"):
+            value = payload.get(field_name, "LumiStripe")
+            if (
+                isinstance(value, str)
+                and value.strip()
+                and len(value.strip()) <= 64
+                and not any(ord(char) < 32 or ord(char) == 127 for char in value)
+            ):
+                setattr(settings, field_name, value.strip())
+            elif field_name in payload:
+                warnings.append(f"{field_name} must be a valid name of at most 64 characters")
 
         encoded_colors = payload.get("color_correction", {})
         if not isinstance(encoded_colors, dict):
@@ -403,7 +417,7 @@ class CalibrationSettingsStore:
                 except (TypeError, ValueError) as exc:
                     warnings.append(str(exc))
 
-        if payload.get("version") in {2, 3, 4, 5, 6, 7, 8, 9, 10, SETTINGS_VERSION}:
+        if payload.get("version") in {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, SETTINGS_VERSION}:
             selected = payload.get("selected_audio_device")
             if selected is not None and not isinstance(selected, str):
                 warnings.append("selected_audio_device must be a string or null")
@@ -441,13 +455,13 @@ class CalibrationSettingsStore:
                     except (TypeError, ValueError) as exc:
                         warnings.append(str(exc))
 
-        if payload.get("version") in {3, 4, 5, 6, 7, 8, 9, 10, SETTINGS_VERSION} and "stripes" in payload:
+        if payload.get("version") in {3, 4, 5, 6, 7, 8, 9, 10, 11, SETTINGS_VERSION} and "stripes" in payload:
             try:
                 settings.stripe_topology = _decode_stripes(payload["stripes"])
             except (TypeError, ValueError) as exc:
                 warnings.append(str(exc))
 
-        if payload.get("version") in {4, 5, 6, 7, 8, 9, 10, SETTINGS_VERSION}:
+        if payload.get("version") in {4, 5, 6, 7, 8, 9, 10, 11, SETTINGS_VERSION}:
             restore = payload.get("restore_last_state", False)
             if not isinstance(restore, bool):
                 warnings.append("restore_last_state must be a boolean")
@@ -469,7 +483,7 @@ class CalibrationSettingsStore:
                 except (TypeError, ValueError) as exc:
                     warnings.append(str(exc))
 
-        if payload.get("version") in {6, 7, 8, 9, 10, SETTINGS_VERSION}:
+        if payload.get("version") in {6, 7, 8, 9, 10, 11, SETTINGS_VERSION}:
             encoded_offsets = payload.get("audio_sync_offsets_ms", {})
             if not isinstance(encoded_offsets, dict):
                 warnings.append("audio_sync_offsets_ms must be an object")
@@ -487,7 +501,7 @@ class CalibrationSettingsStore:
                     except (TypeError, ValueError) as exc:
                         warnings.append(str(exc))
 
-        if payload.get("version") in {7, 8, 9, 10, SETTINGS_VERSION}:
+        if payload.get("version") in {7, 8, 9, 10, 11, SETTINGS_VERSION}:
             encoded_quantization = payload.get("switch_quantization", "off")
             try:
                 settings.switch_quantization = SwitchQuantization(encoded_quantization)
@@ -504,12 +518,12 @@ class CalibrationSettingsStore:
             else:
                 settings.bars_per_phrase = encoded_bars
 
-        if payload.get("version") in {8, 9, 10, SETTINGS_VERSION}:
+        if payload.get("version") in {8, 9, 10, 11, SETTINGS_VERSION}:
             settings.animation_sequences, settings.active_sequence_id = (
                 _decode_animation_sequences(payload, warnings)
             )
 
-        if payload.get("version") in {9, 10, SETTINGS_VERSION} and "transition_settings" in payload:
+        if payload.get("version") in {9, 10, 11, SETTINGS_VERSION} and "transition_settings" in payload:
             encoded_transitions = payload["transition_settings"]
             try:
                 if not isinstance(encoded_transitions, dict):
@@ -522,7 +536,7 @@ class CalibrationSettingsStore:
             except (TypeError, ValueError) as exc:
                 warnings.append(f"transition settings: {exc}")
 
-        if payload.get("version") == SETTINGS_VERSION and "animation_settings" in payload:
+        if payload.get("version") in {11, SETTINGS_VERSION} and "animation_settings" in payload:
             settings.animation_settings = _decode_animation_settings(
                 payload["animation_settings"], warnings
             )
@@ -591,6 +605,12 @@ class CalibrationSettingsStore:
         settings.remembered_playback = remembered
         self.save_all(settings)
 
+    def save_identity(self, application_name: str, spotify_device_name: str) -> None:
+        settings = self._load_for_update()
+        settings.application_name = application_name
+        settings.spotify_device_name = spotify_device_name
+        self.save_all(settings)
+
     def save_sequencer_settings(
         self, switch_quantization: SwitchQuantization, bars_per_phrase: int
     ) -> None:
@@ -642,6 +662,8 @@ class CalibrationSettingsStore:
         )
         payload = {
             "version": SETTINGS_VERSION,
+            "application_name": settings.application_name,
+            "spotify_device_name": settings.spotify_device_name,
             "music_idle": {scope: {"mode": value.mode, "color": value.color, "animation": value.animation, "brightness": value.brightness} for scope, value in settings.music_idle.items()},
             "color_correction": {
                 name: {

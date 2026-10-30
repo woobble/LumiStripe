@@ -31,6 +31,12 @@ and hardware again; if recovery fails, inspect the updater and web service
 journals and restore the previous checkout and its recursive submodules before
 rebuilding dependencies and restarting services.
 
+Change the dashboard title and Spotify Connect player name from
+**Devices → Startup → Names**. Saving a Spotify name updates the Soloist
+service configuration and requests a service restart so Connect advertises it.
+On appliances installed before this naming control was added, rerun
+`sudo ./deploy/install.sh` once to install its restricted restart helper.
+
 ## One-command installation
 
 From the LumiStripe checkout on the Pi, run:

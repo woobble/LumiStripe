@@ -1679,6 +1679,11 @@
             "title": "Animation",
             "type": "string"
           },
+          "application_name": {
+            "default": "LumiStripe",
+            "title": "Application Name",
+            "type": "string"
+          },
           "application_version": {
             "default": "development",
             "title": "Application Version",
@@ -2001,6 +2006,51 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "IdentitySettingsRequest": {
+        "properties": {
+          "application_name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Application Name",
+            "type": "string"
+          },
+          "spotify_device_name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Spotify Device Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "application_name",
+          "spotify_device_name"
+        ],
+        "title": "IdentitySettingsRequest",
+        "type": "object"
+      },
+      "IdentitySettingsResponse": {
+        "properties": {
+          "application_name": {
+            "title": "Application Name",
+            "type": "string"
+          },
+          "spotify_device_name": {
+            "title": "Spotify Device Name",
+            "type": "string"
+          },
+          "spotify_restart_requested": {
+            "title": "Spotify Restart Requested",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "application_name",
+          "spotify_device_name",
+          "spotify_restart_requested"
+        ],
+        "title": "IdentitySettingsResponse",
         "type": "object"
       },
       "ModeRequest": {
@@ -5280,6 +5330,60 @@
           }
         },
         "summary": "Health"
+      }
+    },
+    "/api/identity": {
+      "get": {
+        "operationId": "identity_settings_api_identity_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentitySettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Identity Settings"
+      },
+      "put": {
+        "operationId": "update_identity_settings_api_identity_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IdentitySettingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentitySettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Identity Settings"
       }
     },
     "/api/mode": {

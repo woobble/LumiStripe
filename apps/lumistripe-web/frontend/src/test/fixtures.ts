@@ -31,6 +31,7 @@ export const initialState: DashboardState = {
   last_output_at: "2026-08-07T10:00:00Z",
   last_output_age_seconds: 0.1,
   application_version: "0.1.0",
+  application_name: "LumiStripe",
   color_corrections: [
     { output_index: 0, name: "Primary", device: "Simulation", red: 255, green: 255, blue: 255 },
   ],

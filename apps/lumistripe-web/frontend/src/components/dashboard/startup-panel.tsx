@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useState } from "react"
+import { memo, useCallback, useEffect, useState, type FormEvent } from "react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
@@ -21,6 +21,10 @@ function title(value: string) {
 
 function StartupPanelView() {
   const [settings, setSettings] = useState<StartupSettingsResponse | null>(null)
+  const [identity, setIdentity] = useState({ application_name: "LumiStripe", spotify_device_name: "LumiStripe" })
+  const [savedIdentity, setSavedIdentity] = useState({ application_name: "LumiStripe", spotify_device_name: "LumiStripe" })
+  const [identityLoaded, setIdentityLoaded] = useState(false)
+  const [identitySaving, setIdentitySaving] = useState(false)
   const [saving, setSaving] = useState(false)
   const form = useForm<StartupFormValues>({ resolver: zodResolver(startupSchema), defaultValues: { restore_last_state: false } })
   const { watch, reset, handleSubmit, formState: { isDirty, errors } } = form
@@ -29,7 +33,12 @@ function StartupPanelView() {
   const load = useCallback(async () => {
     try {
       const next = await dashboardApi.getStartupSettings()
+      const nextIdentity = await dashboardApi.getIdentitySettings()
       setSettings(next)
+      const loadedIdentity = { application_name: nextIdentity.application_name, spotify_device_name: nextIdentity.spotify_device_name }
+      setIdentity(loadedIdentity)
+      setSavedIdentity(loadedIdentity)
+      setIdentityLoaded(true)
       reset({ restore_last_state: next.restore_last_state })
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not load startup behavior.")
@@ -54,6 +63,22 @@ function StartupPanelView() {
   }
 
   const restore = watch("restore_last_state")
+  const saveIdentity = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (identitySaving) return
+    const spotifyNameChanged = identity.spotify_device_name.trim() !== savedIdentity.spotify_device_name
+    setIdentitySaving(true)
+    try {
+      const next = await dashboardApi.updateIdentitySettings(identity.application_name, identity.spotify_device_name)
+      setIdentity({ application_name: next.application_name, spotify_device_name: next.spotify_device_name })
+      setSavedIdentity({ application_name: next.application_name, spotify_device_name: next.spotify_device_name })
+      toast.success(next.spotify_restart_requested ? "Names saved. Spotify restart requested to apply its player name." : spotifyNameChanged ? "Names saved, but this runtime cannot restart Soloist to apply the Spotify name." : "Names saved.")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Names could not be saved.")
+    } finally {
+      setIdentitySaving(false)
+    }
+  }
   return (
     <SetupPage className="max-w-4xl">
       {!settings ? <Skeleton className="h-64 rounded-xl" /> : (
@@ -89,6 +114,25 @@ function StartupPanelView() {
           </CardContent>
         </Card>
       )}
+      <Card className="mt-4 border-border/70 bg-card shadow-none">
+        <CardHeader>
+          <CardTitle>Names</CardTitle>
+          <CardDescription>Choose the name shown in this dashboard and the Spotify Connect player name.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form className="space-y-4" onSubmit={(event) => void saveIdentity(event)}>
+            <label className="block space-y-2 text-sm font-medium">
+              <span>Application name</span>
+              <input required maxLength={64} disabled={!identityLoaded || identitySaving} value={identity.application_name} onChange={(event) => setIdentity((current) => ({ ...current, application_name: event.target.value }))} className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm disabled:opacity-50" />
+            </label>
+            <label className="block space-y-2 text-sm font-medium">
+              <span>Spotify player name</span>
+              <input required maxLength={64} disabled={!identityLoaded || identitySaving} value={identity.spotify_device_name} onChange={(event) => setIdentity((current) => ({ ...current, spotify_device_name: event.target.value }))} className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm disabled:opacity-50" />
+            </label>
+            <button type="submit" disabled={!identityLoaded || identitySaving} className="h-10 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-50">{identitySaving ? "Saving…" : "Save names"}</button>
+          </form>
+        </CardContent>
+      </Card>
     </SetupPage>
   )
 }

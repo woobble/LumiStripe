@@ -93,13 +93,13 @@ function LiveDashboard({ access }: { access: AccessController }) {
   const { state, connection, loading, loadError } = controller
   return (
     <div className="min-h-svh overflow-x-hidden bg-background">
-      <DashboardNavigation />
+      <DashboardNavigation applicationName={state?.application_name ?? "LumiStripe"} />
       <div className="min-h-svh lg:pl-64">
         <header className="sticky top-0 z-30 border-b border-border/70 bg-background/90 pt-[env(safe-area-inset-top)] backdrop-blur-xl">
           <div className="mx-auto flex h-14 max-w-[1500px] items-center gap-3 px-4 sm:px-6 lg:h-16 lg:px-10">
             <div className="flex min-w-0 items-center gap-2 lg:hidden">
               <LightbulbIcon className="size-5 text-primary" aria-hidden="true" />
-              <span className="truncate text-sm font-semibold tracking-tight">LumiStripe</span>
+              <span className="truncate text-sm font-semibold tracking-tight">{state?.application_name ?? "LumiStripe"}</span>
             </div>
             <div className="hidden text-sm text-muted-foreground lg:block">
               {state ? `${state.runtime} controller` : "Lighting controller"}

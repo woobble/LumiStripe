@@ -86,6 +86,9 @@ for required_file in \
   "$PROJECT_DIR/deploy/lumistripe_network.py" \
   "$PROJECT_DIR/deploy/lumistripe-network" \
   "$PROJECT_DIR/deploy/lumistripe-network.sudoers" \
+  "$PROJECT_DIR/deploy/spotify_device_name.py" \
+  "$PROJECT_DIR/deploy/lumistripe-spotify-device-name" \
+  "$PROJECT_DIR/deploy/lumistripe-spotify-name.sudoers" \
   "$PROJECT_DIR/deploy/nginx/led-controller.conf" \
   "$PROJECT_DIR/deploy/tls.sh" \
   "$PROJECT_DIR/deploy/soloist.sh" \
