@@ -2395,6 +2395,9 @@ def test_native_electric_storm_matches_python(length: int, audio_mode: bool, pal
         if rendered:
             np.testing.assert_array_equal(destination, stripe.pixels())
         assert native.flash.value == pytest.approx(python.flash.value)
-        assert [(s.pos, s.length, s.speed, s.hue, s.alpha.value) for s in native.streaks] == pytest.approx(
-            [(s.pos, s.length, s.speed, s.hue, s.alpha.value) for s in python.streaks]
+        np.testing.assert_allclose(
+            [(s.pos, s.length, s.speed, s.hue, s.alpha.value) for s in native.streaks],
+            [(s.pos, s.length, s.speed, s.hue, s.alpha.value) for s in python.streaks],
+            rtol=1e-6,
+            atol=1e-12,
         )
