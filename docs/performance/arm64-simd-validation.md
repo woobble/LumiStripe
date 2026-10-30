@@ -140,27 +140,25 @@ rendering pipeline or GPIO/SPI output.
 
 ## `rpi02` follow-up benchmark
 
-The updated harness was run once with 10,000 iterations per case on `rpi02`.
-The Pi model and clock/thermal conditions were not included. All cases passed
-their parity checks; screen composition reported a zero-byte delta and matching
-checksums.
+The updated correction/screen harness was run twice with 10,000 iterations per
+case on `rpi02`. The table reports medians across both runs. The Pi model and
+clock/thermal conditions were not included. Both runs passed parity; screen
+composition reported a zero-byte delta and matching checksums.
 
 | Kernel | Pixels | Scalar ms | Dispatch ms | Speedup |
 | --- | ---: | ---: | ---: | ---: |
-| RGBA correction | 600 | 13.755 | 8.034 | 1.71x |
-| RGBA correction | 4,096 | 91.605 | 53.164 | 1.72x |
-| RGBA correction | 16,384 | 376.504 | 215.472 | 1.75x |
-| Alpha scale | 600 | 15.800 | 13.587 | 1.16x |
-| Alpha scale | 4,096 | 137.819 | 227.320 | 0.61x |
-| Alpha scale | 16,384 | 1,003.179 | 1,007.488 | 1.00x |
-| Screen composite | 600 | 489.434 | 120.460 | 4.06x |
-| Screen composite | 4,096 | 3,456.768 | 826.209 | 4.18x |
-| Screen composite | 16,384 | 14,410.044 | 3,327.591 | 4.33x |
+| RGBA correction | 600 | 13.773 | 8.049 | 1.71x |
+| RGBA correction | 4,096 | 91.555 | 52.891 | 1.73x |
+| RGBA correction | 16,384 | 375.985 | 215.593 | 1.74x |
+| Screen composite | 600 | 489.291 | 120.586 | 4.06x |
+| Screen composite | 4,096 | 3,614.177 | 835.549 | 4.33x |
+| Screen composite | 16,384 | 14,413.501 | 3,320.468 | 4.34x |
 
 The screen SIMD path clears the 10% target at all tested sizes and is retained.
-Alpha SIMD is removed: despite a gain at 600 pixels, it regressed at 4,096 and
-was neutral at 16,384, violating the no-regression requirement. Alpha scaling
-uses the scalar implementation and preserves exact NumPy floor semantics.
+An alpha-scale SIMD candidate was measured once: its dispatch ratios were
+1.16x, 0.61x, and 1.00x at the three frame sizes. It regressed at 4,096 and was
+neutral at 16,384, so its NEON path was removed. Alpha scaling uses the scalar
+implementation and preserves exact NumPy floor semantics.
 
 ## Validation
 
