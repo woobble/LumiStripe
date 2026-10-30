@@ -59,7 +59,7 @@ function PwaStatus() {
 
   if (!offline && !updateAvailable) return null
   return (
-    <div className="fixed inset-x-3 bottom-[calc(5.75rem+env(safe-area-inset-bottom))] z-50 mx-auto flex max-w-lg items-center justify-between gap-3 rounded-2xl border border-white/10 bg-card/95 px-4 py-3 text-sm shadow-2xl backdrop-blur-xl">
+    <div className="fixed inset-x-3 bottom-[calc(5.75rem+env(safe-area-inset-bottom))] z-50 mx-auto flex max-w-lg items-center justify-between gap-3 rounded-2xl border border-border bg-card px-4 py-3 text-sm shadow-xl backdrop-blur-xl lg:inset-x-auto lg:right-6 lg:bottom-6">
       <span className="text-muted-foreground">{offline ? "Offline — controls are unavailable until the Pi reconnects." : "A new LumiStripe version is ready."}</span>
       {updateAvailable && !offline && <Button className="h-9 shrink-0 rounded-xl px-3 text-xs" onClick={() => void window.__lumistripeUpdatePwa?.()}>Update</Button>}
     </div>
@@ -74,8 +74,8 @@ function Dashboard({ access }: { access: AccessController }) {
 
 function DashboardAccessFrame({ children }: { children: ReactNode }) {
   return (
-    <div className="relative min-h-svh overflow-x-hidden bg-background">
-      <main className="relative mx-auto flex min-h-svh w-full max-w-lg flex-col justify-center px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]">
+    <div className="min-h-svh overflow-x-hidden bg-background">
+      <main className="mx-auto flex min-h-svh w-full max-w-xl flex-col justify-center px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-6">
         {children}
       </main>
       <Toaster position="top-center" richColors />
@@ -87,41 +87,35 @@ function LiveDashboard({ access }: { access: AccessController }) {
   const controller = useDashboard()
   const { state, connection, loading, loadError } = controller
   return (
-    <div className="relative min-h-svh overflow-x-hidden bg-background">
-      <div className="ambient-glow ambient-glow-one" aria-hidden="true" />
-      <div className="ambient-glow ambient-glow-two" aria-hidden="true" />
-
-      <main className="relative mx-auto flex min-h-svh w-full max-w-lg flex-col px-4 pt-[max(1rem,env(safe-area-inset-top))]">
-        <header className="mb-5 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="grid size-11 place-items-center rounded-2xl border border-violet-300/15 bg-violet-400/10 text-violet-200 shadow-lg shadow-violet-950/30">
-              <LightbulbIcon className="size-5" aria-hidden="true" />
+    <div className="min-h-svh overflow-x-hidden bg-background">
+      <DashboardNavigation />
+      <div className="min-h-svh lg:pl-64">
+        <header className="sticky top-0 z-30 border-b border-border/70 bg-background/90 pt-[env(safe-area-inset-top)] backdrop-blur-xl">
+          <div className="mx-auto flex h-14 max-w-[1500px] items-center gap-3 px-4 sm:px-6 lg:h-16 lg:px-10">
+            <div className="flex min-w-0 items-center gap-2 lg:hidden">
+              <LightbulbIcon className="size-5 text-primary" aria-hidden="true" />
+              <span className="truncate text-sm font-semibold tracking-tight">LumiStripe</span>
             </div>
-            <div>
-              <h1 className="text-xl font-semibold tracking-tight">LumiStripe</h1>
-              <p className="text-xs capitalize text-muted-foreground">
-                {state ? `${state.runtime} controller` : "Lighting controller"}
-              </p>
+            <div className="hidden text-sm text-muted-foreground lg:block">
+              {state ? `${state.runtime} controller` : "Lighting controller"}
             </div>
+            <div className="ml-auto"><ConnectionBadge status={connection} /></div>
           </div>
-          <ConnectionBadge status={connection} />
         </header>
 
-        <SystemUpdateNotice />
-
-        {loading && !state ? (
-          <DashboardSkeleton />
-        ) : !state ? (
-          <Unavailable message={loadError ?? "The controller did not return a state."} retry={() => void controller.refresh()} />
-        ) : (
-          <UnsavedChangesProvider>
-          <div className="min-h-0 flex-1 pb-[calc(5.25rem+env(safe-area-inset-bottom))]">
-            <DashboardRoutes access={access} controller={controller} fallback={<DashboardSkeleton />} />
-            <DashboardNavigation />
-          </div>
-          </UnsavedChangesProvider>
-        )}
-      </main>
+        <main className="mx-auto w-full max-w-[1500px] px-4 pt-5 pb-[calc(6rem+env(safe-area-inset-bottom))] sm:px-6 lg:px-10 lg:pt-8 lg:pb-10">
+          <SystemUpdateNotice />
+          {loading && !state ? (
+            <DashboardSkeleton />
+          ) : !state ? (
+            <Unavailable message={loadError ?? "The controller did not return a state."} retry={() => void controller.refresh()} />
+          ) : (
+            <UnsavedChangesProvider>
+              <DashboardRoutes access={access} controller={controller} fallback={<DashboardSkeleton />} />
+            </UnsavedChangesProvider>
+          )}
+        </main>
+      </div>
       <Toaster position="top-center" richColors />
       <PwaStatus />
     </div>
@@ -141,7 +135,6 @@ function DashboardApp() {
   if (access.loading) {
     return (
       <div className="relative grid min-h-svh place-items-center overflow-hidden bg-background px-5">
-        <div className="ambient-glow ambient-glow-one" aria-hidden="true" />
         <div className="w-full max-w-sm">
           <DashboardSkeleton />
         </div>
@@ -157,9 +150,7 @@ function DashboardApp() {
   }
   if (access.required && !access.authenticated) {
     return (
-      <div className="relative min-h-svh overflow-hidden bg-background">
-        <div className="ambient-glow ambient-glow-one" aria-hidden="true" />
-        <div className="ambient-glow ambient-glow-two" aria-hidden="true" />
+      <div className="min-h-svh overflow-hidden bg-background">
         <PairingScreen access={access} />
         <Toaster position="top-center" richColors />
       </div>

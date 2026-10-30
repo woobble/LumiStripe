@@ -58,7 +58,7 @@ export function AudioSourceStatus({
     <Card className="border-white/5 bg-card/80">
       <CardHeader className="pb-3">
         <CardTitle className="flex min-w-0 items-center gap-2 text-base"><AudioLinesIcon className="size-4 shrink-0 text-cyan-300" />{compact ? "Input source" : "Audio source status"}</CardTitle>
-        {statusMessage && !compact && <p className="break-words text-sm text-muted-foreground [overflow-wrap:anywhere]" aria-live="polite">{statusMessage}</p>}
+        {statusMessage && <p className={`break-words text-muted-foreground [overflow-wrap:anywhere] ${compact ? "text-xs" : "text-sm"}`} aria-live="polite">{statusMessage}</p>}
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
         <StatusItem label="Configured source" value={audioSourceLabel(configuredSource)} />

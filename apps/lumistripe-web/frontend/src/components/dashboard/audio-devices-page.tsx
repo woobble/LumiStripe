@@ -68,14 +68,14 @@ export function AudioDevicesPage() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="grid items-start gap-4 xl:grid-cols-2">
       {error && <Card className="border-amber-300/15 bg-amber-500/5"><CardContent className="flex flex-wrap items-center justify-between gap-3 pt-4"><p role="status" className="text-sm text-amber-100">Could not refresh device status. Showing the last available result: {error}</p><Button type="button" variant="outline" disabled={loading || busy} onClick={refreshStatus}>Retry refresh</Button></CardContent></Card>}
       <section aria-labelledby="audio-outputs-heading" className="space-y-2">
-        <div className="px-1"><h2 id="audio-outputs-heading" className="text-base font-semibold">Audio outputs</h2><p className="text-xs text-muted-foreground">Choose the PipeWire speaker receiving audio from the Pi.</p></div>
+        <div className="px-1"><h2 id="audio-outputs-heading" className="text-base font-semibold">Audio output</h2><p className="text-xs text-muted-foreground">Choose where sound plays from the Pi.</p></div>
         <AudioOutputControls status={status} busy={busy} onAction={runAction} />
       </section>
       <section aria-labelledby="bluetooth-devices-heading" className="space-y-2">
-        <div className="px-1"><h2 id="bluetooth-devices-heading" className="text-base font-semibold">Bluetooth devices</h2><p className="text-xs text-muted-foreground">Manage the Pi’s Bluetooth radio, name, pairing, and input/output connections.</p></div>
+        <div className="px-1"><h2 id="bluetooth-devices-heading" className="text-base font-semibold">Bluetooth</h2><p className="text-xs text-muted-foreground">Pair speakers and audio inputs, or change the device name.</p></div>
         <BluetoothDevicePanel
           status={status}
           alias={alias}

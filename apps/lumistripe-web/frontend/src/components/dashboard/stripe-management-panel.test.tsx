@@ -143,6 +143,7 @@ describe("StripeManagementPanel", () => {
       </MemoryRouter>,
     )
 
+    await user.click(screen.getByText("Zones, wiring, calibration and power"))
     expect(screen.getByText("Zone 1: LEDs 1–41")).toBeInTheDocument()
     fireEvent.change(screen.getByLabelText("Zones per stripe"), { target: { value: "4" } })
     expect(screen.getByText("Zone 1: LEDs 1–11")).toBeInTheDocument()

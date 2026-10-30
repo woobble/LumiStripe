@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FocusEvent, type ReactNode } from "react"
 import { useFieldArray, useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
-import { ArrowDownIcon, ArrowUpIcon, CableIcon, PlusIcon, SaveIcon, Trash2Icon, ZapIcon } from "lucide-react"
+import { ArrowDownIcon, ArrowUpIcon, CableIcon, ChevronDownIcon, PlusIcon, SaveIcon, Trash2Icon, ZapIcon } from "lucide-react"
 import { toast } from "sonner"
 import { z } from "zod"
 
@@ -167,7 +167,8 @@ export function StripeManagementPanel({ controller }: { controller: DashboardCon
 
   return (
     <SetupPage onFocusCapture={() => setFormFocused(true)} onBlurCapture={handleFormBlur}>
-      <Card className="border-white/5 bg-card/80">
+      <div className="grid gap-4 xl:grid-cols-2">
+      <Card className="border-border/70 bg-card shadow-none">
         <CardHeader>
           <CardTitle>Layout</CardTitle>
           <CardDescription>Choose how animations use two outputs.</CardDescription>
@@ -180,7 +181,7 @@ export function StripeManagementPanel({ controller }: { controller: DashboardCon
         </CardContent>
       </Card>
 
-      <Card className="border-white/5 bg-card/80">
+      <Card className="border-border/70 bg-card shadow-none">
         <CardHeader>
           <CardTitle>Power budget</CardTitle>
           <CardDescription>Estimate LED load and cap all outputs together to protect the wagon supply.</CardDescription>
@@ -252,11 +253,13 @@ export function StripeManagementPanel({ controller }: { controller: DashboardCon
           {draft.shared_supply_enabled && <p className="text-xs text-muted-foreground">LED allowance: {Math.max(0, draft.supply_capacity_watts - draft.pi_reserve_watts).toFixed(1)} W. Enter the Pi and converter draw at the PSU, including conversion losses. LumiStripe does not measure their power draw.</p>}
         </CardContent>
       </Card>
+      </div>
 
+      <div className="grid gap-4 2xl:grid-cols-2">
       {fields.map((field, index) => {
         const output = draft.outputs[index]
         if (!output) return null
-        return <Card key={field.id} className="border-white/5 bg-card/80">
+        return <Card key={field.id} className="border-border/70 bg-card shadow-none">
           <CardHeader>
             <div className="flex items-start justify-between gap-3">
               <div><CardTitle>{output.name || `Stripe ${index + 1}`}</CardTitle><CardDescription>{output.backend === "spi" ? output.spi_device : `${output.chip} · GPIO ${output.data_pin}/${output.clock_pin}`}</CardDescription></div>
@@ -268,14 +271,22 @@ export function StripeManagementPanel({ controller }: { controller: DashboardCon
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
-            <Field label="Name"><Input value={output.name} maxLength={40} aria-invalid={errors.outputs?.[index]?.name ? true : undefined} onChange={(event) => updateOutput(index, { name: event.target.value })} />{errors.outputs?.[index]?.name && <InlineError message={errors.outputs[index]?.name?.message} />}</Field>
-            <Field label="Pixel count"><Input type="number" min={1} max={4096} inputMode="numeric" value={output.pixels} aria-invalid={errors.outputs?.[index]?.pixels ? true : undefined} onChange={(event) => {
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Name"><Input value={output.name} maxLength={40} aria-invalid={errors.outputs?.[index]?.name ? true : undefined} onChange={(event) => updateOutput(index, { name: event.target.value })} />{errors.outputs?.[index]?.name && <InlineError message={errors.outputs[index]?.name?.message} />}</Field>
+              <Field label="Pixel count"><Input type="number" min={1} max={4096} inputMode="numeric" value={output.pixels} aria-invalid={errors.outputs?.[index]?.pixels ? true : undefined} onChange={(event) => {
               const pixels = Number(event.target.value)
               updateOutput(index, {
                 pixels,
                 ...(pixels >= 1 ? { zone_count: Math.min(output.zone_count ?? 1, pixels) } : {}),
               })
             }} />{errors.outputs?.[index]?.pixels && <InlineError message={errors.outputs[index]?.pixels?.message} />}</Field>
+            </div>
+            <details className="group overflow-hidden rounded-xl border border-border/70 bg-muted/20">
+              <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+                Zones, wiring, calibration and power
+                <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" aria-hidden="true" />
+              </summary>
+              <div className="space-y-4 border-t border-border/70 p-3 sm:p-4">
             <div className="grid grid-cols-2 gap-3">
               <Field label="Zones per stripe">
                 <Input
@@ -357,9 +368,12 @@ export function StripeManagementPanel({ controller }: { controller: DashboardCon
               {(["identify", "red", "green", "blue", "white"] as const).map((pattern) => <Button key={pattern} variant="outline" className="h-10 px-1 text-xs capitalize" disabled={busy} aria-label={`Test ${pattern}`} onClick={() => void controller.testStripe(output.id, pattern, draft)}>{pattern === "identify" ? <ZapIcon /> : pattern}</Button>)}
             </div>
             {isDirty && <p className="text-xs text-amber-300">Tests use this draft temporarily, then restore the applied setup.</p>}
+              </div>
+            </details>
           </CardContent>
         </Card>
       })}
+      </div>
 
       {fields.length < 2 && <Button variant="outline" className="h-12 w-full rounded-xl" disabled={busy} onClick={() => append(newStripe(draft.outputs))}><PlusIcon />Add stripe</Button>}
       <Button className="h-14 w-full rounded-2xl" disabled={!isDirty || busy} onClick={() => void handleSubmit(apply)()}><SaveIcon />{busy ? "Applying…" : "Save & apply"}</Button>

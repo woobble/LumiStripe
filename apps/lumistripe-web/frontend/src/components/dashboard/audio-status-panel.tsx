@@ -17,8 +17,7 @@ import { AudioSourceStatus } from "@/components/dashboard/audio-source-status"
 import { audioSourceLabel } from "@/components/dashboard/audio-source"
 import { SpotifyControls } from "@/components/dashboard/spotify-controls"
 import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Skeleton } from "@/components/ui/skeleton"
+import { Card, CardContent } from "@/components/ui/card"
 import { useBluetooth } from "@/hooks/use-bluetooth"
 import type { BluetoothAction } from "@/hooks/use-bluetooth"
 import { useAudioSettings } from "@/hooks/use-audio-settings"
@@ -63,17 +62,6 @@ function sourceMessage(
       return configuredSource === "auto"
         ? source ? `Automatic source · ${audioSourceLabel(source)} is currently selected.` : "Automatic routing is waiting for an available audio source."
         : audioStatus
-  }
-}
-
-function sourceHeading(source: string | null | undefined, configuredSource: string | null | undefined) {
-  if (configuredSource === "auto") return "Automatic audio source"
-  switch (source) {
-    case "mic": return "Microphone input"
-    case "bluetooth": return "Bluetooth input"
-    case "demo": return "Demo beat"
-    case "off": return "No active audio source"
-    default: return `${audioSourceLabel(source)} source`
   }
 }
 
@@ -145,11 +133,10 @@ function AudioStatusPanelView({
 
   return (
     <div className="space-y-4 pb-4">
-      <header className="flex items-start justify-between gap-3">
+      <header className="flex items-end justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-200">Control center</p>
-          <h2 className="mt-1 flex items-center gap-2 text-2xl font-semibold tracking-tight"><AudioLinesIcon className="size-5 text-cyan-300" />Audio</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Playback, routing, and live signal health.</p>
+          <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">Audio</p>
+          <h2 className="mt-1 flex items-center gap-2 text-2xl font-semibold tracking-tight"><AudioLinesIcon className="size-5 text-cyan-300" aria-hidden="true" />Audio</h2>
         </div>
         <Link to="/setup/audio" aria-label="Open audio setup" className="inline-flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-background text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
           <Settings2Icon className="size-4" />
@@ -167,7 +154,7 @@ function AudioStatusPanelView({
         onRetryOutput={() => { void refreshBluetooth().catch(() => undefined) }}
       />
 
-      <section className="grid gap-3" aria-label="Audio routing status">
+      <section className="grid items-start gap-3 xl:grid-cols-2" aria-label="Audio routing status">
         <AudioSourceStatus
           configuredSource={configuredSource}
           activeSource={activeSource}
@@ -187,27 +174,16 @@ function AudioStatusPanelView({
         </section>
       </section>
 
-      {spotifySelected ? (
+      {spotifySelected && (
         settings
           ? <SpotifyControls key="spotify-player" initialStatus={settings.spotify} />
           : <Card className="border-white/5 bg-card/80"><CardContent className="py-4 text-sm text-muted-foreground">Spotify playback status is unavailable until audio settings load.</CardContent></Card>
-      ) : (
-        <Card className="border-white/5 bg-card/80">
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <CardTitle>{sourceHeading(activeSource, configuredSource)}</CardTitle>
-                <CardDescription className="mt-1">{sourceStatus}</CardDescription>
-              </div>
-              <Badge variant={monitoring || activeSource === "demo" ? "default" : "outline"}>{activeSource === "off" ? "Inactive" : activeSource === "demo" ? "Internal" : monitoring ? "Active" : "Unavailable"}</Badge>
-            </div>
-          </CardHeader>
-          {loading && <CardContent className="pt-0"><Skeleton className="h-2 w-full" /></CardContent>}
-        </Card>
       )}
 
-      <AudioControlVisualization telemetry={telemetry} fresh={streamFresh} silent={silent} />
-      <AudioMusicStructureSummary telemetry={telemetry} fresh={streamFresh} />
+      <section className="grid items-start gap-3 xl:grid-cols-2" aria-label="Live audio analysis">
+        <AudioControlVisualization telemetry={telemetry} fresh={streamFresh} silent={silent} />
+        <AudioMusicStructureSummary telemetry={telemetry} fresh={streamFresh} />
+      </section>
 
       <details
         className="group rounded-xl border border-white/10 bg-card/60"

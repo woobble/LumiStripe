@@ -17,14 +17,17 @@ describe("TransitionSettingsPanel", () => {
 
     render(<TransitionSettingsPanel controller={controller} disabled={false} />)
 
-    await user.click(screen.getByRole("button", { name: "Transitions" }))
+    expect(screen.getByRole("button", { name: "Animation transitions" })).not.toBeVisible()
+    await user.click(screen.getByText("Transitions"))
+    await user.click(screen.getByRole("button", { name: "Animation transitions" }))
 
     await waitFor(() => {
       expect(setTransitionSettings).toHaveBeenCalledWith(false, 300, "crossfade")
     })
   })
 
-  it("disables duration control while transitions are off", () => {
+  it("disables duration control while transitions are off", async () => {
+    const user = userEvent.setup()
     const controller = {
       state: {
         ...initialState,
@@ -34,6 +37,7 @@ describe("TransitionSettingsPanel", () => {
     } as unknown as DashboardController
 
     const { container } = render(<TransitionSettingsPanel controller={controller} disabled={false} />)
+    await user.click(screen.getByText("Transitions"))
 
     expect(container.querySelector<HTMLInputElement>('input[type="range"]')).toBeDisabled()
   })
@@ -46,6 +50,7 @@ describe("TransitionSettingsPanel", () => {
     } as unknown as DashboardController
 
     const { container } = render(<TransitionSettingsPanel controller={controller} disabled={false} />)
+    await userEvent.setup().click(screen.getByText("Transitions"))
     const slider = container.querySelector<HTMLInputElement>('input[type="range"]')
     expect(slider).not.toBeNull()
 
@@ -66,6 +71,7 @@ describe("TransitionSettingsPanel", () => {
 
     render(<TransitionSettingsPanel controller={controller} disabled={false} />)
 
+    await user.click(screen.getByText("Transitions"))
     await user.click(screen.getByRole("combobox", { name: "Transition effect" }))
     await user.click(await screen.findByRole("option", { name: "Fade through black" }))
 

@@ -17,6 +17,10 @@ const ControlPanel = lazy(async () => {
   const module = await import("@/components/dashboard/control-panel")
   return { default: module.ControlPanel }
 })
+const AdvancedPlaybackPage = lazy(async () => {
+  const module = await import("@/components/dashboard/advanced-playback-page")
+  return { default: module.AdvancedPlaybackPage }
+})
 const AudioStatusPanel = lazy(async () => {
   const module = await import("@/components/dashboard/audio-status-panel")
   return { default: module.AudioStatusPanel }
@@ -68,6 +72,7 @@ export function DashboardRoutes({
   return (
     <Routes>
       <Route path="/" element={<Suspense fallback={fallback}><ControlPanel controller={controller} /></Suspense>} />
+      <Route path="/playback" element={<Suspense fallback={fallback}><AdvancedPlaybackPage controller={controller} /></Suspense>} />
       <Route path="/audio" element={<Suspense fallback={fallback}><AudioStatusPanel
         audioStatus={controller.state?.audio_status ?? "Audio input status unavailable."}
         audioHealth={controller.state?.audio_health}

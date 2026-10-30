@@ -1,18 +1,14 @@
-import { lazy, memo, Suspense, useState } from "react"
-import type { ComponentProps } from "react"
-import { ActivityIcon, ChevronDownIcon, ListRestartIcon, Music2Icon, PaletteIcon, PowerIcon, RadioIcon, SunMediumIcon } from "lucide-react"
-import { HexColorPicker } from "react-colorful"
+import { lazy, Suspense, useState, type ComponentProps } from "react"
+import { Link } from "react-router"
+import { ActivityIcon, ListRestartIcon, Music2Icon, PaletteIcon, PowerIcon, RadioIcon, Settings2Icon, SunMediumIcon } from "lucide-react"
 
 import { AnimationSheet } from "@/components/dashboard/animation-sheet"
-import { SequencerPanel } from "@/components/dashboard/sequencer-panel"
-import { TransitionSettingsPanel } from "@/components/dashboard/transition-settings-panel"
+import { ColorControl } from "@/components/dashboard/color-control"
+import { StripeTargetSelector } from "@/components/dashboard/stripe-target-selector"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Slider } from "@/components/ui/slider"
 import { Toggle } from "@/components/ui/toggle"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { PreviewStreamProvider } from "@/hooks/preview-stream-provider"
 import { usePreviewStreamContext } from "@/hooks/preview-stream-context"
 import type { DashboardController } from "@/hooks/use-dashboard"
@@ -23,11 +19,11 @@ const LivePreview = lazy(async () => {
   return { default: module.LivePreview }
 })
 
-const modes: Array<{ value: PlaybackMode; label: string; icon: typeof RadioIcon }> = [
-  { value: "solid", label: "Solid", icon: PaletteIcon },
-  { value: "static", label: "Static", icon: RadioIcon },
-  { value: "cycling", label: "Cycle", icon: ListRestartIcon },
-  { value: "dynamic", label: "Music", icon: Music2Icon },
+const modes: Array<{ value: PlaybackMode; label: string; accessibleLabel: string; icon: typeof RadioIcon }> = [
+  { value: "solid", label: "Color", accessibleLabel: "Solid color", icon: PaletteIcon },
+  { value: "static", label: "Static", accessibleLabel: "Static animation", icon: RadioIcon },
+  { value: "cycling", label: "Cycle", accessibleLabel: "Cycling animations", icon: ListRestartIcon },
+  { value: "dynamic", label: "Music", accessibleLabel: "Music reactive", icon: Music2Icon },
 ]
 
 const firstSliderValue = (value: number | readonly number[]) =>
@@ -47,6 +43,7 @@ function StreamedLivePreview({
       frame={frame}
       connection={connection}
       onDisable={onDisable}
+      compact
     />
   )
 }
@@ -58,71 +55,12 @@ type StreamedAnimationSheetProps = Omit<
 
 function StreamedAnimationSheet(props: StreamedAnimationSheetProps) {
   const { frame, connection } = usePreviewStreamContext()
-  return (
-    <AnimationSheet
-      {...props}
-      previewFrame={frame}
-      previewConnection={connection}
-    />
-  )
+  return <AnimationSheet {...props} previewFrame={frame} previewConnection={connection} />
 }
-
-const solidPresets = ["#EF4444", "#F59E0B", "#22C55E", "#06B6D4", "#3B82F6", "#8B5CF6"]
-
-type SolidModeSectionProps = {
-  color: string
-  disabled: boolean
-  label: string
-  onCommit: (color: string) => Promise<boolean>
-}
-
-const SolidModeSection = memo(function SolidModeSection({ color, disabled, label, onCommit }: SolidModeSectionProps) {
-  const [colorDraft, setColorDraft] = useState<string | null>(null)
-  const [colorOpen, setColorOpen] = useState(false)
-
-  const commit = async (nextColor: string) => {
-    setColorDraft(nextColor)
-    const ok = await onCommit(nextColor)
-    if (ok) setColorDraft(null)
-    return ok
-  }
-
-  return (
-    <div className="space-y-3 rounded-xl border border-white/5 bg-black/20 p-3">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="text-sm font-medium">{label}</div>
-          <div className="text-xs text-muted-foreground">Tap the swatch to choose a color.</div>
-        </div>
-        <Popover open={colorOpen} onOpenChange={setColorOpen}>
-          <PopoverTrigger disabled={disabled} aria-label={`Choose ${label.toLowerCase()}`} className="size-12 shrink-0 rounded-xl border-2 border-white/15 shadow-lg" style={{ backgroundColor: colorDraft ?? color }} />
-          <PopoverContent className="w-64">
-            <HexColorPicker color={colorDraft ?? color} onChange={setColorDraft} />
-            <Button className="w-full" disabled={disabled} onClick={() => void commit(colorDraft ?? color).then((ok) => { if (ok) setColorOpen(false) })}>Apply color</Button>
-          </PopoverContent>
-        </Popover>
-      </div>
-      <div className="grid grid-cols-6 gap-2" aria-label={`${label} presets`}>
-        {solidPresets.map((preset) => (
-          <button
-            key={preset}
-            type="button"
-            aria-label={`Set ${label.toLowerCase()} ${preset}`}
-            disabled={disabled}
-            onClick={() => void commit(preset)}
-            className="aspect-square cursor-pointer rounded-full border-2 border-white/15 shadow-sm transition-transform active:scale-90 disabled:cursor-not-allowed disabled:opacity-50"
-            style={{ backgroundColor: preset }}
-          />
-        ))}
-      </div>
-    </div>
-  )
-})
 
 export function ControlPanel({ controller }: { controller: DashboardController }) {
   const { state, animations, pendingCommand } = controller
   const [brightnessDraft, setBrightnessDraft] = useState<number | null>(null)
-  const [idleBrightnessDraft, setIdleBrightnessDraft] = useState<number | null>(null)
   const [target, setTarget] = useState("all")
   const [previewEnabled, setPreviewEnabled] = useState(false)
   const [animationEditorVisible, setAnimationEditorVisible] = useState(false)
@@ -131,15 +69,13 @@ export function ControlPanel({ controller }: { controller: DashboardController }
   const disabled = !state.running || pendingCommand !== null
   const targetId = target === "all" ? undefined : target
   const targetPlayback = state.stripe_topology.layout === "independent"
-    ? (targetId
-        ? state.stripe_playback.find((item) => item.stripe_id === targetId)
-        : state.stripe_playback[0])
+    ? targetId
+      ? state.stripe_playback.find((item) => item.stripe_id === targetId)
+      : state.stripe_playback[0]
     : undefined
   const mode = targetPlayback?.mode ?? state.mode
   const solidColor = targetPlayback?.solid_color ?? state.solid_color
   const animation = targetPlayback?.animation ?? state.animation
-  const musicRecognitionEnabled = targetPlayback?.music_recognition_enabled ?? state.music_recognition_enabled ?? true
-  const musicIdle = targetPlayback?.music_idle ?? state.music_idle ?? { mode: "off" as const, color: "#2060FF", animation: "", brightness: 1 }
   const blackout = targetId
     ? (targetPlayback?.blackout ?? false)
     : state.stripe_topology.layout === "independent" && state.stripe_playback.length > 0
@@ -152,261 +88,201 @@ export function ControlPanel({ controller }: { controller: DashboardController }
     if (nextMode && nextMode !== mode) void controller.setMode(nextMode, targetId)
   }
 
-  const changeMusicRecognition = (enabled: boolean) => {
-    if (mode === "static" || mode === "cycling") {
-      void controller.setMode(mode, targetId, enabled)
-    }
-  }
-
-  const brightnessValue = (value: number | readonly number[]) =>
-    Array.isArray(value) ? value[0] : value
-
   const changeBrightness = (value: number | readonly number[]) => {
-    setBrightnessDraft(brightnessValue(value))
+    setBrightnessDraft(firstSliderValue(value))
   }
 
   const commitBrightness = async (value: number | readonly number[]) => {
-    const ok = await controller.setBrightness(brightnessValue(value) / 100, targetId)
+    const ok = await controller.setBrightness(firstSliderValue(value) / 100, targetId)
     if (ok) setBrightnessDraft(null)
   }
 
   return (
     <PreviewStreamProvider enabled={Boolean(previewEnabled && state.running)}>
-    <div className="space-y-4 pb-4">
-      {previewEnabled && !animationEditorVisible ? (
-        <Suspense fallback={<div className="h-64 animate-pulse rounded-2xl border border-white/5 bg-card/80" aria-label="Loading live preview" />}>
-          <StreamedLivePreview
-            state={state}
-            onDisable={() => setPreviewEnabled(false)}
-          />
-        </Suspense>
-      ) : (
-        <Button
-          variant="outline"
-          className="h-12 w-full justify-between rounded-2xl border-white/10 bg-card/50 px-4 shadow-lg shadow-black/5"
-          onClick={() => setPreviewEnabled(true)}
-          aria-label="Enable live preview"
-        >
-          <span className="flex items-center gap-2">
-            <ActivityIcon className="size-4 text-cyan-300" aria-hidden="true" />
-            Enable live preview
+      <div className="space-y-5 pb-5">
+        <header className="flex items-end justify-between gap-4">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">Lights</p>
+            <h2 className="mt-1 text-2xl font-semibold tracking-tight">Control</h2>
+          </div>
+          <span className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-card px-3 py-1.5 text-xs font-medium text-muted-foreground" role="status" aria-live="polite">
+            <span className={`size-2 rounded-full ${blackout || !state.running ? "bg-muted-foreground" : "bg-emerald-400"}`} aria-hidden="true" />
+            {blackout ? "Lights off" : state.running ? "Lights on" : "Controller stopped"}
           </span>
-          <span className="text-xs text-muted-foreground">Off by default</span>
-        </Button>
-      )}
-      {state.stripe_topology.layout === "independent" && state.stripe_topology.outputs.length > 0 && (
-        <section className="space-y-2" aria-labelledby="control-target-label">
-          <div className="flex items-center justify-between px-1 text-xs">
-            <span id="control-target-label" className="font-medium text-muted-foreground">Control target</span>
-            <span className="max-w-[55%] truncate text-violet-200">
-              {target === "all" ? "All stripes" : state.stripe_topology.outputs.find((stripe) => stripe.id === target)?.name}
-            </span>
-          </div>
-          <ToggleGroup
-            value={[target]}
-            onValueChange={(values) => {
-              if (!values[0]) return
-              setBrightnessDraft(null)
-              setTarget(values[0])
-            }}
-            variant="outline"
-            spacing={1}
-            className="grid w-full gap-1 rounded-xl border border-white/5 bg-black/20 p-1"
-            style={{ gridTemplateColumns: `repeat(${state.stripe_topology.outputs.length + 1}, minmax(0, 1fr))` }}
-            aria-label="Control target"
-          >
-            <ToggleGroupItem value="all" className="h-11 min-w-0 rounded-lg border-0 px-2 data-pressed:bg-violet-400/15 data-pressed:text-violet-100">All</ToggleGroupItem>
-            {state.stripe_topology.outputs.map((stripe) => (
-              <ToggleGroupItem
-                key={stripe.id}
-                value={stripe.id}
-                title={stripe.name}
-                className="h-11 min-w-0 truncate rounded-lg border-0 px-2 data-pressed:bg-violet-400/15 data-pressed:text-violet-100"
-              >
-                <span className="truncate">{stripe.name}</span>
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-        </section>
-      )}
-      <Toggle
-        pressed={blackout}
-        variant="outline"
-        size="lg"
-        className={blackout ? "h-14 w-full rounded-2xl border-red-300/30 bg-red-500/15 text-red-200 hover:bg-red-500/25 data-pressed:bg-red-500/20" : "h-14 w-full rounded-2xl border-emerald-300/30 bg-emerald-400 text-emerald-950 hover:bg-emerald-300 data-pressed:bg-emerald-300"}
-        disabled={disabled || pendingCommand !== null}
-        aria-label={blackout ? "Restore lights" : "Blackout"}
-        onPressedChange={(pressed) => void controller.setBlackout(pressed, targetId)}
-      >
-        <PowerIcon aria-hidden="true" />
-        {blackout ? "Restore lights" : "Blackout"}
-      </Toggle>
+        </header>
 
-      <Card className="border-white/5 bg-card/80 shadow-xl shadow-black/10 backdrop-blur-xl">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <SunMediumIcon className="size-4 text-amber-300" aria-hidden="true" />
-            Brightness
-          </CardTitle>
-          <CardDescription>Set the overall output level.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="mb-4 flex items-end justify-between">
-            <span className="text-4xl font-semibold tracking-tight tabular-nums">{brightness}%</span>
-            <span className="text-xs text-muted-foreground">Output</span>
-          </div>
-          <Slider
-            aria-label="Brightness"
-            min={0}
-            max={100}
-            step={1}
-            value={[brightness]}
-            disabled={disabled || pendingCommand === "brightness"}
-            onValueChange={changeBrightness}
-            onValueCommitted={(value) => void commitBrightness(value)}
-            className="py-4 [&_[data-slot=slider-track]]:h-2 [&_[data-slot=slider-range]]:bg-gradient-to-r [&_[data-slot=slider-range]]:from-violet-500 [&_[data-slot=slider-range]]:to-fuchsia-400 [&_[data-slot=slider-thumb]]:size-5 [&_[data-slot=slider-thumb]]:border-2 [&_[data-slot=slider-thumb]]:border-violet-300"
-          />
-        </CardContent>
-      </Card>
+        <StripeTargetSelector
+          state={state}
+          value={target}
+          onChange={(value) => {
+            setBrightnessDraft(null)
+            setTarget(value)
+          }}
+        />
 
-      <Card className="border-white/5 bg-card/80 shadow-xl shadow-black/10 backdrop-blur-xl">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <ActivityIcon className="size-4 text-cyan-300" aria-hidden="true" />
-            Playback
-          </CardTitle>
-          <CardDescription>Choose how LumiStripe changes over time.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <ToggleGroup
-            value={[mode]}
-            onValueChange={changeMode}
-            disabled={disabled || pendingCommand === "mode"}
-            variant="outline"
-            spacing={1}
-            className="grid w-full grid-cols-4 rounded-xl bg-black/20 p-1"
-            aria-label="Playback mode"
-          >
-            {modes.map(({ value, label, icon: Icon }) => (
-              <ToggleGroupItem
-                key={value}
-                value={value}
-                className="h-12 min-w-0 flex-col gap-0.5 rounded-lg border-0 px-1 text-xs data-pressed:bg-violet-400/15 data-pressed:text-violet-200 aria-pressed:bg-violet-400/15 aria-pressed:text-violet-200"
-              >
-                <Icon aria-hidden="true" />
-                {label}
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(19rem,0.8fr)]">
+          <div className="space-y-4">
+            <section className="rounded-2xl border border-border/70 bg-card p-4 sm:p-5" aria-label="Power and brightness">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="font-medium">Brightness</h3>
+                  <p className="mt-0.5 text-xs text-muted-foreground">Adjust the output for {target === "all" ? "your lights" : state.stripe_topology.outputs.find((stripe) => stripe.id === target)?.name ?? "this strip"}.</p>
+                </div>
+                <output className="text-3xl font-semibold tabular-nums tracking-tight" aria-label="Brightness level">{brightness}%</output>
+              </div>
+              <Slider
+                aria-label="Brightness"
+                min={0}
+                max={100}
+                step={1}
+                value={[brightness]}
+                disabled={disabled || pendingCommand === "brightness"}
+                onValueChange={changeBrightness}
+                onValueCommitted={(value) => void commitBrightness(value)}
+                className="mt-3 py-3 [&_[data-slot=slider-track]]:h-2 [&_[data-slot=slider-thumb]]:size-5"
+              />
+              <div className="mt-2 flex items-center justify-between gap-3 border-t border-border/60 pt-3">
+                <span className="text-xs text-muted-foreground" role="status" aria-live="polite">
+                  {pendingCommand ? "Applying change…" : blackout ? "Lights are off" : "Output level"}
+                </span>
+                <Toggle
+                  pressed={blackout}
+                  variant="outline"
+                  disabled={!state.running || pendingCommand !== null}
+                  aria-label={blackout ? "Turn lights on" : "Turn lights off"}
+                  onPressedChange={(pressed) => void controller.setBlackout(pressed, targetId)}
+                  className={blackout
+                    ? "h-10 rounded-xl border-border px-4"
+                    : "h-10 rounded-xl border-emerald-300/30 bg-emerald-400 px-4 text-emerald-950 hover:bg-emerald-300 data-pressed:bg-emerald-300"}
+                >
+                  <PowerIcon aria-hidden="true" />
+                  {blackout ? "Turn on" : "Turn off"}
+                </Toggle>
+              </div>
+            </section>
 
-          {(mode === "static" || mode === "cycling") && (
-            <div className="space-y-2 rounded-xl border border-white/5 bg-black/20 p-3">
-              <Toggle
-                pressed={musicRecognitionEnabled}
-                onPressedChange={changeMusicRecognition}
+            <section className="space-y-3 rounded-2xl border border-border/70 bg-card p-4 sm:p-5" aria-labelledby="playback-mode-heading">
+              <div className="flex items-center justify-between gap-3">
+                <h3 id="playback-mode-heading" className="font-medium">Playback mode</h3>
+                <Link to="/playback" className="inline-flex min-h-9 items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  <Settings2Icon className="size-4" aria-hidden="true" />
+                  More settings
+                </Link>
+              </div>
+              <ToggleGroup
+                value={[mode]}
+                onValueChange={changeMode}
                 disabled={disabled || pendingCommand === "mode"}
                 variant="outline"
-                className="h-11 w-full justify-between rounded-lg px-3 data-[state=on]:border-violet-300/40 data-[state=on]:bg-violet-400/15 data-[state=on]:text-violet-100"
-                aria-label="Music recognition"
+                spacing={1}
+                className="grid w-full grid-cols-2 gap-2 sm:grid-cols-4"
+                aria-label="Playback mode"
               >
-                <span>Music recognition</span>
-                <span className="text-xs text-muted-foreground">{musicRecognitionEnabled ? "On" : "Off"}</span>
-              </Toggle>
-              <p className="text-xs leading-relaxed text-muted-foreground">
-                Let live audio influence this animation without switching to Music mode.
-              </p>
-            </div>
-          )}
-
-          {mode === "dynamic" && (
-            <Collapsible defaultOpen={false} className="rounded-xl border border-white/5 bg-black/20 p-3">
-              <CollapsibleTrigger className="group flex w-full items-center justify-between text-left text-sm font-medium">
-                <span>When music is idle</span>
-                <ChevronDownIcon className="size-4 text-muted-foreground transition-transform group-data-[panel-open]:rotate-180" aria-hidden="true" />
-              </CollapsibleTrigger>
-              <CollapsibleContent className="pt-3">
-                <div className="space-y-3">
-              <div className="flex items-end justify-between">
-                <span className="text-lg font-semibold tabular-nums">{idleBrightnessDraft ?? Math.round(musicIdle.brightness * 100)}%</span>
-                <span className="text-xs text-muted-foreground">Idle brightness</span>
-              </div>
-              <Slider aria-label="Idle brightness" min={0} max={100} step={1} value={[idleBrightnessDraft ?? Math.round(musicIdle.brightness * 100)]} disabled={disabled || pendingCommand === "musicIdle"} onValueChange={(value) => setIdleBrightnessDraft(firstSliderValue(value))} onValueCommitted={(value) => {
-                const next = firstSliderValue(value)
-                setIdleBrightnessDraft(next)
-                void controller.setMusicIdle({ ...musicIdle, brightness: next / 100 }, targetId).finally(() => setIdleBrightnessDraft(null))
-              }} className="py-2 [&_[data-slot=slider-track]]:h-2 [&_[data-slot=slider-thumb]]:size-5" />
-              <ToggleGroup aria-label="Music idle mode" value={[musicIdle.mode]} onValueChange={(values) => {
-                const next = values[0] as "off" | "solid" | "animation" | undefined
-                if (next && next !== musicIdle.mode) void controller.setMusicIdle({ ...musicIdle, mode: next, animation: musicIdle.animation || animations[0]?.name || "" }, targetId)
-              }} className="grid w-full grid-cols-3 rounded-xl bg-black/20 p-1">
-                <ToggleGroupItem className="h-11 min-w-0 rounded-lg border-0 px-1 text-xs data-pressed:bg-violet-400/15 data-pressed:text-violet-200" value="off" disabled={disabled}>Off</ToggleGroupItem>
-                <ToggleGroupItem className="h-11 min-w-0 rounded-lg border-0 px-1 text-xs data-pressed:bg-violet-400/15 data-pressed:text-violet-200" value="solid" disabled={disabled}>Solid color</ToggleGroupItem>
-                <ToggleGroupItem className="h-11 min-w-0 rounded-lg border-0 px-1 text-xs data-pressed:bg-violet-400/15 data-pressed:text-violet-200" value="animation" disabled={disabled || animations.length === 0}>Animation</ToggleGroupItem>
+                {modes.map(({ value, label, accessibleLabel, icon: Icon }) => (
+                  <ToggleGroupItem
+                    key={value}
+                    value={value}
+                    aria-label={accessibleLabel}
+                    title={accessibleLabel}
+                    className="h-12 min-w-0 flex-col gap-1 rounded-xl border border-border/70 px-1 text-xs text-muted-foreground data-pressed:border-primary/40 data-pressed:bg-primary/10 data-pressed:text-foreground aria-pressed:border-primary/40 aria-pressed:bg-primary/10 aria-pressed:text-foreground"
+                  >
+                    <Icon aria-hidden="true" />
+                    {label}
+                  </ToggleGroupItem>
+                ))}
               </ToggleGroup>
-              {musicIdle.mode === "solid" && <SolidModeSection key={targetId ?? "all"} label="Idle color" color={musicIdle.color} disabled={disabled} onCommit={(color) => controller.setMusicIdle({ ...musicIdle, color }, targetId)} />}
-              {musicIdle.mode === "animation" && <StreamedAnimationSheet selectionOnly animations={animations} current={musicIdle.animation} disabled={disabled} stripeId={targetId} onSelect={(name) => controller.setMusicIdle({ ...musicIdle, animation: name }, targetId)} onLoadSettings={controller.getAnimationSettings} onSaveSettings={controller.setAnimationSettings} previewEnabled={false} previewTopology={state.stripe_topology} onEnablePreview={() => {}} onDisablePreview={() => {}} onEditorVisibilityChange={() => {}} />}
-                </div>
-              </CollapsibleContent>
-            </Collapsible>
-          )}
 
-          {mode === "solid" ? (
-            <SolidModeSection
-              key={targetId ?? "all"}
-              label="Solid color"
-              onCommit={(color) => controller.setSolidColor(color, targetId)}
-              color={solidColor}
-              disabled={disabled || pendingCommand === "solidColor"}
-            />
-          ) : (
-            <StreamedAnimationSheet
-              animations={animations}
-              current={animation}
-              disabled={disabled || pendingCommand === "animation"}
-              stripeId={targetId}
-              settingsDisabledReason={
-                state.stripe_topology.layout === "independent" && targetId === undefined
-                  ? "Choose a stripe to edit its animation settings."
-                  : undefined
-              }
-              onSelect={(name) => controller.selectAnimation(name, targetId)}
-              onLoadSettings={controller.getAnimationSettings}
-              onSaveSettings={controller.setAnimationSettings}
-              previewEnabled={previewEnabled}
-              previewTopology={state.stripe_topology}
-              onEnablePreview={() => setPreviewEnabled(true)}
-              onDisablePreview={() => setPreviewEnabled(false)}
-              onEditorVisibilityChange={setAnimationEditorVisible}
-            />
-          )}
-        </CardContent>
-      </Card>
-      <TransitionSettingsPanel
-        controller={controller}
-        disabled={!state.running || pendingCommand !== null}
-      />
-      <SequencerPanel
-        state={state}
-        target={target}
-        disabled={!state.running || pendingCommand !== null}
-        saving={pendingCommand === "sequencer"}
-        sequenceBusy={pendingCommand !== null}
-        sequenceSaving={pendingCommand === "sequence"}
-        animations={animations}
-        animationsLoading={controller.animationsLoading}
-        animationsError={controller.animationsError}
-        sequences={controller.sequences}
-        sequenceLoading={controller.sequenceLibraryLoading}
-        sequenceLoadError={controller.sequenceLibraryError}
-        sequenceActionError={controller.sequenceActionError}
-        onApply={controller.setSequencerSettings}
-        onRefreshSequences={controller.refreshSequences}
-        onCreateSequence={controller.createSequence}
-        onUpdateSequence={controller.updateSequence}
-        onDeleteSequence={controller.deleteSequence}
-        onSetActiveSequence={controller.setActiveSequence}
-      />
-    </div>
+              {mode === "solid" ? (
+                <ColorControl
+                  key={targetId ?? "all"}
+                  label="Solid color"
+                  color={solidColor}
+                  disabled={disabled || pendingCommand === "solidColor"}
+                  onCommit={(color) => controller.setSolidColor(color, targetId)}
+                />
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    <PaletteIcon className="size-4" aria-hidden="true" />
+                    Current animation
+                  </div>
+                  <StreamedAnimationSheet
+                    animations={animations}
+                    current={animation}
+                    disabled={disabled || pendingCommand === "animation"}
+                    stripeId={targetId}
+                    settingsDisabledReason={state.stripe_topology.layout === "independent" && targetId === undefined
+                      ? "Choose a stripe to edit its animation settings."
+                      : undefined}
+                    onSelect={(name) => controller.selectAnimation(name, targetId)}
+                    onLoadSettings={controller.getAnimationSettings}
+                    onSaveSettings={controller.setAnimationSettings}
+                    previewEnabled={previewEnabled}
+                    previewTopology={state.stripe_topology}
+                    onEnablePreview={() => setPreviewEnabled(true)}
+                    onDisablePreview={() => setPreviewEnabled(false)}
+                    onEditorVisibilityChange={setAnimationEditorVisible}
+                  />
+                </div>
+              )}
+            </section>
+          </div>
+
+          <aside className="space-y-4" aria-label="Live view and shortcuts">
+            {previewEnabled ? animationEditorVisible ? (
+              <div className="rounded-2xl border border-border/70 bg-card p-4 text-sm text-muted-foreground" role="status">
+                Live preview is shown in the animation editor while it is open.
+              </div>
+            ) : (
+              <Suspense fallback={<div className="h-40 animate-pulse rounded-2xl border border-border/70 bg-card" aria-label="Loading live preview" />}>
+                <StreamedLivePreview state={state} onDisable={() => setPreviewEnabled(false)} />
+              </Suspense>
+            ) : (
+              <section className="flex min-h-36 flex-col justify-between gap-4 rounded-2xl border border-border/70 bg-card p-4 sm:p-5">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2 font-medium">
+                      <ActivityIcon className="size-4 text-cyan-300" aria-hidden="true" />
+                      Live preview
+                    </div>
+                    <p className="mt-1 text-sm text-muted-foreground">See the output from your configured strips.</p>
+                  </div>
+                  <span className="rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">Off</span>
+                </div>
+                <Button
+                  variant="outline"
+                  className="h-10 w-full justify-between rounded-xl border-border/70 px-3"
+                  onClick={() => setPreviewEnabled(true)}
+                  disabled={!state.running}
+                  aria-label="Enable live preview"
+                >
+                  <span>{state.running ? "Enable live preview" : "Start the controller to preview"}</span>
+                  <ActivityIcon className="size-4" aria-hidden="true" />
+                </Button>
+              </section>
+            )}
+
+            <section className="rounded-2xl border border-border/70 bg-card p-4 sm:p-5">
+              <h3 className="font-medium">More controls</h3>
+              <div className="mt-3 divide-y divide-border/70">
+                <Link to="/playback" className="flex min-h-12 items-center justify-between gap-3 py-2 text-sm hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  <span>Transitions and sequences</span>
+                  <Settings2Icon className="size-4 text-muted-foreground" aria-hidden="true" />
+                </Link>
+                <Link to="/setup/stripes" className="flex min-h-12 items-center justify-between gap-3 py-2 text-sm hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  <span>Manage LED strips</span>
+                  <Settings2Icon className="size-4 text-muted-foreground" aria-hidden="true" />
+                </Link>
+              </div>
+            </section>
+
+            <div className="hidden items-center gap-2 px-1 text-xs text-muted-foreground xl:flex">
+              <SunMediumIcon className="size-4" aria-hidden="true" />
+              {state.stripe_topology.outputs.length} configured {state.stripe_topology.outputs.length === 1 ? "strip" : "strips"}
+            </div>
+          </aside>
+        </div>
+      </div>
     </PreviewStreamProvider>
   )
 }

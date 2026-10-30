@@ -342,10 +342,10 @@ describe("App", () => {
     const { container } = render(<App />, { wrapper: Router })
 
     expect(await screen.findByText(/aurora wave/i)).toBeInTheDocument()
-    expect(container.querySelectorAll("[data-slot=slider-thumb]")).toHaveLength(2)
-    await user.click(screen.getByRole("button", { name: "Blackout" }))
+    expect(container.querySelectorAll("[data-slot=slider-thumb]")).toHaveLength(1)
+    await user.click(screen.getByRole("button", { name: "Turn lights off" }))
 
-    expect(await screen.findByRole("button", { name: "Restore lights" })).toBeInTheDocument()
+    expect(await screen.findByRole("button", { name: "Turn lights on" })).toBeInTheDocument()
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/blackout",
       expect.objectContaining({ method: "POST", body: JSON.stringify({ enabled: true }) })
@@ -373,17 +373,31 @@ describe("App", () => {
     await waitFor(() => expect(screen.queryByTestId("live-preview")).not.toBeInTheDocument())
   })
 
-  it("keeps the routed bottom navigation fixed and evenly sized", async () => {
+  it("keeps transitions and sequences off the main controls but one step away", async () => {
+    const user = userEvent.setup()
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    const navigation = screen.getByRole("navigation", { name: "Dashboard" })
+    expect(screen.queryByText("Transitions")).not.toBeInTheDocument()
+    expect(screen.queryByText("Sequencer")).not.toBeInTheDocument()
+    await user.click(screen.getByRole("link", { name: "More settings" }))
+
+    expect(await screen.findByText("Transitions")).toBeInTheDocument()
+    expect(screen.getByText("Sequencer")).toBeInTheDocument()
+    expect(screen.getByRole("link", { name: "Back to lights" })).toHaveAttribute("href", "/")
+  })
+
+  it("uses compact mobile navigation and clear desktop destinations", async () => {
+    render(<App />, { wrapper: Router })
+    await screen.findByText(/aurora wave/i)
+
+    const navigation = screen.getByRole("navigation", { name: "Primary navigation" })
     expect(navigation).toHaveClass("grid-cols-4", "items-stretch")
-    expect(navigation.parentElement?.parentElement).toHaveClass("fixed", "inset-x-0", "bottom-0")
-    expect(screen.getByRole("link", { name: "Control" })).toHaveClass("w-full")
-    expect(screen.getByRole("link", { name: "Audio" })).toHaveClass("w-full")
-    expect(screen.getByRole("link", { name: "Setup" })).toHaveClass("w-full")
-    expect(screen.getByRole("link", { name: "Status" })).toHaveClass("w-full")
+    expect(navigation.closest("aside")).toHaveClass("fixed", "inset-x-0", "bottom-0", "lg:w-64")
+    expect(screen.getByRole("link", { name: "Lights" })).toHaveAttribute("href", "/")
+    expect(screen.getByRole("link", { name: "Audio" })).toHaveAttribute("href", "/audio")
+    expect(screen.getByRole("link", { name: "Devices" })).toHaveAttribute("href", "/setup")
+    expect(screen.getByRole("link", { name: "System" })).toHaveAttribute("href", "/diagnostics")
   })
 
   it("renders independent stripe targets as a full-width segmented control", async () => {
@@ -411,7 +425,7 @@ describe("App", () => {
     expect(targets).toHaveClass("grid", "w-full", "gap-1")
     expect(screen.getByRole("button", { name: "All" })).toHaveClass("border-0", "min-w-0")
     await user.click(screen.getByRole("button", { name: "Right" }))
-    expect(screen.getByText("Right", { selector: "span.text-violet-200" })).toBeInTheDocument()
+    expect(screen.getByText("Right", { selector: "span.text-foreground" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Right" })).toHaveAttribute("data-pressed")
     expect(screen.getByText("40%")).toBeInTheDocument()
   })
@@ -421,7 +435,7 @@ describe("App", () => {
     const { container } = render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("link", { name: "Setup" }))
+    await user.click(screen.getByRole("link", { name: "Devices" }))
     await user.click(await screen.findByRole("link", { name: "Color" }))
     expect(await screen.findByRole("heading", { name: "Color calibration" })).toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: "Start calibration" }))
@@ -446,7 +460,7 @@ describe("App", () => {
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("link", { name: "Setup" }))
+    await user.click(screen.getByRole("link", { name: "Devices" }))
     expect(await screen.findByText("Layout")).toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: "Add stripe" }))
     await user.click(screen.getByRole("button", { name: "Save & apply" }))
@@ -465,7 +479,7 @@ describe("App", () => {
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("link", { name: "Setup" }))
+    await user.click(screen.getByRole("link", { name: "Devices" }))
     const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
     await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
     await user.click(await screen.findByRole("combobox", { name: "Microphone input device" }))
@@ -484,7 +498,7 @@ describe("App", () => {
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("link", { name: "Setup" }))
+    await user.click(screen.getByRole("link", { name: "Devices" }))
     const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
     await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
     await user.click(await screen.findByRole("combobox", { name: "Microphone input device" }))
@@ -501,7 +515,7 @@ describe("App", () => {
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("link", { name: "Setup" }))
+    await user.click(screen.getByRole("link", { name: "Devices" }))
     const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
     await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
 
@@ -528,7 +542,7 @@ describe("App", () => {
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("link", { name: "Setup" }))
+    await user.click(screen.getByRole("link", { name: "Devices" }))
     const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
     await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
     await user.click(await screen.findByRole("combobox", { name: "Audio input source" }))
@@ -545,7 +559,7 @@ describe("App", () => {
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("link", { name: "Setup" }))
+    await user.click(screen.getByRole("link", { name: "Devices" }))
     const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
     await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
 
@@ -562,7 +576,7 @@ describe("App", () => {
     await user.tab()
     expect(within(audioNav).getByRole("link", { name: "Devices" })).toHaveFocus()
     await user.keyboard("{Enter}")
-    expect(await screen.findByRole("heading", { name: "Audio outputs" })).toBeInTheDocument()
+    expect(await screen.findByRole("heading", { name: "Audio output" })).toBeInTheDocument()
     expect(within(audioNav).getByRole("link", { name: "Devices" })).toHaveAttribute("aria-current", "page")
     await waitFor(() => expect(fetchMock.mock.calls.filter(([path]) => String(path) === "/api/audio/bluetooth").length).toBeGreaterThan(0))
     const bluetoothPolls = fetchMock.mock.calls.filter(([path]) => String(path) === "/api/audio/bluetooth").length
@@ -581,7 +595,7 @@ describe("App", () => {
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("link", { name: "Setup" }))
+    await user.click(screen.getByRole("link", { name: "Devices" }))
     const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
     await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
 
@@ -610,7 +624,7 @@ describe("App", () => {
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("link", { name: "Setup" }))
+    await user.click(screen.getByRole("link", { name: "Devices" }))
     const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
     await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
     const audioNav = await screen.findByRole("navigation", { name: "Audio setup sections" })
@@ -676,7 +690,7 @@ describe("App", () => {
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("link", { name: "Setup" }))
+    await user.click(screen.getByRole("link", { name: "Devices" }))
     const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
     await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
     const audioNav = await screen.findByRole("navigation", { name: "Audio setup sections" })
@@ -688,7 +702,7 @@ describe("App", () => {
       expect.objectContaining({ method: "POST", body: JSON.stringify({ active: true }) }),
     ))
     await user.click(within(audioNav).getByRole("link", { name: "Devices" }))
-    await screen.findByRole("heading", { name: "Audio outputs" })
+    await screen.findByRole("heading", { name: "Audio output" })
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       "/api/audio/sync-calibration",
       expect.objectContaining({ method: "POST", body: JSON.stringify({ active: false }) }),
@@ -700,7 +714,7 @@ describe("App", () => {
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("link", { name: "Setup" }))
+    await user.click(screen.getByRole("link", { name: "Devices" }))
     const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
     await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
     const audioNav = await screen.findByRole("navigation", { name: "Audio setup sections" })
@@ -732,7 +746,7 @@ describe("App", () => {
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("link", { name: "Setup" }))
+    await user.click(screen.getByRole("link", { name: "Devices" }))
     const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
     await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
     const audioNav = await screen.findByRole("navigation", { name: "Audio setup sections" })
@@ -758,7 +772,7 @@ describe("App", () => {
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("link", { name: "Setup" }))
+    await user.click(screen.getByRole("link", { name: "Devices" }))
     const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
     await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
     const audioNav = await screen.findByRole("navigation", { name: "Audio setup sections" })
@@ -774,7 +788,7 @@ describe("App", () => {
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("link", { name: "Setup" }))
+    await user.click(screen.getByRole("link", { name: "Devices" }))
     const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
     await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
     const audioNav = await screen.findByRole("navigation", { name: "Audio setup sections" })
@@ -813,7 +827,7 @@ describe("App", () => {
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("link", { name: "Setup" }))
+    await user.click(screen.getByRole("link", { name: "Devices" }))
     const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
     await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
     const audioNav = await screen.findByRole("navigation", { name: "Audio setup sections" })
@@ -825,7 +839,7 @@ describe("App", () => {
     ))
 
     await user.click(within(audioNav).getByRole("link", { name: "Devices" }))
-    await screen.findByRole("heading", { name: "Audio outputs" })
+    await screen.findByRole("heading", { name: "Audio output" })
     resolveStart?.(await jsonResponse({ start_at_ms: Date.now() + 250, sync_route: currentSyncRoute, sync_offset_ms: 0 }))
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
@@ -842,7 +856,7 @@ describe("App", () => {
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("link", { name: "Setup" }))
+    await user.click(screen.getByRole("link", { name: "Devices" }))
     const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
     await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
     const audioNav = await screen.findByRole("navigation", { name: "Audio setup sections" })
@@ -854,7 +868,7 @@ describe("App", () => {
     ))
 
     await user.click(within(audioNav).getByRole("link", { name: "Devices" }))
-    await screen.findByRole("heading", { name: "Audio outputs" })
+    await screen.findByRole("heading", { name: "Audio output" })
     await user.click(await screen.findByRole("combobox", { name: "Audio output device" }))
     await user.click(await screen.findByRole("option", { name: "Bluetooth Speaker · Bluetooth" }))
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
@@ -877,7 +891,7 @@ describe("App", () => {
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("link", { name: "Setup" }))
+    await user.click(screen.getByRole("link", { name: "Devices" }))
     const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
     await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
     const audioNav = await screen.findByRole("navigation", { name: "Audio setup sections" })
@@ -931,15 +945,13 @@ describe("App", () => {
     expect(await screen.findByText("Bluetooth input is disconnected or its audio stream is unavailable.")).toBeInTheDocument()
 
     emitAudioSourceState(5, "auto", "bluetooth", false)
-    expect(await screen.findByText("Automatic audio source")).toBeInTheDocument()
-    expect(screen.getByText("Configured source").parentElement).toHaveTextContent("Automatic")
+    expect(await screen.findByText("Bluetooth input is disconnected or its audio stream is unavailable.")).toBeInTheDocument()
 
     emitAudioSourceState(6, "demo", "demo", false)
     expect(await screen.findByText("Using the internal demo beat; no microphone capture is required.")).toBeInTheDocument()
 
     emitAudioSourceState(7, "off", "off", false)
-    expect(await screen.findByText("No active audio source")).toBeInTheDocument()
-    expect(screen.getByText("No audio source is active.")).toBeInTheDocument()
+    expect(await screen.findByText("No audio source is active.")).toBeInTheDocument()
   })
 
   it("shows Spotify artwork and controls only when playback is ready", async () => {
@@ -1010,7 +1022,7 @@ describe("App", () => {
     const user = userEvent.setup()
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
-    await user.click(screen.getByRole("link", { name: "Setup" }))
+    await user.click(screen.getByRole("link", { name: "Devices" }))
     const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
     await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
 
@@ -1162,7 +1174,7 @@ describe("App", () => {
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("link", { name: "Setup" }))
+    await user.click(screen.getByRole("link", { name: "Devices" }))
     const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
     await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
     const audioNav = await screen.findByRole("navigation", { name: "Audio setup sections" })
@@ -1186,7 +1198,7 @@ describe("App", () => {
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("link", { name: "Setup" }))
+    await user.click(screen.getByRole("link", { name: "Devices" }))
     const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
     await user.click(within(setupNav).getByRole("link", { name: "Startup" }))
     await user.click(await screen.findByRole("button", { name: "Restore last state off" }))
@@ -1203,9 +1215,10 @@ describe("App", () => {
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("link", { name: "Setup" }))
+    await user.click(screen.getByRole("link", { name: "Devices" }))
     expect(await screen.findByRole("group", { name: "Stripe layout" })).toHaveClass("w-full")
 
+    await user.click(screen.getByText("Zones, wiring, calibration and power"))
     await user.click(screen.getByRole("button", { name: "Reverse direction off" }))
     expect(screen.getByRole("button", { name: "Reverse direction on" })).toHaveAttribute("data-pressed")
     expect(screen.getByText("On")).toBeInTheDocument()
@@ -1239,7 +1252,7 @@ describe("App", () => {
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("link", { name: "Setup" }))
+    await user.click(screen.getByRole("link", { name: "Devices" }))
     await user.click(await screen.findByRole("button", { name: "Add stripe" }))
 
     expect(screen.getByDisplayValue("Stripe 1")).toBeInTheDocument()
@@ -1252,7 +1265,7 @@ describe("App", () => {
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("button", { name: /Animation/i }))
+    await user.click(screen.getByRole("button", { name: "Animation Aurora Wave. Change" }))
     const search = await screen.findByRole("searchbox", { name: "Search animations" })
     await user.type(search, "bass heavy")
 
@@ -1271,7 +1284,7 @@ describe("App", () => {
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("button", { name: "Solid" }))
+    await user.click(screen.getByRole("button", { name: "Solid color" }))
     const preset = await screen.findByRole("button", { name: "Set solid color #EF4444" })
     await user.click(preset)
 
@@ -1296,21 +1309,16 @@ describe("App", () => {
     const user = userEvent.setup()
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
-    await user.click(screen.getByRole("button", { name: "Music" }))
-    const idleOptionsToggle = await screen.findByRole("button", { name: "When music is idle" })
-    expect(idleOptionsToggle).toHaveAttribute("aria-expanded", "false")
-    expect(screen.queryByText("Idle brightness")).not.toBeInTheDocument()
-    await user.click(idleOptionsToggle)
-    expect(idleOptionsToggle).toHaveAttribute("aria-expanded", "true")
+    await user.click(screen.getByRole("button", { name: "Music reactive" }))
+    expect(screen.queryByText("When music is idle")).not.toBeInTheDocument()
+    await user.click(screen.getByRole("link", { name: "More settings" }))
+    expect(await screen.findByRole("heading", { name: "Advanced settings" })).toBeInTheDocument()
+    expect(screen.getByText("When music is idle")).toBeInTheDocument()
+    expect(screen.getByText("Idle brightness")).toBeInTheDocument()
     await user.click(await screen.findByRole("button", { name: "Solid color" }))
     await user.click(await screen.findByRole("button", { name: "Set idle color #EF4444" }))
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/music-idle", expect.objectContaining({ body: expect.stringContaining('"color":"#EF4444"') })))
     expect(screen.getByRole("button", { name: "Choose idle color" })).toBeInTheDocument()
-
-    expect(screen.getByText("Idle brightness")).toBeInTheDocument()
-    await user.click(idleOptionsToggle)
-    expect(idleOptionsToggle).toHaveAttribute("aria-expanded", "false")
-    expect(screen.queryByText("Idle brightness")).not.toBeInTheDocument()
   })
 
   it("navigates to the diagnostics page and shows runtime health", async () => {
@@ -1318,9 +1326,10 @@ describe("App", () => {
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("link", { name: "Status" }))
+    await user.click(screen.getByRole("link", { name: "System" }))
 
     expect(await screen.findByRole("heading", { name: "Diagnostics" })).toBeInTheDocument()
+    await user.click(screen.getByText("Technical details"))
     expect(screen.getByText("1m 5s")).toBeInTheDocument()
     expect(screen.getByText("20.0 FPS")).toBeInTheDocument()
     expect(screen.getByText("0.1.0")).toBeInTheDocument()
@@ -1334,9 +1343,10 @@ describe("App", () => {
 
     const { power_budget: _powerBudget, ...legacyState } = initialState
     act(() => MockWebSocket.instances[0].emit({ ...legacyState, revision: 2 }))
-    await user.click(screen.getByRole("link", { name: "Status" }))
+    await user.click(screen.getByRole("link", { name: "System" }))
 
     expect(await screen.findByRole("heading", { name: "Diagnostics" })).toBeInTheDocument()
+    await user.click(screen.getByText("Technical details"))
     expect(screen.getByText("Power limiting is disabled.")).toBeInTheDocument()
   })
 
@@ -1457,7 +1467,7 @@ describe("App", () => {
     render(<App />, { wrapper: Router })
     await screen.findByText(/aurora wave/i)
 
-    await user.click(screen.getByRole("link", { name: "Setup" }))
+    await user.click(screen.getByRole("link", { name: "Devices" }))
     const setupNav = await screen.findByRole("navigation", { name: "Setup sections" })
     await user.click(within(setupNav).getByRole("link", { name: "Audio" }))
     const audioNav = await screen.findByRole("navigation", { name: "Audio setup sections" })

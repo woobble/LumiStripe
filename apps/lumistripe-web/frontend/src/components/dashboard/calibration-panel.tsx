@@ -214,13 +214,13 @@ export function CalibrationPanel({ controller }: { controller: DashboardControll
   }
 
   return (
-    <div className="space-y-4 pb-4">
-      <div>
+    <div className="grid items-start gap-4 pb-5 xl:grid-cols-2">
+      <div className="xl:col-span-2">
         <h2 className="text-lg font-semibold">Color calibration</h2>
         <p className="text-sm text-muted-foreground">Balance each strip using full-brightness test patterns.</p>
       </div>
 
-      <Card className="border-white/5 bg-card/80 shadow-xl shadow-black/10 backdrop-blur-xl">
+      <Card className="border-border/70 bg-card shadow-none">
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><PaletteIcon className="size-4 text-fuchsia-300" aria-hidden="true" />Output</CardTitle>
           <CardDescription>Select the strip whose white balance you want to correct.</CardDescription>
@@ -242,7 +242,7 @@ export function CalibrationPanel({ controller }: { controller: DashboardControll
       </Card>
 
       {!sessionId ? (
-        <Card className="border-white/5 bg-card/80 shadow-xl shadow-black/10 backdrop-blur-xl">
+        <Card className="border-border/70 bg-card shadow-none">
           <CardHeader>
             <CardTitle>Guided calibration</CardTitle>
             <CardDescription>{activeElsewhere ? "Calibration is active in another browser. It will restore automatically if abandoned." : "Normal playback will pause. The selected strip starts white while every other output turns off."}</CardDescription>
@@ -260,7 +260,7 @@ export function CalibrationPanel({ controller }: { controller: DashboardControll
         </Card>
       ) : draft && (
         <>
-          <Card className="border-white/5 bg-card/80 shadow-xl shadow-black/10 backdrop-blur-xl">
+          <Card className="border-border/70 bg-card shadow-none">
             <CardHeader><CardTitle>Test pattern</CardTitle><CardDescription>Patterns bypass normal brightness while calibration is active.</CardDescription></CardHeader>
             <CardContent>
               <ToggleGroup value={[pattern]} onValueChange={changePattern} disabled={busy} variant="outline" spacing={1} className="grid w-full grid-cols-4 rounded-xl bg-black/20 p-1" aria-label="Calibration test pattern">
@@ -273,7 +273,7 @@ export function CalibrationPanel({ controller }: { controller: DashboardControll
             </CardContent>
           </Card>
 
-          <Card className="border-white/5 bg-card/80 shadow-xl shadow-black/10 backdrop-blur-xl">
+          <Card className="border-border/70 bg-card shadow-none">
             <CardHeader><CardTitle>Channel gains</CardTitle><CardDescription>Lower dominant channels until white looks neutral.</CardDescription></CardHeader>
             <CardContent className="space-y-6">
               {channels.map((channel) => (
@@ -286,7 +286,7 @@ export function CalibrationPanel({ controller }: { controller: DashboardControll
             </CardContent>
           </Card>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-3 xl:col-span-2 xl:max-w-lg xl:justify-self-end">
             <Button variant="outline" className="h-12 rounded-xl" disabled={busy} onClick={() => void finish(false)}><XIcon aria-hidden="true" />Cancel</Button>
             <Button className="h-12 rounded-xl" disabled={busy} onClick={() => void handleCorrectionSubmit(() => finish(true))()}><SaveIcon aria-hidden="true" />Save profile</Button>
           </div>

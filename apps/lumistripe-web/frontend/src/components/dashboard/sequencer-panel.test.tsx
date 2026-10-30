@@ -23,7 +23,7 @@ describe("SequencerPanel", () => {
     onSetActiveSequence: vi.fn().mockResolvedValue(true),
   }
 
-  it("applies a preset and phrase length, showing estimated-grid diagnostics", async () => {
+  it("shows beat diagnostics on request and saves phrase timing", async () => {
     const user = userEvent.setup()
     const onApply = vi.fn().mockResolvedValue(true)
     const state = {
@@ -60,15 +60,17 @@ describe("SequencerPanel", () => {
       />,
     )
 
+    expect(screen.getByText("Clock confidence 87%")).not.toBeVisible()
+    await user.click(screen.getByText("Beat timing details"))
     expect(screen.getByText("Clock confidence 87%")).toBeInTheDocument()
     expect(screen.getByText("Bar and phrase positions use an estimated 4/4 grid anchored to the first observed beat.")).toBeInTheDocument()
     expect(screen.getByText("bass_pulse")).toBeInTheDocument()
 
-    await user.click(screen.getByRole("button", { name: "Every Bar preset" }))
+    await user.click(screen.getByRole("button", { name: "Phrase" }))
     await user.click(screen.getByRole("button", { name: "16 bars" }))
-    await user.click(screen.getByRole("button", { name: "Apply and save sequencer settings" }))
+    await user.click(screen.getByRole("button", { name: "Save sequencer timing" }))
 
-    await waitFor(() => expect(onApply).toHaveBeenCalledWith("bar", 16))
+    await waitFor(() => expect(onApply).toHaveBeenCalledWith("phrase", 16))
   })
 
   it("shows every independent output for All and only the selected output when targeted", () => {
@@ -103,6 +105,7 @@ describe("SequencerPanel", () => {
     }
 
     const view = render(<SequencerPanel {...props} target="all" />)
+    fireEvent.click(screen.getByText("Beat timing details"))
     expect(screen.getByRole("region", { name: "Left sequencer status" })).toBeInTheDocument()
     expect(screen.getByRole("region", { name: "Right sequencer status" })).toBeInTheDocument()
 
@@ -124,10 +127,10 @@ describe("SequencerPanel", () => {
       />,
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Every Phrase preset" }))
-    fireEvent.click(screen.getByRole("button", { name: "Apply and save sequencer settings" }))
+    fireEvent.click(screen.getByRole("button", { name: "Phrase" }))
+    fireEvent.click(screen.getByRole("button", { name: "Save sequencer timing" }))
 
     await waitFor(() => expect(onApply).toHaveBeenCalledWith("phrase", 8))
-    expect(screen.getByRole("button", { name: "Apply and save sequencer settings" })).toBeEnabled()
+    expect(screen.getByRole("button", { name: "Save sequencer timing" })).toBeEnabled()
   })
 })

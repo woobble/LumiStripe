@@ -1,6 +1,6 @@
 import { useState } from "react"
+import { ChevronDownIcon } from "lucide-react"
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Slider } from "@/components/ui/slider"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Toggle } from "@/components/ui/toggle"
@@ -20,6 +20,11 @@ export function TransitionSettingsPanel({ controller, disabled }: TransitionSett
   }
   const [durationDraft, setDurationDraft] = useState<number | null>(null)
   const duration = durationDraft ?? settings.duration_ms
+  const effectLabel = settings.effect === "fade_black"
+    ? "Fade through black"
+    : settings.effect === "wipe"
+      ? "Wipe"
+      : "Crossfade"
 
   const apply = async (enabled: boolean, durationMs: number, effect: TransitionEffect) => {
     const applied = await controller.setTransitionSettings(enabled, durationMs, effect)
@@ -36,19 +41,24 @@ export function TransitionSettingsPanel({ controller, disabled }: TransitionSett
   }
 
   return (
-    <Card className="border-white/5 bg-card/80 shadow-xl shadow-black/10 backdrop-blur-xl">
-      <CardHeader>
-        <CardTitle>Transitions</CardTitle>
-        <CardDescription>Choose how animations transition when they change.</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <details className="group overflow-hidden rounded-2xl border border-border/70 bg-card">
+      <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-5">
+        <span>
+          <span className="block font-medium">Transitions</span>
+          <span className="mt-0.5 block text-sm text-muted-foreground">
+            {settings.enabled ? "On" : "Off"} · {effectLabel} · {duration} ms
+          </span>
+        </span>
+        <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" aria-hidden="true" />
+      </summary>
+      <div className="space-y-4 border-t border-border/70 p-4 sm:p-5">
         <Toggle
           pressed={settings.enabled}
           onPressedChange={(enabled) => void apply(enabled, settings.duration_ms, settings.effect)}
           disabled={disabled}
           variant="outline"
-          className="h-11 w-full justify-between rounded-lg px-3 data-[state=on]:border-violet-300/40 data-[state=on]:bg-violet-400/15 data-[state=on]:text-violet-100"
-          aria-label="Transitions"
+          className="h-11 w-full justify-between rounded-xl px-3 data-pressed:border-primary/40 data-pressed:bg-primary/10 data-pressed:text-foreground"
+          aria-label="Animation transitions"
         >
           <span>Animation transitions</span>
           <span className="text-xs text-muted-foreground">{settings.enabled ? "On" : "Off"}</span>
@@ -95,7 +105,7 @@ export function TransitionSettingsPanel({ controller, disabled }: TransitionSett
             <span>Slow (1500 ms)</span>
           </div>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </details>
   )
 }

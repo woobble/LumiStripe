@@ -55,9 +55,9 @@ function StartupPanelView() {
 
   const restore = watch("restore_last_state")
   return (
-    <SetupPage>
+    <SetupPage className="max-w-4xl">
       {!settings ? <Skeleton className="h-64 rounded-xl" /> : (
-        <Card className="border-white/5 bg-card/80">
+        <Card className="border-border/70 bg-card shadow-none">
           <CardHeader>
             <CardTitle className="flex items-center gap-2"><RotateCcwIcon className="size-4 text-violet-300" />Restore last state</CardTitle>
             <CardDescription>Resume the last controls applied to All stripes after LumiStripe restarts.</CardDescription>

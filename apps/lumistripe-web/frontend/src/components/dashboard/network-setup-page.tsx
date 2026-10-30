@@ -124,8 +124,8 @@ export function NetworkSetupPage() {
   }
 
   return (
-    <SetupPage>
-      <Card className="border-white/5 bg-card/80">
+    <SetupPage className="max-w-4xl">
+      <Card className="border-border/70 bg-card shadow-none">
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><WifiIcon aria-hidden="true" className="size-4" /> Internet Wi-Fi</CardTitle>
           <CardDescription>Connect the internet adapter to Wi-Fi for updates. The hotspot used by dashboard devices stays on its own adapter.</CardDescription>

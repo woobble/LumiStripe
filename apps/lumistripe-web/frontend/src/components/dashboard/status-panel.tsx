@@ -2,6 +2,7 @@ import {
   ActivityIcon,
   AudioLinesIcon,
   CheckCircle2Icon,
+  ChevronDownIcon,
   CircleAlertIcon,
   Clock3Icon,
   CpuIcon,
@@ -19,6 +20,7 @@ import {
   WrenchIcon,
   ZapIcon,
 } from "lucide-react"
+import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 
 import { ConnectionBadge } from "@/components/dashboard/connection-badge"
@@ -113,12 +115,13 @@ function Issue({ issue }: { issue: DiagnosticIssue }) {
 
 export function StatusPanel({ controller, onLogout }: { controller: DashboardController; onLogout?: () => Promise<void> }) {
   const { state, connection } = controller
+  const [technicalOpen, setTechnicalOpen] = useState(false)
   const systemStatsQuery = useQuery({
     queryKey: ["system-stats"],
     queryFn: dashboardApi.getSystemStats,
-    enabled: state?.runtime === "hardware",
+    enabled: state?.runtime === "hardware" && technicalOpen,
     staleTime: 0,
-    refetchInterval: state?.runtime === "hardware" ? 5000 : false,
+    refetchInterval: state?.runtime === "hardware" && technicalOpen ? 5000 : false,
     refetchIntervalInBackground: false,
     retry: false,
   })
@@ -132,11 +135,11 @@ export function StatusPanel({ controller, onLogout }: { controller: DashboardCon
   return (
     <div className="space-y-4 pb-4">
       <div>
-        <h2 className="text-lg font-semibold">Diagnostics</h2>
-        <p className="text-sm text-muted-foreground">Runtime health and troubleshooting details.</p>
+        <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">System</p>
+        <h2 className="mt-1 text-2xl font-semibold tracking-tight">Diagnostics</h2>
       </div>
 
-      <Card className="border-white/5 bg-card/80 shadow-xl shadow-black/10 backdrop-blur-xl">
+      <Card className="border-border/70 bg-card shadow-none">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             {state.diagnostic_issues.length === 0 ? (
@@ -152,17 +155,35 @@ export function StatusPanel({ controller, onLogout }: { controller: DashboardCon
               : `${state.diagnostic_issues.length} item${state.diagnostic_issues.length === 1 ? "" : "s"} need attention.`}
           </CardDescription>
         </CardHeader>
-        {state.diagnostic_issues.length > 0 && (
-          <CardContent className="space-y-3">
-            {state.diagnostic_issues.map((issue, index) => (
-              <Issue key={`${issue.title}-${index}`} issue={issue} />
-            ))}
-          </CardContent>
-        )}
+        <CardContent className="space-y-3">
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-border/70 bg-muted/30 px-3 py-2.5">
+            <span className="text-sm">{state.running ? "Controller running" : "Controller stopped"}</span>
+            <ConnectionBadge status={connection} />
+          </div>
+          {state.diagnostic_issues.length > 0 && state.diagnostic_issues.map((issue, index) => (
+            <Issue key={`${issue.title}-${index}`} issue={issue} />
+          ))}
+        </CardContent>
       </Card>
 
-      {state.runtime === "hardware" && (
-        <Card className="border-white/5 bg-card/80 shadow-xl shadow-black/10 backdrop-blur-xl">
+      <details open={technicalOpen} className="group overflow-hidden rounded-2xl border border-border/70 bg-card">
+        <summary
+          aria-expanded={technicalOpen}
+          onClick={(event) => {
+            event.preventDefault()
+            setTechnicalOpen((open) => !open)
+          }}
+          className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-5"
+        >
+          <span>
+            <span className="block font-medium">Technical details</span>
+            <span className="mt-0.5 block text-sm text-muted-foreground">Runtime, power, audio, and host metrics</span>
+          </span>
+          <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" aria-hidden="true" />
+        </summary>
+        {technicalOpen && <div className="grid items-start gap-4 border-t border-border/70 p-3 sm:p-4 xl:grid-cols-2">
+        {state.runtime === "hardware" && (
+        <Card className="border-border/70 bg-card shadow-none">
           <CardHeader>
             <CardTitle className="flex items-center gap-2"><ActivityIcon className="size-4 text-emerald-300" aria-hidden="true" />System resources</CardTitle>
             <CardDescription>
@@ -189,7 +210,7 @@ export function StatusPanel({ controller, onLogout }: { controller: DashboardCon
         </Card>
       )}
 
-      <Card className="border-white/5 bg-card/80 shadow-xl shadow-black/10 backdrop-blur-xl">
+      <Card className="border-border/70 bg-card shadow-none">
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><ZapIcon className="size-4 text-amber-300" aria-hidden="true" />Power budget</CardTitle>
           <CardDescription>
@@ -215,7 +236,7 @@ export function StatusPanel({ controller, onLogout }: { controller: DashboardCon
         </CardContent>
       </Card>
 
-      <Card className="border-white/5 bg-card/80 shadow-xl shadow-black/10 backdrop-blur-xl">
+      <Card className="border-border/70 bg-card shadow-none">
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><CpuIcon className="size-4 text-violet-300" aria-hidden="true" />Runtime</CardTitle>
           <CardDescription>Backend, renderer, and output status.</CardDescription>
@@ -236,14 +257,10 @@ export function StatusPanel({ controller, onLogout }: { controller: DashboardCon
               {state.output_devices.length > 0 ? state.output_devices.join(", ") : "In-memory controller"}
             </p>
           </div>
-          <div className="col-span-2 flex items-center justify-between rounded-xl bg-white/[0.035] p-3">
-            <span className="text-xs text-muted-foreground">Live connection</span>
-            <ConnectionBadge status={connection} />
-          </div>
         </CardContent>
       </Card>
 
-      <Card className="border-white/5 bg-card/80 shadow-xl shadow-black/10 backdrop-blur-xl">
+      <Card className="border-border/70 bg-card shadow-none">
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><AudioLinesIcon className="size-4 text-fuchsia-300" aria-hidden="true" />Audio input</CardTitle>
           <CardDescription>{state.audio_status}</CardDescription>
@@ -266,9 +283,11 @@ export function StatusPanel({ controller, onLogout }: { controller: DashboardCon
           </div>
         </CardContent>
       </Card>
+        </div>}
+      </details>
 
       {onLogout && (
-        <Card className="border-white/5 bg-card/80 shadow-xl shadow-black/10 backdrop-blur-xl">
+        <Card className="border-border/70 bg-card shadow-none">
           <CardHeader>
             <CardTitle className="flex items-center gap-2"><ShieldCheckIcon className="size-4 text-emerald-300" aria-hidden="true" />Access</CardTitle>
             <CardDescription>This phone is paired using a protected session cookie.</CardDescription>

@@ -354,7 +354,7 @@ export function AudioTelemetryCards({
 
   return (
     <>
-      <Card className="border-white/5 bg-card/80 shadow-xl shadow-black/10 backdrop-blur-xl">
+      <Card className="border-border/70 bg-card shadow-none">
         <CardHeader className="grid-cols-1 @sm/card-header:grid-cols-[minmax(0,1fr)_auto]">
           <div className="min-w-0">
             <CardTitle className="flex items-center gap-2"><GaugeIcon className="size-4 text-cyan-300" />Live input</CardTitle>

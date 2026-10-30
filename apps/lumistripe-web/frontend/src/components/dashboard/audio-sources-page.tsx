@@ -60,8 +60,10 @@ export function AudioSourcesPage({
       <LiveAudioSourceStatus settings={settings} configuredAudioSource={configuredAudioSource} activeAudioSource={activeAudioSource} audioMonitoring={audioMonitoring} />
       <p className="-mt-2 px-1 text-xs text-muted-foreground">Configured source is your selection. Active source shows what is currently feeding audio analysis; automatic mode may fall back to the selected microphone.</p>
       {settings.error && <p role="alert" className="rounded-xl bg-red-500/10 p-3 text-sm text-red-200">{settings.error}</p>}
-      <AudioSourceControls settings={settings} disabled={loading || saving} onDirtyChange={setSourceDirty} onSave={saveSource} />
-      <MicrophoneInputControls settings={settings} loading={loading || saving} onDirtyChange={setMicrophoneDirty} onRefresh={refreshSettings} onSave={saveMicrophone} />
+      <div className="grid items-start gap-4 xl:grid-cols-2">
+        <AudioSourceControls settings={settings} disabled={loading || saving} onDirtyChange={setSourceDirty} onSave={saveSource} />
+        <MicrophoneInputControls settings={settings} loading={loading || saving} onDirtyChange={setMicrophoneDirty} onRefresh={refreshSettings} onSave={saveMicrophone} />
+      </div>
       <div className="space-y-2">
         <h3 className="px-1 text-sm font-semibold">Spotify Connect</h3>
         <SpotifySetupStatus status={settings.spotify} />

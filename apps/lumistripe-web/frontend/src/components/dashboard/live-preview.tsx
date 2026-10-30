@@ -15,11 +15,13 @@ export function LivePreview({
   frame,
   connection,
   onDisable,
+  compact = false,
 }: {
   state: DashboardState
   frame: PreviewFrame | null
   connection: PreviewConnectionStatus
   onDisable?: () => void
+  compact?: boolean
 }) {
   const [rendererStatus, setRendererStatus] = useState<PreviewRendererStatus>("initializing")
   const [rendererDetail, setRendererDetail] = useState<string | null>(null)
@@ -30,16 +32,18 @@ export function LivePreview({
     setRendererDetail(detail)
   }, [])
 
-  const frameStatus = connection === "connected" && frame
-    ? "Live"
-    : connection === "reconnecting" ? "Reconnecting" : "Connecting"
+  const frameStatus = !state.running
+    ? "Stopped"
+    : connection === "connected" && frame
+      ? "Live"
+      : connection === "reconnecting" ? "Reconnecting" : "Connecting"
   const rendererLabel = rendererStatus === "webgpu"
     ? "WebGPU"
     : rendererStatus === "canvas" ? "Canvas fallback" : rendererStatus === "unsupported" ? "Unavailable" : "Starting"
 
   return (
-    <Card className="border-white/5 bg-card/80 shadow-xl shadow-black/10 backdrop-blur-xl" data-testid="live-preview">
-      <CardHeader>
+    <Card className={compact ? "gap-2 border-border/70 bg-card p-3 shadow-none" : "border-border/70 bg-card shadow-none"} data-testid="live-preview">
+      <CardHeader className={compact ? "px-0" : undefined}>
         <CardTitle className="flex items-center justify-between gap-3">
           <span className="flex items-center gap-2">
             <ActivityIcon className="size-4 text-cyan-300" aria-hidden="true" />
@@ -61,14 +65,15 @@ export function LivePreview({
             )}
           </span>
         </CardTitle>
-        <CardDescription>Preview the currently applied LED output.</CardDescription>
+        {!compact && <CardDescription>Preview the currently applied LED output.</CardDescription>}
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className={compact ? "space-y-2 px-0" : "space-y-3"}>
         <div className="relative overflow-hidden rounded-xl border border-white/10 bg-black/40" data-testid="preview-stage">
           <PreviewCanvas
             frame={frame}
             topology={state.stripe_topology}
             onRendererStatus={handleRendererStatus}
+            className={compact ? "block aspect-[3.2/1] min-h-28 w-full" : undefined}
           />
           {(labels.length > 1 || zoneBoundaries.length > 0) && (
             <div className="pointer-events-none absolute inset-0" aria-hidden="true">
@@ -95,11 +100,13 @@ export function LivePreview({
 
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <Badge variant="outline"><RadioIcon aria-hidden="true" />{rendererLabel}</Badge>
-          {state.stripe_topology.outputs.map((output) => (
+          {!compact && state.stripe_topology.outputs.map((output) => (
             <Badge key={output.id} variant="outline">{output.name} · {output.pixels}px</Badge>
           ))}
-          {state.stripe_topology.outputs.length === 0 && <span>No outputs configured.</span>}
+          {!compact && state.stripe_topology.outputs.length === 0 && <span>No outputs configured.</span>}
         </div>
+
+        {!state.running && <p className="text-xs text-muted-foreground" role="status">The controller is stopped. Start it to see live LED output.</p>}
 
         {rendererStatus === "canvas" && rendererDetail && (
           <p className="text-xs text-muted-foreground" role="status">{rendererDetail}</p>

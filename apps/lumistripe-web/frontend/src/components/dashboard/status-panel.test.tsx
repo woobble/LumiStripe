@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { act, render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { StatusPanel } from "@/components/dashboard/status-panel"
@@ -48,6 +48,7 @@ describe("StatusPanel system resources", () => {
     const getSystemStats = vi.spyOn(dashboardApi, "getSystemStats").mockResolvedValue(systemStats)
     vi.useFakeTimers()
     const view = renderStatus("hardware")
+    fireEvent.click(screen.getByText("Technical details"))
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0)
@@ -78,7 +79,7 @@ describe("StatusPanel system resources", () => {
     expect(getSystemStats).toHaveBeenCalledTimes(2)
   })
 
-  it("shows shared supply capacity, Pi reserve, and available LED power", () => {
+  it("shows shared supply capacity, Pi reserve, and available LED power on request", () => {
     renderStatus("simulation", {
       ...initialState.power_budget,
       enabled: true,
@@ -90,6 +91,7 @@ describe("StatusPanel system resources", () => {
       pi_reserve_watts: 15,
       available_led_watts: 185,
     })
+    fireEvent.click(screen.getByText("Technical details"))
 
     expect(screen.getByText("PSU capacity")).toBeInTheDocument()
     expect(screen.getByText("Pi + buck reserve")).toBeInTheDocument()
