@@ -37,9 +37,10 @@ The synchronous in-memory simulator path remains unchanged. Hardware
 output thread, so injected physical controllers follow the same ownership and
 frame-exchange rules as the default SPI/GPIO drivers. Live stripe topology
 editing still requires the default topology factory because an injected
-factory only receives the initial runtime settings. An initial Raspberry Pi 4
-SPI run completed on the candidate, but a matched baseline is still pending;
-GPIO and physical audio-input measurements have not been run.
+factory only receives the initial runtime settings. Raspberry Pi 4 SPI
+measurements now cover the candidate with native rendering enabled and disabled,
+plus a pre-refactor static baseline. Baseline dynamic startup times out; GPIO
+and physical audio-input measurements have not been run.
 
 ## Raspberry Pi 4 before/after run
 
@@ -112,29 +113,93 @@ counters; its frame cadence includes physical transmission time. Both files
 record the Pi model, architecture, Python version, and whether physical SPI
 was enabled.
 
-### Preliminary candidate result
+### Candidate Pi 4 results with native rendering
 
 The Pi 4 Model B Rev 1.4 (`aarch64`, Python 3.12.13) completed the candidate
-matrix with two mirrored SPI outputs at 1 MHz, a 15-watt budget, and demo
-audio. The candidate was an earlier copy without the output-latency fields
-added below, so latency still needs a repeat run.
+static and dynamic runs with two mirrored SPI outputs at 1 MHz, a 15-watt
+budget, and synthetic demo audio. These runs report
+`render_native_enabled=true`. Output latency is submission-to-completion for a
+full frame set; p95 summarizes the most recent 128 sets.
 
-| LEDs total | Mode | Render FPS | Output FPS | Dropped sets | Output failures | Missed deadlines | CPU |
+| LEDs total | Mode | Render FPS | Delivered FPS | Latest / p95 latency | Dropped sets | Missed deadlines | CPU |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 100 | Static | 58.9 | 58.9 | 0 | 0 | 5.9% | 33.5% |
-| 100 | Dynamic | 54.5 | 54.4 | 1 | 0 | 6.7% | 67.0% |
-| 300 | Static | 59.3 | 59.3 | 0 | 0 | 6.0% | 23.5% |
-| 300 | Dynamic | 50.1 | 50.1 | 0 | 0 | 6.9% | 45.4% |
-| 600 | Static | 59.3 | 57.7 | 26 | 0 | 5.8% | 23.9% |
-| 600 | Dynamic | 52.6 | 51.1 | 22 | 0 | 6.5% | 47.9% |
+| 100 | Static | 58.9 | 58.9 | 3.0 / 24.2 ms | 0 | 5.9% | 33.5% |
+| 100 | Dynamic | 54.3 | 54.3 | 3.1 / 23.7 ms | 0 | 6.9% | 66.0% |
+| 300 | Static | 59.1 | 59.1 | 8.3 / 23.0 ms | 0 | 5.9% | 23.8% |
+| 300 | Dynamic | 55.1 | 55.1 | 8.3 / 30.3 ms | 0 | 6.3% | 50.1% |
+| 600 | Static | 59.0 | 57.3 | 19.4 / 40.5 ms | 27 | 5.9% | 24.8% |
+| 600 | Dynamic | 52.1 | 49.9 | 23.2 / 40.1 ms | 32 | 6.4% | 49.7% |
 
-The baseline command reached the first 100-LED dynamic case, where the
-`set_mode()` command future timed out after five seconds. The script writes
-its JSON only after all requested cases finish, so that attempt produced no
-baseline file even though the preceding 100-LED static case had completed.
-The split static/dynamic commands above preserve the static results if dynamic
-startup times out again. The dynamic baseline remains unmeasured until that
-case completes or the timeout is diagnosed.
+All six cases reported zero output failures. At 600 LEDs, the output path
+approaches its transfer limit: delivered frame rate falls below render rate,
+and the latest-wins exchange drops stale sets while keeping storage bounded.
+The output latency p95 reaches about 40 ms, while the measured render-side
+`_flush_power_limited_outputs` p95 remains below 2.1 ms. Renderer deadline
+misses are still around 6%; these measurements do not attribute those misses
+to SPI waiting. Demo audio is synthetic and does not measure live capture or
+audio-to-light latency.
+
+An earlier candidate run had similar static rates and a different 300-LED
+dynamic cadence (20 ms expected interval versus 16 ms in this run), so its
+dynamic results should not be compared directly with this table.
+
+### Matched static comparison with the NumPy renderer
+
+The baseline and candidate fallback runs both report
+`render_native_enabled=false`. On the synchronous baseline, render FPS is also
+the physical output FPS. The baseline `_flush_power_limited_outputs` timing
+includes SPI transfers; on the candidate it covers preparation and frame
+publication only. Candidate delivered FPS and output latency therefore show
+what the independent output thread actually completed.
+
+| LEDs | Baseline render/output FPS | Candidate render/delivered FPS | Baseline flush / candidate prep p95 | Candidate latest / p95 output latency | Baseline / candidate missed deadlines | Baseline / candidate CPU | Candidate dropped sets |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 100 | 58.6 / 58.6 | 59.1 / 59.2 | 4.57 / 1.25 ms | 3.1 / 17.2 ms | 5.9% / 5.9% | 31.4% / 32.2% | 0 |
+| 300 | 56.4 / 56.4 | 58.6 / 58.4 | 10.04 / 1.52 ms | 8.3 / 30.2 ms | 12.9% / 5.9% | 50.6% / 53.1% | 2 |
+| 600 | 32.3 / 32.3 | 57.1 / 30.6 | 18.23 / 2.06 ms | 44.2 / 52.2 ms | 100% / 7.5% | 50.5% / 81.6% | 399 |
+
+At 100 and 300 LEDs, the fallback candidate keeps rendering near 59 FPS and
+delivers nearly every frame. At 600 LEDs, render cadence rises to 57.1 FPS,
+but output delivers 30.6 FPS and drops 399 stale sets, slightly below the
+baseline's 32.3 FPS; CPU use reaches 81.6%. This shows that rendering no longer
+waits for slow output, but this software-rendering profile does not improve
+600-LED physical delivery. The production native-render run above delivered
+57.3 FPS at 600 LEDs. This comparison matches the renderer setting, but it
+does not isolate output threading: the candidate also has the updated SPI
+encoder, including its GIL release.
+
+```bash
+UV_CACHE_DIR=/tmp/lumistripe-uv-cache uv run python scripts/benchmark_runtime_pipeline.py \
+  --hardware --spi-devices /dev/spidev0.0,/dev/spidev0.1 \
+  --led-counts 100,300,600 --layouts mirrored --zone-counts 1 \
+  --modes static --power-limits on --power-budget-watts 15 \
+  --audio-source demo --warmup 5 --duration 15 --disable-native-render \
+  --output /tmp/lumistripe-pi4-after-output-thread-static-numpy.json
+```
+
+The candidate dynamic NumPy-fallback run used:
+
+```bash
+UV_CACHE_DIR=/tmp/lumistripe-uv-cache uv run python scripts/benchmark_runtime_pipeline.py \
+  --hardware --spi-devices /dev/spidev0.0,/dev/spidev0.1 \
+  --led-counts 100,300,600 --layouts mirrored --zone-counts 1 \
+  --modes dynamic --power-limits on --power-budget-watts 15 \
+  --audio-source demo --warmup 5 --duration 15 --disable-native-render \
+  --output /tmp/lumistripe-pi4-after-output-thread-dynamic-numpy.json
+```
+
+| LEDs | Render / delivered FPS | Latest / p95 output latency | Dropped sets | Missed deadlines | CPU |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 100 | 52.3 / 52.2 | 24.0 / 19.0 ms | 1 | 6.8% | 56.8% |
+| 300 | 49.5 / 44.1 | 8.7 / 41.7 ms | 82 | 31.2% | 82.6% |
+| 600 | 42.9 / 38.3 | 35.0 / 56.6 ms | 70 | 38.5% | 81.8% |
+
+Both baseline dynamic attempts timed out while waiting for the `set_mode()`
+command future at the first 100-LED case. The isolated attempt confirms the
+failure is repeatable; it does not provide baseline dynamic frame-rate data.
+The dynamic NumPy-fallback results show substantial CPU use and missed render
+deadlines at 300 and 600 LEDs. Synthetic demo audio does not measure live
+capture or audio-to-light latency.
 
 ## Native backend GIL behavior
 
