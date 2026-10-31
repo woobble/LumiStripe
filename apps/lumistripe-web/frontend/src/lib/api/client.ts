@@ -271,6 +271,8 @@ const dashboardStateSchema = z.object({
   missed_frame_count: z.number().int(),
   recent_frame_miss_rate: z.number().min(0).max(1),
   output_frame_rate: z.number().nonnegative().optional().default(0),
+  output_frame_latency_ms: z.number().nonnegative().nullable().optional().default(null),
+  output_frame_latency_p95_ms: z.number().nonnegative().nullable().optional().default(null),
   output_heartbeat_age_seconds: z.number().nonnegative().nullable().optional(),
   output_dropped_frame_count: z.number().int().nonnegative().optional().default(0),
   output_failure_count: z.number().int().nonnegative().optional().default(0),

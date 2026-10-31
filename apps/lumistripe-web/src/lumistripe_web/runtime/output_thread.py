@@ -5,10 +5,12 @@ from __future__ import annotations
 import queue
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass
 from datetime import datetime
+from math import ceil
 
 import numpy as np
 import numpy.typing as npt
@@ -19,6 +21,7 @@ from .outputs import OutputGateController
 
 PixelFrame = npt.NDArray[np.uint8]
 OutputBuilder = Callable[[], Sequence[tuple[Controller, bool]]]
+OUTPUT_LATENCY_SAMPLE_COUNT = 128
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +37,9 @@ class OutputThreadStats:
     dropped_frames: int
     last_successful_update_at: datetime | None
     last_successful_update_age_seconds: float | None
+    frame_latency_ms: float | None
+    frame_latency_p95_ms: float | None
+    frame_latency_sample_count: int
 
 
 @dataclass(slots=True)
@@ -78,6 +84,10 @@ class LedOutputThread:
         self._last_error: str | None = None
         self._last_successful_update_at: datetime | None = None
         self._last_successful_update_monotonic: float | None = None
+        self._frame_latency_ms: float | None = None
+        self._frame_latency_samples: deque[float] = deque(
+            maxlen=OUTPUT_LATENCY_SAMPLE_COUNT
+        )
         self._rate_started_at = time.monotonic()
         self._rate_frames = 0
         self._output_rate = 0.0
@@ -127,6 +137,8 @@ class LedOutputThread:
             error = self._last_error
             successful_at = self._last_successful_update_at
             successful_monotonic = self._last_successful_update_monotonic
+            frame_latency = self._frame_latency_ms
+            frame_latency_samples = tuple(self._frame_latency_samples)
         exchange = self._exchange
         dropped = exchange.stats().dropped_count if exchange is not None else 0
         successful_age = (
@@ -135,15 +147,20 @@ class LedOutputThread:
             else None
         )
         return OutputThreadStats(
-            heartbeat,
-            last_frame,
-            transmitted,
-            failed,
-            rate,
-            error,
-            dropped,
-            successful_at,
-            successful_age,
+            heartbeat_at_monotonic=heartbeat,
+            last_frame_at_monotonic=last_frame,
+            transmitted_frames=transmitted,
+            failed_flushes=failed,
+            output_rate=rate,
+            last_error=error,
+            dropped_frames=dropped,
+            last_successful_update_at=successful_at,
+            last_successful_update_age_seconds=successful_age,
+            frame_latency_ms=frame_latency,
+            frame_latency_p95_ms=_nearest_rank_percentile(
+                frame_latency_samples, 0.95
+            ),
+            frame_latency_sample_count=len(frame_latency_samples),
         )
 
     def is_healthy(self, *, max_heartbeat_age_seconds: float) -> bool:
@@ -198,6 +215,10 @@ class LedOutputThread:
                 try:
                     self._transmit(slot.frames)
                 finally:
+                    latency_ms = (
+                        time.monotonic_ns() - slot.submitted_at_ns
+                    ) / 1_000_000.0
+                    self._record_frame_latency(latency_ms)
                     exchange.release(slot)
         finally:
             exchange = self._exchange
@@ -338,6 +359,11 @@ class LedOutputThread:
         with self._state_lock:
             self._heartbeat_at = time.monotonic() if at is None else at
 
+    def _record_frame_latency(self, latency_ms: float) -> None:
+        with self._state_lock:
+            self._frame_latency_ms = latency_ms
+            self._frame_latency_samples.append(latency_ms)
+
     def _set_error(self, exc: Exception) -> None:
         detail = str(exc).strip().replace("\n", " ")
         with self._state_lock:
@@ -356,6 +382,16 @@ class LedOutputThread:
 def _make_exchange(output_lengths: Sequence[int]) -> LatestFrameExchange | None:
     lengths = tuple(output_lengths)
     return LatestFrameExchange(lengths) if lengths else None
+
+
+def _nearest_rank_percentile(
+    values: Sequence[float], quantile: float
+) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = min(len(ordered) - 1, max(0, ceil(len(ordered) * quantile) - 1))
+    return ordered[index]
 
 
 __all__ = ["LedOutputThread", "OutputThreadStats"]

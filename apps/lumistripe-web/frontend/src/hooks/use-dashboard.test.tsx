@@ -76,6 +76,8 @@ describe("useDashboard", () => {
     const {
       power_budget: _powerBudget,
       output_frame_rate: _outputFrameRate,
+      output_frame_latency_ms: _outputFrameLatency,
+      output_frame_latency_p95_ms: _outputFrameLatencyP95,
       output_heartbeat_age_seconds: _outputHeartbeatAge,
       output_dropped_frame_count: _outputDroppedFrames,
       output_failure_count: _outputFailures,
@@ -118,6 +120,8 @@ describe("useDashboard", () => {
     expect(result.current.state?.stripe_topology.outputs[0]?.zone_count).toBe(1)
     expect(result.current.state?.stripe_topology.outputs[0]?.zone_pattern).toBe("repeat")
     expect(result.current.state?.output_frame_rate).toBe(0)
+    expect(result.current.state?.output_frame_latency_ms).toBeNull()
+    expect(result.current.state?.output_frame_latency_p95_ms).toBeNull()
     expect(result.current.state?.output_dropped_frame_count).toBe(0)
     expect(result.current.state?.output_failure_count).toBe(0)
     expect(result.current.state?.output_heartbeat_age_seconds).toBeUndefined()

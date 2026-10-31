@@ -289,6 +289,15 @@ def _run_case(
                 "output_frame_rate": (
                     output_stats.output_rate if output_stats else 0.0
                 ),
+                "output_frame_latency_ms": (
+                    output_stats.frame_latency_ms if output_stats else None
+                ),
+                "output_frame_latency_p95_ms": (
+                    output_stats.frame_latency_p95_ms if output_stats else None
+                ),
+                "output_frame_latency_sample_count": (
+                    output_stats.frame_latency_sample_count if output_stats else 0
+                ),
                 "output_transmitted_frame_sets": (
                     output_stats.transmitted_frames - output_stats_before.transmitted_frames
                     if output_stats is not None and output_stats_before is not None

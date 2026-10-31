@@ -1885,6 +1885,30 @@
             "title": "Output Failure Count",
             "type": "integer"
           },
+          "output_frame_latency_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Frame Latency Ms"
+          },
+          "output_frame_latency_p95_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Frame Latency P95 Ms"
+          },
           "output_frame_rate": {
             "default": 0.0,
             "minimum": 0.0,

@@ -1742,6 +1742,10 @@ export interface components {
              * @default 0
              */
             output_failure_count: number;
+            /** Output Frame Latency Ms */
+            output_frame_latency_ms?: number | null;
+            /** Output Frame Latency P95 Ms */
+            output_frame_latency_p95_ms?: number | null;
             /**
              * Output Frame Rate
              * @default 0

@@ -25,18 +25,21 @@ calibration flashes, stripe tests, and shutdown black frames use the same
 output-thread boundary.
 
 Render metrics and output metrics are reported independently. Dashboard state
-includes output rate, output-thread heartbeat age, dropped output frames,
-output failures, and the latest output error. The runtime watchdog monitors
-the output thread independently and requests a process restart if it stops
-making progress.
+includes output rate, end-to-end frame-set latency (latest and rolling p95),
+output-thread heartbeat age, dropped output frames, output failures, and the
+latest output error. Latency is measured from frame submission through
+completion of the full output set; p95 uses the most recent 128 completed
+sets. The runtime watchdog monitors the output thread independently and
+requests a process restart if it stops making progress.
 
 The synchronous in-memory simulator path remains unchanged. Hardware
 `controller_factory` implementations are also created and accessed by the
 output thread, so injected physical controllers follow the same ownership and
 frame-exchange rules as the default SPI/GPIO drivers. Live stripe topology
 editing still requires the default topology factory because an injected
-factory only receives the initial runtime settings. The Raspberry Pi 4
-hardware path still needs validation on device.
+factory only receives the initial runtime settings. An initial Raspberry Pi 4
+SPI run completed on the candidate, but a matched baseline is still pending;
+GPIO and physical audio-input measurements have not been run.
 
 ## Raspberry Pi 4 before/after run
 
@@ -56,15 +59,27 @@ UV_CACHE_DIR=/tmp/lumistripe-uv-cache LUMISTRIPE_BUILD_EXTENSIONS=spi \
   uv sync --locked --all-extras --dev --reinstall-package lumistripe-core
 ```
 
-Run the baseline matrix:
+Run the baseline static matrix first, so its results are saved even if a
+separate dynamic startup later fails:
 
 ```bash
 UV_CACHE_DIR=/tmp/lumistripe-uv-cache uv run python scripts/benchmark_runtime_pipeline.py \
   --hardware --spi-devices /dev/spidev0.0,/dev/spidev0.1 \
   --led-counts 100,300,600 --layouts mirrored --zone-counts 1 \
-  --modes static,dynamic --power-limits on --power-budget-watts 15 \
+  --modes static --power-limits on --power-budget-watts 15 \
   --audio-source demo --warmup 5 --duration 15 \
-  --output /tmp/lumistripe-pi4-before-output-thread.json
+  --output /tmp/lumistripe-pi4-before-output-thread-static.json
+```
+
+Run the baseline dynamic matrix separately:
+
+```bash
+UV_CACHE_DIR=/tmp/lumistripe-uv-cache uv run python scripts/benchmark_runtime_pipeline.py \
+  --hardware --spi-devices /dev/spidev0.0,/dev/spidev0.1 \
+  --led-counts 100,300,600 --layouts mirrored --zone-counts 1 \
+  --modes dynamic --power-limits on --power-budget-watts 15 \
+  --audio-source demo --warmup 5 --duration 15 \
+  --output /tmp/lumistripe-pi4-before-output-thread-dynamic.json
 ```
 
 Then run the exact same matrix from the candidate checkout, after building its
@@ -77,17 +92,49 @@ UV_CACHE_DIR=/tmp/lumistripe-uv-cache LUMISTRIPE_BUILD_EXTENSIONS=spi \
 UV_CACHE_DIR=/tmp/lumistripe-uv-cache uv run python scripts/benchmark_runtime_pipeline.py \
   --hardware --spi-devices /dev/spidev0.0,/dev/spidev0.1 \
   --led-counts 100,300,600 --layouts mirrored --zone-counts 1 \
-  --modes static,dynamic --power-limits on --power-budget-watts 15 \
+  --modes static --power-limits on --power-budget-watts 15 \
   --audio-source demo --warmup 5 --duration 15 \
-  --output /tmp/lumistripe-pi4-after-output-thread.json
+  --output /tmp/lumistripe-pi4-after-output-thread-static.json
+UV_CACHE_DIR=/tmp/lumistripe-uv-cache uv run python scripts/benchmark_runtime_pipeline.py \
+  --hardware --spi-devices /dev/spidev0.0,/dev/spidev0.1 \
+  --led-counts 100,300,600 --layouts mirrored --zone-counts 1 \
+  --modes dynamic --power-limits on --power-budget-watts 15 \
+  --audio-source demo --warmup 5 --duration 15 \
+  --output /tmp/lumistripe-pi4-after-output-thread-dynamic.json
 ```
 
 Compare `effective_fps`, `actual_frame_interval_ms`, `missed_deadline_rate`,
 `cpu_utilization_percent`, and the common stage percentiles in `timings_ms`.
-The candidate report also has output frame rate, dropped frame sets, failures,
-and output heartbeat age. The baseline has no separate output-thread counters;
-its frame cadence includes physical transmission time. Both files record the
-Pi model, architecture, Python version, and whether physical SPI was enabled.
+The candidate report also has output frame rate, end-to-end output latency
+(latest and p95 over at most 128 recent frame sets), dropped frame sets,
+failures, and output heartbeat age. The baseline has no separate output-thread
+counters; its frame cadence includes physical transmission time. Both files
+record the Pi model, architecture, Python version, and whether physical SPI
+was enabled.
+
+### Preliminary candidate result
+
+The Pi 4 Model B Rev 1.4 (`aarch64`, Python 3.12.13) completed the candidate
+matrix with two mirrored SPI outputs at 1 MHz, a 15-watt budget, and demo
+audio. The candidate was an earlier copy without the output-latency fields
+added below, so latency still needs a repeat run.
+
+| LEDs total | Mode | Render FPS | Output FPS | Dropped sets | Output failures | Missed deadlines | CPU |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 100 | Static | 58.9 | 58.9 | 0 | 0 | 5.9% | 33.5% |
+| 100 | Dynamic | 54.5 | 54.4 | 1 | 0 | 6.7% | 67.0% |
+| 300 | Static | 59.3 | 59.3 | 0 | 0 | 6.0% | 23.5% |
+| 300 | Dynamic | 50.1 | 50.1 | 0 | 0 | 6.9% | 45.4% |
+| 600 | Static | 59.3 | 57.7 | 26 | 0 | 5.8% | 23.9% |
+| 600 | Dynamic | 52.6 | 51.1 | 22 | 0 | 6.5% | 47.9% |
+
+The baseline command reached the first 100-LED dynamic case, where the
+`set_mode()` command future timed out after five seconds. The script writes
+its JSON only after all requested cases finish, so that attempt produced no
+baseline file even though the preceding 100-LED static case had completed.
+The split static/dynamic commands above preserve the static results if dynamic
+startup times out again. The dynamic baseline remains unmeasured until that
+case completes or the timeout is diagnosed.
 
 ## Native backend GIL behavior
 

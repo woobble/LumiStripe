@@ -87,7 +87,6 @@ class LatestFrameExchange:
                     f"frame {index} must be uint8 with shape {slot_frame.shape}"
                 )
 
-        submitted_at_ns = time.monotonic_ns()
         with self._condition:
             if self._closed:
                 return False
@@ -107,7 +106,7 @@ class LatestFrameExchange:
                 np.copyto(destination, source, casting="no")
             self._next_sequence += 1
             slot.sequence = self._next_sequence
-            slot.submitted_at_ns = submitted_at_ns
+            slot.submitted_at_ns = time.monotonic_ns()
             self._ready_slot = slot
             self._submitted_count += 1
             self._condition.notify()

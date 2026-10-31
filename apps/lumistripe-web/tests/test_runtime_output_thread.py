@@ -80,6 +80,10 @@ def test_physical_controller_lifecycle_runs_on_output_thread() -> None:
     assert exchange is not None
     assert exchange.submit((_frame(2, 17),))
     _wait_for(lambda: output.stats().transmitted_frames >= 1)
+    stats = output.stats()
+    assert stats.frame_latency_ms is not None
+    assert stats.frame_latency_p95_ms is not None
+    assert stats.frame_latency_sample_count == 1
     output.stop()
 
     owner_ids = {event[2] for event in events}
@@ -119,8 +123,10 @@ def test_blocked_output_does_not_block_latest_frame_submission() -> None:
     assert time.monotonic() - start < 0.1
     assert exchange.stats().dropped_count == 6
 
+    time.sleep(0.03)
     release_flush.set()
     _wait_for(lambda: output.stats().transmitted_frames >= 2)
+    stats = output.stats()
     output.stop()
     transmitted_values = [
         values[0]
@@ -128,6 +134,8 @@ def test_blocked_output_does_not_block_latest_frame_submission() -> None:
         if action == "flush" and values is not None
     ]
     assert transmitted_values[:2] == [0, 7]
+    assert stats.frame_latency_p95_ms is not None
+    assert stats.frame_latency_p95_ms >= 20.0
 
 
 def test_multistrip_frames_remain_a_synchronized_set() -> None:

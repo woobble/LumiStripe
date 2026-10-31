@@ -4244,6 +4244,12 @@ profile.audio_config(microphone=True),
                 time.monotonic()
             ).miss_rate,
             output_frame_rate=(output_stats.output_rate if output_stats else 0.0),
+            output_frame_latency_ms=(
+                output_stats.frame_latency_ms if output_stats else None
+            ),
+            output_frame_latency_p95_ms=(
+                output_stats.frame_latency_p95_ms if output_stats else None
+            ),
             output_heartbeat_age_seconds=output_heartbeat_age,
             output_dropped_frame_count=(
                 output_stats.dropped_frames if output_stats else 0

@@ -25,6 +25,8 @@ export const initialState: DashboardState = {
   missed_frame_count: 0,
   recent_frame_miss_rate: 0,
   output_frame_rate: 19.8,
+  output_frame_latency_ms: 12.3,
+  output_frame_latency_p95_ms: 15.6,
   output_heartbeat_age_seconds: 0.01,
   output_dropped_frame_count: 0,
   output_failure_count: 0,
