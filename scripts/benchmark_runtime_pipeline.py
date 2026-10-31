@@ -1,8 +1,8 @@
-"""Measure the scheduled simulated runtime pipeline without LED hardware.
+"""Measure runtime render scheduling and optional physical LED output.
 
-The benchmark starts the real runtime worker with virtual pixel buffers and
-records frame scheduling, output preparation, telemetry, and publication costs.
-Use the SPI benchmark separately for hardware transfer and encoder measurements.
+The benchmark starts the real runtime and records render scheduling, output
+preparation, telemetry, publication, and independent LED output diagnostics.
+Use ``--hardware`` on a device to include physical transfer measurements.
 """
 
 from __future__ import annotations
@@ -225,6 +225,11 @@ def _run_case(
             frame_starts_ns.clear()
             with runtime._worker_state_lock:
                 missed_before = runtime._missed_frame_count
+            output_stats_before = (
+                runtime._output_thread.stats()
+                if runtime._output_thread is not None
+                else None
+            )
             if trace_allocations:
                 tracemalloc.clear_traces()
                 tracemalloc.reset_peak()
@@ -252,6 +257,11 @@ def _run_case(
             with runtime._worker_state_lock:
                 missed_after = runtime._missed_frame_count
                 expected_interval_s = runtime._last_step_expected_delay_s
+            output_stats = (
+                runtime._output_thread.stats()
+                if runtime._output_thread is not None
+                else None
+            )
             measured_frames = timing_counts["_step"]
             measured_frame_starts = list(frame_starts_ns)
             actual_frame_intervals_ms = [
@@ -276,6 +286,43 @@ def _run_case(
                 "missed_deadlines": missed_after - missed_before,
                 "missed_deadline_rate": (missed_after - missed_before)
                 / max(measured_frames, 1),
+                "output_frame_rate": (
+                    output_stats.output_rate if output_stats else 0.0
+                ),
+                "output_transmitted_frame_sets": (
+                    output_stats.transmitted_frames - output_stats_before.transmitted_frames
+                    if output_stats is not None and output_stats_before is not None
+                    else 0
+                ),
+                "output_effective_fps": (
+                    (
+                        output_stats.transmitted_frames
+                        - output_stats_before.transmitted_frames
+                    )
+                    / max(elapsed, 1e-9)
+                    if output_stats is not None and output_stats_before is not None
+                    else 0.0
+                ),
+                "output_dropped_frame_count": (
+                    output_stats.dropped_frames - output_stats_before.dropped_frames
+                    if output_stats is not None and output_stats_before is not None
+                    else 0
+                ),
+                "output_failure_count": (
+                    output_stats.failed_flushes - output_stats_before.failed_flushes
+                    if output_stats is not None and output_stats_before is not None
+                    else 0
+                ),
+                "output_heartbeat_age_seconds": (
+                    max(
+                        0.0,
+                        time.monotonic() - output_stats.heartbeat_at_monotonic,
+                    )
+                    if output_stats is not None
+                    and output_stats.heartbeat_at_monotonic is not None
+                    else None
+                ),
+                "output_error": output_stats.last_error if output_stats else None,
                 "cpu_utilization_percent": cpu_seconds / max(elapsed, 1e-9) * 100.0,
                 "rss_start_mb": start_rss,
                 "rss_end_mb": _rss_mb(),

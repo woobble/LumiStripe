@@ -246,6 +246,10 @@ export function StatusPanel({ controller, onLogout }: { controller: DashboardCon
           <Metric icon={GaugeIcon} label="Frame rate" value={state.frame_rate > 0 ? `${state.frame_rate.toFixed(1)} FPS` : "Measuring…"} />
           <Metric icon={Clock3Icon} label="Latest render" value={state.render_time_ms > 0 ? `${state.render_time_ms.toFixed(1)} ms` : "Measuring…"} />
           <Metric icon={TriangleAlertIcon} label="Recent deadline misses" value={state.recent_frame_miss_rate > 0 ? `${(state.recent_frame_miss_rate * 100).toFixed(1)}%` : "None"} />
+          <Metric icon={GaugeIcon} label="LED output rate" value={state.runtime === "hardware" ? (state.output_frame_rate > 0 ? `${state.output_frame_rate.toFixed(1)} FPS` : "Measuring…") : "Simulation"} />
+          <Metric icon={Clock3Icon} label="Output heartbeat" value={formatAge(state.output_heartbeat_age_seconds)} />
+          <Metric icon={TriangleAlertIcon} label="Dropped output frames" value={state.output_dropped_frame_count.toString()} />
+          <Metric icon={TriangleAlertIcon} label="Output failures" value={state.output_failure_count.toString()} />
           <Metric icon={RefreshCwIcon} label="Last hardware update" value={outputValue} />
           <Metric icon={PackageIcon} label="Version" value={state.application_version} />
           <Metric icon={CpuIcon} label="Runtime" value={displayName(state.runtime)} />
@@ -257,6 +261,11 @@ export function StatusPanel({ controller, onLogout }: { controller: DashboardCon
               {state.output_devices.length > 0 ? state.output_devices.join(", ") : "In-memory controller"}
             </p>
           </div>
+          {state.output_error && (
+            <p className="col-span-2 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-sm text-amber-100" role="status">
+              LED output: {state.output_error}
+            </p>
+          )}
         </CardContent>
       </Card>
 

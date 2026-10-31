@@ -73,7 +73,15 @@ describe("useDashboard", () => {
     const { result } = renderHook(() => useDashboard(), { wrapper })
     await waitFor(() => expect(result.current.state?.revision).toBe(1))
 
-    const { power_budget: _powerBudget, ...legacyState } = initialState
+    const {
+      power_budget: _powerBudget,
+      output_frame_rate: _outputFrameRate,
+      output_heartbeat_age_seconds: _outputHeartbeatAge,
+      output_dropped_frame_count: _outputDroppedFrames,
+      output_failure_count: _outputFailures,
+      output_error: _outputError,
+      ...legacyState
+    } = initialState
     const {
       shared_supply_enabled: _sharedSupplyEnabled,
       supply_capacity_watts: _supplyCapacityWatts,
@@ -109,6 +117,10 @@ describe("useDashboard", () => {
     expect(result.current.state?.stripe_topology.pi_reserve_watts).toBe(15)
     expect(result.current.state?.stripe_topology.outputs[0]?.zone_count).toBe(1)
     expect(result.current.state?.stripe_topology.outputs[0]?.zone_pattern).toBe("repeat")
+    expect(result.current.state?.output_frame_rate).toBe(0)
+    expect(result.current.state?.output_dropped_frame_count).toBe(0)
+    expect(result.current.state?.output_failure_count).toBe(0)
+    expect(result.current.state?.output_heartbeat_age_seconds).toBeUndefined()
   })
 
   it("marks a dropped socket as reconnecting and opens a replacement", async () => {

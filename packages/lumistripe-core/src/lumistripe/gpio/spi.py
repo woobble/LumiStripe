@@ -83,7 +83,7 @@ def _encoded_frame_size(pixel_count: int) -> int:
 
 
 class _FrameEncoder:
-    """Own a stable wire buffer and encode frames into it without reallocating."""
+    """Own a stable wire buffer and encode exclusively owned frames in place."""
 
     def __init__(self, pixel_count: int) -> None:
         self.payload = np.empty(_encoded_frame_size(pixel_count), dtype=np.uint8)

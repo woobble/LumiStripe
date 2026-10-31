@@ -4,6 +4,7 @@ import threading
 import time
 from concurrent.futures import Future
 from pathlib import Path
+from typing import ClassVar
 
 import lumistripe_web.runtime as runtime_module
 import lumistripe_web.runtime.worker as worker_implementation
@@ -25,6 +26,7 @@ from lumistripe import (
     SwitchQuantization,
     TransitionEffect,
 )
+from lumistripe.gpio.spi import SPIConfig
 from lumistripe_web.runtime import (
     LumiStripeRuntime,
     OutputGateController,
@@ -80,6 +82,47 @@ class FakeSPIStripe(TrackingStripe):
     def __init__(self, config, length: int) -> None:
         super().__init__(length)
         self.config = config
+
+
+class ThreadAwareSPIStripe(FakeSPIStripe):
+    instances: ClassVar[list[ThreadAwareSPIStripe]] = []
+
+    def __init__(self, config, length: int) -> None:
+        super().__init__(config, length)
+        self.thread_ids = {threading.get_ident()}
+        self.frames: list[np.ndarray] = []
+        type(self).instances.append(self)
+
+    def flush(self) -> None:
+        self.thread_ids.add(threading.get_ident())
+        self.frames.append(self.pixels().copy())
+        super().flush()
+
+    def force_flush(self) -> None:
+        self.thread_ids.add(threading.get_ident())
+        self.frames.append(self.pixels().copy())
+        super().force_flush()
+
+    def close(self) -> None:
+        self.thread_ids.add(threading.get_ident())
+        super().close()
+
+
+class StalledSPIStripe(ThreadAwareSPIStripe):
+    entered: ClassVar[threading.Event] = threading.Event()
+    release: ClassVar[threading.Event] = threading.Event()
+
+    def flush(self) -> None:
+        type(self).entered.set()
+        type(self).release.wait()
+        super().flush()
+
+
+class FailingReplacementSPIStripe(ThreadAwareSPIStripe):
+    def __init__(self, config, length: int) -> None:
+        if config.device == "/dev/unavailable":
+            raise RuntimeError("SPI device unavailable")
+        super().__init__(config, length)
 
 
 class FailingStripe(TrackingStripe):
@@ -1654,6 +1697,309 @@ def test_hardware_runtime_supports_mirrored_secondary_spi_device(
         "/dev/spidev1.0",
     ]
     assert controller.controllers[1].config.speed_hz == 500_000
+
+
+def test_default_hardware_runtime_owns_spi_on_output_thread_and_reconfigures(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    ThreadAwareSPIStripe.instances.clear()
+    monkeypatch.setattr(runtime_module, "SPIStripe", ThreadAwareSPIStripe)
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(
+            hardware=True,
+            pixels=6,
+            audio_source="off",
+            settings_file=tmp_path / "settings.json",
+        )
+    )
+    runtime.start()
+    try:
+        output_thread = runtime._output_thread
+        assert output_thread is not None
+        first = ThreadAwareSPIStripe.instances[0]
+        assert first.thread_ids == {output_thread._thread.ident}
+        assert output_thread._thread.ident != runtime._thread.ident
+
+        runtime.set_mode(PlaybackMode.SOLID, solid_color="#123456").result(timeout=1)
+        deadline = time.monotonic() + 1
+        while not first.frames or not np.all(first.frames[-1][:, :3] == (18, 52, 86)):
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+
+        runtime.set_blackout(True).result(timeout=1)
+        deadline = time.monotonic() + 1
+        while first.frames[-1][:, :3].max() != 0:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        runtime.set_blackout(False).result(timeout=1)
+
+        topology = StripeTopologySettings(
+            layout="independent",
+            outputs=(
+                StripeOutputSettings(
+                    id="replacement",
+                    name="Replacement",
+                    pixels=4,
+                    spi_device="/dev/spidev1.0",
+                ),
+            ),
+        )
+        runtime.apply_stripe_topology(topology).result(timeout=2)
+        second = ThreadAwareSPIStripe.instances[-1]
+        assert second is not first
+        assert first.close_count == 1
+        assert second.thread_ids == {output_thread._thread.ident}
+        deadline = time.monotonic() + 1
+        while not second.frames:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+    finally:
+        runtime.stop()
+
+    assert first.close_count == 1
+    assert second.close_count == 1
+    assert first.thread_ids == {output_thread._thread.ident}
+    assert second.thread_ids == {output_thread._thread.ident}
+
+
+def test_injected_hardware_controller_is_owned_by_output_thread(
+    tmp_path: Path,
+) -> None:
+    ThreadAwareSPIStripe.instances.clear()
+
+    def build_controller(settings: RuntimeSettings) -> ThreadAwareSPIStripe:
+        return ThreadAwareSPIStripe(
+            SPIConfig(device=settings.spi_device, speed_hz=settings.spi_speed_hz),
+            settings.pixels,
+        )
+
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(
+            hardware=True,
+            pixels=6,
+            audio_source="off",
+            settings_file=tmp_path / "settings.json",
+        ),
+        controller_factory=build_controller,
+    )
+    runtime.start()
+    try:
+        output_thread = runtime._output_thread
+        assert output_thread is not None
+        stripe = ThreadAwareSPIStripe.instances[0]
+        assert stripe.thread_ids == {output_thread._thread.ident}
+        assert output_thread._thread.ident != runtime._thread.ident
+
+        runtime.set_mode(PlaybackMode.SOLID, solid_color="#123456").result(timeout=1)
+        deadline = time.monotonic() + 1
+        while not stripe.frames:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+    finally:
+        runtime.stop()
+
+    assert stripe.close_count == 1
+    assert stripe.thread_ids == {output_thread._thread.ident}
+
+
+def test_hardware_exchange_preserves_color_correction_and_power_scaling(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    ThreadAwareSPIStripe.instances.clear()
+    monkeypatch.setattr(runtime_module, "SPIStripe", ThreadAwareSPIStripe)
+    settings_file = tmp_path / "settings.json"
+    store = CalibrationSettingsStore(settings_file)
+    store.save({"primary": ColorCorrection(red=128, green=64, blue=32)})
+    store.save_stripes(
+        StripeTopologySettings(
+            layout="mirrored",
+            outputs=(
+                StripeOutputSettings(
+                    id="primary",
+                    name="Primary",
+                    pixels=6,
+                    power_limit_watts=0.01,
+                ),
+            ),
+            power_budget_enabled=True,
+            power_budget_watts=0.03,
+        )
+    )
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(
+            hardware=True,
+            pixels=6,
+            audio_source="off",
+            settings_file=settings_file,
+        )
+    )
+    runtime.start()
+    try:
+        runtime.set_mode(PlaybackMode.SOLID, solid_color="#FFFFFF").result(timeout=1)
+        stripe = ThreadAwareSPIStripe.instances[0]
+        deadline = time.monotonic() + 1
+        while True:
+            if stripe.frames:
+                frame = stripe.frames[-1]
+                state = runtime.snapshot()
+                if (
+                    np.all(frame[:, :3] == (128, 64, 32))
+                    and np.all(frame[:, 3] < 255)
+                    and state.power_budget.applied_scale < 1.0
+                ):
+                    break
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+
+        frame = stripe.frames[-1]
+        state = runtime.snapshot()
+        np.testing.assert_array_equal(frame[:, :3], [[128, 64, 32]] * 6)
+        assert state.power_budget.applied_scale < 1.0
+        assert np.all(frame[:, 3] < 255)
+    finally:
+        runtime.stop()
+
+
+def test_hardware_rendering_continues_while_output_is_blocked_and_watchdog_is_separate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    ThreadAwareSPIStripe.instances.clear()
+    StalledSPIStripe.entered.clear()
+    StalledSPIStripe.release.clear()
+    monkeypatch.setattr(runtime_module, "SPIStripe", StalledSPIStripe)
+    monkeypatch.setattr(runtime_module, "OUTPUT_STALL_SECONDS", 0.2)
+    exits: list[int] = []
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(
+            hardware=True,
+            pixels=6,
+            audio_source="off",
+            settings_file=tmp_path / "settings.json",
+        ),
+        fatal_exit=exits.append,
+    )
+    runtime.start()
+    try:
+        assert StalledSPIStripe.entered.wait(1.0)
+        with runtime._worker_state_lock:
+            previous_render = runtime._last_step_completed_s
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            with runtime._worker_state_lock:
+                current_render = runtime._last_step_completed_s
+            if current_render is not None and current_render != previous_render:
+                break
+            time.sleep(0.01)
+        assert current_render != previous_render
+
+        deadline = time.monotonic() + 2.0
+        while not exits and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert exits == [1]
+    finally:
+        StalledSPIStripe.release.set()
+        runtime.stop()
+    assert runtime.snapshot().error == "the LED output thread stopped making progress"
+
+
+def test_topology_reconfiguration_does_not_pause_rendering_behind_spi(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    ThreadAwareSPIStripe.instances.clear()
+    StalledSPIStripe.entered.clear()
+    StalledSPIStripe.release.clear()
+    monkeypatch.setattr(runtime_module, "SPIStripe", StalledSPIStripe)
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(
+            hardware=True,
+            pixels=6,
+            audio_source="off",
+            settings_file=tmp_path / "settings.json",
+        )
+    )
+    runtime.start()
+    try:
+        assert StalledSPIStripe.entered.wait(1.0)
+        topology = StripeTopologySettings(
+            layout="independent",
+            outputs=(
+                StripeOutputSettings(
+                    id="new",
+                    name="New output",
+                    pixels=4,
+                    spi_device="/dev/spidev1.0",
+                ),
+            ),
+        )
+        command = runtime.apply_stripe_topology(topology)
+        deadline = time.monotonic() + 1.0
+        while runtime._pending_topology_change is None:
+            assert time.monotonic() < deadline
+            time.sleep(0.005)
+        with runtime._worker_state_lock:
+            previous_render = runtime._last_step_completed_s
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            with runtime._worker_state_lock:
+                current_render = runtime._last_step_completed_s
+            if current_render is not None and current_render != previous_render:
+                break
+            time.sleep(0.01)
+        assert current_render != previous_render
+        assert not command.done()
+
+        StalledSPIStripe.release.set()
+        command.result(timeout=2.0)
+        assert runtime._topology == topology
+    finally:
+        StalledSPIStripe.release.set()
+        runtime.stop()
+
+
+def test_failed_hardware_reconfiguration_restores_previous_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    ThreadAwareSPIStripe.instances.clear()
+    monkeypatch.setattr(runtime_module, "SPIStripe", FailingReplacementSPIStripe)
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(
+            hardware=True,
+            pixels=6,
+            audio_source="off",
+            settings_file=tmp_path / "settings.json",
+        )
+    )
+    runtime.start()
+    previous_topology = runtime._topology
+    first = FailingReplacementSPIStripe.instances[0]
+    try:
+        replacement = StripeTopologySettings(
+            layout="mirrored",
+            outputs=(
+                StripeOutputSettings(
+                    id="broken",
+                    name="Broken",
+                    pixels=6,
+                    spi_device="/dev/unavailable",
+                ),
+            ),
+        )
+        with pytest.raises(RuntimeCommandError, match="configuration was not applied"):
+            runtime.apply_stripe_topology(replacement).result(timeout=2.0)
+
+        assert runtime._topology == previous_topology
+        assert runtime.healthy is True
+        assert first.close_count == 1
+        restored = FailingReplacementSPIStripe.instances[-1]
+        assert restored is not first
+        assert restored.config.device == previous_topology.outputs[0].spi_device
+    finally:
+        runtime.stop()
 
 
 def test_runtime_settings_validate_secondary_spi_configuration() -> None:

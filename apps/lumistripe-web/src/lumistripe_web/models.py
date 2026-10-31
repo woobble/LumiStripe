@@ -276,6 +276,11 @@ class DashboardState(BaseModel):
     worker_heartbeat_age_seconds: float | None = None
     missed_frame_count: int = 0
     recent_frame_miss_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    output_frame_rate: float = Field(default=0.0, ge=0.0)
+    output_heartbeat_age_seconds: float | None = Field(default=None, ge=0.0)
+    output_dropped_frame_count: int = 0
+    output_failure_count: int = 0
+    output_error: str | None = None
     command_queue_depth: int = 0
     audio_health: str = "inactive"
     audio_callback_age_seconds: float | None = None

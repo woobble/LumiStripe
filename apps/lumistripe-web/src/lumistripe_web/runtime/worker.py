@@ -64,6 +64,7 @@ from lumistripe.playback import (
     TransitionEffect,
     demo_snapshot,
 )
+from lumistripe.render.kernels import correct_rgba_into
 
 from ..bluetooth import (
     SPOTIFY_MONITOR,
@@ -164,6 +165,8 @@ from .commands import (
     _TargetCommand,
     _TransitionSettingsCommand,
 )
+from .frame_exchange import LatestFrameExchange
+from .output_thread import LedOutputThread
 from .outputs import (
     OutputGateController,
     _OutputFrameBuffers,
@@ -224,6 +227,7 @@ MAX_COALESCED_COMMAND_WAITERS = 256
 FRAME_STALL_GRACE_SECONDS = 0.5
 FRAME_STALL_MIN_SECONDS = 0.75
 FRAME_STALL_MAX_SECONDS = 5.0
+OUTPUT_STALL_SECONDS = 5.0
 FRAME_TIMING_WINDOW_SECONDS = 10.0
 FRAME_TIMING_MIN_MISSES = 5
 FRAME_TIMING_MISS_RATE_THRESHOLD = 0.10
@@ -277,6 +281,19 @@ class _FrameTimingStats:
     frame_count: int = 0
     missed_frame_count: int = 0
     miss_rate: float = 0.0
+
+
+@dataclass(slots=True)
+class _PendingTopologyChange:
+    command: _Command | None
+    previous: StripeTopologySettings
+    topology: StripeTopologySettings
+    built: _BuiltTopology
+    output_future: Future[LatestFrameExchange | None]
+    persist: bool = True
+    stripe_test: _StripeTestCommand | None = None
+    rollback_future: Future[LatestFrameExchange | None] | None = None
+    output_error: Exception | None = None
 
 
 class _FrameTimingWindow:
@@ -460,6 +477,8 @@ class RuntimeWorker:
         self._preview_outputs: tuple[bytes, ...] = ()
         self._pending_preview_frames: tuple[np.ndarray | None, ...] | None = None
         self._output_frame_buffers: tuple[_OutputFrameBuffers, ...] = ()
+        self._output_thread: LedOutputThread | None = None
+        self._frame_exchange: LatestFrameExchange | None = None
         self._last_dashboard_publication_at_s: float | None = None
         self._last_audio_telemetry_publication_at_s: float | None = None
         self._last_preview_publication_at_s: float | None = None
@@ -540,6 +559,7 @@ class RuntimeWorker:
         self._missed_frame_count = 0
         self._last_render_time_ms = 0.0
         self._frame_timing = _FrameTimingWindow()
+        self._pending_topology_change: _PendingTopologyChange | None = None
 
     @property
     def healthy(self) -> bool:
@@ -1357,7 +1377,30 @@ class RuntimeWorker:
     def _run(self) -> None:
         unexpected_failure = False
         try:
-            if self._uses_default_controller_factory:
+            if self.settings.hardware:
+                built = self._build_topology(self._topology)
+                if not self._uses_default_controller_factory:
+                    for index, correction in enumerate(built.corrections):
+                        correction.set_correction(
+                            self._saved_corrections.get(
+                                _profile_name(index), ColorCorrection()
+                            )
+                        )
+                self._install_topology(built)
+                initial_topology = self._topology
+
+                def build_initial_outputs() -> tuple[tuple[Controller, bool], ...]:
+                    if self._uses_default_controller_factory:
+                        return self._build_physical_outputs(initial_topology)
+                    return self._build_injected_physical_outputs(initial_topology)
+
+                self._output_thread = LedOutputThread(
+                    tuple(output.pixels for output in self._topology.outputs),
+                    build_initial_outputs,
+                )
+                self._output_thread.start(timeout=4.5)
+                self._frame_exchange = self._output_thread.exchange
+            elif self._uses_default_controller_factory:
                 built = self._build_topology(self._topology)
                 self._install_topology(built)
             else:
@@ -1418,17 +1461,37 @@ class RuntimeWorker:
             thread = self._thread
             if thread is None or not thread.is_alive():
                 return
-            if not self._worker_is_stalled():
+            if self._worker_is_stalled():
+                self._fatal_failure.set()
+                self._fatal_error = "the runtime worker stopped making progress"
+                self._stop_event.set()
+                self._wake_worker()
+                thread.join(WORKER_STOP_GRACE_SECONDS)
+                if thread.is_alive():
+                    self._request_fatal_exit()
+                return
+
+            if self._stop_event.is_set() or not self._started_event.is_set():
+                continue
+            with self._worker_state_lock:
+                command_started = self._command_started_s
+            output_thread = self._output_thread
+            if (
+                command_started is not None
+                or output_thread is None
+                or output_thread.is_healthy(
+                    max_heartbeat_age_seconds=OUTPUT_STALL_SECONDS
+                )
+            ):
                 continue
 
             self._fatal_failure.set()
-            self._fatal_error = (
-                "the runtime worker stopped making progress"
-            )
+            self._fatal_error = "the LED output thread stopped making progress"
             self._stop_event.set()
             self._wake_worker()
-            thread.join(WORKER_STOP_GRACE_SECONDS)
-            if thread.is_alive():
+            try:
+                output_thread.stop(timeout=WORKER_STOP_GRACE_SECONDS)
+            except Exception:  # noqa: BLE001 - process restart is the safe fallback
                 self._request_fatal_exit()
             return
 
@@ -1469,25 +1532,7 @@ class RuntimeWorker:
         renderers: list[ZoneMappingController] = []
         try:
             for index, output in enumerate(topology.outputs):
-                if not self.settings.hardware:
-                    child: Controller = Stripe(output.pixels)
-                elif output.backend == "gpio":
-                    child = GPIOStripe(
-                        Config(
-                            chip=output.chip,
-                            gpio_data=output.data_pin,
-                            gpio_clock=output.clock_pin,
-                            consumer=f"lumistripe-web-{output.id}",
-                        ),
-                        output.pixels,
-                    )
-                else:
-                    child = SPIStripe(
-                        SPIConfig(
-                            device=output.spi_device, speed_hz=output.spi_speed_hz
-                        ),
-                        output.pixels,
-                    )
+                child: Controller = Stripe(output.pixels)
                 physical.append(child)
                 oriented = ReversedController(child) if output.reversed else child
                 fallback = self._saved_corrections.get(
@@ -1532,6 +1577,79 @@ class RuntimeWorker:
                 except Exception:  # noqa: BLE001, S110 - preserve the original build error
                     pass
             raise
+
+    def _build_physical_outputs(
+        self, topology: StripeTopologySettings
+    ) -> tuple[tuple[Controller, bool], ...]:
+        """Create physical drivers on the LED output thread only."""
+        physical: list[Controller] = []
+        try:
+            for output in topology.outputs:
+                if output.backend == "gpio":
+                    child: Controller = GPIOStripe(
+                        Config(
+                            chip=output.chip,
+                            gpio_data=output.data_pin,
+                            gpio_clock=output.clock_pin,
+                            consumer=f"lumistripe-web-{output.id}",
+                        ),
+                        output.pixels,
+                    )
+                else:
+                    child = SPIStripe(
+                        SPIConfig(
+                            device=output.spi_device, speed_hz=output.spi_speed_hz
+                        ),
+                        output.pixels,
+                    )
+                physical.append(child)
+            return tuple(
+                (controller, output.reversed)
+                for controller, output in zip(
+                    physical, topology.outputs, strict=True
+                )
+            )
+        except Exception as build_error:
+            for controller in physical:
+                try:
+                    controller.close()
+                except Exception as close_error:  # noqa: BLE001 - preserve build error
+                    build_error.add_note(f"controller close also failed: {close_error}")
+            raise
+
+    def _build_injected_physical_outputs(
+        self, topology: StripeTopologySettings
+    ) -> tuple[tuple[Controller, bool], ...]:
+        """Create injected hardware controllers on the LED output thread."""
+        controller = self._controller_factory(self.settings)
+        children = (
+            controller.controllers
+            if isinstance(controller, MultiController)
+            else (controller,)
+        )
+        try:
+            return tuple(
+                (child, output.reversed)
+                for child, output in zip(children, topology.outputs, strict=True)
+            )
+        except Exception as build_error:
+            for child in children:
+                try:
+                    child.close()
+                except Exception as close_error:  # noqa: BLE001 - preserve build error
+                    build_error.add_note(f"controller close also failed: {close_error}")
+            raise
+
+    def _configure_physical_outputs(
+        self, topology: StripeTopologySettings
+    ) -> None:
+        output_thread = self._output_thread
+        if output_thread is None:
+            return
+        self._frame_exchange = output_thread.reconfigure(
+            tuple(output.pixels for output in topology.outputs),
+            lambda: self._build_physical_outputs(topology),
+        )
 
     def _install_topology(self, built: _BuiltTopology) -> None:
         self._raw_controller = built.raw
@@ -1593,6 +1711,7 @@ class RuntimeWorker:
             self._last_step_completed_s = next_frame_at
             self._last_step_expected_delay_s = MIN_FRAME_SECONDS
         while not self._stop_event.is_set():
+            self._complete_pending_topology_change()
             now = time.monotonic()
             if now >= next_frame_at:
                 with self._worker_state_lock:
@@ -1658,6 +1777,13 @@ class RuntimeWorker:
         if all(future.cancelled() or future.done() for future in command.futures()):
             return
         try:
+            if self._pending_topology_change is not None and command.name in {
+                "stripe_topology",
+                "stripe_test",
+            }:
+                raise RuntimeCommandError(
+                    "wait for the current stripe configuration to finish"
+                )
             self._last_command_error = None
             if self._calibration is not None and not command.name.startswith(
                 "calibration_"
@@ -1750,6 +1876,8 @@ class RuntimeWorker:
                 enabled = _expect(target.value, bool)
                 for gate in self._target_gates(target.stripe_id):
                     gate.set_blackout(enabled)
+                if self._frame_exchange is not None:
+                    self._submit_hardware_output_frames()
                 if target.stripe_id is None:
                     self._remember_shared_playback(blackout=enabled)
                 result = self._publish(running=True)
@@ -1836,10 +1964,36 @@ class RuntimeWorker:
                 result = self._set_identity_settings(identity)
             elif command.name == "stripe_topology":
                 topology_update = _expect(command.value, _StripeTopologyCommand)
+                if self._output_thread is not None:
+                    self._begin_stripe_topology_change(command, topology_update.topology)
+                    return
                 self._apply_stripe_topology(topology_update.topology)
                 result = self._publish(running=True)
             elif command.name == "stripe_test":
                 test = _expect(command.value, _StripeTestCommand)
+                if (
+                    self._output_thread is not None
+                    and test.topology is not None
+                    and test.topology != self._topology
+                ):
+                    if test.pattern not in {"identify", "white", "red", "green", "blue"}:
+                        raise RuntimeCommandError(
+                            f"unknown test pattern: {test.pattern}"
+                        )
+                    if not any(
+                        output.id == test.stripe_id
+                        for output in test.topology.outputs
+                    ):
+                        raise RuntimeCommandError(
+                            f"unknown stripe: {test.stripe_id}"
+                        )
+                    self._begin_stripe_topology_change(
+                        command,
+                        test.topology,
+                        persist=False,
+                        stripe_test=test,
+                    )
+                    return
                 self._test_stripe(test.stripe_id, test.pattern, test.topology)
                 result = self._publish(running=True)
             else:
@@ -1956,6 +2110,159 @@ class RuntimeWorker:
             self._rollback_topology_change(
                 previous, "configuration was not applied", exc
             )
+        try:
+            self._configure_physical_outputs(topology)
+        except Exception as exc:  # noqa: BLE001 - restore the active hardware topology
+            self._rollback_topology_change(
+                previous, "configuration was not applied", exc
+            )
+        self._activate_topology(previous, topology, built)
+        try:
+            with self._settings_io_lock:
+                self._settings_store.save_stripes(topology)
+        except OSError as exc:
+            # Hardware is usable, but make the persistence failure explicit.
+            raise RuntimeCommandError(
+                f"configuration is active but could not be saved: {exc}"
+            ) from exc
+
+    def _begin_stripe_topology_change(
+        self,
+        command: _Command | None,
+        topology: StripeTopologySettings,
+        *,
+        persist: bool = True,
+        stripe_test: _StripeTestCommand | None = None,
+    ) -> None:
+        if not self._uses_default_controller_factory:
+            raise RuntimeCommandError(
+                "live stripe configuration is unavailable with a custom controller"
+            )
+        output_thread = self._output_thread
+        if output_thread is None:
+            raise RuntimeError("hardware output thread is unavailable")
+        previous = self._topology
+        self._stripe_test = None
+        self._release_output_before_topology_change(
+            previous, reason="configuration"
+        )
+        try:
+            built = self._build_topology(topology)
+        except Exception as exc:  # noqa: BLE001 - retain the previous topology
+            self._rollback_topology_change(
+                previous, "configuration was not applied", exc
+            )
+        output_future = output_thread.reconfigure_async(
+            tuple(output.pixels for output in topology.outputs),
+            lambda: self._build_physical_outputs(topology),
+        )
+        self._pending_topology_change = _PendingTopologyChange(
+            command=command,
+            previous=previous,
+            topology=topology,
+            built=built,
+            output_future=output_future,
+            persist=persist,
+            stripe_test=stripe_test,
+        )
+
+    def _complete_pending_topology_change(self) -> None:
+        pending = self._pending_topology_change
+        if pending is None:
+            return
+        output_thread = self._output_thread
+        if output_thread is None:
+            self._pending_topology_change = None
+            if pending.command is not None:
+                self._resolve_command(
+                    pending.command,
+                    error=RuntimeUnavailableError("hardware output thread stopped"),
+                )
+            return
+
+        if pending.rollback_future is None:
+            if not pending.output_future.done():
+                return
+            try:
+                self._frame_exchange = pending.output_future.result()
+            except Exception as exc:  # noqa: BLE001 - restore before rejecting command
+                pending.output_error = exc
+                try:
+                    pending.rollback_future = output_thread.reconfigure_async(
+                        tuple(output.pixels for output in pending.previous.outputs),
+                        lambda: self._build_physical_outputs(pending.previous),
+                    )
+                except Exception as rollback_error:  # noqa: BLE001
+                    self._fail_topology_rollback(pending, rollback_error)
+                return
+
+            self._activate_topology(pending.previous, pending.topology, pending.built)
+            self._pending_topology_change = None
+            if pending.persist:
+                try:
+                    with self._settings_io_lock:
+                        self._settings_store.save_stripes(pending.topology)
+                except OSError as exc:
+                    error = RuntimeCommandError(
+                        f"configuration is active but could not be saved: {exc}"
+                    )
+                    self._last_command_error = str(error)
+                    self._publish(running=True)
+                    if pending.command is not None:
+                        self._resolve_command(pending.command, error=error)
+                    return
+            if pending.stripe_test is not None:
+                self._test_stripe(
+                    pending.stripe_test.stripe_id,
+                    pending.stripe_test.pattern,
+                    None,
+                )
+                if self._stripe_test is not None:
+                    self._stripe_test.restore_topology = pending.previous
+            state = self._publish(running=True)
+            if pending.command is not None:
+                self._resolve_command(pending.command, result=state)
+            return
+
+        if not pending.rollback_future.done():
+            return
+        try:
+            self._frame_exchange = pending.rollback_future.result()
+            restored = self._build_topology(pending.previous)
+            self._topology = pending.previous
+            self._install_topology(restored)
+        except Exception as rollback_error:  # noqa: BLE001 - hardware state is unknown
+            self._fail_topology_rollback(pending, rollback_error)
+            return
+
+        self._pending_topology_change = None
+        error = RuntimeCommandError(
+            f"configuration was not applied: {pending.output_error}"
+        )
+        self._last_command_error = str(error)
+        self._publish(running=True)
+        if pending.command is not None:
+            self._resolve_command(pending.command, error=error)
+
+    def _fail_topology_rollback(
+        self, pending: _PendingTopologyChange, cause: Exception
+    ) -> None:
+        message = (
+            "configuration could not be applied and the previous hardware "
+            f"topology could not be restored: {cause}"
+        )
+        self._pending_topology_change = None
+        self._mark_fatal_failure(message)
+        self._publish(running=False, error=message)
+        if pending.command is not None:
+            self._resolve_command(pending.command, error=RuntimeCommandError(message))
+
+    def _activate_topology(
+        self,
+        previous: StripeTopologySettings,
+        topology: StripeTopologySettings,
+        built: _BuiltTopology,
+    ) -> None:
         if previous.layout == "independent" and topology.layout != "independent":
             first = previous.outputs[0].id if previous.outputs else None
             source = self._playbacks.get(first) if first is not None else None
@@ -1967,14 +2274,6 @@ class RuntimeWorker:
         self._power_budget_state = _power_budget_state_for(topology)
         self._pending_preview_frames = None
         self._install_topology(built)
-        try:
-            with self._settings_io_lock:
-                self._settings_store.save_stripes(topology)
-        except OSError as exc:
-            # Hardware is usable, but make the persistence failure explicit.
-            raise RuntimeCommandError(
-                f"configuration is active but could not be saved: {exc}"
-            ) from exc
 
     def _release_output_before_topology_change(
         self, previous: StripeTopologySettings, *, reason: str
@@ -2001,6 +2300,7 @@ class RuntimeWorker:
         cause: Exception,
     ) -> NoReturn:
         try:
+            self._configure_physical_outputs(previous)
             built = self._build_topology(previous)
             self._topology = previous
             self._install_topology(built)
@@ -2075,13 +2375,23 @@ class RuntimeWorker:
                     controller.set_pixel(position, Rgb(255, 255, 255))
                 else:
                     controller.fill(colors[pattern])
-            controller.force_flush()
+            if self._frame_exchange is None:
+                controller.force_flush()
+        if self._frame_exchange is not None:
+            self._submit_hardware_output_frames()
 
     def _finish_stripe_test(self) -> None:
         session = self._stripe_test
         self._stripe_test = None
         if session is not None and session.restore_topology is not None:
-            self._replace_topology(session.restore_topology)
+            if self._output_thread is not None:
+                self._begin_stripe_topology_change(
+                    None,
+                    session.restore_topology,
+                    persist=False,
+                )
+            else:
+                self._replace_topology(session.restore_topology)
 
     def _replace_topology(self, topology: StripeTopologySettings) -> None:
         previous = self._topology
@@ -2091,6 +2401,12 @@ class RuntimeWorker:
         try:
             built = self._build_topology(topology)
         except Exception as exc:  # noqa: BLE001 - restore the previous topology
+            self._rollback_topology_change(
+                previous, "temporary configuration failed", exc
+            )
+        try:
+            self._configure_physical_outputs(topology)
+        except Exception as exc:  # noqa: BLE001 - restore the active hardware topology
             self._rollback_topology_change(
                 previous, "temporary configuration failed", exc
             )
@@ -3451,7 +3767,9 @@ profile.audio_config(microphone=True),
             strict=True,
         ):
             controller.set_pixels(frame)
-        if not session.original_blackout:
+        if self._frame_exchange is not None:
+            self._submit_hardware_output_frames()
+        elif not session.original_blackout:
             for controller in self._correction_controllers:
                 controller.force_flush()
 
@@ -3474,7 +3792,10 @@ profile.audio_config(microphone=True),
                 controller.fill(pattern)
             else:
                 controller.clear()
-            controller.force_flush()
+            if self._frame_exchange is None:
+                controller.force_flush()
+        if self._frame_exchange is not None:
+            self._submit_hardware_output_frames()
 
     def _step(self) -> float:
         assert self._controller is not None
@@ -3590,6 +3911,57 @@ profile.audio_config(microphone=True),
                 self._output_frame_buffers,
             )
         )
+        exchange = self._frame_exchange
+        if exchange is None:
+            return
+        shared_blackout = (
+            self._topology.layout != "independent"
+            and self._controller is not None
+            and self._controller.blackout
+        )
+        for gate, buffers in zip(
+            self._output_gates, self._output_frame_buffers, strict=True
+        ):
+            if shared_blackout or gate.blackout:
+                buffers.corrected.fill(0)
+        exchange.submit(
+            tuple(buffers.corrected for buffers in self._output_frame_buffers)
+        )
+
+    def _submit_hardware_output_frames(self) -> None:
+        """Publish corrected calibration/blackout frames without touching drivers."""
+        exchange = self._frame_exchange
+        if exchange is None:
+            return
+        shared_blackout = (
+            self._topology.layout != "independent"
+            and self._controller is not None
+            and self._controller.blackout
+        )
+        frames: list[np.ndarray] = []
+        for controller, gate, buffers in zip(
+            self._correction_controllers,
+            self._output_gates,
+            self._output_frame_buffers,
+            strict=True,
+        ):
+            correction = controller.correction
+            buffers.correction[:] = (
+                correction.red,
+                correction.green,
+                correction.blue,
+            )
+            if shared_blackout or gate.blackout:
+                buffers.corrected.fill(0)
+            else:
+                correct_rgba_into(
+                    controller.pixels(),
+                    buffers.corrected,
+                    buffers.correction,
+                    buffers.rgb_scratch,
+                )
+            frames.append(buffers.corrected)
+        exchange.submit(tuple(frames))
 
     def _preview_bytes(self, pixels: np.ndarray, index: int) -> bytes:
         frame = (
@@ -3829,6 +4201,18 @@ profile.audio_config(microphone=True),
         self._revision += 1
         controller = self._controller
         uptime_seconds = self._uptime_seconds()
+        output_stats = (
+            self._output_thread.stats() if self._output_thread is not None else None
+        )
+        output_heartbeat_age = (
+            max(
+                0.0,
+                time.monotonic() - output_stats.heartbeat_at_monotonic,
+            )
+            if output_stats is not None
+            and output_stats.heartbeat_at_monotonic is not None
+            else None
+        )
         state = DashboardState(
             revision=self._revision,
             runtime=self.settings.kind,
@@ -3859,6 +4243,15 @@ profile.audio_config(microphone=True),
             recent_frame_miss_rate=self._frame_timing.stats(
                 time.monotonic()
             ).miss_rate,
+            output_frame_rate=(output_stats.output_rate if output_stats else 0.0),
+            output_heartbeat_age_seconds=output_heartbeat_age,
+            output_dropped_frame_count=(
+                output_stats.dropped_frames if output_stats else 0
+            ),
+            output_failure_count=(
+                output_stats.failed_flushes if output_stats else 0
+            ),
+            output_error=(output_stats.last_error if output_stats else None),
             command_queue_depth=self._command_queue_depth(),
             audio_health=self._audio_health_status(uptime_seconds),
             audio_callback_age_seconds=self._audio_health.last_callback_age,
@@ -4158,6 +4551,8 @@ profile.audio_config(microphone=True),
         )
 
     def _last_output_at(self) -> datetime | None:
+        if self._output_thread is not None:
+            return self._output_thread.stats().last_successful_update_at
         values = [
             gate.last_successful_update_at
             for gate in self._output_gates
@@ -4168,6 +4563,8 @@ profile.audio_config(microphone=True),
         return self._controller.last_successful_update_at if self._controller else None
 
     def _last_output_age(self) -> float | None:
+        if self._output_thread is not None:
+            return self._output_thread.stats().last_successful_update_age_seconds
         values = [
             gate.last_successful_update_age_seconds
             for gate in self._output_gates
@@ -4403,6 +4800,13 @@ profile.audio_config(microphone=True),
         return tuple(issues)
 
     def _cleanup(self) -> None:
+        pending_topology = self._pending_topology_change
+        self._pending_topology_change = None
+        if pending_topology is not None and pending_topology.command is not None:
+            self._resolve_command(
+                pending_topology.command,
+                error=RuntimeUnavailableError(self._fatal_error or "runtime stopped"),
+            )
         cleanup_steps = [
             self._cancel_startup_persist_timer,
             self._stop_audio_sync_calibration,
@@ -4414,6 +4818,14 @@ profile.audio_config(microphone=True),
             try:
                 cleanup_step()
             except Exception as exc:  # noqa: BLE001 - cleanup continues after individual failures
+                self._fatal_error = self._fatal_error or str(exc)
+        output_thread = self._output_thread
+        self._output_thread = None
+        self._frame_exchange = None
+        if output_thread is not None:
+            try:
+                output_thread.stop()
+            except Exception as exc:  # noqa: BLE001 - still release render-owned state
                 self._fatal_error = self._fatal_error or str(exc)
         controller = self._raw_controller
         if controller is None:

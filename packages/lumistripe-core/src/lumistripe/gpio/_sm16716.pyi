@@ -4,4 +4,5 @@ from numpy import uint8
 from numpy.typing import NDArray
 
 def frame_size(pixel_count: int, /) -> int: ...
-def encode_into(pixels: NDArray[uint8], destination: Buffer, /) -> None: ...
+def encode_into(pixels: NDArray[uint8], destination: Buffer, /) -> None:
+    """Encode RGBA pixels; callers must not mutate either buffer until return."""

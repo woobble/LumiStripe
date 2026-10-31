@@ -93,6 +93,8 @@ static PyObject *sm16716_encode_into(PyObject *module, PyObject *args) {
         PyErr_SetString(PyExc_ValueError, "pixels and destination must not overlap");
         return NULL;
     }
+    /* The caller retains exclusive access to both buffers until return. */
+    Py_BEGIN_ALLOW_THREADS
     memset(output, 0, frame_size);
 
     size_t bit_index = 50u;
@@ -107,6 +109,7 @@ static PyObject *sm16716_encode_into(PyObject *module, PyObject *args) {
         }
     }
     /* Trailing zero clocks and byte padding were established by memset. */
+    Py_END_ALLOW_THREADS
 
     PyBuffer_Release(&destination);
     Py_RETURN_NONE;
@@ -116,7 +119,7 @@ static PyMethodDef module_methods[] = {
     {"frame_size", sm16716_frame_size, METH_VARARGS,
      "Return the encoded SM16716 frame size for a pixel count."},
     {"encode_into", sm16716_encode_into, METH_VARARGS,
-     "Encode an (n,4) uint8 RGBA array into a writable byte buffer."},
+     "Encode an (n,4) uint8 RGBA array into a writable byte buffer. The caller must not mutate either buffer until return."},
     {NULL, NULL, 0, NULL}
 };
 

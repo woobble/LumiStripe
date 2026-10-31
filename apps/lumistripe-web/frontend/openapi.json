@@ -1864,6 +1864,45 @@
             "title": "Output Devices",
             "type": "array"
           },
+          "output_dropped_frame_count": {
+            "default": 0,
+            "title": "Output Dropped Frame Count",
+            "type": "integer"
+          },
+          "output_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Error"
+          },
+          "output_failure_count": {
+            "default": 0,
+            "title": "Output Failure Count",
+            "type": "integer"
+          },
+          "output_frame_rate": {
+            "default": 0.0,
+            "minimum": 0.0,
+            "title": "Output Frame Rate",
+            "type": "number"
+          },
+          "output_heartbeat_age_seconds": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Heartbeat Age Seconds"
+          },
           "power_budget": {
             "$ref": "#/components/schemas/PowerBudgetState",
             "default": {

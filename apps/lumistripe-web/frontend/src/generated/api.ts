@@ -1731,6 +1731,25 @@ export interface components {
              */
             output_devices: string[];
             /**
+             * Output Dropped Frame Count
+             * @default 0
+             */
+            output_dropped_frame_count: number;
+            /** Output Error */
+            output_error?: string | null;
+            /**
+             * Output Failure Count
+             * @default 0
+             */
+            output_failure_count: number;
+            /**
+             * Output Frame Rate
+             * @default 0
+             */
+            output_frame_rate: number;
+            /** Output Heartbeat Age Seconds */
+            output_heartbeat_age_seconds?: number | null;
+            /**
              * @default {
              *       "applied_scale": 1,
              *       "enabled": false,
