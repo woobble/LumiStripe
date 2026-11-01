@@ -58,6 +58,16 @@ jobs:
           apps/lumistripe-web/src/lumistripe_web
           packages/lumistripe-app-support/src/lumistripe_app_support
 
+      - name: Verify Rust renderer catalogs and golden fixtures
+        if: matrix.python-version == '3.12'
+        run: |
+          uv run --locked python scripts/export_rust_animation_catalog.py --check
+          uv run --locked python scripts/export_rust_animation_golden.py --check
+          uv run --locked python scripts/export_rust_effect_golden.py --check
+          uv run --locked python scripts/export_rust_layout_golden.py --check
+          uv run --locked python scripts/export_rust_transition_golden.py --check
+          uv run --locked python scripts/export_rust_power_golden.py --check
+
       - name: Build Rust engine for Python IPC integration
         if: matrix.python-version == '3.12'
         run: >-
@@ -338,14 +348,14 @@ jobs:
       - name: Build and verify ARM64 engine
         run: |
           cargo build --release --locked --manifest-path rust/Cargo.toml --workspace
-          file rust/target/release/lumistripe-engine | rg 'ARM aarch64'
+          file rust/target/release/lumistripe-engine | grep -q 'ARM aarch64'
 
   raspberry-pi:
     name: Raspberry Pi 5 arm64 native smoke
     # This runner is a persistent home/device host. Keep untrusted pull request
     # code on the hosted runners above and use the RPi only for trusted pushes
-    # and explicit manual validation.
-    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' }}
+    # to main and explicit manual validation dispatched from main.
+    if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     runs-on: [self-hosted, linux, ARM64, rpi5]
     timeout-minutes: 30
     steps:
@@ -379,6 +389,14 @@ jobs:
         run: |
           set -eu
           uv --version
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+
+      - name: Verify Rust toolchain
+        run: rustc -vV && cargo --version
 
       - name: Install Raspberry Pi audio build dependency
         run: |
@@ -457,3 +475,116 @@ jobs:
               raise SystemExit(f"sdist is missing KISS FFT sources: {sorted(missing)}")
           print(f"verified {len(native)} native extensions and KISS FFT sources")
           PY
+
+      - name: Build native and scalar Rust renderer benchmarks
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/lumistripe-rust-renderer-benchmarks"
+          CARGO_TARGET_DIR="$RUNNER_TEMP/lumistripe-rust-renderer-llvm" \
+            RUSTFLAGS="-C target-cpu=native" \
+            cargo build --release --locked --manifest-path rust/Cargo.toml \
+              -p lumistripe-engine-animation-state --example benchmark_render
+          CARGO_TARGET_DIR="$RUNNER_TEMP/lumistripe-rust-renderer-scalar" \
+            RUSTFLAGS="-C target-cpu=native -C no-vectorize-loops -C no-vectorize-slp" \
+            cargo build --release --locked --manifest-path rust/Cargo.toml \
+              -p lumistripe-engine-animation-state --example benchmark_render
+
+      - name: Benchmark scalar C and Rust renderer profiles on Raspberry Pi 5
+        env:
+          LUMISTRIPE_BUILD_EXTENSIONS: render
+          LUMISTRIPE_NATIVE_OPTIMIZATION: "1"
+          LUMISTRIPE_DISABLE_RENDER_NEON: "1"
+        run: |
+          set -eu
+          uv run --directory packages/lumistripe-core --with setuptools \
+            python setup.py build_ext --inplace --force
+          uv run --locked python scripts/benchmark_rust_catalog_comparison.py \
+            --pixels 300 --frames 1000 --warmup 200 --audio --python --native-c \
+            --rust-binary llvm="$RUNNER_TEMP/lumistripe-rust-renderer-llvm/release/examples/benchmark_render" \
+            --rust-binary scalar="$RUNNER_TEMP/lumistripe-rust-renderer-scalar/release/examples/benchmark_render" \
+            --output "$RUNNER_TEMP/lumistripe-rust-renderer-benchmarks/c-scalar.json"
+          uv run --locked python - "$RUNNER_TEMP/lumistripe-rust-renderer-benchmarks/c-scalar.json" false <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          expected_neon = sys.argv[2] == "true"
+          if report["native_c_neon_enabled"] is not expected_neon:
+              raise SystemExit(
+                  f"expected native C NEON={expected_neon}, got "
+                  f"{report['native_c_neon_enabled']}"
+              )
+          for profile in ("native-c", "llvm", "scalar"):
+              available = report["summary"][profile]["available_cases"]
+              if available != report["animation_count"]:
+                  raise SystemExit(
+                      f"{profile} benchmark covers {available}/"
+                      f"{report['animation_count']} animations"
+                  )
+          PY
+
+      - name: Benchmark NEON C and Rust renderer profiles on Raspberry Pi 5
+        env:
+          LUMISTRIPE_BUILD_EXTENSIONS: render
+          LUMISTRIPE_NATIVE_OPTIMIZATION: "1"
+        run: |
+          set -eu
+          uv run --directory packages/lumistripe-core --with setuptools \
+            python setup.py build_ext --inplace --force
+          uv run --locked python scripts/benchmark_rust_catalog_comparison.py \
+            --pixels 300 --frames 1000 --warmup 200 --audio --python --native-c \
+            --rust-binary llvm="$RUNNER_TEMP/lumistripe-rust-renderer-llvm/release/examples/benchmark_render" \
+            --rust-binary scalar="$RUNNER_TEMP/lumistripe-rust-renderer-scalar/release/examples/benchmark_render" \
+            --output "$RUNNER_TEMP/lumistripe-rust-renderer-benchmarks/c-neon.json"
+          uv run --locked python - "$RUNNER_TEMP/lumistripe-rust-renderer-benchmarks/c-neon.json" true <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          expected_neon = sys.argv[2] == "true"
+          if report["native_c_neon_enabled"] is not expected_neon:
+              raise SystemExit(
+                  f"expected native C NEON={expected_neon}, got "
+                  f"{report['native_c_neon_enabled']}"
+              )
+          for profile in ("native-c", "llvm", "scalar"):
+              available = report["summary"][profile]["available_cases"]
+              if available != report["animation_count"]:
+                  raise SystemExit(
+                      f"{profile} benchmark covers {available}/"
+                      f"{report['animation_count']} animations"
+                  )
+          PY
+
+      - name: Benchmark Rust effect layers and allocation counts on Raspberry Pi 5
+        run: |
+          set -eu
+          uv run --locked python scripts/benchmark_rust_catalog.py \
+            --rust-binary llvm="$RUNNER_TEMP/lumistripe-rust-renderer-llvm/release/examples/benchmark_render" \
+            --rust-binary scalar="$RUNNER_TEMP/lumistripe-rust-renderer-scalar/release/examples/benchmark_render" \
+            --pixels 300 --frames 1000 --warmup 200 --audio --fail-on-allocation \
+            --output "$RUNNER_TEMP/lumistripe-rust-renderer-benchmarks/effects-and-allocations.json"
+
+      - name: Record Raspberry Pi renderer benchmark environment
+        if: always()
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/lumistripe-rust-renderer-benchmarks"
+          {
+            uname -a
+            rustc -vV
+            cc --version
+            uv --version
+            uv run --locked python -c 'import platform, sys; print(sys.version); print(platform.platform()); print(platform.processor())'
+          } > "$RUNNER_TEMP/lumistripe-rust-renderer-benchmarks/environment.txt"
+
+      - name: Upload Raspberry Pi renderer benchmark results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: raspberry-pi-5-renderer-benchmarks-${{ github.run_id }}
+          path: ${{ runner.temp }}/lumistripe-rust-renderer-benchmarks/
+          if-no-files-found: warn
+          retention-days: 30

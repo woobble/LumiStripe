@@ -28,6 +28,7 @@ if "none" in requested_extensions and len(requested_extensions) > 1:
     )
 build_all_extensions = "all" in requested_extensions
 optimized_native_build = os.environ.get("LUMISTRIPE_NATIVE_OPTIMIZATION", "0") == "1"
+disable_render_neon = os.environ.get("LUMISTRIPE_DISABLE_RENDER_NEON", "0") == "1"
 
 
 def optimization_flags() -> tuple[list[str], list[str]]:
@@ -82,6 +83,9 @@ ext_render = Extension(
         "src/lumistripe/render/native_reactive.c",
     ],
     include_dirs=[numpy.get_include()],
+    define_macros=(
+        [("LUMISTRIPE_DISABLE_RENDER_NEON", "1")] if disable_render_neon else []
+    ),
     extra_compile_args=native_compile_flags,
     extra_link_args=native_link_flags,
 )

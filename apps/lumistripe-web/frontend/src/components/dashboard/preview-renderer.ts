@@ -1,5 +1,5 @@
 import type { StripeTopology } from "@/lib/api"
-import { buildPreviewLayout, type PreviewFrame, type PreviewLayout, type PreviewStripLayout } from "@/lib/preview"
+import { buildPreviewLayout, previewSampleIndex, type PreviewFrame, type PreviewLayout, type PreviewStripLayout } from "@/lib/preview"
 
 const RENDERER_BACKGROUND = [0.025, 0.018, 0.05, 1] as const
 const GPU_BUFFER_USAGE_STORAGE = 0x80
@@ -14,8 +14,10 @@ function resizeCanvas(canvas: HTMLCanvasElement) {
   return { width, height }
 }
 
-function pixelColor(output: Uint8Array | undefined, index: number) {
-  const offset = index * 4
+function pixelColor(output: Uint8Array | undefined, index: number, pixelCount: number) {
+  const sampleCount = output ? output.length / 4 : 0
+  const sampleIndex = previewSampleIndex(index, pixelCount, sampleCount)
+  const offset = sampleIndex * 4
   const alpha = (output?.[offset + 3] ?? 0) / 255
   return {
     red: output?.[offset] ?? 0,
@@ -31,7 +33,7 @@ function buildInstances(frame: PreviewFrame, layout: PreviewLayout) {
   for (const strip of layout.strips) {
     const output = frame.outputs[strip.outputIndex]
     for (let index = 0; index < strip.pixelCount; index += 1) {
-      const color = pixelColor(output, index)
+      const color = pixelColor(output, index, strip.pixelCount)
       const position = index / Math.max(strip.pixelCount, 1)
       const cellGap = Math.min(0.18 / Math.max(strip.pixelCount, 1), 0.008)
       instances[offset] = strip.x + position * strip.width + cellGap
@@ -91,7 +93,7 @@ export class CanvasPreviewRenderer implements PreviewRenderer {
     for (const strip of layout.strips) {
       const output = frame.outputs[strip.outputIndex]
       for (let index = 0; index < strip.pixelCount; index += 1) {
-        const color = pixelColor(output, index)
+        const color = pixelColor(output, index, strip.pixelCount)
         if (color.alpha <= 0) continue
         const position = index / Math.max(strip.pixelCount, 1)
         const gap = Math.min(0.18 / Math.max(strip.pixelCount, 1), 0.008)

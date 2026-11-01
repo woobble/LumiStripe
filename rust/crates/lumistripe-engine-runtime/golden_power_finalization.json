@@ -1,0 +1,128 @@
+{
+  "cases": [
+    {
+      "applied_scale": 0.37500000000000006,
+      "estimated_watts": 0.10666666666666666,
+      "input_frames": [
+        [
+          [
+            255,
+            128,
+            64,
+            255
+          ]
+        ]
+      ],
+      "limiting_output_index": 0,
+      "name": "corrected_per_output_and_global_limit",
+      "output_frames": [
+        [
+          [
+            128,
+            128,
+            16,
+            95
+          ]
+        ]
+      ],
+      "output_watts": [
+        0.10666666666666666
+      ],
+      "outputs": [
+        {
+          "animation": "rainbow",
+          "blackout": false,
+          "color_correction": [
+            128,
+            255,
+            64
+          ],
+          "full_white_current_a": 0.06,
+          "power_limit_watts": 0.04,
+          "voltage_v": 5.0
+        }
+      ],
+      "power": {
+        "budget_watts": 0.05,
+        "enabled": true
+      }
+    },
+    {
+      "applied_scale": 0.33333333333333337,
+      "estimated_watts": 0.3,
+      "input_frames": [
+        [
+          [
+            255,
+            255,
+            255,
+            255
+          ]
+        ],
+        [
+          [
+            255,
+            255,
+            255,
+            255
+          ]
+        ]
+      ],
+      "limiting_output_index": null,
+      "name": "blackout_excluded_from_power_estimate",
+      "output_frames": [
+        [
+          [
+            255,
+            255,
+            255,
+            85
+          ]
+        ],
+        [
+          [
+            0,
+            0,
+            0,
+            0
+          ]
+        ]
+      ],
+      "output_watts": [
+        0.3,
+        0.0
+      ],
+      "outputs": [
+        {
+          "animation": "rainbow",
+          "blackout": false,
+          "color_correction": [
+            255,
+            255,
+            255
+          ],
+          "full_white_current_a": 0.06,
+          "power_limit_watts": null,
+          "voltage_v": 5.0
+        },
+        {
+          "animation": "rainbow",
+          "blackout": true,
+          "color_correction": [
+            255,
+            255,
+            255
+          ],
+          "full_white_current_a": 0.06,
+          "power_limit_watts": null,
+          "voltage_v": 5.0
+        }
+      ],
+      "power": {
+        "budget_watts": 0.1,
+        "enabled": true
+      }
+    }
+  ],
+  "schema_version": 1
+}

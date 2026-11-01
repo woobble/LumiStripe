@@ -26,6 +26,83 @@ Health request:
 {"protocol_version":2,"request_id":"req-1","command":{"type":"health"}}
 ```
 
+After a direct `render` request completes, health may include
+`render_time_ms`, `estimated_power_watts`, `applied_power_scale`,
+`output_power_watts`, `limiting_output_index`, and `preview_outputs`. Render
+time measures Rust scene rendering, zone expansion, color correction, and power finalization;
+queue, output transmission, and sequential skew remain separate measurements.
+Power estimates describe the corrected frame before alpha scaling. The output
+array and optional limiting index use the same order as the configured outputs.
+`preview_outputs` contains post-correction, post-power-limit RGBA samples in
+physical output order, with at most 128 evenly spaced pixels per output.
+These fields are omitted until a direct render completes, preserving the
+existing health fixture and compatibility with clients that ignore additions.
+
+### Direct Rust rendering
+
+The `render` command accepts timestamped animation inputs instead of pixels.
+The configured output count and order must match `frame.outputs`. Rust keeps
+each animation instance, effect state, and scratch frame in the output worker.
+It renders into reusable buffers and queues the result for output. A newer
+pending render replaces a stale pending render.
+
+```json
+{"protocol_version":2,"request_id":"req-3","command":{"type":"render","data":{"frame":{"sequence":7,"timestamp_ns":1240000000,"delta_ns":16000000,"brightness":0.8,"audio":{"rms":0.4,"bands":[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8],"beat":true,"beat_strength":0.9},"power":{"enabled":true,"budget_watts":80.0},"outputs":[{"animation":"rainbow","settings":{"palette":"neon"},"effects":[{"name":"hard_beat","settings":{},"intensity":0.75}],"base_intensity":0.8,"max_overlay_strength":0.65,"zone_count":2,"zone_pattern":"alternate","transition":{"started_at_ns":1200000000,"duration_ns":250000000,"mode":"crossfade"},"color_correction":[240,255,224],"voltage_v":5.0,"full_white_current_a":0.06,"power_limit_watts":45.0}]}}}}
+```
+
+Each output has one base animation and may specify up to two effects. Effect
+settings use the effect catalog schema; effect intensity and base intensity
+are bounded to `[0, 1]`, and overlay strength is bounded to `(0, 1]`. Missing
+settings and effect arrays default to empty,
+base intensity defaults to `1.0`, and overlay strength defaults to `0.65`.
+An optional `solid_color` contains three RGB bytes and renders a brightness-
+scaled solid base instead of the named animation. Solid scenes cannot include
+effect layers.
+`zone_count` defaults to `1` and must not exceed the configured physical pixel
+count. `zone_pattern` defaults to `repeat` and may be `alternate`. Rust renders
+to a logical canvas of `ceil(pixel_count / zone_count)` pixels, then expands it
+into each physical zone using evenly spaced nearest samples with ties rounded
+to even. `alternate` reverses the sample order in every odd-numbered zone.
+For a shared whole-topology scene, `scene_pixel_count` gives the logical canvas
+length and `scene_offset` selects the first pixel assigned to this output.
+Omitting both fields renders one independent scene per output. Continuous
+layouts use these fields to render one logical animation across multiple
+outputs before applying each output's zone mapping. `scene_resample` instead
+maps the full canvas to this output's logical length using evenly spaced
+nearest samples with ties rounded to even; it requires a whole scene canvas
+and a zero offset. Mirrored layouts use it when output lengths differ.
+An optional `transition` has a monotonic `started_at_ns`, positive
+`duration_ns`, and a mode of `crossfade`, `fade_black`, or `wipe`. When the
+scene revision changes, Rust captures the prior logical scene frame and
+composites the transition before selecting the output slice and expanding
+zones. Transition frames use the same reusable buffers as normal renders.
+`blackout` defaults to `false`. While true, the animation and effects continue
+advancing in Rust, but the physical output frame is black; clearing the flag
+restores the current rendered scene without resetting its state.
+`power` defaults to disabled. When enabled, it requires a non-negative global
+`budget_watts`; each output can also provide a `power_limit_watts` ceiling,
+`voltage_v`, and `full_white_current_a`. Per-output RGB `color_correction`
+defaults to `[255,255,255]`. Rust applies integer color correction after scene
+composition and zone expansion, estimates power from corrected RGB and alpha,
+chooses the minimum global/per-output scale, and applies that scale to alpha
+before output. Per-output power limits are ignored while global power limiting
+is disabled, matching the Python output path.
+Unsupported animation names/settings and invalid frame-level values reject the
+render request before it is queued. The output worker validates effect names
+and settings before it renders; a bad effect rejects the frame, increments
+failed-frame health, and does not transmit it. `sequence`, `timestamp_ns`, and
+`delta_ns` are unsigned integers; brightness is between zero and one. Audio is
+optional and carries RMS, eight bands, beat state, and beat strength.
+
+This command renders the base animation and effect stack, applies render
+brightness, scene transitions, per-output blackout and zone mapping, then
+applies color correction and power limiting before writing to the configured
+output set. Continuous layouts use the shared scene slice fields, and
+differently sized mirrored layouts use scene resampling. The web runtime routes
+supported Static, Cycling, Dynamic, and Solid scenes through this command.
+The binary frame-set protocol remains available for older clients and
+unsupported custom scene requests.
+
 Configure all outputs in one transaction:
 
 ```json

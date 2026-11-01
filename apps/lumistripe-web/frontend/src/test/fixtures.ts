@@ -21,6 +21,7 @@ export const initialState: DashboardState = {
   uptime_seconds: 65,
   frame_rate: 20,
   render_time_ms: 4.2,
+  scheduler_time_ms: 0.3,
   worker_heartbeat_age_seconds: 0.01,
   missed_frame_count: 0,
   recent_frame_miss_rate: 0,

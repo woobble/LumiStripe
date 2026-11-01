@@ -245,6 +245,7 @@ export function StatusPanel({ controller, onLogout }: { controller: DashboardCon
           <Metric icon={Clock3Icon} label="Uptime" value={formatDuration(state.uptime_seconds)} />
           <Metric icon={GaugeIcon} label="Frame rate" value={state.frame_rate > 0 ? `${state.frame_rate.toFixed(1)} FPS` : "Measuring…"} />
           <Metric icon={Clock3Icon} label="Latest render" value={state.render_time_ms > 0 ? `${state.render_time_ms.toFixed(1)} ms` : "Measuring…"} />
+          <Metric icon={Clock3Icon} label="Playback scheduling" value={typeof state.scheduler_time_ms === "number" ? `${state.scheduler_time_ms.toFixed(2)} ms` : "Unavailable"} />
           <Metric icon={TriangleAlertIcon} label="Recent deadline misses" value={state.recent_frame_miss_rate > 0 ? `${(state.recent_frame_miss_rate * 100).toFixed(1)}%` : "None"} />
           <Metric icon={GaugeIcon} label="LED output rate" value={state.runtime === "hardware" ? (state.output_frame_rate > 0 ? `${state.output_frame_rate.toFixed(1)} FPS` : "Measuring…") : "Simulation"} />
           <Metric icon={Clock3Icon} label="Latest output latency" value={typeof state.output_frame_latency_ms === "number" ? `${state.output_frame_latency_ms.toFixed(1)} ms` : "Measuring…"} />

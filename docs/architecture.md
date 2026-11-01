@@ -124,13 +124,16 @@ remain available in the pure-Python profile.
 
 These modules are the intended seams for future implementation moves.
 
-### Optional Rust engine migration
+### Optional Rust rendering engine
 
-The opt-in Rust process boundary and its current feature parity are documented
-in [the incremental Rust engine migration guide](migrations/rust-engine.md).
-The Python runtime remains the default. Rust can own mock, SPI, and GPIO outputs
-in one process while Python retains animation, playback, audio DSP, FastAPI,
-dashboard contracts, and frame correction/power policy.
+The opt-in Rust process boundary and renderer parity are documented in
+[the incremental Rust engine migration guide](migrations/rust-engine.md) and
+[the renderer migration status](rust-renderer-migration.md). Python remains the
+default and rollback renderer. With Rust selected, Python retains playback,
+sequencer, audio, and application policy while Rust renders supported animation
+scenes and effects into reusable frame buffers, finalizes them, and owns mock,
+SPI, or GPIO output devices. Hosted and mock tests do not replace Raspberry Pi
+4/5 renderer benchmarks or physical GPIO/SPI validation.
 
 ## Physical stripe zones
 

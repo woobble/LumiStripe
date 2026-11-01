@@ -85,6 +85,7 @@ describe("useDashboard", () => {
       output_ipc_latency_ms: _outputIpcLatency,
       output_sequential_skew_ms: _outputSequentialSkew,
       output_heartbeat_age_seconds: _outputHeartbeatAge,
+      scheduler_time_ms: _schedulerTime,
       output_dropped_frame_count: _outputDroppedFrames,
       output_failure_count: _outputFailures,
       output_error: _outputError,
@@ -137,6 +138,7 @@ describe("useDashboard", () => {
     expect(result.current.state?.output_dropped_frame_count).toBe(0)
     expect(result.current.state?.output_failure_count).toBe(0)
     expect(result.current.state?.output_heartbeat_age_seconds).toBeUndefined()
+    expect(result.current.state?.scheduler_time_ms).toBeNull()
   })
 
   it("marks a dropped socket as reconnecting and opens a replacement", async () => {

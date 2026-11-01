@@ -267,6 +267,7 @@ const dashboardStateSchema = z.object({
   uptime_seconds: z.number(),
   frame_rate: z.number(),
   render_time_ms: z.number().nonnegative(),
+  scheduler_time_ms: z.number().nonnegative().nullable().optional().default(null),
   worker_heartbeat_age_seconds: z.number().nullable().optional(),
   missed_frame_count: z.number().int(),
   recent_frame_miss_rate: z.number().min(0).max(1),

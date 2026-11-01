@@ -1,6 +1,8 @@
 import numpy as np
 import numpy.typing as npt
 
+render_neon_enabled: int
+
 def correct_rgba_into(
     source: npt.NDArray[np.uint8],
     destination: npt.NDArray[np.uint8],

@@ -14,16 +14,27 @@ import numpy as np
 import pytest
 from lumistripe import Stripe
 from lumistripe.gpio.spi import _FrameEncoder, encode_legacy_frame
+from lumistripe.playback import PlaybackMode
 from lumistripe_web.app import build_parser
 from lumistripe_web.runtime import RuntimeSettings
 from lumistripe_web.runtime.rust_engine import (
+    RustEngineError,
     RustEngineOutputThread,
     RustEngineProcess,
     RustOutputSpec,
+    RustRenderAudioInput,
+    RustRenderEffect,
+    RustRenderOutput,
+    RustRenderTransition,
     _decode_response,
     _encode_request,
 )
 from lumistripe_web.runtime.worker import RuntimeWorker
+from lumistripe_web.settings import (
+    CalibrationSettingsStore,
+    StripeOutputSettings,
+    StripeTopologySettings,
+)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 PROTOCOL_FIXTURES = REPOSITORY_ROOT / "rust" / "test-fixtures" / "protocol-v2"
@@ -152,6 +163,332 @@ def test_one_rust_process_configures_and_transmits_all_outputs() -> None:
     assert process.is_running is False
 
 
+def test_rust_process_renders_typed_scene_inputs_without_pixel_frames() -> None:
+    process = RustEngineProcess(binary_path=_engine_binary())
+    try:
+        assert process.render_capabilities() == (
+            "rainbow",
+            "rainbow_cycle",
+            "theater_chase",
+            "strobe",
+            "pulse",
+            "police",
+            "bpm",
+            "wave",
+            "sinelon",
+            "bouncing_ball",
+            "color_wipe",
+            "juggle",
+            "comet",
+            "aurora",
+            "fire",
+            "twinkle",
+            "rainbow_strobe",
+            "laser_sweep",
+            "disco_sparkle",
+            "dual_comet",
+            "dance_floor",
+            "red_rave_sweep",
+            "red_rave_chase",
+            "red_blackout_strobe",
+            "glow_rush",
+            "rave_pulse",
+            "rave_scanner",
+            "neon_confetti",
+            "strobe_chase",
+            "plasma_rave",
+            "dual_laser",
+            "disco_comet",
+            "neon_storm",
+            "peak_mirror",
+            "shockwave",
+            "center_burst",
+            "mirror_flash",
+            "spectrum_flash",
+            "club_flash",
+            "color_burst",
+            "drop_explosion",
+            "drop_wave",
+            "bass_drop",
+            "beat_explosion",
+            "beat_ripple",
+            "beat_tunnel",
+            "beat_wave",
+            "hard_beat",
+            "confetti",
+            "comet_storm",
+            "electric_storm",
+            "firework_burst",
+            "lightning_strike",
+            "pixel_explosion",
+        )
+        process.configure((_mock_spec("main", 64), _mock_spec("secondary", 32)))
+        with pytest.raises(RustEngineError, match="invalid_render"):
+            process.render_frame(
+                sequence=22,
+                timestamp_ns=1_234_000_000,
+                delta_ns=16_000_000,
+                brightness=0.8,
+                outputs=(
+                    RustRenderOutput("not_ported", {}),
+                    RustRenderOutput("strobe", {}),
+                ),
+            )
+        with pytest.raises(RustEngineError, match="invalid_render"):
+            process.render_frame(
+                sequence=23,
+                timestamp_ns=1_250_000_000,
+                delta_ns=16_000_000,
+                brightness=0.8,
+                outputs=(
+                    RustRenderOutput("rainbow", {}),
+                    RustRenderOutput("strobe", {"flash_rate": 999}),
+                ),
+            )
+        invalid_effect_ack = process.render_frame(
+            sequence=24,
+            timestamp_ns=1_266_000_000,
+            delta_ns=16_000_000,
+            brightness=0.8,
+            outputs=(
+                RustRenderOutput(
+                    "rainbow",
+                    {},
+                    effects=(RustRenderEffect("unknown_effect", {}),),
+                ),
+                RustRenderOutput("strobe", {"flash_rate": 72}),
+            ),
+        )
+        assert invalid_effect_ack.sequence == 24
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            health = process.health()
+            if health.failed_frames >= 1:
+                break
+            time.sleep(0.005)
+        assert health.failed_frames == 1
+        assert health.frames_rendered == 0
+
+        acknowledgement = process.render_frame(
+            sequence=25,
+            timestamp_ns=1_282_000_000,
+            delta_ns=16_000_000,
+            brightness=0.8,
+            outputs=(
+                RustRenderOutput("rainbow", {"palette": "neon"}),
+                RustRenderOutput(
+                    "strobe",
+                    {"flash_rate": 72},
+                    effects=(RustRenderEffect("hard_beat", {}, 1.0),),
+                    base_intensity=0.5,
+                    max_overlay_strength=0.8,
+                ),
+            ),
+            audio=RustRenderAudioInput(
+                rms=0.4,
+                bands=(0.8, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.1),
+                beat=True,
+                beat_strength=0.9,
+            ),
+            power_limiting_enabled=True,
+            power_budget_watts=12.0,
+        )
+        assert acknowledgement.sequence == 25
+        assert acknowledgement.replaced is False
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            health = process.health()
+            if health.frames_rendered >= 1:
+                break
+            time.sleep(0.005)
+        assert health.frames_rendered == 1
+        assert health.last_sequence == 25
+        assert health.failed_frames == 1
+        assert health.render_time_ms is not None and health.render_time_ms >= 0.0
+        assert health.estimated_power_watts is not None
+        assert health.applied_power_scale is not None
+        assert 0.0 <= health.applied_power_scale <= 1.0
+        assert health.output_power_watts is not None
+        assert len(health.output_power_watts) == 2
+
+        transition_ack = process.render_frame(
+            sequence=26,
+            timestamp_ns=1_298_000_000,
+            delta_ns=16_000_000,
+            brightness=0.8,
+            outputs=(
+                RustRenderOutput(
+                    "strobe",
+                    {"flash_rate": 72},
+                    zone_count=2,
+                    zone_pattern="alternate",
+                    transition=RustRenderTransition(
+                        1_282_000_000, 100_000_000, "crossfade"
+                    ),
+                    blackout=True,
+                ),
+                RustRenderOutput("strobe", {"flash_rate": 72}),
+            ),
+        )
+        assert transition_ack.sequence == 26
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            health = process.health()
+            if health.frames_rendered >= 2:
+                break
+            time.sleep(0.005)
+        assert health.frames_rendered == 2
+        assert health.last_sequence == 26
+    finally:
+        process.close()
+
+
+def test_rust_render_audio_input_requires_finite_eight_band_values() -> None:
+    with pytest.raises(ValueError, match="eight bands"):
+        RustRenderAudioInput(0.0, (0.0,) * 7, False, 0.0).to_wire()  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="finite"):
+        RustRenderAudioInput(
+            0.0,
+            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, float("nan")),
+            False,
+            0.0,
+        ).to_wire()
+
+
+def test_rust_render_output_validates_and_encodes_effect_layers() -> None:
+    output = RustRenderOutput(
+        "rainbow",
+        {"palette": "neon"},
+        effects=(
+            RustRenderEffect(
+                "hard_beat", {}, 0.75, trigger_beat=True, trigger_beat_strength=0.9
+            ),
+        ),
+        base_intensity=0.4,
+        max_overlay_strength=0.6,
+    )
+    assert output.to_wire() == {
+        "animation": "rainbow",
+        "settings": {"palette": "neon"},
+        "effects": [
+            {
+                "name": "hard_beat",
+                "settings": {},
+                "intensity": 0.75,
+                "trigger_beat": True,
+                "trigger_beat_strength": 0.9,
+            }
+        ],
+        "base_intensity": 0.4,
+        "max_overlay_strength": 0.6,
+    }
+    zoned = RustRenderOutput("rainbow", {}, zone_count=3, zone_pattern="alternate")
+    assert zoned.to_wire() == {
+        "animation": "rainbow",
+        "settings": {},
+        "zone_count": 3,
+        "zone_pattern": "alternate",
+    }
+    transitioned = RustRenderOutput(
+        "rainbow",
+        {},
+        transition=RustRenderTransition(1_000_000_000, 250_000_000, "wipe"),
+        blackout=True,
+    )
+    assert transitioned.to_wire() == {
+        "animation": "rainbow",
+        "settings": {},
+        "transition": {
+            "started_at_ns": 1_000_000_000,
+            "duration_ns": 250_000_000,
+            "mode": "wipe",
+        },
+        "blackout": True,
+    }
+    calibrated = RustRenderOutput(
+        "rainbow",
+        {},
+        color_correction=(128, 255, 64),
+        voltage_v=12.0,
+        full_white_current_a=0.08,
+        power_limit_watts=4.5,
+    )
+    assert calibrated.to_wire() == {
+        "animation": "rainbow",
+        "settings": {},
+        "color_correction": [128, 255, 64],
+        "voltage_v": 12.0,
+        "full_white_current_a": 0.08,
+        "power_limit_watts": 4.5,
+    }
+    scene = RustRenderOutput(
+        "rainbow", {}, scene_revision=12, brightness=0.4
+    )
+    assert scene.to_wire() == {
+        "animation": "rainbow",
+        "settings": {},
+        "scene_revision": 12,
+        "brightness": 0.4,
+    }
+    scene_slice = RustRenderOutput(
+        "rainbow", {}, scene_pixel_count=5, scene_offset=2
+    )
+    assert scene_slice.to_wire() == {
+        "animation": "rainbow",
+        "settings": {},
+        "scene_pixel_count": 5,
+        "scene_offset": 2,
+    }
+    resampled_scene = RustRenderOutput(
+        "rainbow", {}, scene_pixel_count=5, scene_resample=True
+    )
+    assert resampled_scene.to_wire() == {
+        "animation": "rainbow",
+        "settings": {},
+        "scene_pixel_count": 5,
+        "scene_resample": True,
+    }
+    solid_scene = RustRenderOutput("rainbow", {}, solid_color=(128, 64, 32))
+    assert solid_scene.to_wire() == {
+        "animation": "rainbow",
+        "settings": {},
+        "solid_color": [128, 64, 32],
+    }
+    with pytest.raises(ValueError, match="positive"):
+        RustRenderOutput("rainbow", {}, zone_count=0).to_wire()
+    with pytest.raises(ValueError, match="pattern"):
+        RustRenderOutput("rainbow", {}, zone_pattern="zigzag").to_wire()
+    with pytest.raises(ValueError, match="duration"):
+        RustRenderTransition(1, 0).to_wire()
+    with pytest.raises(ValueError, match="inside its scene canvas"):
+        RustRenderOutput("rainbow", {}, scene_pixel_count=5, scene_offset=5).to_wire()
+    with pytest.raises(ValueError, match="whole scene canvas"):
+        RustRenderOutput("rainbow", {}, scene_resample=True).to_wire()
+    with pytest.raises(ValueError, match="solid scenes"):
+        RustRenderOutput(
+            "rainbow",
+            {},
+            effects=(RustRenderEffect("hard_beat", {}),),
+            solid_color=(128, 64, 32),
+        ).to_wire()
+    with pytest.raises(ValueError, match="intensity"):
+        RustRenderEffect("hard_beat", {}, 1.1).to_wire()
+    with pytest.raises(ValueError, match="correction"):
+        RustRenderOutput("rainbow", {}, color_correction=(255, 256, 255)).to_wire()
+    with pytest.raises(ValueError, match="power limit"):
+        RustRenderOutput("rainbow", {}, power_limit_watts=0.0).to_wire()
+    with pytest.raises(ValueError, match="at most two"):
+        RustRenderOutput(
+            "rainbow",
+            {},
+            effects=(
+                RustRenderEffect("hard_beat", {}),
+                RustRenderEffect("beat_ripple", {}),
+                RustRenderEffect("club_flash", {}),
+            ),
+        ).to_wire()
+
+
 def test_rust_output_thread_uses_bounded_exchange_and_reports_health() -> None:
     output = RustEngineOutputThread(
         (2, 1),
@@ -205,13 +542,60 @@ def test_rust_output_thread_uses_bounded_exchange_and_reports_health() -> None:
     assert output.process_is_running is False
 
 
+def test_rust_output_thread_exposes_direct_render_and_power_telemetry() -> None:
+    output = RustEngineOutputThread(
+        (64,),
+        (_mock_spec("main", 64),),
+        binary_path=_engine_binary(),
+    )
+    worker = RuntimeWorker(RuntimeSettings(pixels=64))
+    worker._output_thread = output
+    output.start()
+    try:
+        acknowledgement = output.submit_render_frame(
+            sequence=1,
+            timestamp_ns=1_000_000,
+            delta_ns=16_000_000,
+            brightness=1.0,
+            outputs=(RustRenderOutput("rainbow", {}),),
+            power_limiting_enabled=True,
+            power_budget_watts=0.5,
+        )
+        assert acknowledgement.sequence == 1
+
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline:
+            stats = output.stats()
+            if stats.render_time_ms is not None:
+                break
+            time.sleep(0.01)
+        assert stats.render_time_ms is not None and stats.render_time_ms >= 0.0
+        assert stats.estimated_power_watts is not None
+        assert stats.estimated_power_watts > 0.5
+        assert stats.applied_power_scale is not None
+        assert stats.applied_power_scale < 1.0
+        assert stats.output_power_watts is not None
+        assert len(stats.output_power_watts) == 1
+        assert stats.limiting_output_index is None
+        assert stats.preview_outputs is not None
+        assert len(stats.preview_outputs) == 1
+        assert len(stats.preview_outputs[0]) == 64 * 4
+        worker._capture_preview_frame(use_pending=False)
+        assert len(worker.preview_frame().outputs) == 1
+        assert len(worker.preview_frame().outputs[0]) == 64 * 4
+        assert stats.transmitted_frames == 1
+    finally:
+        worker._output_thread = None
+        output.stop()
+
+
 def test_runtime_worker_uses_rust_process_for_simulated_output(tmp_path: Path) -> None:
     worker = RuntimeWorker(
         RuntimeSettings(
             pixels=3,
             engine_backend="rust",
             engine_binary=_engine_binary(),
-            audio_source="off",
+            audio_source="demo",
             settings_file=tmp_path / "settings.json",
         )
     )
@@ -223,10 +607,124 @@ def test_runtime_worker_uses_rust_process_for_simulated_output(tmp_path: Path) -
         while worker._output_thread.stats().transmitted_frames == 0:
             assert time.monotonic() < deadline, "runtime did not submit Rust output frames"
             time.sleep(0.01)
+        stats = worker._output_thread.stats()
+        assert stats.render_time_ms is not None
+        while worker.snapshot().scheduler_time_ms is None:
+            assert time.monotonic() < deadline, "playback scheduler timing was not published"
+            time.sleep(0.01)
+        assert worker.snapshot().scheduler_time_ms >= 0.0
+        assert stats.preview_outputs is not None
+        assert worker._output_thread.exchange is not None
+        assert worker._output_thread.exchange.stats().submitted_count == 0
         assert worker.snapshot().running is True
+        previous_sequence = worker._rust_render_sequence
+        worker.set_mode(PlaybackMode.DYNAMIC).result(timeout=1.0)
+        deadline = time.monotonic() + 1.0
+        while worker._rust_render_sequence <= previous_sequence:
+            assert time.monotonic() < deadline, "Dynamic scene was not sent to Rust"
+            time.sleep(0.01)
+        assert worker._rust_scene_render_error is None
+        assert worker._output_thread.exchange.stats().submitted_count == 0
+
+        previous_sequence = worker._rust_render_sequence
+        worker.set_mode(PlaybackMode.SOLID, solid_color="#804020").result(timeout=1.0)
+        deadline = time.monotonic() + 1.0
+        expected_solid = bytes([128, 64, 32, 255]) * 3
+        while (
+            worker._rust_render_sequence <= previous_sequence
+            or worker._output_thread.stats().preview_outputs != (expected_solid,)
+        ):
+            assert time.monotonic() < deadline, "solid scene was not rendered by Rust"
+            time.sleep(0.01)
+        assert worker._output_thread.exchange.stats().submitted_count == 0
     finally:
         worker.stop(timeout=5.0)
     assert worker._output_thread is None
+
+
+def test_runtime_worker_renders_continuous_outputs_in_rust(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    CalibrationSettingsStore(settings_file).save_stripes(
+        StripeTopologySettings(
+            layout="continuous",
+            outputs=(
+                StripeOutputSettings(id="left", name="Left", pixels=3),
+                StripeOutputSettings(
+                    id="right",
+                    name="Right",
+                    pixels=5,
+                    zone_count=2,
+                    spi_device="/dev/spidev1.0",
+                ),
+            ),
+        )
+    )
+    worker = RuntimeWorker(
+        RuntimeSettings(
+            pixels=3,
+            engine_backend="rust",
+            engine_binary=_engine_binary(),
+            audio_source="off",
+            settings_file=settings_file,
+        )
+    )
+    worker.start(timeout=3.0)
+    try:
+        assert isinstance(worker._output_thread, RustEngineOutputThread)
+        deadline = time.monotonic() + 1.0
+        while worker._output_thread.stats().render_time_ms is None:
+            assert time.monotonic() < deadline, "continuous scene was not rendered by Rust"
+            time.sleep(0.01)
+        stats = worker._output_thread.stats()
+        assert stats.preview_outputs is not None
+        assert tuple(map(len, stats.preview_outputs)) == (3 * 4, 5 * 4)
+        assert worker._output_thread.exchange is not None
+        assert worker._output_thread.exchange.stats().submitted_count == 0
+        assert worker._rust_scene_render_error is None
+    finally:
+        worker.stop(timeout=5.0)
+
+
+def test_runtime_worker_resamples_mirrored_outputs_in_rust(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    CalibrationSettingsStore(settings_file).save_stripes(
+        StripeTopologySettings(
+            layout="mirrored",
+            outputs=(
+                StripeOutputSettings(id="short", name="Short", pixels=3),
+                StripeOutputSettings(
+                    id="long",
+                    name="Long",
+                    pixels=5,
+                    spi_device="/dev/spidev1.0",
+                ),
+            ),
+        )
+    )
+    worker = RuntimeWorker(
+        RuntimeSettings(
+            pixels=3,
+            engine_backend="rust",
+            engine_binary=_engine_binary(),
+            audio_source="off",
+            settings_file=settings_file,
+        )
+    )
+    worker.start(timeout=3.0)
+    try:
+        assert isinstance(worker._output_thread, RustEngineOutputThread)
+        deadline = time.monotonic() + 1.0
+        while worker._output_thread.stats().render_time_ms is None:
+            assert time.monotonic() < deadline, "mirrored scene was not rendered by Rust"
+            time.sleep(0.01)
+        stats = worker._output_thread.stats()
+        assert stats.preview_outputs is not None
+        assert tuple(map(len, stats.preview_outputs)) == (3 * 4, 5 * 4)
+        assert worker._output_thread.exchange is not None
+        assert worker._output_thread.exchange.stats().submitted_count == 0
+        assert worker._rust_scene_render_error is None
+    finally:
+        worker.stop(timeout=5.0)
 
 
 def test_worker_keeps_python_render_buffers_when_rust_output_is_selected(

@@ -287,6 +287,7 @@ class AnimationPlayer:
         default=TransitionEffect.CROSSFADE, kw_only=True
     )
     _audio_snapshot: Callable[[], AudioFrame] | None = None
+    _scene_revision: int = 0
     _transition_duration_ms: int = 0
     _transition_started_at_s: float | None = None
     _active_transition_effect: TransitionEffect | None = None
@@ -340,6 +341,39 @@ class AnimationPlayer:
         if not isfinite(value):
             raise ValueError("brightness must be finite")
         self.brightness = max(0.0, min(1.0, value))
+
+    @property
+    def scene_revision(self) -> int:
+        """Return the generation to send when a renderer must restart this scene."""
+        return self._scene_revision
+
+    @property
+    def transition_parameters(self) -> tuple[float, int, TransitionEffect] | None:
+        """Describe the active transition without exposing its pixel buffers."""
+        if not self.transition_active or self._transition_started_at_s is None:
+            return None
+        return (
+            self._transition_started_at_s,
+            self._transition_duration_ms,
+            self._active_transition_effect or self.transition_effect,
+        )
+
+    def advance(
+        self, *, now_s: float | None = None, finish_transition: bool = True
+    ) -> float:
+        """Advance the scene clock without rasterizing pixels."""
+        _validate_transition_time(now_s)
+        if not self.animations:
+            return 0.05
+        entry = self.animations[self.index]
+        self.frame += 1
+        if (
+            finish_transition
+            and self.transition_active
+            and self.transition_progress_at(now_s) >= 1.0
+        ):
+            self.cancel_transition()
+        return entry.frame_ms / 1000.0
 
     def set_animation_settings(
         self, name: str, values: object
@@ -477,6 +511,7 @@ class AnimationPlayer:
         self.index = next_index
         self.frame = 0
         if self.animations and restart:
+            self._scene_revision += 1
             self.animations[self.index].restart()
         duration = self.transition_ms if transition_ms is None else transition_ms
         if changed and duration > 0:

@@ -4,6 +4,7 @@ import {
   buildPreviewLayout,
   decodePreviewFrame,
   isNewerPreviewSequence,
+  previewSampleIndex,
 } from "@/lib/preview"
 import { initialState } from "@/test/fixtures"
 
@@ -69,6 +70,12 @@ describe("preview protocol and layout", () => {
     expect(isNewerPreviewSequence(0xffffffff, 0)).toBe(false)
     expect(isNewerPreviewSequence(23, 23)).toBe(false)
     expect(isNewerPreviewSequence(0x80000000, 0)).toBe(false)
+  })
+
+  it("maps full-resolution preview positions to downsampled Rust previews", () => {
+    expect([0, 1, 2, 3, 4, 5, 6, 7].map((index) => previewSampleIndex(index, 8, 4)))
+      .toEqual([0, 0, 1, 1, 2, 2, 3, 3])
+    expect([0, 1, 2].map((index) => previewSampleIndex(index, 3, 3))).toEqual([0, 1, 2])
   })
 
   it("keeps continuous output boundaries in pixel order", () => {

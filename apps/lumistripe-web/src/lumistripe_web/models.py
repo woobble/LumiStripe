@@ -273,6 +273,7 @@ class DashboardState(BaseModel):
     uptime_seconds: float = 0.0
     frame_rate: float = 0.0
     render_time_ms: float = Field(default=0.0, ge=0.0)
+    scheduler_time_ms: float | None = Field(default=None, ge=0.0)
     worker_heartbeat_age_seconds: float | None = None
     missed_frame_count: int = 0
     recent_frame_miss_rate: float = Field(default=0.0, ge=0.0, le=1.0)

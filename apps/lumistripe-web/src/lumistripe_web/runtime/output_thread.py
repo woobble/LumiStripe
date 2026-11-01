@@ -46,6 +46,12 @@ class OutputThreadStats:
     ipc_latency_ms: float | None
     sequential_skew_ms: float | None
     frame_latency_sample_count: int
+    render_time_ms: float | None = None
+    estimated_power_watts: float | None = None
+    applied_power_scale: float | None = None
+    output_power_watts: tuple[float, ...] | None = None
+    limiting_output_index: int | None = None
+    preview_outputs: tuple[bytes, ...] | None = None
 
 
 @dataclass(slots=True)

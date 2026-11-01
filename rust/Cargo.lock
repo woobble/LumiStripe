@@ -52,10 +52,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumistripe-engine-animation-definitions"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "lumistripe-engine-animation-state"
+version = "0.1.0"
+dependencies = [
+ "lumistripe-engine-animation-definitions",
+ "lumistripe-engine-effects",
+ "lumistripe-engine-render-primitives",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "lumistripe-engine-compositing"
+version = "0.1.0"
+dependencies = [
+ "lumistripe-engine-render-primitives",
+ "serde_json",
+]
+
+[[package]]
 name = "lumistripe-engine-config"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "lumistripe-engine-effects"
+version = "0.1.0"
+dependencies = [
+ "lumistripe-engine-animation-definitions",
+ "lumistripe-engine-compositing",
+ "lumistripe-engine-render-primitives",
  "serde_json",
 ]
 
@@ -80,13 +117,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumistripe-engine-render-primitives"
+version = "0.1.0"
+
+[[package]]
 name = "lumistripe-engine-runtime"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "lumistripe-engine-animation-state",
+ "lumistripe-engine-compositing",
  "lumistripe-engine-config",
+ "lumistripe-engine-effects",
  "lumistripe-engine-output",
  "lumistripe-engine-protocol",
+ "lumistripe-engine-render-primitives",
  "serde",
  "serde_json",
 ]

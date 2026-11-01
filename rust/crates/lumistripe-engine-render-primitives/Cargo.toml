@@ -1,0 +1,10 @@
+[package]
+name = "lumistripe-engine-render-primitives"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "lumistripe_engine_render_primitives"
+path = "src/lib.rs"

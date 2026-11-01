@@ -1796,6 +1796,8 @@ export interface components {
              */
             running: boolean;
             runtime: components["schemas"]["RuntimeKind"];
+            /** Scheduler Time Ms */
+            scheduler_time_ms?: number | null;
             sequence_library?: components["schemas"]["SequenceLibrarySummary"];
             sequencer_settings?: components["schemas"]["SequencerSettingsResponse"];
             /**

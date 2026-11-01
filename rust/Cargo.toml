@@ -5,6 +5,11 @@ members = [
     "crates/lumistripe-engine-output",
     "crates/lumistripe-engine-protocol",
     "crates/lumistripe-engine-runtime",
+    "crates/lumistripe-engine-render-primitives",
+    "crates/lumistripe-engine-animation-definitions",
+    "crates/lumistripe-engine-animation-state",
+    "crates/lumistripe-engine-compositing",
+    "crates/lumistripe-engine-effects",
 ]
 resolver = "2"
 
@@ -24,3 +29,8 @@ lumistripe-engine-config = { path = "crates/lumistripe-engine-config" }
 lumistripe-engine-output = { path = "crates/lumistripe-engine-output" }
 lumistripe-engine-protocol = { path = "crates/lumistripe-engine-protocol" }
 lumistripe-engine-runtime = { path = "crates/lumistripe-engine-runtime" }
+lumistripe-engine-render-primitives = { path = "crates/lumistripe-engine-render-primitives" }
+lumistripe-engine-animation-definitions = { path = "crates/lumistripe-engine-animation-definitions" }
+lumistripe-engine-animation-state = { path = "crates/lumistripe-engine-animation-state" }
+lumistripe-engine-compositing = { path = "crates/lumistripe-engine-compositing" }
+lumistripe-engine-effects = { path = "crates/lumistripe-engine-effects" }

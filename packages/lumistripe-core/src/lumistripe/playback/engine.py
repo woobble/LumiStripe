@@ -96,6 +96,10 @@ class PlaybackEngine:
     _sequence_coordinator: AnimationSequenceCoordinator = field(init=False)
     sync_offset_s: float = field(init=False, default=0.0)
     _last_rendered_frame: np.ndarray | None = field(init=False, default=None)
+    _last_render_audio_snapshot: AudioSnapshot | None = field(
+        init=False, default=None
+    )
+    last_scheduling_time_ms: float = field(init=False, default=0.0)
 
     def __post_init__(self) -> None:
         self.mode = self.config.mode
@@ -147,6 +151,16 @@ class PlaybackEngine:
     @property
     def active_effect_names(self) -> tuple[str, ...]:
         return self.layered_renderer.active_effect_names
+
+    @property
+    def last_render_audio_snapshot(self) -> AudioSnapshot | None:
+        """Audio values prepared for the latest rendered or policy-only step."""
+        return self._last_render_audio_snapshot
+
+    @property
+    def idle_player(self) -> AnimationPlayer:
+        """The animation player used by the configured Dynamic idle scene."""
+        return self._idle_player
 
     def effect_diagnostics(self, *, now_s: float | None = None) -> EffectSchedulerDiagnostics:
         return self.layered_renderer.diagnostics(now_s=now_s)
@@ -405,8 +419,12 @@ class PlaybackEngine:
         snapshot: AudioSnapshot | None = None,
         now_s: float | None = None,
         flush: bool = True,
+        render: bool = True,
     ) -> float:
+        scheduling_started_ns = time.perf_counter_ns()
+        self.last_scheduling_time_ms = 0.0
         now = time.monotonic() if now_s is None else now_s
+        self._last_render_audio_snapshot = None
         if snapshot is not None:
             self._beat_clock_state = self.beat_clock_tracker.update(
                 snapshot.beat_events,
@@ -435,10 +453,17 @@ class PlaybackEngine:
                 brightness=self.player.brightness,
             )
             self.last_playback_decision = decision
-            self.render_adapter.render_solid(build_render_plan(decision, flush=flush), controller)
+            self.last_scheduling_time_ms = (
+                time.perf_counter_ns() - scheduling_started_ns
+            ) / 1_000_000.0
+            if render:
+                self.render_adapter.render_solid(
+                    build_render_plan(decision, flush=flush), controller
+                )
             self.player.audio_enabled = False
             self.player.cancel_transition()
-            self._remember_rendered_frame(controller)
+            if render:
+                self._remember_rendered_frame(controller)
             return 0.05
 
         if self.mode is PlaybackMode.DYNAMIC:
@@ -470,21 +495,35 @@ class PlaybackEngine:
                     brightness=self.player.brightness,
                 )
                 self.last_playback_decision = decision
+                self.last_scheduling_time_ms = (
+                    time.perf_counter_ns() - scheduling_started_ns
+                ) / 1_000_000.0
                 if self.idle_mode == "animation":
                     self._idle_player.set_brightness(self.idle_brightness)
-                    delay = self._idle_player.step(controller, flush=flush, now_s=now)
-                    self._remember_rendered_frame(controller)
+                    if render:
+                        delay = self._idle_player.step(
+                            controller, flush=flush, now_s=now
+                        )
+                    else:
+                        advance_started_ns = time.perf_counter_ns()
+                        delay = self._idle_player.advance(now_s=now)
+                        self.last_scheduling_time_ms += (
+                            time.perf_counter_ns() - advance_started_ns
+                        ) / 1_000_000.0
+                    if render:
+                        self._remember_rendered_frame(controller)
                     return delay
-                if self.idle_mode == "solid":
+                if self.idle_mode == "solid" and render:
                     solid = decide_playback(PlaybackMode.SOLID, animation_name=None, solid_color=self.idle_color, brightness=self.idle_brightness)
                     self.render_adapter.render_solid(build_render_plan(solid, flush=flush), controller)
-                elif not self._idle_rendered:
+                elif self.idle_mode == "off" and not self._idle_rendered and render:
                     self.render_adapter.clear(
                         build_render_plan(decision, flush=flush),
                         controller,
                     )
                     self._idle_rendered = True
-                self._remember_rendered_frame(controller)
+                if render:
+                    self._remember_rendered_frame(controller)
                 return 0.05
 
             if not was_active:
@@ -602,6 +641,7 @@ class PlaybackEngine:
                 active_snapshot,
                 frame=self.reactive_smoother.update(active_snapshot.frame),
             )
+            self._last_render_audio_snapshot = active_snapshot
             if (
                 not was_active
                 and not sequence_controls_playback
@@ -629,16 +669,34 @@ class PlaybackEngine:
             )
             self.last_playback_decision = decision
             self.player.audio_enabled = plan.decision.audio_enabled
-            delay = self.layered_renderer.render(
-                self.player,
-                controller,
-                plan.snapshot or active_snapshot,
-                now_s=now,
-                flush=plan.flush,
-                sync_offset_s=self.sync_offset_s,
-                structure_state=self._music_structure_state,
-            )
-            self._remember_rendered_frame(controller)
+            self.last_scheduling_time_ms = (
+                time.perf_counter_ns() - scheduling_started_ns
+            ) / 1_000_000.0
+            if render:
+                delay = self.layered_renderer.render(
+                    self.player,
+                    controller,
+                    plan.snapshot or active_snapshot,
+                    now_s=now,
+                    flush=plan.flush,
+                    sync_offset_s=self.sync_offset_s,
+                    structure_state=self._music_structure_state,
+                )
+                self.last_scheduling_time_ms += (
+                    self.layered_renderer.last_schedule_update_ms
+                )
+                self._remember_rendered_frame(controller)
+            else:
+                delay = self.layered_renderer.advance(
+                    self.player,
+                    plan.snapshot or active_snapshot,
+                    now_s=now,
+                    sync_offset_s=self.sync_offset_s,
+                    structure_state=self._music_structure_state,
+                )
+                self.last_scheduling_time_ms = (
+                    time.perf_counter_ns() - scheduling_started_ns
+                ) / 1_000_000.0
             return delay
 
         audio_frame = None
@@ -653,13 +711,27 @@ class PlaybackEngine:
         plan = build_render_plan(decision, snapshot=snapshot, flush=flush)
         self.last_playback_decision = decision
         self.player.audio_enabled = plan.decision.audio_enabled
-        delay = self.player.step(
-            controller,
-            audio_frame=audio_frame,
-            flush=plan.flush,
-            now_s=now,
-        )
-        self._remember_rendered_frame(controller)
+        if audio_frame is not None:
+            self._last_render_audio_snapshot = AudioSnapshot.from_parts(
+                audio_frame, snapshot.features if snapshot is not None else None
+            )
+        self.last_scheduling_time_ms = (
+            time.perf_counter_ns() - scheduling_started_ns
+        ) / 1_000_000.0
+        if render:
+            delay = self.player.step(
+                controller,
+                audio_frame=audio_frame,
+                flush=plan.flush,
+                now_s=now,
+            )
+            self._remember_rendered_frame(controller)
+        else:
+            advance_started_ns = time.perf_counter_ns()
+            delay = self.player.advance(now_s=now)
+            self.last_scheduling_time_ms += (
+                time.perf_counter_ns() - advance_started_ns
+            ) / 1_000_000.0
         return delay
 
     def _cycling_due(self, now_s: float) -> bool:

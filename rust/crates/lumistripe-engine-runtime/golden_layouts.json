@@ -1,0 +1,332 @@
+{
+  "cases": [
+    {
+      "animation": "rainbow",
+      "brightness": 0.73,
+      "frames": [
+        {
+          "audio": null,
+          "delta_ns": 20000000,
+          "outputs_hex": [
+            "ff32feba32ffbbba32a6ffba9232ffba32ffbbba",
+            "ff32feba32a6ffba32ffbbba"
+          ],
+          "timestamp_ns": 0
+        },
+        {
+          "audio": {
+            "bands": [
+              0.82,
+              0.64,
+              0.48,
+              0.31,
+              0.57,
+              0.26,
+              0.41,
+              0.19
+            ],
+            "beat": true,
+            "beat_strength": 0.91,
+            "rms": 0.44
+          },
+          "delta_ns": 20000000,
+          "outputs_hex": [
+            "eb3cebbaf0d737baf05c37baf235f2ba33f4b4ba",
+            "eb3cebbaf05c37ba33f4b4ba"
+          ],
+          "timestamp_ns": 20000000
+        },
+        {
+          "audio": {
+            "bands": [
+              0.62,
+              0.51,
+              0.71,
+              0.55,
+              0.36,
+              0.47,
+              0.25,
+              0.14
+            ],
+            "beat": false,
+            "beat_strength": 0.12,
+            "rms": 0.29
+          },
+          "delta_ns": 20000000,
+          "outputs_hex": [
+            "ea38eaa7ead238a7ea5c38a78b34eea734eeb0a7",
+            "ea38eaa7ea5c38a734eeb0a7"
+          ],
+          "timestamp_ns": 40000000
+        },
+        {
+          "audio": {
+            "bands": [
+              0.91,
+              0.76,
+              0.58,
+              0.63,
+              0.49,
+              0.52,
+              0.38,
+              0.28
+            ],
+            "beat": true,
+            "beat_strength": 0.78,
+            "rms": 0.67
+          },
+          "delta_ns": 20000000,
+          "outputs_hex": [
+            "3becb1baeed638baf05c37baf235f2baf2d935ba",
+            "3becb1baf05c37baf2d935ba"
+          ],
+          "timestamp_ns": 60000000
+        }
+      ],
+      "layout": "independent",
+      "name": "independent_unequal_outputs",
+      "pixel_counts": [
+        5,
+        3
+      ],
+      "scene_offsets": [
+        0,
+        0
+      ],
+      "scene_pixel_count": null,
+      "scene_resample": false,
+      "settings": {
+        "color_spread": 70,
+        "palette": "neon",
+        "speed": 65
+      },
+      "zone_counts": [
+        1,
+        1
+      ],
+      "zone_patterns": [
+        "repeat",
+        "repeat"
+      ]
+    },
+    {
+      "animation": "rainbow",
+      "brightness": 0.73,
+      "frames": [
+        {
+          "audio": null,
+          "delta_ns": 20000000,
+          "outputs_hex": [
+            "ff32feba32ffbbbaffe332baffe332baff32feba",
+            "32a6ffbaff5b32baff32feba32ffbbba"
+          ],
+          "timestamp_ns": 0
+        },
+        {
+          "audio": {
+            "bands": [
+              0.82,
+              0.64,
+              0.48,
+              0.31,
+              0.57,
+              0.26,
+              0.41,
+              0.19
+            ],
+            "beat": true,
+            "beat_strength": 0.91,
+            "rms": 0.44
+          },
+          "delta_ns": 20000000,
+          "outputs_hex": [
+            "eb3cebba39edb1baf0d737baf0d737baeb3cebba",
+            "f05c37ba8d37f0baf235f2ba33f4b4ba"
+          ],
+          "timestamp_ns": 20000000
+        },
+        {
+          "audio": {
+            "bands": [
+              0.62,
+              0.51,
+              0.71,
+              0.55,
+              0.36,
+              0.47,
+              0.25,
+              0.14
+            ],
+            "beat": false,
+            "beat_strength": 0.12,
+            "rms": 0.29
+          },
+          "delta_ns": 20000000,
+          "outputs_hex": [
+            "ea38eaa738eaaea7ead238a7ead238a7ea38eaa7",
+            "ea5c38a78b36eca7ee34eea734eeb0a7"
+          ],
+          "timestamp_ns": 40000000
+        },
+        {
+          "audio": {
+            "bands": [
+              0.91,
+              0.76,
+              0.58,
+              0.63,
+              0.49,
+              0.52,
+              0.38,
+              0.28
+            ],
+            "beat": true,
+            "beat_strength": 0.78,
+            "rms": 0.67
+          },
+          "delta_ns": 20000000,
+          "outputs_hex": [
+            "3becb1baeed638ba38a0eeba38a0eeba3becb1ba",
+            "f05c37baf037f0ba35f2b3baf2d935ba"
+          ],
+          "timestamp_ns": 60000000
+        }
+      ],
+      "layout": "continuous",
+      "name": "continuous_unequal_zoned_outputs",
+      "pixel_counts": [
+        5,
+        4
+      ],
+      "scene_offsets": [
+        0,
+        3
+      ],
+      "scene_pixel_count": 7,
+      "scene_resample": false,
+      "settings": {
+        "color_spread": 70,
+        "palette": "neon",
+        "speed": 65
+      },
+      "zone_counts": [
+        2,
+        1
+      ],
+      "zone_patterns": [
+        "alternate",
+        "repeat"
+      ]
+    },
+    {
+      "animation": "rainbow",
+      "brightness": 0.73,
+      "frames": [
+        {
+          "audio": null,
+          "delta_ns": 20000000,
+          "outputs_hex": [
+            "ff32febaffe332baff5b32ba32ffbbba32ffbbbaff5b32baffe332baff32feba",
+            "ff32febaff5b32ba32ffbbba"
+          ],
+          "timestamp_ns": 0
+        },
+        {
+          "audio": {
+            "bands": [
+              0.82,
+              0.64,
+              0.48,
+              0.31,
+              0.57,
+              0.26,
+              0.41,
+              0.19
+            ],
+            "beat": true,
+            "beat_strength": 0.91,
+            "rms": 0.44
+          },
+          "delta_ns": 20000000,
+          "outputs_hex": [
+            "eb3cebbaf0d737ba8d37f0ba33f4b4ba33f4b4ba8d37f0baf0d737baeb3cebba",
+            "eb3cebba8d37f0ba33f4b4ba"
+          ],
+          "timestamp_ns": 20000000
+        },
+        {
+          "audio": {
+            "bands": [
+              0.62,
+              0.51,
+              0.71,
+              0.55,
+              0.36,
+              0.47,
+              0.25,
+              0.14
+            ],
+            "beat": false,
+            "beat_strength": 0.12,
+            "rms": 0.29
+          },
+          "delta_ns": 20000000,
+          "outputs_hex": [
+            "ea38eaa7ead238a78b36eca734eeb0a734eeb0a78b36eca7ead238a7ea38eaa7",
+            "ea38eaa78b36eca734eeb0a7"
+          ],
+          "timestamp_ns": 40000000
+        },
+        {
+          "audio": {
+            "bands": [
+              0.91,
+              0.76,
+              0.58,
+              0.63,
+              0.49,
+              0.52,
+              0.38,
+              0.28
+            ],
+            "beat": true,
+            "beat_strength": 0.78,
+            "rms": 0.67
+          },
+          "delta_ns": 20000000,
+          "outputs_hex": [
+            "3becb1ba38a0eebaf037f0baf2d935baf2d935baf037f0ba38a0eeba3becb1ba",
+            "3becb1baf037f0baf2d935ba"
+          ],
+          "timestamp_ns": 60000000
+        }
+      ],
+      "layout": "mirrored",
+      "name": "mirrored_unequal_zoned_outputs",
+      "pixel_counts": [
+        8,
+        3
+      ],
+      "scene_offsets": [
+        0,
+        0
+      ],
+      "scene_pixel_count": 4,
+      "scene_resample": true,
+      "settings": {
+        "color_spread": 70,
+        "palette": "neon",
+        "speed": 65
+      },
+      "zone_counts": [
+        2,
+        1
+      ],
+      "zone_patterns": [
+        "alternate",
+        "repeat"
+      ]
+    }
+  ],
+  "schema_version": 1
+}

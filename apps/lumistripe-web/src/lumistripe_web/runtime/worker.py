@@ -173,9 +173,17 @@ from .outputs import (
     allocate_output_frame_buffers,
     flush_power_limited_outputs,
     power_budget_state_for,
+    power_budget_state_from_engine,
 )
 from .playback_service import PlaybackPolicy, PlaybackPolicyError
-from .rust_engine import RustEngineOutputThread, RustOutputSpec
+from .rust_engine import (
+    RustEngineOutputThread,
+    RustOutputSpec,
+    RustRenderAudioInput,
+    RustRenderEffect,
+    RustRenderOutput,
+    RustRenderTransition,
+)
 from .state import (
     CalibrationPattern,
     PreviewFrame,
@@ -476,6 +484,11 @@ class RuntimeWorker:
         self._revision = 0
         self._preview_sequence = 0
         self._preview_outputs: tuple[bytes, ...] = ()
+        self._rust_render_sequence = 0
+        self._rust_last_render_timestamp_ns: int | None = None
+        self._rust_scene_generations: dict[str, tuple[object, int, int]] = {}
+        self._rust_scene_rendering_disabled = False
+        self._rust_scene_render_error: str | None = None
         self._pending_preview_frames: tuple[np.ndarray | None, ...] | None = None
         self._output_frame_buffers: tuple[_OutputFrameBuffers, ...] = ()
         self._output_thread: LedOutputThread | RustEngineOutputThread | None = None
@@ -559,6 +572,7 @@ class RuntimeWorker:
         self._last_command_completed_s: float | None = None
         self._missed_frame_count = 0
         self._last_render_time_ms = 0.0
+        self._last_scheduler_time_ms: float | None = None
         self._frame_timing = _FrameTimingWindow()
         self._pending_topology_change: _PendingTopologyChange | None = None
 
@@ -589,6 +603,7 @@ class RuntimeWorker:
             self._last_step_expected_delay_s = MIN_FRAME_SECONDS
             self._missed_frame_count = 0
             self._last_render_time_ms = 0.0
+            self._last_scheduler_time_ms = None
             self._frame_timing.reset()
         self._thread = threading.Thread(
             target=self._run,
@@ -3866,6 +3881,7 @@ profile.audio_config(microphone=True),
 
     def _step(self) -> float:
         assert self._controller is not None
+        self._last_scheduler_time_ms = None
         self._maintain_audio_monitor()
         self._apply_sync_offset_for_route()
         if (
@@ -3942,6 +3958,11 @@ profile.audio_config(microphone=True),
                 return MIN_FRAME_SECONDS
 
         self._tick_audio_calibration()
+        rust_delay = self._advance_rust_scene(snapshot, now_s=time.monotonic())
+        if rust_delay is not None:
+            self._record_frame()
+            self._publish_frame_updates()
+            return max(rust_delay, MIN_FRAME_SECONDS)
         if self._topology.layout == "independent" and self._output_gates:
             targets: tuple[Controller, ...] = (
                 self._output_renderers
@@ -3956,15 +3977,272 @@ profile.audio_config(microphone=True),
                     self._topology.outputs, targets, strict=True
                 )
             ]
+            self._last_scheduler_time_ms = sum(
+                self._playbacks[output.id][1].last_scheduling_time_ms
+                for output in self._topology.outputs
+            )
             delay = min(delays)
         else:
             delay = self.playback.step(
                 self._controller, snapshot=snapshot, flush=False
             )
+            self._last_scheduler_time_ms = self.playback.last_scheduling_time_ms
         self._flush_power_limited_outputs()
         self._record_frame()
         self._publish_frame_updates()
         return max(delay, MIN_FRAME_SECONDS)
+
+    def _advance_rust_scene(
+        self, snapshot: AudioSnapshot | None, *, now_s: float
+    ) -> float | None:
+        """Advance scene policy and send supported output scenes to Rust."""
+        output_thread = self._output_thread
+        outputs = self._topology.outputs
+        if (
+            self._rust_scene_rendering_disabled
+            or not isinstance(output_thread, RustEngineOutputThread)
+            or not outputs
+        ):
+            return None
+
+        if self._topology.layout == "independent":
+            entries = tuple(self._playbacks[output.id] for output in outputs)
+            targets: tuple[Controller, ...] = (
+                self._output_renderers
+                if len(self._output_renderers) == len(self._output_gates)
+                else self._output_gates
+            )
+            if len(entries) != len(targets):
+                return None
+            playback_engines = tuple(entry[1] for entry in entries)
+        else:
+            if self._controller is None:
+                return None
+            playback_engines = (self.playback,)
+            entries = ((self.player, self.playback),)
+            targets = (self._controller,)
+
+        if any(
+            engine.mode
+            not in (
+                PlaybackMode.STATIC,
+                PlaybackMode.CYCLING,
+                PlaybackMode.DYNAMIC,
+                PlaybackMode.SOLID,
+            )
+            for engine in playback_engines
+        ):
+            return None
+        if len({engine.music_recognition_enabled for engine in playback_engines}) > 1:
+            return None
+
+        delays = tuple(
+            engine.step(
+                target,
+                snapshot=snapshot,
+                now_s=now_s,
+                flush=False,
+                render=False,
+            )
+            for engine, target in zip(playback_engines, targets, strict=True)
+        )
+        scheduler_time_ns = sum(
+            int(engine.last_scheduling_time_ms * 1_000_000)
+            for engine in playback_engines
+        )
+        self._last_scheduler_time_ms = scheduler_time_ns / 1_000_000.0
+        per_output_engines = (
+            playback_engines
+            if self._topology.layout == "independent"
+            else playback_engines * len(outputs)
+        )
+        if len(per_output_engines) != len(outputs):
+            return None
+
+        audio_inputs = tuple(
+            self._rust_audio_input(engine.last_render_audio_snapshot)
+            for engine in per_output_engines
+        )
+        if any(audio != audio_inputs[0] for audio in audio_inputs[1:]):
+            self._rust_scene_rendering_disabled = True
+            self._rust_scene_render_error = "independent outputs require different audio inputs"
+            return min(delays, default=MIN_FRAME_SECONDS)
+
+        shared_blackout = (
+            self._topology.layout != "independent"
+            and self._controller is not None
+            and self._controller.blackout
+        )
+        continuous_scene_pixel_count = (
+            sum(
+                (output.pixels + output.zone_count - 1) // output.zone_count
+                for output in outputs
+            )
+            if self._topology.layout == "continuous"
+            else None
+        )
+        mirrored_scene_pixel_count: int | None = None
+        if self._topology.layout == "mirrored":
+            logical_lengths = tuple(
+                (output.pixels + output.zone_count - 1) // output.zone_count
+                for output in outputs
+            )
+            if len(set(logical_lengths)) > 1:
+                mirrored_scene_pixel_count = max(logical_lengths)
+        scene_offset = 0
+        render_outputs: list[RustRenderOutput] = []
+        for index, (output, engine) in enumerate(
+            zip(outputs, per_output_engines, strict=True)
+        ):
+            is_dynamic_idle = (
+                engine.mode is PlaybackMode.DYNAMIC and not engine.music_active
+            )
+            idle_off = is_dynamic_idle and engine.idle_mode == "off"
+            player = engine.idle_player if (
+                is_dynamic_idle and engine.idle_mode == "animation"
+            ) else engine.player
+            animation = player.name_at(player.current_index())
+            if animation is None:
+                self._rust_scene_rendering_disabled = True
+                self._rust_scene_render_error = "selected animation is unavailable"
+                return min(delays, default=MIN_FRAME_SECONDS)
+            base_intensity = 1.0
+            effects: tuple[RustRenderEffect, ...] = ()
+            solid_color: tuple[int, int, int] | None = None
+            brightness = player.brightness
+            if engine.mode is PlaybackMode.SOLID:
+                color = engine.solid_color.as_rgba_array()
+                solid_color = (int(color[0]), int(color[1]), int(color[2]))
+            elif is_dynamic_idle and engine.idle_mode == "solid":
+                color = engine.idle_color.as_rgba_array()
+                solid_color = (int(color[0]), int(color[1]), int(color[2]))
+                brightness = engine.idle_brightness
+            if engine.mode is PlaybackMode.DYNAMIC and engine.music_active:
+                active_audio = engine.last_render_audio_snapshot or AudioSnapshot.silence()
+                schedule_inputs_started_ns = time.perf_counter_ns()
+                base_intensity, active_effects = engine.layered_renderer.render_inputs(
+                    player,
+                    active_audio,
+                    engine.music_structure_state,
+                )
+                scheduler_time_ns += (
+                    time.perf_counter_ns() - schedule_inputs_started_ns
+                )
+                self._last_scheduler_time_ms = scheduler_time_ns / 1_000_000.0
+                effects = tuple(
+                    RustRenderEffect(
+                        name=effect.name,
+                        settings=effect.settings,
+                        intensity=effect.intensity,
+                        trigger_beat=effect.trigger_beat_strength is not None,
+                        trigger_beat_strength=effect.trigger_beat_strength or 0.0,
+                    )
+                    for effect in active_effects
+                )
+            correction = (
+                self._correction_controllers[index].correction
+                if index < len(self._correction_controllers)
+                else ColorCorrection()
+            )
+            gate_blackout = (
+                index < len(self._output_gates)
+                and self._output_gates[index].blackout
+            )
+            transition_parameters = player.transition_parameters
+            transition = None
+            if transition_parameters is not None:
+                started_at_s, duration_ms, effect = transition_parameters
+                transition = RustRenderTransition(
+                    started_at_ns=max(0, int(started_at_s * 1_000_000_000)),
+                    duration_ns=duration_ms * 1_000_000,
+                    mode=effect.value,
+                )
+            render_outputs.append(
+                RustRenderOutput(
+                    animation=animation,
+                    settings=player.animation_settings(animation) or {},
+                    effects=effects,
+                    base_intensity=base_intensity,
+                    scene_revision=self._rust_scene_revision(output.id, player),
+                    brightness=brightness,
+                    zone_count=output.zone_count,
+                    zone_pattern=output.zone_pattern,
+                    transition=transition,
+                    blackout=shared_blackout or gate_blackout or idle_off,
+                    reversed=output.reversed,
+                    color_correction=(correction.red, correction.green, correction.blue),
+                    voltage_v=output.voltage_v,
+                    full_white_current_a=output.full_white_current_a,
+                    power_limit_watts=output.power_limit_watts,
+                    scene_pixel_count=(
+                        continuous_scene_pixel_count or mirrored_scene_pixel_count
+                    ),
+                    scene_offset=(
+                        scene_offset
+                        if continuous_scene_pixel_count is not None
+                        else 0
+                    ),
+                    scene_resample=mirrored_scene_pixel_count is not None,
+                    solid_color=solid_color,
+                )
+            )
+            if continuous_scene_pixel_count is not None:
+                scene_offset += (
+                    output.pixels + output.zone_count - 1
+                ) // output.zone_count
+
+        timestamp_ns = time.monotonic_ns()
+        delta_ns = (
+            max(0, timestamp_ns - self._rust_last_render_timestamp_ns)
+            if self._rust_last_render_timestamp_ns is not None
+            else int(MIN_FRAME_SECONDS * 1_000_000_000)
+        )
+        self._rust_render_sequence += 1
+        try:
+            output_thread.submit_render_frame(
+                sequence=self._rust_render_sequence,
+                timestamp_ns=timestamp_ns,
+                delta_ns=delta_ns,
+                brightness=1.0,
+                outputs=tuple(render_outputs),
+                audio=audio_inputs[0],
+                power_limiting_enabled=self._topology.power_limiting_enabled,
+                power_budget_watts=self._topology.effective_power_budget_watts,
+            )
+        except Exception as exc:  # noqa: BLE001 - unsupported scenes use Python fallback
+            self._rust_scene_rendering_disabled = True
+            self._rust_scene_render_error = f"{type(exc).__name__}: {exc}"[:256]
+            self._rust_last_render_timestamp_ns = None
+            return min(delays, default=MIN_FRAME_SECONDS)
+        self._rust_last_render_timestamp_ns = timestamp_ns
+        self._pending_preview_frames = None
+        return min(delays, default=MIN_FRAME_SECONDS)
+
+    def _rust_scene_revision(self, output_id: str, player: AnimationPlayer) -> int:
+        previous = self._rust_scene_generations.get(output_id)
+        if previous is not None and previous[0] is player and previous[1] == player.scene_revision:
+            return previous[2]
+        revision = 0 if previous is None else (previous[2] + 1) & 0xFFFFFFFFFFFFFFFF
+        self._rust_scene_generations[output_id] = (
+            player,
+            player.scene_revision,
+            revision,
+        )
+        return revision
+
+    @staticmethod
+    def _rust_audio_input(
+        snapshot: AudioSnapshot | None,
+    ) -> RustRenderAudioInput | None:
+        if snapshot is None:
+            return None
+        frame = snapshot.frame
+        return RustRenderAudioInput(
+            rms=frame.rms,
+            bands=frame.bands,
+            beat=frame.beat,
+            beat_strength=frame.beat_strength,
+        )
 
     def _flush_power_limited_outputs(self) -> None:
         self._power_budget_state, self._pending_preview_frames = (
@@ -4271,6 +4549,22 @@ profile.audio_config(microphone=True),
         output_stats = (
             self._output_thread.stats() if self._output_thread is not None else None
         )
+        power_budget_state = self._power_budget_state
+        if (
+            output_stats is not None
+            and output_stats.estimated_power_watts is not None
+            and output_stats.applied_power_scale is not None
+            and output_stats.output_power_watts is not None
+            and len(output_stats.output_power_watts) == len(self._topology.outputs)
+        ):
+            power_budget_state = power_budget_state_from_engine(
+                self._topology,
+                estimated_watts=output_stats.estimated_power_watts,
+                applied_scale=output_stats.applied_power_scale,
+                output_watts=output_stats.output_power_watts,
+                limiting_output_index=output_stats.limiting_output_index,
+            )
+            self._power_budget_state = power_budget_state
         output_heartbeat_age = (
             max(
                 0.0,
@@ -4304,7 +4598,12 @@ profile.audio_config(microphone=True),
             active_effects=self.playback.active_effect_names,
             uptime_seconds=uptime_seconds,
             frame_rate=self._frame_rate,
-            render_time_ms=self._last_render_time_ms,
+            render_time_ms=(
+                output_stats.render_time_ms
+                if output_stats is not None and output_stats.render_time_ms is not None
+                else self._last_render_time_ms
+            ),
+            scheduler_time_ms=self._last_scheduler_time_ms,
             worker_heartbeat_age_seconds=self._worker_heartbeat_age(),
             missed_frame_count=self._missed_frame_count,
             recent_frame_miss_rate=self._frame_timing.stats(
@@ -4354,7 +4653,7 @@ profile.audio_config(microphone=True),
             color_corrections=self._color_correction_profiles(),
             calibration=self._calibration_status(),
             stripe_topology=self._stripe_topology_state(),
-            power_budget=self._power_budget_state,
+            power_budget=power_budget_state,
             sequencer_settings=SequencerSettingsResponse(
                 switch_quantization=self._switch_quantization,
                 bars_per_phrase=self._bars_per_phrase,
@@ -4411,6 +4710,15 @@ profile.audio_config(microphone=True),
             self._pending_preview_frames = None
             self._last_preview_publication_at_s = time.monotonic()
             return
+        output_thread = self._output_thread
+        if isinstance(output_thread, RustEngineOutputThread):
+            preview_outputs = output_thread.stats().preview_outputs
+            if preview_outputs is not None and len(preview_outputs) == len(self._topology.outputs):
+                with self._preview_lock:
+                    self._preview_sequence += 1
+                    self._preview_outputs = preview_outputs
+                self._last_preview_publication_at_s = time.monotonic()
+                return
         outputs: list[bytes] = []
         gates = self._output_gates
         if gates:

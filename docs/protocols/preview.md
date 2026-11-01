@@ -14,7 +14,10 @@ All integer fields are little-endian. The packet begins with:
 
 Each output then contains a four-byte unsigned pixel count followed by
 `pixel_count * 4` RGBA bytes. Outputs are ordered according to the backend
-topology.
+topology. An output may contain fewer pixels than its topology when the
+renderer supplies a downsampled preview; clients map those samples across the
+configured output length. The Rust renderer currently publishes at most 128
+evenly spaced samples per output through health telemetry.
 
 Version 1 reserves the flags byte and requires it to be zero. Implementations
 must reject packets with more than two outputs, more than 4096 pixels per

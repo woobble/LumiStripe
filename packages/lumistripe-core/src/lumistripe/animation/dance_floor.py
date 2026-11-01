@@ -72,7 +72,7 @@ class DanceFloor(Animation):
             high,
             drive,
             beat_boost,
-            max(0.0, min(1.0, float(brightness))),
+            max(0.0, min(1.0, float(self._output_brightness(brightness)))),
             str(self.setting("palette", "rainbow")),
             str(self.setting("custom_color", "#7C3AED")),
         )

@@ -2,34 +2,31 @@
 
 ## Goal and current boundary
 
-LumiStripe runs animation playback, audio analysis, and the application runtime
-in Python, with selected DSP and device paths implemented as optional native
-extensions. The opt-in Rust backend now owns every configured output in one
-Rust process and includes native Linux SPI and GPIO drivers plus a mock output.
-Animation definitions, playback policy, audio capture and DSP, FastAPI routes,
-and React code remain in Python.
+LumiStripe keeps its application control plane in Python. The opt-in Rust
+backend owns animation and visual-effect pixel rendering, reusable frame
+buffers, final output processing, and every configured device in one Rust
+process. Python still owns animation selection, playback and sequencer policy,
+audio capture and DSP, FastAPI routes, and the React application. The original
+Python/C renderer remains available as the default backend and rollback path.
 
-The Python worker remains the single writer for playback, audio, topology, and
-output policy. The default Python backend is unchanged. With the Rust backend,
-Python still selects and renders animations, applies color correction and
-power limits, and publishes complete RGBA output sets through a bounded
-latest-wins exchange. A dedicated bridge sends compact binary frames to one
-Rust process. Rust owns all device handles and a second bounded latest-wins
-frame slot, then drives every configured output from its output thread. The
-dashboard preview and REST/WebSocket contracts continue to come from the
-existing Python runtime. Dashboard state adds optional output p50/p95/p99,
-frame IPC round-trip, and sequential output-skew diagnostics; older clients
-retain explicit compatibility defaults.
+For supported scenes, the Python worker sends typed, timestamped render inputs
+through protocol v2; it does not send completed pixel frames. Rust renders
+directly into reusable logical and physical buffers and passes those buffers
+to its output worker. Rust applies transitions, zone mapping, color correction,
+power limits, blackout, and output reversal. Unsupported scene modes can still
+use the Python/C path. The dashboard preview and REST/WebSocket contracts stay
+in the Python runtime, with separate playback scheduling, Rust scene-render,
+and output timing diagnostics.
 
 ## Architecture audit
 
 | Area | Current owner and boundary | Migration implication |
 | --- | --- | --- |
 | Runtime and lifecycle | `LumiStripeRuntime` is the public façade. `RuntimeWorker` owns mutable playback, audio, topology, and output state and serializes commands. | Keep the worker and public runtime API in Python while the optional Rust process owns configured hardware. |
-| Animations | `lumistripe.animation.catalog` registers `AnimationDefinition` values; `AnimationPlayer` runs Python animation implementations over the core pixel buffers. | Animations remain Python-owned. |
+| Animations | `lumistripe.animation.catalog` remains canonical for names, settings schemas, defaults, and timing. `AnimationPlayer` and Python/C kernels remain the rollback renderer. | Rust imports the generated catalog and renders all 54 registered animations and 19 effect definitions into reusable buffers; differential golden fixtures check Python/C parity. |
 | Playback | `lumistripe.playback` contains configuration, state, rendering, selection, transitions, musical timing, and sequence policy. | Playback policy remains Python-owned. |
 | Audio | Capture uses bounded buffers; worker-side DSP uses typed `AudioFrame`, `MusicFeatures`, and statistics. Optional native `_audio` code accelerates processing. | Capture callbacks, audio analysis, and DSP remain Python/C. |
-| Output | The web runtime applies output gates, color correction, zone mapping, brightness, and power limits before publishing complete frames. | Rust owns physical device handles, transfers, blackout, and device lifecycle. Python retains render buffers and policy. |
+| Output | The Python backend keeps its existing output path. | The Rust backend owns frame finalization and output buffers, then drives configured mock, SPI, or GPIO devices on its output-owner thread. |
 | API and dashboard | FastAPI routes use feature-oriented Pydantic contracts. WebSocket preview has its own versioned binary protocol. REST TypeScript types are generated from OpenAPI. | Existing endpoints and preview messages remain unchanged; additive output diagnostic fields are generated from OpenAPI. |
 
 ## Workspace and process boundary
@@ -42,13 +39,18 @@ The independent Cargo workspace is under [`rust/`](../../rust/Cargo.toml):
 | `lumistripe-engine-protocol` | Versioned JSON control messages and fixed-size binary frame/ack headers. |
 | `lumistripe-engine-output` | Output-set lifecycle, SM16716 encoding, SPI, gpiomem, gpio-cdev, and mock output drivers. |
 | `lumistripe-engine-runtime` | Private Unix socket server, bounded Rust frame queue, output owner thread, health reporting, and socket cleanup. |
+| `lumistripe-engine-animation-definitions` | Generated catalog names, settings schemas, defaults, and animation timing. |
+| `lumistripe-engine-animation-state` | Stateful animation instances, typed render inputs, reusable animation frames, and golden parity tests. |
+| `lumistripe-engine-render-primitives` | RGBA frame buffers, audio render inputs, and reusable zone geometry. |
+| `lumistripe-engine-compositing` | Effect composition and timestamped scene transitions. |
+| `lumistripe-engine-effects` | Stateful visual effects, deterministic random state, layer scheduling inputs, and reusable effect buffers. |
 | `lumistripe-engine` | Standalone `lumistripe-engine` process entry point. |
 
 The Python adapter in `lumistripe_web.runtime.rust_engine` starts one process
-per runtime, configures the complete topology, sends contiguous RGBA buffers
-over one persistent frame socket, and requests graceful blackout and shutdown.
-Control messages use bounded JSON lines; frame sets use a fixed-size header
-and raw bytes. Protocol details and shared fixtures are in
+per runtime, configures the complete topology, sends typed rendering inputs
+over bounded JSON control messages, and requests graceful blackout and
+shutdown. The persistent binary frame socket remains available for rollback
+and compatibility paths. Protocol details and shared fixtures are in
 [`rust-engine-ipc-v2.md`](../protocols/rust-engine-ipc-v2.md).
 Existing version 1 single-output clients still work for health, simulated
 configuration, RGB frames, and shutdown; multi-output hardware uses version 2.
@@ -66,8 +68,8 @@ LUMISTRIPE_ENGINE_BINARY="$PWD/rust/target/release/lumistripe-engine" \
 Alternatively, pass `--engine-binary PATH`. Programmatic callers can set
 `RuntimeSettings(engine_backend="rust", engine_binary=Path(...))`. With
 `--hardware`, Rust opens the configured SPI or GPIO devices. Without
-`--hardware`, it uses mock outputs while Python continues to render frames.
-Leaving `--engine-backend` unset preserves the Python backend.
+`--hardware`, it uses mock outputs while Rust renders supported scenes.
+Leaving `--engine-backend` unset preserves the Python/C renderer.
 
 ## Raspberry Pi deployment
 
@@ -100,15 +102,17 @@ implementation installed as the rollback path.
 | Capability | Python backend | Rust backend | Validation state |
 | --- | --- | --- | --- |
 | FastAPI routes, REST models, dashboard, WebSocket preview | Supported | Existing Python path remains active | Preserved |
-| Animation catalog, playback, audio, and DSP | Supported | Receives completed RGBA frames | Python-owned |
-| Frame correction, mapping, brightness, and power policy | Supported | Receives post-policy frames | Python-owned |
+| Animation catalog and pixel rendering | Supported | All catalog animations and effects render in Rust for supported scene modes | Python/C rollback remains available |
+| Playback selection, sequencer, audio capture, and DSP | Supported | Typed timestamps and audio features arrive from Python policy | Python-owned by design |
+| Transitions, zones, correction, brightness, blackout, and power limits | Supported | Finalized in Rust against reusable frame buffers | Python path remains the rollback implementation |
 | Mock output | In-memory controller | Mock output through the same queue and process used by hardware | Rust and Python process tests |
 | SPI output | Optional Python spidev driver | Rust spidev, mode 0/MSB-first, one encoded transaction per strip | Mock encoder tests; Pi validation pending |
 | GPIO output | Python gpiomem fast path and libgpiod fallback | Device-tree-selected BCM and RP1 gpiomem register writers with gpio-cdev fallback | Mock wire and register-map tests; Pi validation pending |
 | Configuration validation | Python runtime settings and topology validation | Per-output backend and device/pin uniqueness checks | Rust tests |
 | Process health and shutdown | Python worker lifecycle/watchdog | One owned process, bounded frames, output telemetry, blackout and close | Process integration tests |
 
-The dashboard reports Python render time, frame IPC send/ack round-trip, frame
+The dashboard reports playback scheduling time, Rust scene-render time, frame
+IPC send/ack round-trip, frame
 queue-to-completion latency with p50/p95/p99, queue delay, measured sequential
 transmission duration and output skew, transmitted FPS, latest-wins drops, and device/transport
 errors. Interrupted, temporarily unavailable, and timed-out hardware writes get
@@ -118,19 +122,14 @@ releases devices, and process exit releases kernel handles if shutdown times
 out. The original Python hardware output thread also reports latency
 percentiles and sequential completion skew; its IPC latency remains `null`.
 
-## Work beyond output migration
+## Remaining scope
 
-1. Select deterministic, UI-independent core primitives with narrow inputs and
-   outputs. Add Python/Rust golden fixtures and benchmarks before replacing a
-   Python implementation.
-2. Port playback policy only after catalog and time/beat inputs have a stable
-   typed contract. Compare `PlaybackDecision` and `RenderPlan` values across
-   both implementations.
-3. Consider audio DSP only after preserving bounded capture callbacks and
-   validating timestamping, calibration, and telemetry parity.
-4. Run trusted Raspberry Pi validation for GPIO/SPI waveforms, transfer timing,
-   cleanup, and failure recovery. This checkout has no attached LED hardware
-   for electrical validation.
+Playback selection, sequencer policy, audio capture, and audio DSP remain in
+Python for this goal. Do not treat their presence as an incomplete rendering
+migration. Raspberry Pi 4/5 throughput measurements and physical GPIO/SPI
+waveform, timing, cleanup, and failure-recovery validation remain outstanding;
+mock tests and hosted ARM64 runs do not establish electrical timing safety.
+Keep those device checks separate from software parity results.
 
 ## Validation and measurement
 

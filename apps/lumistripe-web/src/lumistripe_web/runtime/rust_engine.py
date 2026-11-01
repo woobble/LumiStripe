@@ -13,11 +13,11 @@ import threading
 import time
 import uuid
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from concurrent.futures import Future, InvalidStateError
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from math import ceil
+from math import ceil, isfinite
 from pathlib import Path
 from queue import Empty, Full, Queue
 from typing import TypeAlias
@@ -41,7 +41,8 @@ _STARTUP_TIMEOUT_SECONDS = 3.0
 _REQUEST_TIMEOUT_SECONDS = 1.0
 _CONFIGURE_TIMEOUT_SECONDS = 12.0
 _SHUTDOWN_TIMEOUT_SECONDS = 8.0
-_HEALTH_POLL_SECONDS = 0.5
+_HEALTH_POLL_SECONDS = 0.1
+_MAX_RENDER_PREVIEW_PIXELS = 128
 
 
 class RustEngineError(OSError):
@@ -91,6 +92,226 @@ class RustOutputSpec:
 
 
 @dataclass(frozen=True, slots=True)
+class RustRenderEffect:
+    name: str
+    settings: Mapping[str, object]
+    intensity: float = 1.0
+    trigger_beat: bool = False
+    trigger_beat_strength: float = 0.0
+
+    def to_wire(self) -> dict[str, object]:
+        if not self.name:
+            raise ValueError("Rust render effect name cannot be empty")
+        if not isfinite(self.intensity) or not 0.0 <= self.intensity <= 1.0:
+            raise ValueError("Rust render effect intensity must be between zero and one")
+        if not isinstance(self.trigger_beat, bool):
+            raise TypeError("Rust render effect trigger_beat must be a boolean")
+        if (
+            not isfinite(self.trigger_beat_strength)
+            or not 0.0 <= self.trigger_beat_strength <= 1.0
+        ):
+            raise ValueError("Rust render effect trigger strength must be between zero and one")
+        result: dict[str, object] = {
+            "name": self.name,
+            "settings": dict(self.settings),
+            "intensity": self.intensity,
+        }
+        if self.trigger_beat:
+            result["trigger_beat"] = True
+            if self.trigger_beat_strength != 0.0:
+                result["trigger_beat_strength"] = self.trigger_beat_strength
+        return result
+
+
+@dataclass(frozen=True, slots=True)
+class RustRenderTransition:
+    started_at_ns: int
+    duration_ns: int
+    mode: str = "crossfade"
+
+    def to_wire(self) -> dict[str, object]:
+        if (
+            not isinstance(self.started_at_ns, int)
+            or isinstance(self.started_at_ns, bool)
+            or self.started_at_ns < 0
+        ):
+            raise ValueError("Rust render transition start must be an unsigned integer")
+        if (
+            not isinstance(self.duration_ns, int)
+            or isinstance(self.duration_ns, bool)
+            or self.duration_ns <= 0
+        ):
+            raise ValueError("Rust render transition duration must be positive")
+        if self.mode not in {"crossfade", "fade_black", "wipe"}:
+            raise ValueError("Rust render transition mode is unsupported")
+        return {
+            "started_at_ns": self.started_at_ns,
+            "duration_ns": self.duration_ns,
+            "mode": self.mode,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class RustRenderOutput:
+    animation: str
+    settings: Mapping[str, object]
+    effects: tuple[RustRenderEffect, ...] = ()
+    base_intensity: float = 1.0
+    max_overlay_strength: float = 0.65
+    scene_revision: int = 0
+    brightness: float | None = None
+    zone_count: int = 1
+    zone_pattern: str = "repeat"
+    transition: RustRenderTransition | None = None
+    blackout: bool = False
+    reversed: bool = False
+    color_correction: tuple[int, int, int] = (255, 255, 255)
+    voltage_v: float = 5.0
+    full_white_current_a: float = 0.06
+    power_limit_watts: float | None = None
+    scene_pixel_count: int | None = None
+    scene_offset: int = 0
+    scene_resample: bool = False
+    solid_color: tuple[int, int, int] | None = None
+
+    def to_wire(self) -> dict[str, object]:
+        if not self.animation:
+            raise ValueError("Rust render animation name cannot be empty")
+        if not isfinite(self.base_intensity) or not 0.0 <= self.base_intensity <= 1.0:
+            raise ValueError("Rust render base intensity must be between zero and one")
+        if (
+            not isfinite(self.max_overlay_strength)
+            or not 0.0 < self.max_overlay_strength <= 1.0
+        ):
+            raise ValueError("Rust render overlay strength must be between zero and one")
+        if len(self.effects) > 2:
+            raise ValueError("Rust render output supports at most two effects")
+        if (
+            type(self.scene_revision) is not int
+            or not 0 <= self.scene_revision <= 0xFFFFFFFFFFFFFFFF
+        ):
+            raise ValueError("Rust render scene revision must be a u64")
+        if self.brightness is not None and (
+            not isfinite(self.brightness) or not 0.0 <= self.brightness <= 1.0
+        ):
+            raise ValueError("Rust render output brightness must be between zero and one")
+        if not isinstance(self.zone_count, int) or isinstance(self.zone_count, bool):
+            raise TypeError("Rust render zone count must be an integer")
+        if self.zone_count < 1:
+            raise ValueError("Rust render zone count must be positive")
+        if self.zone_pattern not in {"repeat", "alternate"}:
+            raise ValueError("Rust render zone pattern must be repeat or alternate")
+        if not isinstance(self.blackout, bool):
+            raise TypeError("Rust render blackout state must be a boolean")
+        if not isinstance(self.reversed, bool):
+            raise TypeError("Rust render output reversal must be a boolean")
+        if len(self.color_correction) != 3 or any(
+            type(channel) is not int or not 0 <= channel <= 255
+            for channel in self.color_correction
+        ):
+            raise ValueError("Rust render color correction must contain three byte channels")
+        if not isfinite(self.voltage_v) or self.voltage_v <= 0.0:
+            raise ValueError("Rust render voltage must be finite and positive")
+        if not isfinite(self.full_white_current_a) or self.full_white_current_a <= 0.0:
+            raise ValueError("Rust render full-white current must be finite and positive")
+        if self.power_limit_watts is not None and (
+            not isfinite(self.power_limit_watts) or self.power_limit_watts <= 0.0
+        ):
+            raise ValueError("Rust render output power limit must be finite and positive")
+        if self.scene_pixel_count is not None and (
+            type(self.scene_pixel_count) is not int or self.scene_pixel_count <= 0
+        ):
+            raise ValueError("Rust render scene pixel count must be a positive integer")
+        if type(self.scene_offset) is not int or self.scene_offset < 0:
+            raise ValueError("Rust render scene offset must be an unsigned integer")
+        if self.scene_offset and (
+            self.scene_pixel_count is None
+            or self.scene_offset >= self.scene_pixel_count
+        ):
+            raise ValueError("Rust render scene offset must be inside its scene canvas")
+        if not isinstance(self.scene_resample, bool):
+            raise TypeError("Rust render scene resample state must be a boolean")
+        if self.scene_resample and (
+            self.scene_pixel_count is None or self.scene_offset != 0
+        ):
+            raise ValueError("Rust scene resampling needs a whole scene canvas")
+        if self.solid_color is not None and (
+            len(self.solid_color) != 3
+            or any(type(channel) is not int or not 0 <= channel <= 255 for channel in self.solid_color)
+        ):
+            raise ValueError("Rust solid color must contain three byte channels")
+        if self.solid_color is not None and self.effects:
+            raise ValueError("Rust solid scenes do not accept effect layers")
+        output: dict[str, object] = {
+            "animation": self.animation,
+            "settings": dict(self.settings),
+        }
+        if self.effects:
+            output["effects"] = [effect.to_wire() for effect in self.effects]
+        if self.effects or self.base_intensity != 1.0:
+            output["base_intensity"] = self.base_intensity
+        if self.effects:
+            output["max_overlay_strength"] = self.max_overlay_strength
+        if self.scene_revision != 0:
+            output["scene_revision"] = self.scene_revision
+        if self.brightness is not None:
+            output["brightness"] = self.brightness
+        if self.zone_count != 1:
+            output["zone_count"] = self.zone_count
+        if self.zone_pattern != "repeat":
+            output["zone_pattern"] = self.zone_pattern
+        if self.transition is not None:
+            output["transition"] = self.transition.to_wire()
+        if self.blackout:
+            output["blackout"] = True
+        if self.reversed:
+            output["reversed"] = True
+        if self.color_correction != (255, 255, 255):
+            output["color_correction"] = list(self.color_correction)
+        if self.voltage_v != 5.0:
+            output["voltage_v"] = self.voltage_v
+        if self.full_white_current_a != 0.06:
+            output["full_white_current_a"] = self.full_white_current_a
+        if self.power_limit_watts is not None:
+            output["power_limit_watts"] = self.power_limit_watts
+        if self.scene_pixel_count is not None:
+            output["scene_pixel_count"] = self.scene_pixel_count
+        if self.scene_offset:
+            output["scene_offset"] = self.scene_offset
+        if self.scene_resample:
+            output["scene_resample"] = True
+        if self.solid_color is not None:
+            output["solid_color"] = list(self.solid_color)
+        return output
+
+
+@dataclass(frozen=True, slots=True)
+class RustRenderAudioInput:
+    rms: float
+    bands: tuple[float, float, float, float, float, float, float, float]
+    beat: bool
+    beat_strength: float
+
+    def to_wire(self) -> dict[str, object]:
+        if len(self.bands) != 8:
+            raise ValueError("Rust render audio input requires eight bands")
+        if not all(isfinite(value) for value in (self.rms, *self.bands, self.beat_strength)):
+            raise ValueError("Rust render audio input values must be finite")
+        return {
+            "rms": self.rms,
+            "bands": list(self.bands),
+            "beat": self.beat,
+            "beat_strength": self.beat_strength,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class RustRenderAck:
+    sequence: int
+    replaced: bool
+
+
+@dataclass(frozen=True, slots=True)
 class EngineHealth:
     status: str
     configured: bool
@@ -110,6 +331,12 @@ class EngineHealth:
     frame_latency_p99_ms: float | None
     sequential_skew_ms: float | None
     last_successful_update_at: datetime | None
+    render_time_ms: float | None
+    estimated_power_watts: float | None
+    applied_power_scale: float | None
+    output_power_watts: tuple[float, ...] | None
+    limiting_output_index: int | None
+    preview_outputs: tuple[bytes, ...] | None
 
 
 def _encode_request(
@@ -263,6 +490,60 @@ class RustEngineProcess:
             if updated_ms is not None
             else None
         )
+        render_time_ms = _optional_number_field(result, "render_time_ms")
+        estimated_power_watts = _optional_number_field(
+            result, "estimated_power_watts"
+        )
+        applied_power_scale = _optional_number_field(result, "applied_power_scale")
+        if applied_power_scale is not None and applied_power_scale > 1.0:
+            raise RustEngineError("Rust engine health applied_power_scale is invalid")
+        output_power_value = result.get("output_power_watts")
+        if output_power_value is None:
+            output_power_watts = None
+        elif (
+            not isinstance(output_power_value, list)
+            or len(output_power_value) != output_count
+        ):
+            raise RustEngineError("Rust engine health output_power_watts is invalid")
+        else:
+            parsed_output_power: list[float] = []
+            for value in output_power_value:
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise RustEngineError(
+                        "Rust engine health output_power_watts is invalid"
+                    )
+                watts = float(value)
+                if not np.isfinite(watts) or watts < 0.0:
+                    raise RustEngineError(
+                        "Rust engine health output_power_watts is invalid"
+                    )
+                parsed_output_power.append(watts)
+            output_power_watts = tuple(parsed_output_power)
+        limiting_output_index_value = result.get("limiting_output_index")
+        if limiting_output_index_value is not None and (
+            type(limiting_output_index_value) is not int
+            or not 0 <= limiting_output_index_value < output_count
+        ):
+            raise RustEngineError(
+                "Rust engine health limiting_output_index is invalid"
+            )
+        preview_value = result.get("preview_outputs")
+        if preview_value is None:
+            preview_outputs = None
+        elif not isinstance(preview_value, list) or len(preview_value) != output_count:
+            raise RustEngineError("Rust engine health preview_outputs is invalid")
+        else:
+            decoded_previews: list[bytes] = []
+            for output in preview_value:
+                if (
+                    not isinstance(output, list)
+                    or len(output) % 4 != 0
+                    or len(output) > _MAX_RENDER_PREVIEW_PIXELS * 4
+                    or any(type(channel) is not int or not 0 <= channel <= 255 for channel in output)
+                ):
+                    raise RustEngineError("Rust engine health preview_outputs is invalid")
+                decoded_previews.append(bytes(output))
+            preview_outputs = tuple(decoded_previews)
         return EngineHealth(
             status="ready",
             configured=configured,
@@ -282,7 +563,22 @@ class RustEngineProcess:
             frame_latency_p99_ms=frame_latency_p99_ms,
             sequential_skew_ms=sequential_skew_ms,
             last_successful_update_at=updated_at,
+            render_time_ms=render_time_ms,
+            estimated_power_watts=estimated_power_watts,
+            applied_power_scale=applied_power_scale,
+            output_power_watts=output_power_watts,
+            limiting_output_index=limiting_output_index_value,
+            preview_outputs=preview_outputs,
         )
+
+    def render_capabilities(self) -> tuple[str, ...]:
+        result = self._request("render_capabilities")
+        animations = result.get("animations")
+        if result.get("type") != "render_capabilities" or not isinstance(animations, list):
+            raise RustEngineError("Rust engine returned invalid render capabilities")
+        if any(not isinstance(animation, str) for animation in animations):
+            raise RustEngineError("Rust engine render capabilities contain an invalid name")
+        return tuple(animations)
 
     def configure(self, outputs: Sequence[RustOutputSpec]) -> None:
         wire_outputs = [output.to_wire() for output in outputs]
@@ -299,6 +595,59 @@ class RustEngineProcess:
         ):
             raise RustEngineError("Rust engine returned an invalid output configuration")
         self._pixel_counts = pixel_counts
+
+    def render_frame(
+        self,
+        *,
+        sequence: int,
+        timestamp_ns: int,
+        delta_ns: int,
+        brightness: float,
+        outputs: Sequence[RustRenderOutput],
+        audio: RustRenderAudioInput | None = None,
+        power_limiting_enabled: bool = False,
+        power_budget_watts: float | None = None,
+    ) -> RustRenderAck:
+        if sequence < 0 or timestamp_ns < 0 or delta_ns < 0:
+            raise ValueError("Rust render sequence and timestamps must be non-negative")
+        if not isfinite(brightness) or not 0.0 <= brightness <= 1.0:
+            raise ValueError("Rust render brightness must be between zero and one")
+        if len(outputs) != len(self._pixel_counts):
+            raise ValueError("render output count does not match Rust output configuration")
+        if not isinstance(power_limiting_enabled, bool):
+            raise TypeError("Rust render power limiting state must be a boolean")
+        if power_budget_watts is not None and (
+            not isfinite(power_budget_watts) or power_budget_watts < 0.0
+        ):
+            raise ValueError("Rust render power budget must be finite and non-negative")
+        if power_limiting_enabled and power_budget_watts is None:
+            raise ValueError("enabled Rust render power limiting needs a watt budget")
+        frame: dict[str, object] = {
+            "sequence": sequence,
+            "timestamp_ns": timestamp_ns,
+            "delta_ns": delta_ns,
+            "brightness": brightness,
+            "audio": None if audio is None else audio.to_wire(),
+            "outputs": [output.to_wire() for output in outputs],
+        }
+        if power_limiting_enabled or power_budget_watts is not None:
+            frame["power"] = {
+                "enabled": power_limiting_enabled,
+                "budget_watts": power_budget_watts,
+            }
+        result = self._request(
+            "render",
+            {"frame": frame},
+        )
+        if result.get("type") != "render_queued":
+            raise RustEngineError("Rust engine returned an invalid render acknowledgement")
+        returned_sequence = result.get("sequence")
+        replaced = result.get("replaced")
+        if type(returned_sequence) is not int or returned_sequence != sequence:
+            raise RustEngineError("Rust engine render sequence does not match the request")
+        if type(replaced) is not bool:
+            raise RustEngineError("Rust engine render acknowledgement has an invalid replacement flag")
+        return RustRenderAck(sequence=returned_sequence, replaced=replaced)
 
     def open_frame_stream(self) -> socket.socket:
         if self._closed:
@@ -484,6 +833,12 @@ class RustEngineOutputThread:
         self._frame_latency_p99_ms: float | None = None
         self._ipc_latency_ms: float | None = None
         self._sequential_skew_ms: float | None = None
+        self._render_time_ms: float | None = None
+        self._estimated_power_watts: float | None = None
+        self._applied_power_scale: float | None = None
+        self._output_power_watts: tuple[float, ...] | None = None
+        self._limiting_output_index: int | None = None
+        self._preview_outputs: tuple[bytes, ...] | None = None
         self._frame_latency_samples: deque[float] = deque(
             maxlen=OUTPUT_LATENCY_SAMPLE_COUNT
         )
@@ -555,6 +910,12 @@ class RustEngineOutputThread:
             frame_latency_p99 = self._frame_latency_p99_ms
             ipc_latency = self._ipc_latency_ms
             sequential_skew = self._sequential_skew_ms
+            render_time = self._render_time_ms
+            estimated_power = self._estimated_power_watts
+            applied_power_scale = self._applied_power_scale
+            output_power = self._output_power_watts
+            limiting_output_index = self._limiting_output_index
+            preview_outputs = self._preview_outputs
             latency_samples = tuple(self._frame_latency_samples)
             health_dropped = self._health_dropped_frames
         exchange = self._exchange
@@ -589,6 +950,38 @@ class RustEngineOutputThread:
             ipc_latency_ms=ipc_latency,
             sequential_skew_ms=sequential_skew,
             frame_latency_sample_count=len(latency_samples),
+            render_time_ms=render_time,
+            estimated_power_watts=estimated_power,
+            applied_power_scale=applied_power_scale,
+            output_power_watts=output_power,
+            limiting_output_index=limiting_output_index,
+            preview_outputs=preview_outputs,
+        )
+
+    def submit_render_frame(
+        self,
+        *,
+        sequence: int,
+        timestamp_ns: int,
+        delta_ns: int,
+        brightness: float,
+        outputs: Sequence[RustRenderOutput],
+        audio: RustRenderAudioInput | None = None,
+        power_limiting_enabled: bool = False,
+        power_budget_watts: float | None = None,
+    ) -> RustRenderAck:
+        process = self._process
+        if process is None:
+            raise RustEngineError("Rust output bridge is not running")
+        return process.render_frame(
+            sequence=sequence,
+            timestamp_ns=timestamp_ns,
+            delta_ns=delta_ns,
+            brightness=brightness,
+            outputs=outputs,
+            audio=audio,
+            power_limiting_enabled=power_limiting_enabled,
+            power_budget_watts=power_budget_watts,
         )
 
     def is_healthy(self, *, max_heartbeat_age_seconds: float) -> bool:
@@ -719,6 +1112,12 @@ class RustEngineOutputThread:
                 self._frame_latency_p95_ms = baseline.frame_latency_p95_ms
                 self._frame_latency_p99_ms = baseline.frame_latency_p99_ms
                 self._sequential_skew_ms = baseline.sequential_skew_ms
+                self._render_time_ms = baseline.render_time_ms
+                self._estimated_power_watts = baseline.estimated_power_watts
+                self._applied_power_scale = baseline.applied_power_scale
+                self._output_power_watts = baseline.output_power_watts
+                self._limiting_output_index = baseline.limiting_output_index
+                self._preview_outputs = baseline.preview_outputs
                 self._last_successful_update_at = baseline.last_successful_update_at
                 self._last_successful_update_monotonic = None
                 self._frame_latency_samples.clear()
@@ -748,6 +1147,12 @@ class RustEngineOutputThread:
             self._frame_latency_p95_ms = health.frame_latency_p95_ms
             self._frame_latency_p99_ms = health.frame_latency_p99_ms
             self._sequential_skew_ms = health.sequential_skew_ms
+            self._render_time_ms = health.render_time_ms
+            self._estimated_power_watts = health.estimated_power_watts
+            self._applied_power_scale = health.applied_power_scale
+            self._output_power_watts = health.output_power_watts
+            self._limiting_output_index = health.limiting_output_index
+            self._preview_outputs = health.preview_outputs
             if has_new_frame and health.frame_latency_ms is not None:
                 self._frame_latency_samples.append(health.frame_latency_ms)
             if health.last_successful_update_at is not None:

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from random import Random
+from time import perf_counter_ns
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -144,6 +146,14 @@ class EffectLayerStatus:
     elapsed_s: float
     remaining_s: float
     progress: float
+
+
+@dataclass(frozen=True, slots=True)
+class EffectRenderInput:
+    name: str
+    settings: Mapping[str, object]
+    intensity: float
+    trigger_beat_strength: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -857,6 +867,10 @@ class LayeredRenderer:
     _base_buffer: Stripe | None = None
     _effect_buffers: list[Stripe] = field(default_factory=list)
     _output_buffer: np.ndarray | None = None
+    _last_trigger_audio: dict[str, AudioFrame] = field(
+        default_factory=dict, init=False
+    )
+    last_schedule_update_ms: float = field(default=0.0, init=False)
 
     @property
     def active_effect_names(self) -> tuple[str, ...]:
@@ -865,8 +879,74 @@ class LayeredRenderer:
     def diagnostics(self, *, now_s: float | None = None) -> EffectSchedulerDiagnostics:
         return self.scheduler.diagnostics(now_s=now_s)
 
+    def render_inputs(
+        self,
+        player: AnimationPlayer,
+        snapshot: AudioSnapshot,
+        structure_state: MusicStructureState | None = None,
+    ) -> tuple[float, tuple[EffectRenderInput, ...]]:
+        """Return active layer settings for a renderer outside this process."""
+        modifiers = _structure_modifiers(structure_state)
+        base_intensity = (
+            self.scheduler.quiet_floor
+            + (1.0 - self.scheduler.quiet_floor) * snapshot.musical_impact
+        ) * modifiers.output_scale
+        effects = tuple(
+            EffectRenderInput(
+                name=active.definition.name,
+                settings=player.animation_settings(active.definition.name) or {},
+                intensity=active.intensity * modifiers.effect_scale,
+                trigger_beat_strength=(
+                    self._last_trigger_audio[active.definition.name].beat_strength
+                    if active.definition.name in self._last_trigger_audio
+                    else None
+                ),
+            )
+            for active in self.scheduler.active
+        )
+        return base_intensity, effects
+
+    def advance(
+        self,
+        player: AnimationPlayer,
+        snapshot: AudioSnapshot,
+        *,
+        now_s: float,
+        sync_offset_s: float = 0.0,
+        structure_state: MusicStructureState | None = None,
+    ) -> float:
+        """Advance animation and effect policy without rendering their pixels."""
+        transitioning = player.transition_active
+        previous_effects = {id(active) for active in self.scheduler.active}
+        if transitioning:
+            self.scheduler.clear_active()
+        delay = player.advance(now_s=now_s, finish_transition=False)
+        schedule_started_ns = perf_counter_ns()
+        self.scheduler.update(
+            player,
+            snapshot,
+            now_s=now_s,
+            allow_triggers=not player.transition_active and not transitioning,
+            sync_offset_s=sync_offset_s,
+            structure_state=structure_state,
+        )
+        self.last_schedule_update_ms = (
+            perf_counter_ns() - schedule_started_ns
+        ) / 1_000_000.0
+        self._last_trigger_audio = {
+            active.definition.name: active.trigger_frame
+            for active in self.scheduler.active
+            if id(active) not in previous_effects
+        }
+        for active in self.scheduler.active:
+            active.frame += 1
+        if player.transition_active and player.transition_progress_at(now_s) >= 1.0:
+            player.cancel_transition()
+        return delay
+
     def reset(self) -> None:
         self.scheduler.reset()
+        self._last_trigger_audio.clear()
         self._base_buffer = None
         self._effect_buffers.clear()
         self._output_buffer = None
@@ -900,6 +980,7 @@ class LayeredRenderer:
             now_s=now_s,
             transition_external=True,
         )
+        schedule_started_ns = perf_counter_ns()
         self.scheduler.update(
             player,
             snapshot,
@@ -908,6 +989,9 @@ class LayeredRenderer:
             sync_offset_s=sync_offset_s,
             structure_state=structure_state,
         )
+        self.last_schedule_update_ms = (
+            perf_counter_ns() - schedule_started_ns
+        ) / 1_000_000.0
 
         while len(self._effect_buffers) < len(self.scheduler.active):
             self._effect_buffers.append(Stripe(controller.length))

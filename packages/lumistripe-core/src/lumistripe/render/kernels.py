@@ -24,6 +24,14 @@ NATIVE_AVAILABLE = _native_module is not None
 NATIVE_RENDER_MIN_PIXELS = 150
 
 
+def native_render_neon_enabled() -> bool | None:
+    """Report whether the loaded native extension includes its AArch64 NEON path."""
+    if _native_module is None:
+        return None
+    enabled = getattr(_native_module, "render_neon_enabled", None)
+    return bool(enabled) if isinstance(enabled, int) else None
+
+
 def native_render_dispatch_enabled(
     pixel_count: int, minimum_pixels: int = NATIVE_RENDER_MIN_PIXELS
 ) -> bool:

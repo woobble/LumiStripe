@@ -2035,6 +2035,18 @@
           "runtime": {
             "$ref": "#/components/schemas/RuntimeKind"
           },
+          "scheduler_time_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduler Time Ms"
+          },
           "sequence_library": {
             "$ref": "#/components/schemas/SequenceLibrarySummary"
           },

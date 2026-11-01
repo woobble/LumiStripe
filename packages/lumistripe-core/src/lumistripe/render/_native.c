@@ -4,7 +4,7 @@
 static struct PyModuleDef module_definition = {
     PyModuleDef_HEAD_INIT,
     .m_name = "lumistripe.render._native",
-    .m_doc = "Portable scalar C kernels for RGBA frame processing",
+    .m_doc = "C kernels for RGBA frame processing",
     .m_size = -1,
 };
 
@@ -26,6 +26,14 @@ PyMODINIT_FUNC PyInit__native(void) {
             Py_DECREF(module);
             return NULL;
         }
+    }
+#if defined(__aarch64__) && !defined(LUMISTRIPE_DISABLE_RENDER_NEON)
+    if (PyModule_AddIntConstant(module, "render_neon_enabled", 1) < 0) {
+#else
+    if (PyModule_AddIntConstant(module, "render_neon_enabled", 0) < 0) {
+#endif
+        Py_DECREF(module);
+        return NULL;
     }
     return module;
 }

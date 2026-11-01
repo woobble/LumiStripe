@@ -11,6 +11,7 @@ from lumistripe.render import (
     composite_screen_rgba_into,
     correct_rgba_into,
     kernels,
+    native_render_neon_enabled,
 )
 from lumistripe.render.kernels import (
     _apply_alpha_scale_numpy,
@@ -30,6 +31,10 @@ def _frames(length: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray
     destination = np.empty_like(source)
     correction = np.array((128, 255, 37), dtype=np.uint16)
     return source, corrected, destination, correction
+
+
+def test_native_render_neon_reports_the_loaded_build_profile() -> None:
+    assert native_render_neon_enabled() in (True, False, None)
 
 
 @pytest.mark.parametrize("length", [0, 1, 150, 600])

@@ -33,6 +33,11 @@ export function isNewerPreviewSequence(sequence: number, previous: number): bool
   return distance > 0 && distance < 0x80000000
 }
 
+export function previewSampleIndex(index: number, pixelCount: number, sampleCount: number): number {
+  if (pixelCount <= 0 || sampleCount <= 0) return 0
+  return Math.min(sampleCount - 1, Math.floor(index * sampleCount / pixelCount))
+}
+
 export async function decodePreviewFrame(data: unknown): Promise<PreviewFrame | null> {
   let buffer: ArrayBuffer
   if (data instanceof ArrayBuffer) {

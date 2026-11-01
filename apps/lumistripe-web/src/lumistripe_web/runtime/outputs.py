@@ -209,6 +209,44 @@ def power_budget_state_for(
     )
 
 
+def power_budget_state_from_engine(
+    topology: StripeTopologySettings,
+    *,
+    estimated_watts: float,
+    applied_scale: float,
+    output_watts: Sequence[float],
+    limiting_output_index: int | None,
+) -> PowerBudgetState:
+    """Translate Rust render telemetry into the existing dashboard power model."""
+    if len(output_watts) != len(topology.outputs):
+        raise ValueError("Rust power telemetry does not match configured outputs")
+    if limiting_output_index is not None and not 0 <= limiting_output_index < len(
+        topology.outputs
+    ):
+        raise ValueError("Rust limiting output index is outside the configured topology")
+    outputs = tuple(
+        PowerOutputState(
+            output_id=output.id,
+            estimated_watts=watts,
+            limit_watts=output.power_limit_watts,
+            applied_scale=applied_scale,
+        )
+        for output, watts in zip(topology.outputs, output_watts, strict=True)
+    )
+    limiting_output_id = (
+        topology.outputs[limiting_output_index].id
+        if limiting_output_index is not None
+        else None
+    )
+    return power_budget_state_for(
+        topology,
+        estimated_watts=estimated_watts,
+        applied_scale=applied_scale,
+        limiting_output_id=limiting_output_id,
+        outputs=outputs,
+    )
+
+
 def flush_power_limited_outputs(
     topology: StripeTopologySettings,
     controller: OutputGateController | None,
@@ -336,4 +374,9 @@ def copy_output_pixels(controller: Controller) -> np.ndarray:
     return controller.pixels().copy()
 
 
-__all__ = ["OutputGateController", "copy_output_pixels"]
+__all__ = [
+    "OutputGateController",
+    "copy_output_pixels",
+    "power_budget_state_for",
+    "power_budget_state_from_engine",
+]

@@ -31,6 +31,13 @@ ARM64 Advanced SIMD in 16-pixel blocks and keeps a scalar implementation for
 portable builds and the final partial block. Portable wheels retain their
 default compiler flags.
 
+For renderer benchmarks, the C render extension's AArch64 NEON kernels can be
+disabled at build time with `LUMISTRIPE_DISABLE_RENDER_NEON=1`. The benchmark
+tool reports whether the loaded native extension includes NEON, so enabled and
+scalar C runs can be labeled and compared without relying on the build command
+history. `null` means the extension is unavailable or predates this build
+metadata.
+
 Install hardware SPI support with:
 
 ```bash

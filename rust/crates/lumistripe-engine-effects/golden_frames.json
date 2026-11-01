@@ -1,0 +1,2581 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "name": "hard_beat",
+      "settings": {
+        "decay": 42,
+        "duty_cycle": 44,
+        "intensity": 91
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9",
+        "ffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8c",
+        "ffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7f",
+        "d0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939c"
+      ],
+      "variant": "python"
+    },
+    {
+      "name": "hard_beat",
+      "settings": {
+        "decay": 42,
+        "duty_cycle": 44,
+        "intensity": 91
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9ff6565a9",
+        "ffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8cffda7f8c",
+        "ffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7fffda7f7f",
+        "d0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939cd0ff939c"
+      ],
+      "variant": "native"
+    },
+    {
+      "name": "confetti",
+      "settings": {
+        "count": 5,
+        "spread": 67,
+        "fade_time": 58,
+        "intensity": 91,
+        "palette": "rainbow"
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "ff19195700000000000000000000000000000000000000000000000075ff19570000000097ff1957000000000000000000000000000000000000000000000000000000000000000019ffe8570000000019ffc55700000000000000000000000000000000000000000000000000000000000000004719ff5700000000000000000000000000000000000000000000000000000000000000000000000000000000c9ff1957000000000000000000000000000000000000000000000000000000000000000019ffb65700000000000000000000000000000000000000000000000000000000000000003819ff5700000000191dff57000000000000000000000000",
+        "ffb2478723feae55fe82235523fe8d55fe61235523fe6c55fe40235547ff69875323fe5547ff47872e23fe5544fe23552339fe5565fe2355235afe5586fe23552386fe55b2fe235547b5ff87d3fe235547d1ff87f7fe235523e9fe55fee5235523fef455fec4235523fed355fea3235523feb255ff96478723fe8d55fe61235523fe6555fe39235523fe44555323fe5523fe23553223fe5544fe23552335fe557bff47872356fe5582fe23552377fe55a3fe23552398fe55c4fe235523b9fe55ecfe235547e6ff87feec235523fefb55fecb235523feda55feaa235523feb955fe8a235523fe9855ff81478723fe7755ff66478723fe5355fe27235523fe2b55",
+        "ffcb3d7119ffd146ff9f194647ffbe81ff7c194647ffa381ff5a19465bff9499ff3b19463dff6371ff19194619ff24465c47ff8130ff1946474dff8152ff1946476cff8179ff19465b94ff999bff19463da1ff71bdff194619b2ff46e6ff478119d8ff46fff8478119fbff46ffdd478119ffe046ffbb3d7119ffbd46ff8c194619ff9746ff66194619ff7546ff43194647ff7581ff21194647ff59813b19ff4650ff3d711921ff4652ff19461943ff4675ff19461965ff4697ff194647a0ff81bdff19463dbeff71e0ff194619d4ff46fffb194619f7ff46ffe0478119ffe446ffbe478119ffba46ffad5b9919ff9746ff7d3d7119ff7546ff43194647ff7281",
+        "c5ff609e47b2ff80d7ff478060d4ff9ef2ff478060ecff9effef478060fff99effca478060ffdc9effaf478047ffbb80ffa2609e47ffa080ff8b609e47ff8480ff6e609e47ff62808060ff9e4aff47806860ff9e66ff47804759ff8092ff609e4778ff80adff609e4793ff80c5ff609e47b2ff80dcff609e47ceff80f2ff478047ecff80ffec478047fff580ffd1478060ffdf9effb5478060ffc79eff96478060ffad9eff78478047ff8480ff5c478047ff69807247ff8047ff4d806e60ff9e62ff4780606eff9e7eff47804772ff809aff4780478dff80bfff609e47a9ff80dcff609e47caff80f4ff609e47e9ff80fff1609e47fff880ffd4478060ffe29e"
+      ],
+      "variant": "python"
+    },
+    {
+      "name": "confetti",
+      "settings": {
+        "count": 5,
+        "spread": 67,
+        "fade_time": 58,
+        "intensity": 91,
+        "palette": "rainbow"
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "ff19195700000000000000000000000000000000000000000000000075ff19570000000097ff1957000000000000000000000000000000000000000000000000000000000000000019ffe8570000000019ffc55700000000000000000000000000000000000000000000000000000000000000004719ff5700000000000000000000000000000000000000000000000000000000000000000000000000000000c9ff1957000000000000000000000000000000000000000000000000000000000000000019ffb65700000000000000000000000000000000000000000000000000000000000000003819ff5700000000191dff57000000000000000000000000",
+        "ffb2478723feae55fe82235523fe8d55fe61235523fe6c55fe40235547ff69875323fe5547ff47872e23fe5544fe23552339fe5565fe2355235afe5586fe23552386fe55b2fe235547b5ff87d3fe235547d1ff87f7fe235523e9fe55fee5235523fef455fec4235523fed355fea3235523feb255ff96478723fe8d55fe61235523fe6555fe39235523fe44555323fe5523fe23553223fe5544fe23552335fe557bff47872356fe5582fe23552377fe55a3fe23552398fe55c4fe235523b9fe55ecfe235547e6ff87feec235523fefb55fecb235523feda55feaa235523feb955fe8a235523fe9855ff81478723fe7755ff66478723fe5355fe27235523fe2b55",
+        "ffcb3d7119ffd146ff9f194647ffbe81ff7c194647ffa381ff5a19465bff9499ff3b19463dff6371ff19194619ff24465c47ff8130ff1946474dff8152ff1946476cff8179ff19465b94ff999bff19463da1ff71bdff194619b2ff46e6ff478119d8ff46fff8478119fbff46ffdd478119ffe046ffbb3d7119ffbd46ff8c194619ff9746ff66194619ff7546ff43194647ff7581ff21194647ff59813b19ff4650ff3d711921ff4652ff19461943ff4675ff19461965ff4697ff194647a0ff81bdff19463dbeff71e0ff194619d4ff46fffb194619f7ff46ffe0478119ffe446ffbe478119ffba46ffad5b9919ff9746ff7d3d7119ff7546ff43194647ff7281",
+        "c5ff609e47b2ff80d7ff478060d4ff9ef2ff478060ecff9effef478060fff99effca478060ffdc9effaf478047ffbb80ffa2609e47ffa080ff8b609e47ff8480ff6e609e47ff62808060ff9e4aff47806860ff9e66ff47804759ff8092ff609e4778ff80adff609e4793ff80c5ff609e47b2ff80dcff609e47ceff80f2ff478047ecff80ffec478047fff580ffd1478060ffdf9effb5478060ffc79eff96478060ffad9eff78478047ff8480ff5c478047ff69807247ff8047ff4d806e60ff9e62ff4780606eff9e7eff47804772ff809aff4780478dff80bfff609e47a9ff80dcff609e47caff80f4ff609e47e9ff80fff1609e47fff880ffd4478060ffe29e"
+      ],
+      "variant": "native"
+    },
+    {
+      "name": "bass_drop",
+      "settings": {
+        "speed": 56,
+        "decay": 48,
+        "intensity": 90,
+        "palette": "neon"
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1",
+        "ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7",
+        "ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7",
+        "ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7"
+      ],
+      "variant": "python"
+    },
+    {
+      "name": "bass_drop",
+      "settings": {
+        "speed": 56,
+        "decay": 48,
+        "intensity": 90,
+        "palette": "neon"
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1ff5b32a1",
+        "ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7ec5e3ba7",
+        "ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7ee5d38a7",
+        "ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7ea5f3da7"
+      ],
+      "variant": "native"
+    },
+    {
+      "name": "beat_explosion",
+      "settings": {
+        "speed": 55,
+        "width": 34,
+        "intensity": 90,
+        "palette": "neon",
+        "beat_sensitivity": 88
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df4003df4b7003df4b7003df4b7003df4b7003df4b7003df4b7123df4b7383df4b75e3df4b7833df4b7833df4b75e3df4b7383df4b7123df4b7003df4b7003df4b7003df4b7003df4b7003df4b7003df4b7003df4b7003df4b700f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00",
+        "da57da00da57da00da57da00da57da01da57da01da57da02da57da02da57da02da57da03da57da03da57da04da57da04da57da05da57da05da57da05da57da06da57da06da57da07da57da07da57da08da57da08da57da08da57da09da57da09da57da0ada57da0ada57da0bda57da0dda57da29da57da45da57da61da57da7dda57da7dda57da61da57da45da57da29da57da0dda57da0bda57da0ada57da0ada57da09da57da09da57da08da57da08da57da08da57da07da57da07da57da06da57da06da57da05da57da05da57da05da57da04da57da04da57da03da57da03da57da02da57da02da57da02da57da01da57da01da57da00da57da00da57da00",
+        "d859d800d859d800d859d800d859d801d859d801d859d802d859d802d859d802d859d803d859d803d859d804d859d804d859d805d859d805d859d805d859d806d859d806d859d807d859d807d859d808d859d808d859d808d859d809d859d809d859d80ad859d80ad859d815d859d82fd859d849d859d864d859d87ed859d86dd859d86dd859d87ed859d864d859d849d859d82fd859d815d859d80ad859d80ad859d809d859d809d859d808d859d808d859d808d859d807d859d807d859d806d859d806d859d805d859d805d859d805d859d804d859d804d859d803d859d803d859d802d859d802d859d802d859d801d859d801d859d800d859d800d859d800",
+        "da57da00da57da00da57da00da57da01da57da01da57da02da57da02da57da02da57da03da57da03da57da04da57da04da57da05da57da05da57da05da57da06da57da06da57da07da57da07da57da08da57da08da57da08da57da09da57da09da57da0ada57da0ada57da0bda57da12da57da29da57da41da57da59da57da70da57da70da57da59da57da41da57da29da57da12da57da0bda57da0ada57da0ada57da09da57da09da57da08da57da08da57da08da57da07da57da07da57da06da57da06da57da05da57da05da57da05da57da04da57da04da57da03da57da03da57da02da57da02da57da02da57da01da57da01da57da00da57da00da57da00"
+      ],
+      "variant": "python"
+    },
+    {
+      "name": "beat_explosion",
+      "settings": {
+        "speed": 55,
+        "width": 34,
+        "intensity": 90,
+        "palette": "neon",
+        "beat_sensitivity": 88
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df400f43df4003df4b7003df4b7003df4b7003df4b7003df4b7003df4b7123df4b7383df4b75e3df4b7833df4b7833df4b75e3df4b7383df4b7123df4b7003df4b7003df4b7003df4b7003df4b7003df4b7003df4b7003df4b7003df4b700f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00f4dc3d00",
+        "da57da00da57da00da57da00da57da01da57da01da57da02da57da02da57da02da57da03da57da03da57da04da57da04da57da05da57da05da57da05da57da06da57da06da57da07da57da07da57da08da57da08da57da08da57da09da57da09da57da0ada57da0ada57da0bda57da0dda57da29da57da45da57da61da57da7dda57da7dda57da61da57da45da57da29da57da0dda57da0bda57da0ada57da0ada57da09da57da09da57da08da57da08da57da08da57da07da57da07da57da06da57da06da57da05da57da05da57da05da57da04da57da04da57da03da57da03da57da02da57da02da57da02da57da01da57da01da57da00da57da00da57da00",
+        "d859d800d859d800d859d800d859d801d859d801d859d802d859d802d859d802d859d803d859d803d859d804d859d804d859d805d859d805d859d805d859d806d859d806d859d807d859d807d859d808d859d808d859d808d859d809d859d809d859d80ad859d80ad859d815d859d82fd859d849d859d864d859d87ed859d86dd859d86dd859d87ed859d864d859d849d859d82fd859d815d859d80ad859d80ad859d809d859d809d859d808d859d808d859d808d859d807d859d807d859d806d859d806d859d805d859d805d859d805d859d804d859d804d859d803d859d803d859d802d859d802d859d802d859d801d859d801d859d800d859d800d859d800",
+        "da57da00da57da00da57da00da57da01da57da01da57da02da57da02da57da02da57da03da57da03da57da04da57da04da57da05da57da05da57da05da57da06da57da06da57da07da57da07da57da08da57da08da57da08da57da09da57da09da57da0ada57da0ada57da0bda57da12da57da29da57da41da57da59da57da70da57da70da57da59da57da41da57da29da57da12da57da0bda57da0ada57da0ada57da09da57da09da57da08da57da08da57da08da57da07da57da07da57da06da57da06da57da05da57da05da57da05da57da04da57da04da57da03da57da03da57da02da57da02da57da02da57da01da57da01da57da00da57da00da57da00"
+      ],
+      "variant": "native"
+    },
+    {
+      "name": "beat_ripple",
+      "settings": {
+        "speed": 54,
+        "width": 32,
+        "decay": 53,
+        "intensity": 90,
+        "palette": "neon"
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ff32fe11ff32fe41ff32fe71ff32fe71ff32fe41ff32fe110000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "e64be68ae64be662e64be63ae64be6110000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000e64be611e64be63ae64be662e64be68a",
+        "e349e370e349e36ce349e347e349e3210000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000e349e321e349e347e349e36ce349e370",
+        "49e3b08249e3b05f49e3b03b49e3b017000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000049e3b01749e3b03b49e3b05f49e3b082"
+      ],
+      "variant": "python"
+    },
+    {
+      "name": "beat_ripple",
+      "settings": {
+        "speed": 54,
+        "width": 32,
+        "decay": 53,
+        "intensity": 90,
+        "palette": "neon"
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ff32fe11ff32fe41ff32fe71ff32fe71ff32fe41ff32fe110000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "e64be68ae64be662e64be63ae64be6110000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000e64be611e64be63ae64be662e64be68a",
+        "e349e370e349e36ce349e347e349e3210000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000e349e321e349e347e349e36ce349e370",
+        "49e3b08249e3b05f49e3b03b49e3b017000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000049e3b01749e3b03b49e3b05f49e3b082"
+      ],
+      "variant": "native"
+    },
+    {
+      "name": "beat_tunnel",
+      "settings": {
+        "speed": 52,
+        "width": 33,
+        "intensity": 90,
+        "palette": "neon",
+        "beat_sensitivity": 88
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "5b5b5b00e7d03a00e7d03a01e7d03a01e7d03a02e7d03a02e7d03a03e7d03a03e7d03a04e7d03a04e7d03a31e7d03a5fe7d03a48e7d03a1be7d03a07e7d03a07e7d03a08e7d03a09e7d03a09e7d03a0ae7d03a0ae7d03a0be7d03a0be7d03a0ce7d03a0ce7d03a0de7d03a0de7d03a0ee7d03a0ee7d03a28e7d03a48e7d03a67e7d03a67e7d03a48e7d03a28e7d03a0ee7d03a0ee7d03a0de7d03a0de7d03a0ce7d03a0ce7d03a0be7d03a0be7d03a0ae7d03a0ae7d03a09e7d03a09e7d03a08e7d03a07e7d03a07e7d03a1be7d03a48e7d03a5fe7d03a31e7d03a04e7d03a04e7d03a03e7d03a03e7d03a02e7d03a02e7d03a01e7d03a01e7d03a005b5b5b00",
+        "5b5b5b00e73ae700e73ae701e73ae701e73ae702e73ae702e73ae703e73ae703e73ae704e73ae716e73ae74fe73ae75ae73ae723e73ae706e73ae707e73ae707e73ae708e73ae709e73ae709e73ae70ae73ae70ae73ae70be73ae70be73ae70ce73ae70ce73ae70de73ae70de73ae70ee73ae70ee73ae728e73ae745e73ae763e73ae763e73ae745e73ae728e73ae70ee73ae70ee73ae70de73ae70de73ae70ce73ae70ce73ae70be73ae70be73ae70ae73ae70ae73ae709e73ae709e73ae708e73ae707e73ae707e73ae706e73ae723e73ae75ae73ae74fe73ae716e73ae704e73ae703e73ae703e73ae702e73ae702e73ae701e73ae701e73ae7005b5b5b00",
+        "5b5b5b00e73ae700e73ae701e73ae701e73ae702e73ae702e73ae703e73ae703e73ae715e73ae74ce73ae758e73ae722e73ae706e73ae706e73ae707e73ae707e73ae708e73ae709e73ae709e73ae70ae73ae70ae73ae70be73ae70be73ae70ce73ae70ce73ae70de73ae70de73ae70ee73ae726e73ae744e73ae761e73ae761e73ae761e73ae761e73ae744e73ae726e73ae70ee73ae70de73ae70de73ae70ce73ae70ce73ae70be73ae70be73ae70ae73ae70ae73ae709e73ae709e73ae708e73ae707e73ae707e73ae706e73ae706e73ae722e73ae758e73ae74ce73ae715e73ae703e73ae703e73ae702e73ae702e73ae701e73ae701e73ae7005b5b5b00",
+        "5b5b5b00e73ae700e73ae701e73ae701e73ae702e73ae702e73ae703e73ae703e73ae704e73ae715e73ae74be73ae756e73ae722e73ae706e73ae707e73ae707e73ae708e73ae709e73ae709e73ae70ae73ae70ae73ae70be73ae70be73ae70ce73ae70ce73ae70de73ae70de73ae70ee73ae70fe73ae72be73ae746e73ae761e73ae761e73ae746e73ae72be73ae70fe73ae70ee73ae70de73ae70de73ae70ce73ae70ce73ae70be73ae70be73ae70ae73ae70ae73ae709e73ae709e73ae708e73ae707e73ae707e73ae706e73ae722e73ae756e73ae74be73ae715e73ae704e73ae703e73ae703e73ae702e73ae702e73ae701e73ae701e73ae7005b5b5b00"
+      ],
+      "variant": "python"
+    },
+    {
+      "name": "beat_tunnel",
+      "settings": {
+        "speed": 52,
+        "width": 33,
+        "intensity": 90,
+        "palette": "neon",
+        "beat_sensitivity": 88
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "5b5b5b00e7d03a00e7d03a01e7d03a01e7d03a02e7d03a02e7d03a03e7d03a03e7d03a04e7d03a04e7d03a31e7d03a5fe7d03a48e7d03a1be7d03a07e7d03a07e7d03a08e7d03a09e7d03a09e7d03a0ae7d03a0ae7d03a0be7d03a0be7d03a0ce7d03a0ce7d03a0de7d03a0de7d03a0ee7d03a0ee7d03a28e7d03a48e7d03a67e7d03a67e7d03a48e7d03a28e7d03a0ee7d03a0ee7d03a0de7d03a0de7d03a0ce7d03a0ce7d03a0be7d03a0be7d03a0ae7d03a0ae7d03a09e7d03a09e7d03a08e7d03a07e7d03a07e7d03a1be7d03a48e7d03a5fe7d03a31e7d03a04e7d03a04e7d03a03e7d03a03e7d03a02e7d03a02e7d03a01e7d03a01e7d03a005b5b5b00",
+        "5b5b5b00e73ae700e73ae701e73ae701e73ae702e73ae702e73ae703e73ae703e73ae704e73ae716e73ae74fe73ae75ae73ae723e73ae706e73ae707e73ae707e73ae708e73ae709e73ae709e73ae70ae73ae70ae73ae70be73ae70be73ae70ce73ae70ce73ae70de73ae70de73ae70ee73ae70ee73ae728e73ae745e73ae763e73ae763e73ae745e73ae728e73ae70ee73ae70ee73ae70de73ae70de73ae70ce73ae70ce73ae70be73ae70be73ae70ae73ae70ae73ae709e73ae709e73ae708e73ae707e73ae707e73ae706e73ae723e73ae75ae73ae74fe73ae716e73ae704e73ae703e73ae703e73ae702e73ae702e73ae701e73ae701e73ae7005b5b5b00",
+        "5b5b5b00e73ae700e73ae701e73ae701e73ae702e73ae702e73ae703e73ae703e73ae715e73ae74ce73ae758e73ae722e73ae706e73ae706e73ae707e73ae707e73ae708e73ae709e73ae709e73ae70ae73ae70ae73ae70be73ae70be73ae70ce73ae70ce73ae70de73ae70de73ae70ee73ae726e73ae744e73ae761e73ae761e73ae761e73ae761e73ae744e73ae726e73ae70ee73ae70de73ae70de73ae70ce73ae70ce73ae70be73ae70be73ae70ae73ae70ae73ae709e73ae709e73ae708e73ae707e73ae707e73ae706e73ae706e73ae722e73ae758e73ae74ce73ae715e73ae703e73ae703e73ae702e73ae702e73ae701e73ae701e73ae7005b5b5b00",
+        "5b5b5b00e73ae700e73ae701e73ae701e73ae702e73ae702e73ae703e73ae703e73ae704e73ae715e73ae74be73ae756e73ae722e73ae706e73ae707e73ae707e73ae708e73ae709e73ae709e73ae70ae73ae70ae73ae70be73ae70be73ae70ce73ae70ce73ae70de73ae70de73ae70ee73ae70fe73ae72be73ae746e73ae761e73ae761e73ae746e73ae72be73ae70fe73ae70ee73ae70de73ae70de73ae70ce73ae70ce73ae70be73ae70be73ae70ae73ae70ae73ae709e73ae709e73ae708e73ae707e73ae707e73ae706e73ae722e73ae756e73ae74be73ae715e73ae704e73ae703e73ae703e73ae702e73ae702e73ae701e73ae701e73ae7005b5b5b00"
+      ],
+      "variant": "native"
+    },
+    {
+      "name": "beat_wave",
+      "settings": {
+        "speed": 56,
+        "width": 32,
+        "intensity": 90,
+        "palette": "neon",
+        "beat_sensitivity": 88
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "5b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b00",
+        "ff32fe61ff32fe96ff32fe82ff32fe4dff32fe19ff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0f",
+        "ff32fe18ff32fe4cff32fe7fff32fe8dff32fe59ff32fe26ff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0c",
+        "ff32fe5eff32fe90ff32fea7ff32fea7ff32fea7ff32fe70ff32fe3dff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14"
+      ],
+      "variant": "python"
+    },
+    {
+      "name": "beat_wave",
+      "settings": {
+        "speed": 56,
+        "width": 32,
+        "intensity": 90,
+        "palette": "neon",
+        "beat_sensitivity": 88
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "5b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b005b5b5b00",
+        "ff32fe61ff32fe96ff32fe82ff32fe4dff32fe19ff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0fff32fe0f",
+        "ff32fe18ff32fe4cff32fe7fff32fe8dff32fe59ff32fe26ff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0cff32fe0c",
+        "ff32fe5eff32fe90ff32fea7ff32fea7ff32fea7ff32fe70ff32fe3dff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14ff32fe14"
+      ],
+      "variant": "native"
+    },
+    {
+      "name": "club_flash",
+      "settings": {
+        "flash_rate": 58,
+        "duty_cycle": 31,
+        "beat_sensitivity": 91,
+        "intensity": 88,
+        "palette": "neon"
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff",
+        "ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1",
+        "ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94",
+        "ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3"
+      ],
+      "variant": "python"
+    },
+    {
+      "name": "club_flash",
+      "settings": {
+        "flash_rate": 58,
+        "duty_cycle": 31,
+        "beat_sensitivity": 91,
+        "intensity": 88,
+        "palette": "neon"
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff",
+        "ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1ea47eaa1",
+        "ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94ea47ea94",
+        "ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3ea47eaa3"
+      ],
+      "variant": "native"
+    },
+    {
+      "name": "color_burst",
+      "settings": {
+        "speed": 58,
+        "spread": 64,
+        "decay": 48,
+        "intensity": 90,
+        "palette": "rainbow"
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff2861ff12cd28ff29ff289340ff69284effd4283728ff3e3e28dbff4f2861ff38cd28ff22ff28930b000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff",
+        "000000ff000000ff000000ff000000ff000000ff28ff3e0928dbff1e2861ff32cd28ff47ff28933eff692829ffd4281428ff3e1b28dbff302861ff44cd28ff40ff28932cff692817ffd42802000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ffffd4281328ff3e2b28dbff442861ff5ccd28ff75ff28938dff69288effd4287528ff3e5d28dbff6c2861ff85cd28ff96ff28937dff692865ffd4284c28ff3e3428dbff1b2861ff03000000ff000000ff000000ff000000ff000000ff000000ff000000ff",
+        "000000ff000000ff000000ffff692801ffd4281428ff3e2728dbff392861ff42cd28ff30ff28931dff69280a000000ff000000ff28dbff102861ff23cd28ff36ff289346ff692833ffd4282128ff3e0e000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ffcd28ff0cff289324ff69283bffd4285228ff3e6928dbff812861ff90cd28ff79ff289362ff69284bffd4283328ff3e1c28dbff2b2861ff42cd28ff5aff289371ff692888ffd4288928ff3e7228dbff5b2861ff43cd28ff2cff289315000000ff000000ff000000ff000000ff000000ff",
+        "000000ff000000ffff28930cff69281dffd4282e28ff3e3f28dbff352861ff24cd28ff13ff289302000000ff000000ff000000ff000000ff2861ff07cd28ff18ff289329ff69283affd4283928ff3e2828dbff182861ff30cd28ff48ff289361ff692879ffd4288a28ff3e7228dbff5a2861ff61cd28ff7aff289389ff692871ffd4285928ff3e4128dbff282861ff10cd28ff49ff28935fff692875ffd4288b28ff3e7d28dbff662861ff50cd28ff3aff289324ff69280e000000ff000000ff000000ff2861ff06cd28ff1cff289332ff692848ffd4285f28ff3e7528dbff8b2861ff7dcd28ff67ff289351ff69283bffd4282528ff3e0f000000ff000000ff"
+      ],
+      "variant": "python"
+    },
+    {
+      "name": "color_burst",
+      "settings": {
+        "speed": 58,
+        "spread": 64,
+        "decay": 48,
+        "intensity": 90,
+        "palette": "rainbow"
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff2861ff12cd28ff29ff289340ff69284effd4283728ff3e3e28dbff4f2861ff38cd28ff22ff28930b000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff",
+        "000000ff000000ff000000ff000000ff000000ff28ff3e0928dbff1e2861ff32cd28ff47ff28933eff692829ffd4281428ff3e1b28dbff302861ff44cd28ff40ff28932cff692817ffd42802000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ffffd4281328ff3e2b28dbff442861ff5ccd28ff75ff28938dff69288effd4287528ff3e5d28dbff6c2861ff85cd28ff96ff28937dff692865ffd4284c28ff3e3428dbff1b2861ff03000000ff000000ff000000ff000000ff000000ff000000ff000000ff",
+        "000000ff000000ff000000ffff692801ffd4281428ff3e2728dbff392861ff42cd28ff30ff28931dff69280a000000ff000000ff28dbff102861ff23cd28ff36ff289346ff692833ffd4282128ff3e0e000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ffcd28ff0cff289324ff69283bffd4285228ff3e6928dbff812861ff90cd28ff79ff289362ff69284bffd4283328ff3e1c28dbff2b2861ff42cd28ff5aff289371ff692888ffd4288928ff3e7228dbff5b2861ff43cd28ff2cff289315000000ff000000ff000000ff000000ff000000ff",
+        "000000ff000000ffff28930cff69281dffd4282e28ff3e3f28dbff352861ff24cd28ff13ff289302000000ff000000ff000000ff000000ff2861ff07cd28ff18ff289329ff69283affd4283928ff3e2828dbff182861ff30cd28ff48ff289361ff692879ffd4288a28ff3e7228dbff5a2861ff61cd28ff7aff289389ff692871ffd4285928ff3e4128dbff282861ff10cd28ff49ff28935fff692875ffd4288b28ff3e7d28dbff662861ff50cd28ff3aff289324ff69280e000000ff000000ff000000ff2861ff06cd28ff1cff289332ff692848ffd4285f28ff3e7528dbff8b2861ff7dcd28ff67ff289351ff69283bffd4282528ff3e0f000000ff000000ff"
+      ],
+      "variant": "native"
+    },
+    {
+      "name": "drop_explosion",
+      "settings": {
+        "speed": 57,
+        "decay": 48,
+        "duty_cycle": 34,
+        "intensity": 90,
+        "music_reactivity": 91
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6",
+        "ffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729f",
+        "ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98",
+        "ffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759f"
+      ],
+      "variant": "python"
+    },
+    {
+      "name": "drop_explosion",
+      "settings": {
+        "speed": 57,
+        "decay": 48,
+        "duty_cycle": 34,
+        "intensity": 90,
+        "music_reactivity": 91
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6ffffffa6",
+        "ffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729fffe4729f",
+        "ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98ffd86c98",
+        "ffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759fffeb759f"
+      ],
+      "variant": "native"
+    },
+    {
+      "name": "drop_wave",
+      "settings": {
+        "speed": 55,
+        "width": 33,
+        "intensity": 90,
+        "palette": "neon"
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff",
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ffea47ea0bea47ea4aea47ea88ea47ea75ea47ea37000000ff000000ffea47ea37ea47ea75ea47ea88ea47ea4aea47ea0b000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff",
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ffea47ea16ea47ea50ea47ea8aea47ea66ea47ea2d000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ffea47ea2dea47ea66ea47ea8aea47ea50ea47ea16000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff",
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ffea47ea35ea47ea73ea47ea8aea47ea4bea47ea0dea47ea0dea47ea4bea47ea8aea47ea73ea47ea35000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff"
+      ],
+      "variant": "python"
+    },
+    {
+      "name": "drop_wave",
+      "settings": {
+        "speed": 55,
+        "width": 33,
+        "intensity": 90,
+        "palette": "neon"
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff",
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ffea47ea0bea47ea4aea47ea88ea47ea75ea47ea37000000ff000000ffea47ea37ea47ea75ea47ea88ea47ea4aea47ea0b000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff",
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ffea47ea16ea47ea50ea47ea8aea47ea66ea47ea2d000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ffea47ea2dea47ea66ea47ea8aea47ea50ea47ea16000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff",
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ffea47ea35ea47ea73ea47ea8aea47ea4bea47ea0dea47ea0dea47ea4bea47ea8aea47ea73ea47ea35000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff"
+      ],
+      "variant": "native"
+    },
+    {
+      "name": "shockwave",
+      "settings": {
+        "speed": 55,
+        "width": 35,
+        "intensity": 90,
+        "palette": "neon",
+        "beat_sensitivity": 95
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "ee654300ee654300ee654301ee654301ee654302ee654303ee654303ee654304ee654305ee654305ee654306ee654307ee654307ee654308ee654308ee654309ee65430aee65430aee65430bee65430cee65430cee65430dee65430eee65430eee65430fee65430fee654310ee654311ee654311ee654330ee654360ee65438fee65438fee654360ee654330ee654311ee654311ee654310ee65430fee65430fee65430eee65430eee65430dee65430cee65430cee65430bee65430aee65430aee654309ee654308ee654308ee654307ee654307ee654306ee654305ee654305ee654304ee654303ee654303ee654302ee654301ee654301ee654300ee654300",
+        "dd6b4f07dd6b4f07dd6b4f08dd6b4f09dd6b4f09dd6b4f0add6b4f0bdd6b4f0bdd6b4f0cdd6b4f0cdd6b4f0ddd6b4f0edd6b4f0edd6b4f0fdd6b4f10dd6b4f10e0694c11e0694c12e0694c12e0694c13e0694c14e0694c14e0694c15e0694c15e0694c16e0694c17e0694c17e0694c18e0694c21e0694c49e0694c72e0694c9ae0694c9ae0694c72e0694c49e0694c21e0694c18e0694c17e0694c17e0694c16e0694c15e0694c15e0694c14e0694c14e0694c13e0694c12e0694c12e0694c11e2684a10e2684a10e2684a0fe2684a0ee2684a0ee2684a0de2684a0ce2684a0ce2684a0be2684a0be2684a0ae2684a09e2684a09e2684a08e2684a07e4674807",
+        "4f9fdd064f9fdd074f9fdd084f9fdd084f9fdd094f9fdd0a4f9fdd0a4f9fdd0b4f9fdd0b4f9fdd0c4f9fdd0d4f9fdd0d4f9fdd0e4f9fdd0f4f9fdd0f4f9fdd104f9fdd114f9fdd114f9fdd124f9fdd124f9fdd134f9fdd144f9fdd144f9fdd154da0df164da0df164da0df174da0df2d4da0df554da0df7e4da0dfa64da0df8d4da0df8d4da0dfa64da0df7e4da0df554da0df2d4da0df174da0df164da0df164ca0e0154ca0e0144ca0e0144ca0e0134ca0e0124ca0e0124ca0e0114ca0e0114aa0e2104aa0e20f4aa0e20f4aa0e20e4aa0e20d4aa0e20d4aa0e20c4aa0e20b4aa0e20b4aa0e20a4aa0e20a4aa0e2094aa0e2084aa0e2084aa0e20748a0e406",
+        "d96e5306d96e5306d96e5307d96e5308d96e5308d96e5309d96e530ad96e530ada6d520bda6d520cda6d520cda6d520dda6d520eda6d520eda6d520fda6d520fdd6b4f10dd6b4f11dd6b4f11dd6b4f12dd6b4f13dd6b4f13dd6b4f14dd6b4f15dd6b4f15dd6b4f16dd6b4f16dd6b4f17dd6b4f28dd6b4f4edd6b4f74dd6b4f9add6b4f9add6b4f74dd6b4f4edd6b4f28dd6b4f17dd6b4f16dd6b4f16dd6b4f15df6a4d15df6a4d14df6a4d13df6a4d13df6a4d12df6a4d11df6a4d11df6a4d10e0694c0fe0694c0fe0694c0ee0694c0ee0694c0de0694c0ce0694c0ce0694c0be0694c0ae0694c0ae0694c09e0694c08e0694c08e0694c07e0694c06e2684a06"
+      ],
+      "variant": "python"
+    },
+    {
+      "name": "shockwave",
+      "settings": {
+        "speed": 55,
+        "width": 35,
+        "intensity": 90,
+        "palette": "neon",
+        "beat_sensitivity": 95
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "ee654300ee654300ee654301ee654301ee654302ee654303ee654303ee654304ee654305ee654305ee654306ee654307ee654307ee654308ee654308ee654309ee65430aee65430aee65430bee65430cee65430cee65430dee65430eee65430eee65430fee65430fee654310ee654311ee654311ee654330ee654360ee65438fee65438fee654360ee654330ee654311ee654311ee654310ee65430fee65430fee65430eee65430eee65430dee65430cee65430cee65430bee65430aee65430aee654309ee654308ee654308ee654307ee654307ee654306ee654305ee654305ee654304ee654303ee654303ee654302ee654301ee654301ee654300ee654300",
+        "dd6b4f07dd6b4f07dd6b4f08dd6b4f09dd6b4f09dd6b4f0add6b4f0bdd6b4f0bdd6b4f0cdd6b4f0cdd6b4f0ddd6b4f0edd6b4f0edd6b4f0fdd6b4f10dd6b4f10e0694c11e0694c12e0694c12e0694c13e0694c14e0694c14e0694c15e0694c15e0694c16e0694c17e0694c17e0694c18e0694c21e0694c49e0694c72e0694c9ae0694c9ae0694c72e0694c49e0694c21e0694c18e0694c17e0694c17e0694c16e0694c15e0694c15e0694c14e0694c14e0694c13e0694c12e0694c12e0694c11e2684a10e2684a10e2684a0fe2684a0ee2684a0ee2684a0de2684a0ce2684a0ce2684a0be2684a0be2684a0ae2684a09e2684a09e2684a08e2684a07e4674807",
+        "4f9fdd064f9fdd074f9fdd084f9fdd084f9fdd094f9fdd0a4f9fdd0a4f9fdd0b4f9fdd0b4f9fdd0c4f9fdd0d4f9fdd0d4f9fdd0e4f9fdd0f4f9fdd0f4f9fdd104f9fdd114f9fdd114f9fdd124f9fdd124f9fdd134f9fdd144f9fdd144f9fdd154da0df164da0df164da0df174da0df2d4da0df554da0df7e4da0dfa64da0df8d4da0df8d4da0dfa64da0df7e4da0df554da0df2d4da0df174da0df164da0df164ca0e0154ca0e0144ca0e0144ca0e0134ca0e0124ca0e0124ca0e0114ca0e0114aa0e2104aa0e20f4aa0e20f4aa0e20e4aa0e20d4aa0e20d4aa0e20c4aa0e20b4aa0e20b4aa0e20a4aa0e20a4aa0e2094aa0e2084aa0e2084aa0e20748a0e406",
+        "d96e5306d96e5306d96e5307d96e5308d96e5308d96e5309d96e530ad96e530ada6d520bda6d520cda6d520cda6d520dda6d520eda6d520eda6d520fda6d520fdd6b4f10dd6b4f11dd6b4f11dd6b4f12dd6b4f13dd6b4f13dd6b4f14dd6b4f15dd6b4f15dd6b4f16dd6b4f16dd6b4f17dd6b4f28dd6b4f4edd6b4f74dd6b4f9add6b4f9add6b4f74dd6b4f4edd6b4f28dd6b4f17dd6b4f16dd6b4f16dd6b4f15df6a4d15df6a4d14df6a4d13df6a4d13df6a4d12df6a4d11df6a4d11df6a4d10e0694c0fe0694c0fe0694c0ee0694c0ee0694c0de0694c0ce0694c0ce0694c0be0694c0ae0694c0ae0694c09e0694c08e0694c08e0694c07e0694c06e2684a06"
+      ],
+      "variant": "native"
+    },
+    {
+      "name": "center_burst",
+      "settings": {
+        "speed": 61,
+        "width": 34,
+        "intensity": 88,
+        "palette": "neon",
+        "beat_sensitivity": 90
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff47eab408ead44729ea684729ea684708000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff",
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ffea47ea1147eab435ead4475aea68477fea68477447ea684fea47ea2aea47ea2a47eab44fead44774ea68477fea68475a47ea6835ea47ea11000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff",
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ffea68471447ea6837ea47ea59ea47ea7c47eab467ead44745ea684723ea684700000000ff000000ff000000ff000000ffead44700ea684723ea68474547ea6867ea47ea7cea47ea5947eab437ead44714000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff",
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ffea47ea22ea47ea4647eab46bead44776ea684752ea68472d47ea682dea47ea52ea47ea7647eab46bead44746ea684722000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff"
+      ],
+      "variant": "python"
+    },
+    {
+      "name": "center_burst",
+      "settings": {
+        "speed": 61,
+        "width": 34,
+        "intensity": 88,
+        "palette": "neon",
+        "beat_sensitivity": 90
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff47eab408ead44729ea684729ea684708000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff",
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ffea47ea1147eab435ead4475aea68477fea68477447ea684fea47ea2aea47ea2a47eab44fead44774ea68477fea68475a47ea6835ea47ea11000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff",
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ffea68471447ea6837ea47ea59ea47ea7c47eab467ead44745ea684723ea684700000000ff000000ff000000ff000000ffead44700ea684723ea68474547ea6867ea47ea7cea47ea5947eab437ead44714000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff",
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ffea47ea22ea47ea4647eab46bead44776ea684752ea68472d47ea682dea47ea52ea47ea7647eab46bead44746ea684722000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff"
+      ],
+      "variant": "native"
+    },
+    {
+      "name": "mirror_flash",
+      "settings": {
+        "decay": 57,
+        "width": 42,
+        "intensity": 89,
+        "palette": "neon",
+        "beat_sensitivity": 92
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff",
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff4be6b21fe64be629e64be6324be66a3ce66a4b46e66a4b50e6d14b5a4be6b264e64be66de64be6774be66a81ea47ea81ea47ea77ea47ea6dea47ea64ea47ea5aea47ea50ea47ea46ea47ea3cea47ea32ea47ea29ea47ea1f000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff",
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ffe64be61ce64be6254be66a2fe66a4b38e66a4b42e6d14b4b4be6b255e64be65ee64be6684be66a71ea47ea71ea47ea68ea47ea5eea47ea55ea47ea4bea47ea42ea47ea38ea47ea2fea47ea25ea47ea1c000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff",
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ffe66a4b1de6d14b24e64be62c4be66a33e66a4b3b4be6b242e64be64ae66a4b51e6d14b59e64be6604be66a68e66a4b704be6b2774be6b277e66a4b704be66a68e64be660e6d14b59e66a4b51e64be64a4be6b242e66a4b3b4be66a33e64be62ce6d14b24e66a4b1d000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff"
+      ],
+      "variant": "python"
+    },
+    {
+      "name": "mirror_flash",
+      "settings": {
+        "decay": 57,
+        "width": 42,
+        "intensity": 89,
+        "palette": "neon",
+        "beat_sensitivity": 92
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff",
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff4be6b21fe64be629e64be6324be66a3ce66a4b46e66a4b50e6d14b5a4be6b264e64be66de64be6774be66a81ea47ea81ea47ea77ea47ea6dea47ea64ea47ea5aea47ea50ea47ea46ea47ea3cea47ea32ea47ea29ea47ea1f000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff",
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ffe64be61ce64be6254be66a2fe66a4b38e66a4b42e6d14b4b4be6b255e64be65ee64be6684be66a71ea47ea71ea47ea68ea47ea5eea47ea55ea47ea4bea47ea42ea47ea38ea47ea2fea47ea25ea47ea1c000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff",
+        "000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ffe66a4b1de6d14b24e64be62c4be66a33e66a4b3b4be6b242e64be64ae66a4b51e6d14b59e64be6604be66a68e66a4b704be6b2774be6b277e66a4b704be66a68e64be660e6d14b59e66a4b51e64be64a4be6b242e66a4b3b4be66a33e64be62ce6d14b24e66a4b1d000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff000000ff"
+      ],
+      "variant": "native"
+    },
+    {
+      "name": "spectrum_flash",
+      "settings": {
+        "sensitivity": 56,
+        "width": 36,
+        "decay": 48,
+        "intensity": 90,
+        "palette": "neon"
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "f23ff236f23ff236f23ff236f23ff236f23ff236f23ff236f23ff236f23ff236f23ff238f23ff2383ff2b6383ff2b6383ff2b6383ff2b6383ff2b6383ff2b6383ff2b63c3ff2b63c3ff2b63cf2da3f3cf2da3f3cf2da3f3cf2da3f3cf2da3f3cf2da3f3af2da3f3af2da3f3af2da3f3af2da3f3a3fa4f23a3fa4f23a3fa4f23a3fa4f2363fa4f2363fa4f2363fa4f2363fa4f2363fa4f236f2633f36f2633f36f2633f33f2633f33f2633f33f2633f33f2633f33f2633f33f2633f33f2633f33933ff231933ff231933ff231933ff231933ff231933ff231933ff231933ff231933ff22f3ff2632f3ff2632f3ff2632f3ff2632f3ff2632f3ff2632f3ff2632f",
+        "ea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9b",
+        "ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90",
+        "ea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9b"
+      ],
+      "variant": "python"
+    },
+    {
+      "name": "spectrum_flash",
+      "settings": {
+        "sensitivity": 56,
+        "width": 36,
+        "decay": 48,
+        "intensity": 90,
+        "palette": "neon"
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "f23ff236f23ff236f23ff236f23ff236f23ff236f23ff236f23ff236f23ff236f23ff238f23ff2383ff2b6383ff2b6383ff2b6383ff2b6383ff2b6383ff2b6383ff2b63c3ff2b63c3ff2b63cf2da3f3cf2da3f3cf2da3f3cf2da3f3cf2da3f3cf2da3f3af2da3f3af2da3f3af2da3f3af2da3f3a3fa4f23a3fa4f23a3fa4f23a3fa4f2363fa4f2363fa4f2363fa4f2363fa4f2363fa4f236f2633f36f2633f36f2633f33f2633f33f2633f33f2633f33f2633f33f2633f33f2633f33f2633f33933ff231933ff231933ff231933ff231933ff231933ff231933ff231933ff231933ff22f3ff2632f3ff2632f3ff2632f3ff2632f3ff2632f3ff2632f3ff2632f",
+        "ea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9b",
+        "ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90ea47ea90",
+        "ea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9bea47ea9b"
+      ],
+      "variant": "native"
+    },
+    {
+      "name": "electric_storm",
+      "settings": {
+        "count": 5,
+        "decay": 51,
+        "flash_rate": 57,
+        "intensity": 90,
+        "palette": "rainbow"
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "a3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43d85aaf84185aaf882a3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43d",
+        "a3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42d85b5f83085b5f86185b5f892a3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42d85aaf83985aaf873a3b0f42da3b0f42da3b0f42da3b0f42da3b0f42d",
+        "a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f42585b5f82c85b5f85885b5f884a3b0f425a3b0f425a3b0f425a3b0f42585aaf83285aaf865a3b0f425a3b0f425a3b0f425",
+        "a3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42d85acf82285acf84485acf86785acf889a3b0f42da3b0f42d85aaf82b85aaf856"
+      ],
+      "variant": "python"
+    },
+    {
+      "name": "electric_storm",
+      "settings": {
+        "count": 5,
+        "decay": 51,
+        "flash_rate": 57,
+        "intensity": 90,
+        "palette": "rainbow"
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "a3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43d85aaf84185aaf882a3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43da3b0f43d",
+        "a3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42d85b5f83085b5f86185b5f892a3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42d85aaf83985aaf873a3b0f42da3b0f42da3b0f42da3b0f42da3b0f42d",
+        "a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f425a3b0f42585b5f82c85b5f85885b5f884a3b0f425a3b0f425a3b0f425a3b0f42585aaf83285aaf865a3b0f425a3b0f425a3b0f425",
+        "a3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42da3b0f42d85acf82285acf84485acf86785acf889a3b0f42da3b0f42d85aaf82b85aaf856"
+      ],
+      "variant": "native"
+    },
+    {
+      "name": "firework_burst",
+      "settings": {
+        "count": 4,
+        "spread": 63,
+        "fade_time": 56,
+        "intensity": 90,
+        "palette": "neon"
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "5b5b5b005b5b5b005b5b5b005b5b5b005b5b5b00ead44782ead44785ead44788ead4476fead44773ead44759ead4475dead44760ead44747ead44791ead44773ead44773ead44772ead44755ead44754ead44737ead44737ead44736ead4477fead44773ead44749ead4473dead44730ead44707ead447055b5b5b005b5b5b00ead4470b5b5b5b00ead44705ead44701ead44725ead44748ead4474fead44773ead44779ead4472bead44742ead4473dead44754ead4474fead44767ead4477eead44779ead44791ead44741ead44755ead44768ead4475fead44773ead44769ead4477dead44790ead447875b5b5b005b5b5b005b5b5b005b5b5b005b5b5b00",
+        "f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff27ef23ff237f23ff210f23ff210f23ff218f23ff218f23ff240f23ff287f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205",
+        "ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee9aee43ee75ee43ee50ee43ee2bee43ee16ee43ee16ee43ee16ee43ee16ee43ee0fee43ee0fee43ee0fee43ee0fee43ee25ee43ee4aee43ee6fee43ee94ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03",
+        "ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea90ea47ea78ea47ea5fea47ea48ea47ea2fea47ea1eea47ea1e47eab4a747eab47647eab45147eab45147eab44747eab44747eab46d47eab4a7ea47ea19ea47ea19ea47ea2bea47ea43ea47ea5dea47ea76ea47ea8eea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08"
+      ],
+      "variant": "python"
+    },
+    {
+      "name": "firework_burst",
+      "settings": {
+        "count": 4,
+        "spread": 63,
+        "fade_time": 56,
+        "intensity": 90,
+        "palette": "neon"
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "5b5b5b005b5b5b005b5b5b005b5b5b005b5b5b00ead44782ead44785ead44788ead4476fead44773ead44759ead4475dead44760ead44747ead44791ead44773ead44773ead44772ead44755ead44754ead44737ead44737ead44736ead4477fead44773ead44749ead4473dead44730ead44707ead447055b5b5b005b5b5b00ead4470b5b5b5b00ead44705ead44701ead44725ead44748ead4474fead44773ead44779ead4472bead44742ead4473dead44754ead4474fead44767ead4477eead44779ead44791ead44741ead44755ead44768ead4475fead44773ead44769ead4477dead44790ead447875b5b5b005b5b5b005b5b5b005b5b5b005b5b5b00",
+        "f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff27ef23ff237f23ff210f23ff210f23ff218f23ff218f23ff240f23ff287f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205f23ff205",
+        "ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee9aee43ee75ee43ee50ee43ee2bee43ee16ee43ee16ee43ee16ee43ee16ee43ee0fee43ee0fee43ee0fee43ee0fee43ee25ee43ee4aee43ee6fee43ee94ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03ee43ee03",
+        "ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea90ea47ea78ea47ea5fea47ea48ea47ea2fea47ea1eea47ea1e47eab4a747eab47647eab45147eab45147eab44747eab44747eab46d47eab4a7ea47ea19ea47ea19ea47ea2bea47ea43ea47ea5dea47ea76ea47ea8eea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08ea47ea08"
+      ],
+      "variant": "native"
+    },
+    {
+      "name": "lightning_strike",
+      "settings": {
+        "width": 33,
+        "spread": 62,
+        "decay": 48,
+        "intensity": 90,
+        "palette": "neon"
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "a979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95cca5dca34ca5dca69ca5dca9dca5dca69ca5dca34a979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95c",
+        "7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e5d9bca205d9bca405d9bca605d9bca805d9bcaa05d9bca805d9bca605d9bca405d9bca207994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e",
+        "7994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9595d9bca1e5d9bca3d5d9bca5c5d9bca7a5d9bca995d9bca7a5d9bca5c5d9bca3d5d9bca1e7994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a959",
+        "7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e5d9bca1a5d9bca355d9bca505d9bca6a5d9bca855d9bcaa05d9bca855d9bca6a5d9bca505d9bca355d9bca1a7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e"
+      ],
+      "variant": "python"
+    },
+    {
+      "name": "lightning_strike",
+      "settings": {
+        "width": 33,
+        "spread": 62,
+        "decay": 48,
+        "intensity": 90,
+        "palette": "neon"
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "a979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95cca5dca34ca5dca69ca5dca9dca5dca69ca5dca34a979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95ca979a95c",
+        "7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e5d9bca205d9bca405d9bca605d9bca805d9bcaa05d9bca805d9bca605d9bca405d9bca207994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e",
+        "7994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9595d9bca1e5d9bca3d5d9bca5c5d9bca7a5d9bca995d9bca7a5d9bca5c5d9bca3d5d9bca1e7994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a9597994a959",
+        "7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e5d9bca1a5d9bca355d9bca505d9bca6a5d9bca855d9bcaa05d9bca855d9bca6a5d9bca505d9bca355d9bca1a7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e7994a95e"
+      ],
+      "variant": "native"
+    },
+    {
+      "name": "pixel_explosion",
+      "settings": {
+        "count": 5,
+        "spread": 64,
+        "decay": 48,
+        "intensity": 90,
+        "palette": "rainbow"
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ff191903ff191973ff19195dff191973ff1919030000000000000000000000000000000000000000000000000000000000000000",
+        "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000019ff715919ff717219ff710519ff717219ff7159000000000000000000000000000000000000000021ff195921ff197221ff190521ff197221ff19590000000000000000000000000000000000000000000000000000000019ffeb5919ffeb7219ffeb0519ffeb7243ff195919d8ff5919d8ff7219d8ff0519d8ff7219d8ff59000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000019ff711519ff717d19ff714500000000000000000000000019ff714519ff717d19ff71150000000021ff191521ff197d21ff194500000000000000000000000021ff194521ff197d21ff191500000000000000000000000019ffeb1519ffeb7d19ffeb450000000043ff191519d8ff1519d8ff7d19d8ff4519ffeb150000000043ff194519d8ff4519d8ff7d19d8ff1500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000019ff846519ff845d19ffbd6519e4ff6519e4ff5d19ffbd5d19e4ff5d19e4ff650000000019ffe45d19ffe465000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000056ff196556ff195d0000000056ff195d56ff19650000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      ],
+      "variant": "python"
+    },
+    {
+      "name": "pixel_explosion",
+      "settings": {
+        "count": 5,
+        "spread": 64,
+        "decay": 48,
+        "intensity": 90,
+        "palette": "rainbow"
+      },
+      "pixel_count": 64,
+      "brightness": 0.73,
+      "delta_ns": 20000000,
+      "audio": [
+        null,
+        {
+          "rms": 0.44,
+          "bands": [
+            0.82,
+            0.64,
+            0.48,
+            0.31,
+            0.57,
+            0.26,
+            0.41,
+            0.19
+          ],
+          "beat": true,
+          "beat_strength": 0.91
+        },
+        {
+          "rms": 0.29,
+          "bands": [
+            0.62,
+            0.51,
+            0.71,
+            0.55,
+            0.36,
+            0.47,
+            0.25,
+            0.14
+          ],
+          "beat": false,
+          "beat_strength": 0.12
+        },
+        {
+          "rms": 0.67,
+          "bands": [
+            0.91,
+            0.76,
+            0.58,
+            0.63,
+            0.49,
+            0.52,
+            0.38,
+            0.28
+          ],
+          "beat": true,
+          "beat_strength": 0.78
+        }
+      ],
+      "frames_hex": [
+        "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ff191903ff191973ff19195dff191973ff1919030000000000000000000000000000000000000000000000000000000000000000",
+        "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000019ff715919ff717219ff710519ff717219ff7159000000000000000000000000000000000000000021ff195921ff197221ff190521ff197221ff19590000000000000000000000000000000000000000000000000000000019ffeb5919ffeb7219ffeb0519ffeb7243ff195919d8ff5919d8ff7219d8ff0519d8ff7219d8ff59000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000019ff711519ff717d19ff714500000000000000000000000019ff714519ff717d19ff71150000000021ff191521ff197d21ff194500000000000000000000000021ff194521ff197d21ff191500000000000000000000000019ffeb1519ffeb7d19ffeb450000000043ff191519d8ff1519d8ff7d19d8ff4519ffeb150000000043ff194519d8ff4519d8ff7d19d8ff1500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000019ff846519ff845d19ffbd6519e4ff6519e4ff5d19ffbd5d19e4ff5d19e4ff650000000019ffe45d19ffe465000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000056ff196556ff195d0000000056ff195d56ff19650000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      ],
+      "variant": "native"
+    }
+  ]
+}

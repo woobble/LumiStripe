@@ -180,6 +180,22 @@ def test_playback_can_render_without_flushing_for_frame_coordination() -> None:
     assert stripe.flush_calls == 0
 
 
+def test_playback_can_advance_policy_without_rasterizing_pixels() -> None:
+    player = AnimationPlayer.party()
+    engine = PlaybackEngine(player)
+    stripe = Stripe(8)
+    stripe.fill(Rgb(13, 17, 19))
+    before = stripe.pixels().copy()
+
+    delay = engine.step(stripe, snapshot=_active_snapshot(), now_s=0.0, render=False)
+
+    np.testing.assert_array_equal(stripe.pixels(), before)
+    assert player.frame == 1
+    assert delay == player.animations[player.index].frame_ms / 1000.0
+    assert engine.last_render_audio_snapshot is not None
+    assert engine.last_render_audio_snapshot.frame.fresh is True
+
+
 def test_solid_color_can_be_changed_without_rebuilding_playback() -> None:
     engine = PlaybackEngine(
         AnimationPlayer.party(), PlaybackConfig(mode=PlaybackMode.SOLID)
@@ -465,6 +481,45 @@ def test_dynamic_schedules_layered_effects_after_activation_crossfade() -> None:
     assert engine.music_active is True
     assert engine.active_effect_names
     assert len(engine.active_effect_names) <= 2
+    assert engine.last_render_audio_snapshot is not None
+    base_intensity, effect_inputs = engine.layered_renderer.render_inputs(
+        engine.player,
+        engine.last_render_audio_snapshot,
+        engine.music_structure_state,
+    )
+    assert 0.0 <= base_intensity <= 1.0
+    assert tuple(effect.name for effect in effect_inputs) == engine.active_effect_names
+    assert all(0.0 <= effect.intensity <= 1.0 for effect in effect_inputs)
+
+
+def test_dynamic_policy_only_step_exports_layers_without_rasterizing() -> None:
+    engine = PlaybackEngine(
+        AnimationPlayer.party(),
+        PlaybackConfig(
+            mode=PlaybackMode.DYNAMIC,
+            activity=MusicActivityConfig(activation_delay_s=0.0),
+        ),
+    )
+    stripe = Stripe(42)
+
+    for frame in range(40):
+        engine.step(
+            stripe,
+            snapshot=_active_snapshot(),
+            now_s=frame * 0.025,
+            render=False,
+        )
+
+    assert engine.music_active is True
+    assert engine.active_effect_names
+    assert not stripe.pixels()[:, :3].any()
+    assert engine.last_render_audio_snapshot is not None
+    _, effect_inputs = engine.layered_renderer.render_inputs(
+        engine.player,
+        engine.last_render_audio_snapshot,
+        engine.music_structure_state,
+    )
+    assert tuple(effect.name for effect in effect_inputs) == engine.active_effect_names
 
 
 def test_dynamic_playback_tracks_music_structure_and_resets_on_mode_change() -> None:
@@ -741,6 +796,23 @@ def test_playback_config_rejects_invalid_idle_brightness() -> None:
         assert "idle_brightness" in str(exc)
     else:
         raise AssertionError("invalid idle brightness was accepted")
+
+
+def test_playback_scheduler_timing_is_available_without_pixel_rendering() -> None:
+    player = AnimationPlayer.party()
+    engine = PlaybackEngine(player, PlaybackConfig(mode=PlaybackMode.DYNAMIC))
+    controller = CountingStripe(16)
+
+    engine.step(
+        controller,
+        snapshot=_active_snapshot(),
+        now_s=1.0,
+        flush=False,
+        render=False,
+    )
+
+    assert engine.last_scheduling_time_ms > 0.0
+    assert controller.flush_calls == 0
 
 
 @pytest.mark.parametrize("brightness", [float("nan"), float("inf"), -float("inf")])

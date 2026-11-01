@@ -71,6 +71,9 @@ class PixelExplosion(Effect):
         self._update(controller, (0.8 + reactive.high * 1.2) * (0.25 + self.setting("spread", 60) / 100.0 * 1.5), decay=decay)
 
     def _update(self, controller: Controller, speed: float, *, decay: float = 0.5) -> None:
+        # Keep the Python fallback's reusable output consistent with the native
+        # kernel, which writes a fresh transparent frame on every call.
+        controller.pixels()[:] = 0
         max_pos = float(max(controller.length - 1, 0))
         for b in list(self.bursts):
             b.radius += speed
