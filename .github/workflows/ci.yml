@@ -404,8 +404,16 @@ jobs:
             packages+=(libasound2-dev)
           fi
           if test "${#packages[@]}" -gt 0; then
-            sudo apt-get update
-            sudo apt-get install --yes --no-install-recommends "${packages[@]}"
+            if test "$(id -u)" -eq 0; then
+              apt-get update
+              apt-get install --yes --no-install-recommends "${packages[@]}"
+            elif command -v sudo >/dev/null 2>&1; then
+              sudo apt-get update
+              sudo apt-get install --yes --no-install-recommends "${packages[@]}"
+            else
+              echo "missing prerequisites ${packages[*]}; runner needs root or sudo" >&2
+              exit 1
+            fi
           fi
           command -v curl
           test -s /etc/ssl/certs/ca-certificates.crt
