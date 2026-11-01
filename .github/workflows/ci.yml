@@ -390,6 +390,27 @@ jobs:
           set -eu
           uv --version
 
+      - name: Install Raspberry Pi toolchain and audio prerequisites
+        run: |
+          set -eu
+          packages=()
+          if ! command -v curl >/dev/null 2>&1; then
+            packages+=(curl)
+          fi
+          if ! test -s /etc/ssl/certs/ca-certificates.crt; then
+            packages+=(ca-certificates)
+          fi
+          if ! test -f /usr/include/alsa/asoundlib.h; then
+            packages+=(libasound2-dev)
+          fi
+          if test "${#packages[@]}" -gt 0; then
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends "${packages[@]}"
+          fi
+          command -v curl
+          test -s /etc/ssl/certs/ca-certificates.crt
+          test -f /usr/include/alsa/asoundlib.h
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
@@ -397,16 +418,6 @@ jobs:
 
       - name: Verify Rust toolchain
         run: rustc -vV && cargo --version
-
-      - name: Install Raspberry Pi audio build dependency
-        run: |
-          set -eu
-          if test -f /usr/include/alsa/asoundlib.h; then
-            echo "ALSA development headers already installed"
-          else
-            sudo apt-get update
-            sudo apt-get install --yes --no-install-recommends libasound2-dev
-          fi
 
       - name: Install Raspberry Pi native profile
         env:
@@ -573,7 +584,26 @@ jobs:
           set -eu
           mkdir -p "$RUNNER_TEMP/lumistripe-rust-renderer-benchmarks"
           {
+            git rev-parse HEAD
             uname -a
+            if test -r /proc/device-tree/model; then
+              printf 'board_model='
+              tr -d '\000' < /proc/device-tree/model
+              printf '\n'
+            fi
+            awk -F: '/^(Hardware|Model|CPU implementer|CPU part|Revision)[[:space:]]*:/ { print }' /proc/cpuinfo
+            if test -r /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor; then
+              printf 'cpu_governor='
+              cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+            else
+              printf 'cpu_governor=unavailable\n'
+            fi
+            for temperature_file in /sys/class/thermal/thermal_zone*/temp; do
+              if test -r "$temperature_file"; then
+                printf '%s=' "$temperature_file"
+                awk '{ printf "%.3f C\n", $1 / 1000 }' "$temperature_file"
+              fi
+            done
             rustc -vV
             cc --version
             uv --version

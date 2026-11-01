@@ -248,6 +248,28 @@ both Rust profiles reported zero allocations and zero allocated bytes across
 all 146 cases. These x86 results do not establish Raspberry Pi performance or
 make a target-specific C fast-path decision.
 
+### Native Raspberry Pi 5 renderer run
+
+User-supplied artifacts recorded a Raspberry Pi 5 Model B Rev 1.0
+(`aarch64`), Linux `7.0.0-1020-raspi`, Python 3.12.15, Rust 1.99.1 / LLVM
+23.1.1, and GCC 15.2.0 on 2026-11-01. Each C profile ran once with 300 pixels,
+1,000 measured frames, 200 warmup frames, and audio input. Values below are
+median p95 nanoseconds per direct renderer call across 54 animations:
+
+| C build | Python | Native C | Rust LLVM | Rust scalar |
+| --- | ---: | ---: | ---: | ---: |
+| Scalar (`render_neon_enabled=false`) | 2,503,907 | 30,871 | 8,148 | 7,750 |
+| NEON (`render_neon_enabled=true`) | 2,494,231 | 29,834 | 8,001 | 7,917 |
+
+All 54 cases were available in every profile. Rust reported zero allocations
+and zero allocated bytes in each animation. The separate sweep covered all 54
+animations and 19 effects; both Rust profiles reported zero allocations in
+all 73 cases. For this single run, scalar C was faster than both Rust builds
+for `drop_explosion`; with the NEON C build, Rust was faster in all 54
+per-animation p95 comparisons. These results are preliminary: the artifacts do
+not record the source revision, CPU governor, or temperature, and they do not
+measure scheduling or physical output transmission.
+
 ### AArch64 emulated build and allocation check
 
 On 2026-11-01, the locked Rust workspace tests were cross-compiled for
@@ -284,8 +306,8 @@ Record the machine metadata and benchmark JSON when comparing CPU and
 Raspberry Pi results. `docs/performance/arm64-simd-validation.md` contains
 native `rpi02` measurements for isolated C correction and screen-composition
 kernels; its exact Pi model was not recorded. Those are not Rust catalog
-renderer results or GPIO/SPI output timings. No native Pi 4/5 Rust renderer
-catalog result is available yet.
+renderer results or GPIO/SPI output timings. The native Pi 5 renderer sample
+is documented above; Pi 4 renderer results are still missing.
 
 Regenerate or check the catalog and golden files with:
 
@@ -314,15 +336,17 @@ timing.
 
 | Validation | Pi 4 | Pi 5 |
 | --- | --- | --- |
-| Native Rust/Python/C catalog and effect benchmark | Not run | Configured; no artifact from this revision yet |
+| Native Rust/Python/C catalog and effect benchmark | Not run | One supplied run; source revision and thermal metadata missing |
 | Physical SPI/GPIO output, timing, and shutdown | Not performed | Not performed |
 
 For each board, record `/proc/device-tree/model`, `uname -a`, CPU governor and
 temperature, compiler/Rust versions, and the JSON produced by the renderer
 benchmark scripts. The Pi 5 workflow builds target-native LLVM and scalar Rust,
 and scalar and NEON C profiles; its assertions verify the selected C profile
-and complete animation coverage. Run the same profiles on Pi 4 and retain its
-JSON separately.
+and complete animation coverage. Its environment artifact also records the
+source commit, board and CPU details, governor, and thermal-zone readings when
+the kernel exposes them. Run the same profiles on Pi 4 and retain its JSON
+separately.
 
 Physical output validation is a distinct run. With a connected strip and its
 known-good device configuration, start the web runtime with the Rust hardware
