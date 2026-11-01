@@ -145,6 +145,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--pixels", type=_positive_int, default=80)
     parser.add_argument(
+        "--engine-backend",
+        choices=("python", "rust"),
+        default="python",
+        help="Output backend (Rust is opt-in; animations remain in Python)",
+    )
+    parser.add_argument(
+        "--engine-binary",
+        type=Path,
+        help="Path to lumistripe-engine (defaults to LUMISTRIPE_ENGINE_BINARY or PATH)",
+    )
+    parser.add_argument(
         "--hardware",
         action="store_true",
         help="Use physical output instead of the safe in-memory simulation",
@@ -212,6 +223,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         parser.error("--spi-speed-2 requires --spi-device-2")
     if args.output_backend == "gpio" and args.spi_device_2 is not None:
         parser.error("--spi-device-2 requires --output-backend spi")
+    if args.engine_backend == "rust" and args.hardware:
+        parser.error("--engine-backend rust currently supports simulated output only")
     if (args.ssl_certfile is None) != (args.ssl_keyfile is None):
         parser.error("--ssl-certfile and --ssl-keyfile must be used together")
     pairing_code = args.pairing_code
@@ -223,6 +236,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     settings = RuntimeSettings(
         pixels=args.pixels,
         hardware=args.hardware,
+        engine_backend=args.engine_backend,
+        engine_binary=args.engine_binary,
         output_backend=args.output_backend,
         spi_device=args.spi_device,
         spi_speed_hz=args.spi_speed,

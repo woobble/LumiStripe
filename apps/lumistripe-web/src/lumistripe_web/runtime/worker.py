@@ -1532,7 +1532,15 @@ class RuntimeWorker:
         renderers: list[ZoneMappingController] = []
         try:
             for index, output in enumerate(topology.outputs):
-                child: Controller = Stripe(output.pixels)
+                if self.settings.engine_backend == "rust":
+                    from .rust_engine import RustEngineController
+
+                    child: Controller = RustEngineController(
+                        output.pixels,
+                        binary_path=self.settings.engine_binary,
+                    )
+                else:
+                    child = Stripe(output.pixels)
                 physical.append(child)
                 oriented = ReversedController(child) if output.reversed else child
                 fallback = self._saved_corrections.get(

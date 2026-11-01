@@ -58,6 +58,12 @@ jobs:
           apps/lumistripe-web/src/lumistripe_web
           packages/lumistripe-app-support/src/lumistripe_app_support
 
+      - name: Build Rust engine for Python IPC integration
+        if: matrix.python-version == '3.12'
+        run: >-
+          cargo build --locked --manifest-path rust/Cargo.toml
+          --package lumistripe-engine --bin lumistripe-engine
+
       - name: Test Python
         run: uv run python -m pytest -q --junitxml=junit.xml -o junit_family=legacy
 
@@ -279,6 +285,52 @@ jobs:
           if actual != expected:
               raise SystemExit(f"cross-profile wheel has unexpected extensions: {sorted(actual)}")
           PY
+
+  rust-engine:
+    name: Rust engine x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify Rust toolchain
+        run: cargo --version && rustc --version
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+
+      - name: Test Rust workspace
+        run: cargo test --locked --manifest-path rust/Cargo.toml --workspace
+
+      - name: Build standalone Rust engine
+        run: cargo build --release --locked --manifest-path rust/Cargo.toml --workspace
+
+  rust-engine-arm64:
+    name: Rust engine Linux ARM64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify ARM64 Rust toolchain
+        run: |
+          test "$(uname -m)" = "aarch64"
+          rustc -vV | rg '^host: aarch64-unknown-linux-gnu$'
+          cargo --version
+
+      - name: Test Rust workspace on ARM64
+        run: cargo test --locked --manifest-path rust/Cargo.toml --workspace
+
+      - name: Build and verify ARM64 engine
+        run: |
+          cargo build --release --locked --manifest-path rust/Cargo.toml --workspace
+          file rust/target/release/lumistripe-engine | rg 'ARM aarch64'
 
   raspberry-pi:
     name: Raspberry Pi 5 arm64 native smoke

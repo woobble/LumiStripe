@@ -31,6 +31,8 @@ CalibrationPattern = Literal["white", "red", "green", "blue"]
 class RuntimeSettings:
     pixels: int = 80
     hardware: bool = False
+    engine_backend: Literal["python", "rust"] = "python"
+    engine_binary: Path | None = None
     output_backend: str = "spi"
     spi_device: str = "/dev/spidev0.0"
     spi_speed_hz: int = 1_000_000
@@ -48,6 +50,10 @@ class RuntimeSettings:
     def __post_init__(self) -> None:
         if self.pixels <= 0:
             raise ValueError("pixels must be greater than zero")
+        if self.engine_backend not in {"python", "rust"}:
+            raise ValueError(f"invalid engine backend: {self.engine_backend}")
+        if self.engine_backend == "rust" and self.hardware:
+            raise ValueError("the Rust engine currently supports simulated output only")
         if self.output_backend not in {"spi", "gpio"}:
             raise ValueError(f"invalid output backend: {self.output_backend}")
         if self.spi_speed_hz <= 0:

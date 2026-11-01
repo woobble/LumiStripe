@@ -1,0 +1,23 @@
+[workspace]
+members = [
+    "apps/lumistripe-engine",
+    "crates/lumistripe-engine-config",
+    "crates/lumistripe-engine-output",
+    "crates/lumistripe-engine-protocol",
+    "crates/lumistripe-engine-runtime",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.85"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+lumistripe-engine-config = { path = "crates/lumistripe-engine-config" }
+lumistripe-engine-output = { path = "crates/lumistripe-engine-output" }
+lumistripe-engine-protocol = { path = "crates/lumistripe-engine-protocol" }
+lumistripe-engine-runtime = { path = "crates/lumistripe-engine-runtime" }

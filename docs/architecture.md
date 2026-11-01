@@ -124,6 +124,14 @@ remain available in the pure-Python profile.
 
 These modules are the intended seams for future implementation moves.
 
+### Optional Rust engine migration
+
+The experimental Rust process boundary and its current feature parity are
+documented in [the incremental Rust engine migration guide](migrations/rust-engine.md).
+The Python runtime remains the default; the initial Rust backend is opt-in and
+supports simulated output only. FastAPI contracts, dashboard code, animations,
+audio DSP, and physical GPIO/SPI output remain on their existing paths.
+
 ## Physical stripe zones
 
 Each stripe output can map one logical animation canvas across multiple

@@ -55,6 +55,30 @@ uv build --all-packages --out-dir dist
 
 The frontend build writes generated static assets under the web package's ignored `static` directory. Do not commit generated build output. Keep `uv.lock` and `apps/lumistripe-web/frontend/bun.lock` in sync whenever dependency declarations change.
 
+## Optional Rust engine workspace
+
+The experimental engine has a separate Cargo workspace. Its default build does
+not change the Python runtime; use these commands to validate the Rust crates
+and standalone process:
+
+```bash
+cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+cargo test --locked --manifest-path rust/Cargo.toml --workspace
+cargo build --locked --manifest-path rust/Cargo.toml --workspace
+```
+
+For the live Python/Rust socket integration test, build the binary first and
+then run:
+
+```bash
+LUMISTRIPE_ENGINE_BINARY="$PWD/rust/target/debug/lumistripe-engine" \
+  uv run python -m pytest -q --no-cov \
+  apps/lumistripe-web/tests/test_rust_engine_adapter.py
+```
+
+See [the Rust engine migration guide](docs/migrations/rust-engine.md) for the
+feature parity matrix, opt-in command, IPC details, and benchmark script.
+
 ## Pull requests
 
 Describe the user-visible or operational impact, include validation commands, and mention any hardware or deployment testing that was not available. Keep unrelated formatting or dependency updates out of feature pull requests. Dependency updates should normally be left to Dependabot unless they are required for the change.
