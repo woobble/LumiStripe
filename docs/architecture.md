@@ -126,11 +126,11 @@ These modules are the intended seams for future implementation moves.
 
 ### Optional Rust engine migration
 
-The experimental Rust process boundary and its current feature parity are
-documented in [the incremental Rust engine migration guide](migrations/rust-engine.md).
-The Python runtime remains the default; the initial Rust backend is opt-in and
-supports simulated output only. FastAPI contracts, dashboard code, animations,
-audio DSP, and physical GPIO/SPI output remain on their existing paths.
+The opt-in Rust process boundary and its current feature parity are documented
+in [the incremental Rust engine migration guide](migrations/rust-engine.md).
+The Python runtime remains the default. Rust can own mock, SPI, and GPIO outputs
+in one process while Python retains animation, playback, audio DSP, FastAPI,
+dashboard contracts, and frame correction/power policy.
 
 ## Physical stripe zones
 

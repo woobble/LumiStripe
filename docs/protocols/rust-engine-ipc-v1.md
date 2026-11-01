@@ -1,9 +1,18 @@
 # Rust engine local IPC, version 1
 
-The experimental engine uses a Unix-domain stream socket with one UTF-8 JSON
-message per connection. Each request and response is one JSON object followed
-by `\n`. The request and response are typed in the Rust protocol crate and
-validated by the Python runtime adapter.
+This page documents the original single-output protocol, which remains
+available as a compatibility path for existing clients. The current runtime
+also supports [version 2](rust-engine-ipc-v2.md), which adds multi-output
+ownership and compact binary frame sets. Version 1 requests use the same
+single-output simulated backend as the original prototype; hardware and
+multi-output clients must use version 2.
+
+The engine uses a Unix-domain stream socket with one UTF-8 JSON message per
+connection. Each request and response is one JSON object followed by `\n`.
+The request and response are typed in the Rust protocol crate and validated by
+the Python runtime adapter. The Rust server accepts version 1 health,
+configuration, RGB render, and shutdown requests and returns version 1
+responses.
 
 The protocol version is the top-level `protocol_version` field. Version 1
 supports health checks, one-output configuration, complete RGB frame writes,
@@ -16,8 +25,10 @@ the Rust server rejects unsupported versions with a version-1 error response.
 {"protocol_version":1,"request_id":"req-1","command":{"type":"health"}}
 ```
 
-`request_id` is an opaque string copied into the corresponding response.
-Supported commands are:
+`request_id` is an opaque string copied into the corresponding response. A
+breaking wire change requires a new protocol version; version 1 remains
+unchanged for existing single-output simulated clients. Supported commands
+are:
 
 | Command | Data | Meaning |
 | --- | --- | --- |
@@ -45,7 +56,9 @@ the output state.
 
 Messages, including their newline, are limited to 1 MiB. The Python adapter
 opens one connection for each request and applies a one-second request timeout.
-The first implementation handles requests sequentially in the engine process.
+Version 1 requests are handled sequentially with other legacy requests. The
+current process still owns output state and routes these requests through the
+same bounded output worker used by version 2.
 
 ## Local socket handling
 

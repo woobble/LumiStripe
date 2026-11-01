@@ -278,7 +278,13 @@ class DashboardState(BaseModel):
     recent_frame_miss_rate: float = Field(default=0.0, ge=0.0, le=1.0)
     output_frame_rate: float = Field(default=0.0, ge=0.0)
     output_frame_latency_ms: float | None = Field(default=None, ge=0.0)
+    output_queue_latency_ms: float | None = Field(default=None, ge=0.0)
+    output_transmission_ms: float | None = Field(default=None, ge=0.0)
+    output_frame_latency_p50_ms: float | None = Field(default=None, ge=0.0)
     output_frame_latency_p95_ms: float | None = Field(default=None, ge=0.0)
+    output_frame_latency_p99_ms: float | None = Field(default=None, ge=0.0)
+    output_ipc_latency_ms: float | None = Field(default=None, ge=0.0)
+    output_sequential_skew_ms: float | None = Field(default=None, ge=0.0)
     output_heartbeat_age_seconds: float | None = Field(default=None, ge=0.0)
     output_dropped_frame_count: int = 0
     output_failure_count: int = 0

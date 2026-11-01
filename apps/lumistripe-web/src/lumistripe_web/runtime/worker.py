@@ -175,6 +175,7 @@ from .outputs import (
     power_budget_state_for,
 )
 from .playback_service import PlaybackPolicy, PlaybackPolicyError
+from .rust_engine import RustEngineOutputThread, RustOutputSpec
 from .state import (
     CalibrationPattern,
     PreviewFrame,
@@ -477,7 +478,7 @@ class RuntimeWorker:
         self._preview_outputs: tuple[bytes, ...] = ()
         self._pending_preview_frames: tuple[np.ndarray | None, ...] | None = None
         self._output_frame_buffers: tuple[_OutputFrameBuffers, ...] = ()
-        self._output_thread: LedOutputThread | None = None
+        self._output_thread: LedOutputThread | RustEngineOutputThread | None = None
         self._frame_exchange: LatestFrameExchange | None = None
         self._last_dashboard_publication_at_s: float | None = None
         self._last_audio_telemetry_publication_at_s: float | None = None
@@ -1388,21 +1389,29 @@ class RuntimeWorker:
                         )
                 self._install_topology(built)
                 initial_topology = self._topology
+                if self.settings.engine_backend == "rust":
+                    self._start_rust_output_thread(initial_topology)
+                else:
+                    def build_initial_outputs() -> tuple[tuple[Controller, bool], ...]:
+                        if self._uses_default_controller_factory:
+                            return self._build_physical_outputs(initial_topology)
+                        return self._build_injected_physical_outputs(initial_topology)
 
-                def build_initial_outputs() -> tuple[tuple[Controller, bool], ...]:
-                    if self._uses_default_controller_factory:
-                        return self._build_physical_outputs(initial_topology)
-                    return self._build_injected_physical_outputs(initial_topology)
-
-                self._output_thread = LedOutputThread(
-                    tuple(output.pixels for output in self._topology.outputs),
-                    build_initial_outputs,
-                )
-                self._output_thread.start(timeout=4.5)
+                    self._output_thread = LedOutputThread(
+                        tuple(output.pixels for output in self._topology.outputs),
+                        build_initial_outputs,
+                    )
+                    self._output_thread.start(timeout=4.5)
+                assert self._output_thread is not None
                 self._frame_exchange = self._output_thread.exchange
-            elif self._uses_default_controller_factory:
+            elif (
+                self._uses_default_controller_factory
+                or self.settings.engine_backend == "rust"
+            ):
                 built = self._build_topology(self._topology)
                 self._install_topology(built)
+                if self.settings.engine_backend == "rust":
+                    self._start_rust_output_thread(self._topology)
             else:
                 physical_controller = self._controller_factory(self.settings)
                 self._raw_controller = self._with_color_correction(physical_controller)
@@ -1532,15 +1541,7 @@ class RuntimeWorker:
         renderers: list[ZoneMappingController] = []
         try:
             for index, output in enumerate(topology.outputs):
-                if self.settings.engine_backend == "rust":
-                    from .rust_engine import RustEngineController
-
-                    child: Controller = RustEngineController(
-                        output.pixels,
-                        binary_path=self.settings.engine_binary,
-                    )
-                else:
-                    child = Stripe(output.pixels)
+                child: Controller = Stripe(output.pixels)
                 physical.append(child)
                 oriented = ReversedController(child) if output.reversed else child
                 fallback = self._saved_corrections.get(
@@ -1654,8 +1655,64 @@ class RuntimeWorker:
         output_thread = self._output_thread
         if output_thread is None:
             return
-        self._frame_exchange = output_thread.reconfigure(
+        output_lengths = tuple(output.pixels for output in topology.outputs)
+        if isinstance(output_thread, RustEngineOutputThread):
+            self._frame_exchange = output_thread.reconfigure(
+                output_lengths,
+                self._rust_output_specs(topology),
+            )
+        else:
+            self._frame_exchange = output_thread.reconfigure(
+                output_lengths,
+                lambda: self._build_physical_outputs(topology),
+            )
+
+    def _start_rust_output_thread(self, topology: StripeTopologySettings) -> None:
+        output_thread = RustEngineOutputThread(
             tuple(output.pixels for output in topology.outputs),
+            self._rust_output_specs(topology),
+            binary_path=self.settings.engine_binary,
+        )
+        self._output_thread = output_thread
+        output_thread.start(timeout=4.5)
+        self._frame_exchange = output_thread.exchange
+
+    def _rust_output_specs(
+        self, topology: StripeTopologySettings
+    ) -> tuple[RustOutputSpec, ...]:
+        specs = []
+        for output in topology.outputs:
+            backend = output.backend if self.settings.hardware else "mock"
+            specs.append(
+                RustOutputSpec(
+                    output_id=output.id,
+                    pixel_count=output.pixels,
+                    reversed=output.reversed,
+                    backend=backend,
+                    device=output.spi_device if output.backend == "spi" else None,
+                    speed_hz=(
+                        output.spi_speed_hz if output.backend == "spi" else None
+                    ),
+                    chip=output.chip if output.backend == "gpio" else None,
+                    data_pin=output.data_pin if output.backend == "gpio" else None,
+                    clock_pin=output.clock_pin if output.backend == "gpio" else None,
+                )
+            )
+        return tuple(specs)
+
+    def _reconfigure_output_async(
+        self,
+        output_thread: LedOutputThread | RustEngineOutputThread,
+        topology: StripeTopologySettings,
+    ) -> Future[LatestFrameExchange | None]:
+        output_lengths = tuple(output.pixels for output in topology.outputs)
+        if isinstance(output_thread, RustEngineOutputThread):
+            return output_thread.reconfigure_async(
+                output_lengths,
+                self._rust_output_specs(topology),
+            )
+        return output_thread.reconfigure_async(
+            output_lengths,
             lambda: self._build_physical_outputs(topology),
         )
 
@@ -2103,7 +2160,10 @@ class RuntimeWorker:
             self._audio_status = "No audio source active."
 
     def _apply_stripe_topology(self, topology: StripeTopologySettings) -> None:
-        if not self._uses_default_controller_factory:
+        if (
+            not self._uses_default_controller_factory
+            and self.settings.engine_backend != "rust"
+        ):
             raise RuntimeCommandError(
                 "live stripe configuration is unavailable with a custom controller"
             )
@@ -2142,7 +2202,10 @@ class RuntimeWorker:
         persist: bool = True,
         stripe_test: _StripeTestCommand | None = None,
     ) -> None:
-        if not self._uses_default_controller_factory:
+        if (
+            not self._uses_default_controller_factory
+            and self.settings.engine_backend != "rust"
+        ):
             raise RuntimeCommandError(
                 "live stripe configuration is unavailable with a custom controller"
             )
@@ -2160,10 +2223,7 @@ class RuntimeWorker:
             self._rollback_topology_change(
                 previous, "configuration was not applied", exc
             )
-        output_future = output_thread.reconfigure_async(
-            tuple(output.pixels for output in topology.outputs),
-            lambda: self._build_physical_outputs(topology),
-        )
+        output_future = self._reconfigure_output_async(output_thread, topology)
         self._pending_topology_change = _PendingTopologyChange(
             command=command,
             previous=previous,
@@ -2196,9 +2256,8 @@ class RuntimeWorker:
             except Exception as exc:  # noqa: BLE001 - restore before rejecting command
                 pending.output_error = exc
                 try:
-                    pending.rollback_future = output_thread.reconfigure_async(
-                        tuple(output.pixels for output in pending.previous.outputs),
-                        lambda: self._build_physical_outputs(pending.previous),
+                    pending.rollback_future = self._reconfigure_output_async(
+                        output_thread, pending.previous
                     )
                 except Exception as rollback_error:  # noqa: BLE001
                     self._fail_topology_rollback(pending, rollback_error)
@@ -4255,8 +4314,26 @@ profile.audio_config(microphone=True),
             output_frame_latency_ms=(
                 output_stats.frame_latency_ms if output_stats else None
             ),
+            output_queue_latency_ms=(
+                output_stats.queue_latency_ms if output_stats else None
+            ),
+            output_transmission_ms=(
+                output_stats.transmission_ms if output_stats else None
+            ),
+            output_frame_latency_p50_ms=(
+                output_stats.frame_latency_p50_ms if output_stats else None
+            ),
             output_frame_latency_p95_ms=(
                 output_stats.frame_latency_p95_ms if output_stats else None
+            ),
+            output_frame_latency_p99_ms=(
+                output_stats.frame_latency_p99_ms if output_stats else None
+            ),
+            output_ipc_latency_ms=(
+                output_stats.ipc_latency_ms if output_stats else None
+            ),
+            output_sequential_skew_ms=(
+                output_stats.sequential_skew_ms if output_stats else None
             ),
             output_heartbeat_age_seconds=output_heartbeat_age,
             output_dropped_frame_count=(

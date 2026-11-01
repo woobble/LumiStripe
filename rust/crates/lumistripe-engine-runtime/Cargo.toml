@@ -6,8 +6,12 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+libc.workspace = true
+lumistripe-engine-config.workspace = true
 lumistripe-engine-output.workspace = true
 lumistripe-engine-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

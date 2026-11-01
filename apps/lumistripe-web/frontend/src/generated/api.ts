@@ -1744,8 +1744,12 @@ export interface components {
             output_failure_count: number;
             /** Output Frame Latency Ms */
             output_frame_latency_ms?: number | null;
+            /** Output Frame Latency P50 Ms */
+            output_frame_latency_p50_ms?: number | null;
             /** Output Frame Latency P95 Ms */
             output_frame_latency_p95_ms?: number | null;
+            /** Output Frame Latency P99 Ms */
+            output_frame_latency_p99_ms?: number | null;
             /**
              * Output Frame Rate
              * @default 0
@@ -1753,6 +1757,14 @@ export interface components {
             output_frame_rate: number;
             /** Output Heartbeat Age Seconds */
             output_heartbeat_age_seconds?: number | null;
+            /** Output Ipc Latency Ms */
+            output_ipc_latency_ms?: number | null;
+            /** Output Queue Latency Ms */
+            output_queue_latency_ms?: number | null;
+            /** Output Sequential Skew Ms */
+            output_sequential_skew_ms?: number | null;
+            /** Output Transmission Ms */
+            output_transmission_ms?: number | null;
             /**
              * @default {
              *       "applied_scale": 1,

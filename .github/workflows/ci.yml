@@ -318,10 +318,18 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install ARM64 Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          components: rustfmt
+
       - name: Verify ARM64 Rust toolchain
         run: |
           test "$(uname -m)" = "aarch64"
-          rustc -vV | rg '^host: aarch64-unknown-linux-gnu$'
+          rustc -vV | tee "$RUNNER_TEMP/rustc-version.txt"
+          test "$(sed -n 's/^host: //p' "$RUNNER_TEMP/rustc-version.txt")" = "aarch64-unknown-linux-gnu"
+          rustup show active-toolchain
           cargo --version
 
       - name: Test Rust workspace on ARM64

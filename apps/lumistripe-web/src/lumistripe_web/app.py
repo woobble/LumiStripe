@@ -223,8 +223,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         parser.error("--spi-speed-2 requires --spi-device-2")
     if args.output_backend == "gpio" and args.spi_device_2 is not None:
         parser.error("--spi-device-2 requires --output-backend spi")
-    if args.engine_backend == "rust" and args.hardware:
-        parser.error("--engine-backend rust currently supports simulated output only")
     if (args.ssl_certfile is None) != (args.ssl_keyfile is None):
         parser.error("--ssl-certfile and --ssl-keyfile must be used together")
     pairing_code = args.pairing_code

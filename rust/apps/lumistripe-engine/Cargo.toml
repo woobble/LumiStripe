@@ -10,4 +10,5 @@ name = "lumistripe-engine"
 path = "src/main.rs"
 
 [dependencies]
+libc.workspace = true
 lumistripe-engine-runtime.workspace = true

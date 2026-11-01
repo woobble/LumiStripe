@@ -52,8 +52,6 @@ class RuntimeSettings:
             raise ValueError("pixels must be greater than zero")
         if self.engine_backend not in {"python", "rust"}:
             raise ValueError(f"invalid engine backend: {self.engine_backend}")
-        if self.engine_backend == "rust" and self.hardware:
-            raise ValueError("the Rust engine currently supports simulated output only")
         if self.output_backend not in {"spi", "gpio"}:
             raise ValueError(f"invalid output backend: {self.output_backend}")
         if self.spi_speed_hz <= 0:

@@ -38,7 +38,13 @@ class OutputThreadStats:
     last_successful_update_at: datetime | None
     last_successful_update_age_seconds: float | None
     frame_latency_ms: float | None
+    queue_latency_ms: float | None
+    transmission_ms: float | None
+    frame_latency_p50_ms: float | None
     frame_latency_p95_ms: float | None
+    frame_latency_p99_ms: float | None
+    ipc_latency_ms: float | None
+    sequential_skew_ms: float | None
     frame_latency_sample_count: int
 
 
@@ -68,7 +74,7 @@ class LedOutputThread:
     def __init__(self, output_lengths: Sequence[int], builder: OutputBuilder) -> None:
         self._exchange = _make_exchange(output_lengths)
         self._builder = builder
-        self._requests: queue.Queue[_ConfigureRequest] = queue.Queue()
+        self._requests: queue.Queue[_ConfigureRequest] = queue.Queue(maxsize=1)
         self._stop_event = threading.Event()
         self._started = threading.Event()
         self._startup_exception: Exception | None = None
@@ -85,9 +91,12 @@ class LedOutputThread:
         self._last_successful_update_at: datetime | None = None
         self._last_successful_update_monotonic: float | None = None
         self._frame_latency_ms: float | None = None
+        self._queue_latency_ms: float | None = None
+        self._transmission_ms: float | None = None
         self._frame_latency_samples: deque[float] = deque(
             maxlen=OUTPUT_LATENCY_SAMPLE_COUNT
         )
+        self._sequential_skew_ms: float | None = None
         self._rate_started_at = time.monotonic()
         self._rate_frames = 0
         self._output_rate = 0.0
@@ -124,7 +133,14 @@ class LedOutputThread:
         )
         if self._stop_event.is_set() or not self._thread.is_alive():
             raise RuntimeError("LED output thread is not running")
-        self._requests.put(request)
+        try:
+            self._requests.put_nowait(request)
+        except queue.Full:
+            if exchange is not None:
+                exchange.close(discard_pending=True)
+            request.completed.set_exception(
+                RuntimeError("an output configuration is already pending")
+            )
         return request.completed
 
     def stats(self) -> OutputThreadStats:
@@ -138,7 +154,10 @@ class LedOutputThread:
             successful_at = self._last_successful_update_at
             successful_monotonic = self._last_successful_update_monotonic
             frame_latency = self._frame_latency_ms
+            queue_latency = self._queue_latency_ms
+            transmission = self._transmission_ms
             frame_latency_samples = tuple(self._frame_latency_samples)
+            sequential_skew = self._sequential_skew_ms
         exchange = self._exchange
         dropped = exchange.stats().dropped_count if exchange is not None else 0
         successful_age = (
@@ -157,9 +176,19 @@ class LedOutputThread:
             last_successful_update_at=successful_at,
             last_successful_update_age_seconds=successful_age,
             frame_latency_ms=frame_latency,
+            queue_latency_ms=queue_latency,
+            transmission_ms=transmission,
+            frame_latency_p50_ms=_nearest_rank_percentile(
+                frame_latency_samples, 0.50
+            ),
             frame_latency_p95_ms=_nearest_rank_percentile(
                 frame_latency_samples, 0.95
             ),
+            frame_latency_p99_ms=_nearest_rank_percentile(
+                frame_latency_samples, 0.99
+            ),
+            ipc_latency_ms=None,
+            sequential_skew_ms=sequential_skew,
             frame_latency_sample_count=len(frame_latency_samples),
         )
 
@@ -212,13 +241,17 @@ class LedOutputThread:
                 self._record_heartbeat()
                 if slot is None:
                     continue
+                transmission_started_at_ns = time.monotonic_ns()
                 try:
                     self._transmit(slot.frames)
                 finally:
-                    latency_ms = (
-                        time.monotonic_ns() - slot.submitted_at_ns
-                    ) / 1_000_000.0
-                    self._record_frame_latency(latency_ms)
+                    completed_at_ns = time.monotonic_ns()
+                    self._record_frame_latency(
+                        (completed_at_ns - slot.submitted_at_ns) / 1_000_000.0,
+                        (transmission_started_at_ns - slot.submitted_at_ns)
+                        / 1_000_000.0,
+                        (completed_at_ns - transmission_started_at_ns) / 1_000_000.0,
+                    )
                     exchange.release(slot)
         finally:
             exchange = self._exchange
@@ -243,6 +276,7 @@ class LedOutputThread:
             self._exchange = request.exchange
             self._builder = request.builder
             with self._state_lock:
+                self._last_frame_at = time.monotonic()
                 self._last_successful_update_at = None
                 self._last_successful_update_monotonic = None
                 self._last_error = None
@@ -294,6 +328,7 @@ class LedOutputThread:
     def _transmit(self, frames: tuple[PixelFrame, ...]) -> None:
         for output, frame in zip(self._outputs, frames, strict=True):
             output.gate.set_pixels(frame[::-1] if output.reversed else frame)
+        completion_times: list[float] = []
         for output in self._outputs:
             before = output.gate.last_successful_update_at
             output.gate.flush()
@@ -306,6 +341,7 @@ class LedOutputThread:
                 output.last_error = error
             elif after is not None and after != before:
                 output.last_error = None
+                completion_times.append(time.monotonic())
 
         now = time.monotonic()
         successful_at: datetime | None = None
@@ -335,6 +371,11 @@ class LedOutputThread:
             if successful_at is not None and successful_age is not None:
                 self._last_successful_update_at = successful_at
                 self._last_successful_update_monotonic = now - successful_age
+            self._sequential_skew_ms = (
+                (completion_times[-1] - completion_times[0]) * 1000.0
+                if completion_times
+                else None
+            )
         self._record_heartbeat(now)
 
     def _clear_and_close_outputs(self) -> None:
@@ -359,9 +400,16 @@ class LedOutputThread:
         with self._state_lock:
             self._heartbeat_at = time.monotonic() if at is None else at
 
-    def _record_frame_latency(self, latency_ms: float) -> None:
+    def _record_frame_latency(
+        self,
+        latency_ms: float,
+        queue_latency_ms: float,
+        transmission_ms: float,
+    ) -> None:
         with self._state_lock:
             self._frame_latency_ms = latency_ms
+            self._queue_latency_ms = queue_latency_ms
+            self._transmission_ms = transmission_ms
             self._frame_latency_samples.append(latency_ms)
 
     def _set_error(self, exc: Exception) -> None:

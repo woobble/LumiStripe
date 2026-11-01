@@ -77,7 +77,13 @@ describe("useDashboard", () => {
       power_budget: _powerBudget,
       output_frame_rate: _outputFrameRate,
       output_frame_latency_ms: _outputFrameLatency,
+      output_queue_latency_ms: _outputQueueLatency,
+      output_transmission_ms: _outputTransmission,
+      output_frame_latency_p50_ms: _outputFrameLatencyP50,
       output_frame_latency_p95_ms: _outputFrameLatencyP95,
+      output_frame_latency_p99_ms: _outputFrameLatencyP99,
+      output_ipc_latency_ms: _outputIpcLatency,
+      output_sequential_skew_ms: _outputSequentialSkew,
       output_heartbeat_age_seconds: _outputHeartbeatAge,
       output_dropped_frame_count: _outputDroppedFrames,
       output_failure_count: _outputFailures,
@@ -121,7 +127,13 @@ describe("useDashboard", () => {
     expect(result.current.state?.stripe_topology.outputs[0]?.zone_pattern).toBe("repeat")
     expect(result.current.state?.output_frame_rate).toBe(0)
     expect(result.current.state?.output_frame_latency_ms).toBeNull()
+    expect(result.current.state?.output_queue_latency_ms).toBeNull()
+    expect(result.current.state?.output_transmission_ms).toBeNull()
+    expect(result.current.state?.output_frame_latency_p50_ms).toBeNull()
     expect(result.current.state?.output_frame_latency_p95_ms).toBeNull()
+    expect(result.current.state?.output_frame_latency_p99_ms).toBeNull()
+    expect(result.current.state?.output_ipc_latency_ms).toBeNull()
+    expect(result.current.state?.output_sequential_skew_ms).toBeNull()
     expect(result.current.state?.output_dropped_frame_count).toBe(0)
     expect(result.current.state?.output_failure_count).toBe(0)
     expect(result.current.state?.output_heartbeat_age_seconds).toBeUndefined()

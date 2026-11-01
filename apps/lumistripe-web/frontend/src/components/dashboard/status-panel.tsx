@@ -248,7 +248,13 @@ export function StatusPanel({ controller, onLogout }: { controller: DashboardCon
           <Metric icon={TriangleAlertIcon} label="Recent deadline misses" value={state.recent_frame_miss_rate > 0 ? `${(state.recent_frame_miss_rate * 100).toFixed(1)}%` : "None"} />
           <Metric icon={GaugeIcon} label="LED output rate" value={state.runtime === "hardware" ? (state.output_frame_rate > 0 ? `${state.output_frame_rate.toFixed(1)} FPS` : "Measuring…") : "Simulation"} />
           <Metric icon={Clock3Icon} label="Latest output latency" value={typeof state.output_frame_latency_ms === "number" ? `${state.output_frame_latency_ms.toFixed(1)} ms` : "Measuring…"} />
+          <Metric icon={Clock3Icon} label="Output queue delay" value={typeof state.output_queue_latency_ms === "number" ? `${state.output_queue_latency_ms.toFixed(2)} ms` : "Measuring…"} />
+          <Metric icon={Clock3Icon} label="Output transmission" value={typeof state.output_transmission_ms === "number" ? `${state.output_transmission_ms.toFixed(2)} ms` : "Measuring…"} />
+          <Metric icon={Clock3Icon} label="Output latency p50" value={typeof state.output_frame_latency_p50_ms === "number" ? `${state.output_frame_latency_p50_ms.toFixed(1)} ms` : "Measuring…"} />
           <Metric icon={Clock3Icon} label="Output latency p95" value={typeof state.output_frame_latency_p95_ms === "number" ? `${state.output_frame_latency_p95_ms.toFixed(1)} ms` : "Measuring…"} />
+          <Metric icon={Clock3Icon} label="Output latency p99" value={typeof state.output_frame_latency_p99_ms === "number" ? `${state.output_frame_latency_p99_ms.toFixed(1)} ms` : "Measuring…"} />
+          <Metric icon={ActivityIcon} label="Frame IPC round trip" value={typeof state.output_ipc_latency_ms === "number" ? `${state.output_ipc_latency_ms.toFixed(2)} ms` : "Unavailable"} />
+          <Metric icon={ActivityIcon} label="Sequential output skew" value={typeof state.output_sequential_skew_ms === "number" ? `${state.output_sequential_skew_ms.toFixed(2)} ms` : "Measuring…"} />
           <Metric icon={Clock3Icon} label="Output heartbeat" value={formatAge(state.output_heartbeat_age_seconds)} />
           <Metric icon={TriangleAlertIcon} label="Dropped output frames" value={state.output_dropped_frame_count.toString()} />
           <Metric icon={TriangleAlertIcon} label="Output failures" value={state.output_failure_count.toString()} />
