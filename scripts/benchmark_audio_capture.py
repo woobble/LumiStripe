@@ -2,8 +2,8 @@
 
 Run on the target with a working audio input. The script enables
 ``LUMISTRIPE_PROFILE_AUDIO_CALLBACKS=1`` in its process before opening the
-stream. Callback duration tracing keeps a bounded 512-sample window, so the
-normal capture path has no added timer or lock work.
+stream. Callback duration and interval-jitter tracing keep bounded 512-sample
+windows, so the normal capture path has no added timer or lock work.
 """
 
 from __future__ import annotations
@@ -80,6 +80,7 @@ def main() -> int:
         elapsed = time.monotonic() - started
         cpu_seconds = time.process_time() - cpu_before
         callback_samples = list(audio._callback_timing_samples_ms())
+        callback_jitter_samples = list(audio._callback_interval_jitter_samples_ms())
         print(
             json.dumps(
                 {
@@ -98,6 +99,12 @@ def main() -> int:
                     / max(elapsed, 1e-9),
                     "callback_timing_sample_count": len(callback_samples),
                     "callback_duration_ms": _summarize(callback_samples),
+                    "callback_interval_jitter_sample_count": len(
+                        callback_jitter_samples
+                    ),
+                    "callback_interval_jitter_ms": _summarize(
+                        callback_jitter_samples
+                    ),
                     "sample_count": after.processor.samples_seen
                     - before.processor.samples_seen,
                     "dropped_batches": after.dropped_batches

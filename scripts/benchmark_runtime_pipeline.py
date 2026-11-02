@@ -163,6 +163,119 @@ def _thread_cpu_utilization(
     return utilization
 
 
+def _audio_backends_for_case(
+    engine_backend: str,
+    requested: tuple[str, ...],
+) -> tuple[str, ...]:
+    if engine_backend != "rust":
+        return ("python",)
+    return requested
+
+
+def _audio_capture_metrics(
+    before: Any,
+    after: Any,
+    elapsed_seconds: float,
+) -> dict[str, object] | None:
+    if before is None or after is None:
+        return None
+
+    def count_delta(field: str) -> int | None:
+        start = before.capture.get(field)
+        end = after.capture.get(field)
+        if type(start) is not int or type(end) is not int:
+            return None
+        return max(0, end - start)
+
+    def elapsed_ms(field: str) -> float | None:
+        value = after.capture.get(field)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return float(value) / 1_000_000.0
+
+    def processor_delta(field: str) -> int | None:
+        start = before.processor.get(field)
+        end = after.processor.get(field)
+        if type(start) is not int or type(end) is not int:
+            return None
+        return max(0, end - start)
+
+    def status_delta(field: str) -> int:
+        return max(0, getattr(after, field) - getattr(before, field))
+
+    device = after.device
+    callbacks = count_delta("callback_count")
+    return {
+        "active": after.active,
+        "device": device.name if device is not None else None,
+        "host": device.host if device is not None else None,
+        "sample_rate": device.sample_rate if device is not None else None,
+        "channels": device.channels if device is not None else None,
+        "callback_count": callbacks,
+        "callbacks_per_second": (
+            callbacks / max(elapsed_seconds, 1e-9) if callbacks is not None else None
+        ),
+        "callback_errors": count_delta("callback_errors"),
+        "overflowed_batches": count_delta("overflowed_batches"),
+        "dropped_samples": count_delta("dropped_samples"),
+        "samples_processed": processor_delta("samples_seen"),
+        "fft_frames_processed": processor_delta("fft_count"),
+        "audio_update_sequence_delta": status_delta("audio_update_sequence"),
+        "dropped_audio_updates": status_delta("dropped_audio_updates"),
+        "dropped_structure_events": status_delta("dropped_structure_events"),
+        "capture_latency_p50_ms": elapsed_ms("capture_latency_p50_ns"),
+        "capture_latency_p95_ms": elapsed_ms("capture_latency_p95_ns"),
+        "capture_latency_p99_ms": elapsed_ms("capture_latency_p99_ns"),
+        "callback_duration_p50_ms": elapsed_ms("callback_duration_p50_ns"),
+        "callback_duration_p95_ms": elapsed_ms("callback_duration_p95_ns"),
+        "callback_duration_p99_ms": elapsed_ms("callback_duration_p99_ns"),
+        "callback_interval_jitter_p95_ms": elapsed_ms(
+            "callback_interval_jitter_p95_ns"
+        ),
+        "last_error": after.last_error,
+    }
+
+
+def _python_audio_capture_metrics(
+    audio_input: Any,
+    before: Any,
+    elapsed_seconds: float,
+) -> dict[str, object] | None:
+    if audio_input is None or before is None:
+        return None
+    after = audio_input.health()
+    callback_samples = audio_input._callback_timing_samples_ms()
+    jitter_samples = audio_input._callback_interval_jitter_samples_ms()
+    callbacks = max(0, after.callback_count - before.callback_count)
+    return {
+        "active": True,
+        "device": audio_input.device_name(),
+        "callback_count": callbacks,
+        "callbacks_per_second": callbacks / max(elapsed_seconds, 1e-9),
+        "status_count": max(0, after.status_count - before.status_count),
+        "dropped_batches": max(0, after.dropped_batches - before.dropped_batches),
+        "dropped_beat_events": max(
+            0, after.dropped_beat_events - before.dropped_beat_events
+        ),
+        "samples_processed": max(
+            0, after.processor.samples_seen - before.processor.samples_seen
+        ),
+        "fft_frames_processed": max(
+            0, after.processor.fft_count - before.processor.fft_count
+        ),
+        "callback_duration_sample_count": len(callback_samples),
+        "callback_duration_ms": summarize(callback_samples),
+        "callback_interval_jitter_sample_count": len(jitter_samples),
+        "callback_interval_jitter_ms": summarize(jitter_samples),
+        "last_callback_age_ms": (
+            after.last_callback_age * 1000.0
+            if after.last_callback_age is not None
+            else None
+        ),
+        "worker_error": after.worker_error,
+    }
+
+
 def _rust_engine_pid(runtime: LumiStripeRuntime) -> int | None:
     output_thread = getattr(runtime, "_output_thread", None)
     engine_process = getattr(output_thread, "_process", None)
@@ -251,6 +364,7 @@ def _run_case(
     zones: int,
     mode: str,
     engine_backend: Literal["python", "rust"],
+    audio_backend: Literal["python", "rust"],
     engine_binary: Path | None,
     power_limit: bool,
     warmup_s: float,
@@ -289,6 +403,7 @@ def _run_case(
                     pixels=led_count,
                     hardware=hardware,
                     engine_backend=engine_backend,
+                    audio_backend=audio_backend,
                     engine_binary=engine_binary,
                     spi_device=spi_devices[0],
                     spi_device_2=(spi_devices[1] if output_count == 2 else None),
@@ -307,6 +422,19 @@ def _run_case(
             if mode == "dynamic":
                 runtime.set_mode(PlaybackMode.DYNAMIC).result(timeout=5.0)
             time.sleep(warmup_s)
+
+            python_audio_input = (
+                runtime._audio_input if audio_backend == "python" else None
+            )
+            python_audio_status_before = None
+            if python_audio_input is not None:
+                python_audio_input._clear_callback_timing_samples()
+                python_audio_status_before = python_audio_input.health()
+            audio_status_before = (
+                runtime._output_thread.audio_status()
+                if audio_backend == "rust" and runtime._output_thread is not None
+                else None
+            )
 
             for samples in timings.values():
                 samples.clear()
@@ -407,6 +535,11 @@ def _run_case(
                 if runtime._output_thread is not None
                 else None
             )
+            audio_status_after = (
+                runtime._output_thread.audio_status()
+                if audio_backend == "rust" and runtime._output_thread is not None
+                else None
+            )
             measured_frames = timing_counts["_step"]
             measured_frame_starts = list(frame_starts_ns)
             actual_frame_intervals_ms = [
@@ -421,6 +554,7 @@ def _run_case(
                 "zones_per_output": zones,
                 "mode": mode,
                 "engine_backend": engine_backend,
+                "audio_backend": audio_backend,
                 "power_limit_enabled": power_limit,
                 "power_budget_watts": power_budget_watts if power_limit else None,
                 "hardware_output_enabled": hardware,
@@ -490,6 +624,19 @@ def _run_case(
                     output_stats_before.scheduler_missed_deadlines
                     if output_stats_before
                     else None,
+                ),
+                "audio_capture": (
+                    _audio_capture_metrics(
+                        audio_status_before,
+                        audio_status_after,
+                        elapsed,
+                    )
+                    if audio_backend == "rust"
+                    else _python_audio_capture_metrics(
+                        python_audio_input,
+                        python_audio_status_before,
+                        elapsed,
+                    )
                 ),
                 "output_control_update_count": _counter_delta(
                     output_stats.scene_control_revision,
@@ -642,6 +789,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--spi-speed-hz", type=int, default=1_000_000)
     parser.add_argument("--power-budget-watts", type=float, default=15.0)
     parser.add_argument("--engine-backends", default="python")
+    parser.add_argument(
+        "--audio-backends",
+        default="python",
+        help="audio backends to compare (Rust audio requires the Rust engine and a live source)",
+    )
     parser.add_argument("--engine-binary", type=Path)
     parser.add_argument(
         "--audio-source",
@@ -663,6 +815,9 @@ def _parse_args() -> argparse.Namespace:
     args.engine_backends = tuple(
         part.strip() for part in args.engine_backends.split(",")
     )
+    args.audio_backends = tuple(
+        part.strip() for part in args.audio_backends.split(",")
+    )
     args.spi_devices = tuple(part.strip() for part in args.spi_devices.split(","))
     if not args.layouts or any(layout not in _LAYOUTS for layout in args.layouts):
         parser.error(f"--layouts values must be drawn from {', '.join(_LAYOUTS)}")
@@ -678,6 +833,20 @@ def _parse_args() -> argparse.Namespace:
         parser.error("--engine-backends values must be python or rust")
     if len(set(args.engine_backends)) != len(args.engine_backends):
         parser.error("--engine-backends values must be unique")
+    if not args.audio_backends or any(
+        backend not in {"python", "rust"} for backend in args.audio_backends
+    ):
+        parser.error("--audio-backends values must be python or rust")
+    if len(set(args.audio_backends)) != len(args.audio_backends):
+        parser.error("--audio-backends values must be unique")
+    if "rust" in args.audio_backends:
+        if "rust" not in args.engine_backends:
+            parser.error("Rust audio requires --engine-backends to include rust")
+        if args.audio_source not in {"mic", "bluetooth", "spotify"}:
+            parser.error(
+                "Rust audio requires --audio-source mic, bluetooth, or spotify; "
+                "the demo source is generated by Python"
+            )
     if "rust" in args.engine_backends:
         if args.engine_binary is None:
             args.engine_binary = (
@@ -709,6 +878,8 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
+    if args.audio_source in {"mic", "bluetooth", "spotify"}:
+        os.environ["LUMISTRIPE_PROFILE_AUDIO_CALLBACKS"] = "1"
     if args.disable_native_render:
         render_kernels._native_module = None
     cases = [
@@ -719,6 +890,7 @@ def main() -> int:
             zones=zones,
             mode=mode,
             engine_backend=cast(Literal["python", "rust"], engine_backend),
+            audio_backend=cast(Literal["python", "rust"], audio_backend),
             engine_binary=args.engine_binary if engine_backend == "rust" else None,
             power_limit=power_limit == "on",
             warmup_s=args.warmup,
@@ -737,6 +909,10 @@ def main() -> int:
         for mode in args.modes
         for power_limit in args.power_limits
         for engine_backend in args.engine_backends
+        for audio_backend in _audio_backends_for_case(
+            engine_backend,
+            args.audio_backends,
+        )
     ]
     result = {
         "environment": {
@@ -750,6 +926,7 @@ def main() -> int:
             ),
             "hardware_output_enabled": args.hardware,
             "engine_backends": args.engine_backends,
+            "audio_backends": args.audio_backends,
             "output_counts": args.output_counts,
             "audio_type": args.audio_source
             or "off for static and synthetic demo for dynamic cases",

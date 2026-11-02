@@ -41,7 +41,9 @@ jobs:
           version: "0.13.5"
 
       - name: Install native audio dependencies
-        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libasound2-dev
+        run: >-
+          sudo apt-get update && sudo apt-get install --yes --no-install-recommends
+          pkg-config libasound2-dev libpipewire-0.3-dev libpulse-dev
 
       - name: Install dependencies
         run: uv sync --locked --all-extras --dev
@@ -309,6 +311,11 @@ jobs:
       - name: Verify Rust toolchain
         run: cargo --version && rustc --version
 
+      - name: Install CPAL Linux host dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install --yes --no-install-recommends
+          pkg-config libasound2-dev libpipewire-0.3-dev libpulse-dev
+
       - name: Check Rust formatting
         run: cargo fmt --manifest-path rust/Cargo.toml --all -- --check
 
@@ -336,6 +343,11 @@ jobs:
           rustc -vV | tee "$RUNNER_TEMP/rustc-version.txt"
           test "$(sed -n 's/^host: //p' "$RUNNER_TEMP/rustc-version.txt")" = "aarch64-unknown-linux-gnu"
           cargo --version
+
+      - name: Install CPAL Linux host dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install --yes --no-install-recommends
+          pkg-config libasound2-dev libpipewire-0.3-dev libpulse-dev
 
       - name: Test Rust workspace on ARM64
         run: cargo test --locked --manifest-path rust/Cargo.toml --workspace
@@ -372,6 +384,7 @@ jobs:
           command -v make
           command -v cargo
           command -v rustc
+          command -v pkg-config
           cc --version
           rustc -vV | tee "$RUNNER_TEMP/rustc-version.txt"
           rust_host="$(sed -n 's/^host: //p' "$RUNNER_TEMP/rustc-version.txt")"
@@ -379,6 +392,8 @@ jobs:
           cargo --version
           test -s /etc/ssl/certs/ca-certificates.crt
           test -f /usr/include/alsa/asoundlib.h
+          pkg-config --exists libpipewire-0.3
+          pkg-config --exists libpulse
           git submodule status --recursive
 
       - name: Install uv

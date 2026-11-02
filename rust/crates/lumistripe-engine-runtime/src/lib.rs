@@ -1,6 +1,7 @@
 //! Single-process output ownership, bounded frame queue, IPC, and lifecycle.
 
 mod activity_gate;
+mod audio_worker;
 mod beat_clock;
 mod effect_scheduler;
 mod latest_slot;
@@ -11,6 +12,7 @@ mod sequence;
 mod loom_tests;
 
 use activity_gate::{MusicActivityTracker, MusicGateState};
+use audio_worker::NativeAudioWorker;
 use beat_clock::BeatClockTracker;
 use effect_scheduler::EffectScheduleCoordinator;
 use latest_slot::LatestSlot;
@@ -29,14 +31,15 @@ use lumistripe_engine_output::{OutputError, OutputSet};
 use lumistripe_engine_protocol::{
     EngineErrorCode, EngineStatus, FRAME_ACK_BYTES, FRAME_HEADER_BYTES, FrameAck, FrameAckStatus,
     LEGACY_PROTOCOL_VERSION, LegacyErrorCode, LegacyRequest, LegacyRequestCommand, LegacyResponse,
-    LegacyResponseResult, MAX_CONTROL_MESSAGE_BYTES, MAX_FRAME_BYTES, PROTOCOL_VERSION,
-    RenderAnimationChoice, RenderAudioInput, RenderAudioUpdate, RenderBeatClockState,
-    RenderCycleOrder, RenderCycleTiming, RenderCycling, RenderDynamicIdleMode,
-    RenderDynamicSelector, RenderEffect, RenderEffectSchedulerState, RenderFrameRequest,
-    RenderOutput, RenderPowerConfig, RenderSceneUpdate, RenderSchedulerConfig,
-    RenderSelectorFeatures, RenderSequencePlaybackState, RenderStructureEvent, RenderTransition,
-    Request, RequestCommand, Response, ResponseResult, decode_frame_header, decode_legacy_request,
-    decode_request, encode_frame_ack, encode_legacy_response, encode_response,
+    LegacyResponseResult, MAX_CONTROL_MESSAGE_BYTES, MAX_FRAME_BYTES, PREVIOUS_PROTOCOL_VERSION,
+    PROTOCOL_VERSION, RenderAnimationChoice, RenderAudioInput, RenderAudioUpdate,
+    RenderBeatClockState, RenderCycleOrder, RenderCycleTiming, RenderCycling,
+    RenderDynamicIdleMode, RenderDynamicSelector, RenderEffect, RenderEffectSchedulerState,
+    RenderFrameRequest, RenderMusicStructure, RenderOutput, RenderPowerConfig, RenderSceneUpdate,
+    RenderSchedulerConfig, RenderSelectorFeatures, RenderSequencePlaybackState,
+    RenderStructureEvent, RenderTransition, Request, RequestCommand, Response, ResponseResult,
+    decode_frame_header, decode_legacy_request, decode_request, encode_frame_ack,
+    encode_legacy_response, encode_response,
 };
 use lumistripe_engine_render_primitives::{AudioInput, FrameBuffer, Rgba, ZoneMapping, alpha_byte};
 use quantized_switch::QuantizedSwitchState;
@@ -139,6 +142,7 @@ fn reap_finished_connections(connections: &mut Vec<JoinHandle<()>>) {
 }
 
 struct EngineServer {
+    audio: NativeAudioWorker,
     output: OutputWorker,
     stopping: AtomicBool,
     legacy_commands: Mutex<()>,
@@ -148,8 +152,11 @@ struct EngineServer {
 
 impl EngineServer {
     fn new() -> Self {
+        let output = OutputWorker::new();
+        let audio = NativeAudioWorker::new(output.audio_handle());
         Self {
-            output: OutputWorker::new(),
+            audio,
+            output,
             stopping: AtomicBool::new(false),
             legacy_commands: Mutex::new(()),
             legacy_pixel_count: Mutex::new(None),
@@ -215,7 +222,14 @@ fn handle_connection(mut stream: UnixStream, server: Arc<EngineServer>) -> io::R
     let request = decode_request(&bytes)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     validate_request_id(&request.request_id)?;
-    let (response, should_stop) = dispatch(request, &server);
+    let request_protocol_version = request.protocol_version;
+    let (mut response, should_stop) = dispatch(request, &server);
+    if matches!(
+        request_protocol_version,
+        PREVIOUS_PROTOCOL_VERSION | PROTOCOL_VERSION
+    ) {
+        response.protocol_version = request_protocol_version;
+    }
     let encoded = encode_response(&response)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     stream.write_all(&encoded)?;
@@ -430,7 +444,8 @@ fn write_frame_ack(
 
 fn dispatch(request: Request, server: &EngineServer) -> (Response, bool) {
     let request_id = request.request_id;
-    if request.protocol_version != PROTOCOL_VERSION {
+    let protocol_version = request.protocol_version;
+    if protocol_version != PROTOCOL_VERSION && protocol_version != PREVIOUS_PROTOCOL_VERSION {
         return (
             Response::new(
                 request_id,
@@ -438,7 +453,7 @@ fn dispatch(request: Request, server: &EngineServer) -> (Response, bool) {
                     code: EngineErrorCode::UnsupportedVersion,
                     message: format!(
                         "protocol version {} is unsupported; expected {PROTOCOL_VERSION}",
-                        request.protocol_version
+                        protocol_version
                     ),
                 },
             ),
@@ -578,20 +593,160 @@ fn dispatch(request: Request, server: &EngineServer) -> (Response, bool) {
                 }
             }
         }
-        RequestCommand::Shutdown => match server.output.shutdown() {
-            Ok(()) => (Response::new(request_id, ResponseResult::Shutdown), true),
-            Err(message) => (
+        RequestCommand::AudioStart { selector, config } => {
+            if protocol_version != PROTOCOL_VERSION {
+                return unsupported_audio_protocol(request_id, protocol_version);
+            }
+            if let Err(error) = config.validate() {
+                return (
+                    Response::new(
+                        request_id,
+                        ResponseResult::Error {
+                            code: EngineErrorCode::InvalidConfig,
+                            message: error,
+                        },
+                    ),
+                    false,
+                );
+            }
+            match server.audio.start(selector, config) {
+                Ok(active) => (
+                    Response::new(request_id, ResponseResult::AudioConfigured { active }),
+                    false,
+                ),
+                Err(message) => (
+                    Response::new(
+                        request_id,
+                        ResponseResult::Error {
+                            code: EngineErrorCode::AudioFailure,
+                            message,
+                        },
+                    ),
+                    false,
+                ),
+            }
+        }
+        RequestCommand::AudioConfigure { config } => {
+            if protocol_version != PROTOCOL_VERSION {
+                return unsupported_audio_protocol(request_id, protocol_version);
+            }
+            if let Err(message) = config.validate() {
+                return (
+                    Response::new(
+                        request_id,
+                        ResponseResult::Error {
+                            code: EngineErrorCode::InvalidConfig,
+                            message,
+                        },
+                    ),
+                    false,
+                );
+            }
+            match server.audio.configure(config) {
+                Ok(active) => (
+                    Response::new(request_id, ResponseResult::AudioConfigured { active }),
+                    false,
+                ),
+                Err(message) => (
+                    Response::new(
+                        request_id,
+                        ResponseResult::Error {
+                            code: EngineErrorCode::AudioFailure,
+                            message,
+                        },
+                    ),
+                    false,
+                ),
+            }
+        }
+        RequestCommand::AudioStop => {
+            if protocol_version != PROTOCOL_VERSION {
+                return unsupported_audio_protocol(request_id, protocol_version);
+            }
+            match server.audio.stop() {
+                Ok(()) => (
+                    Response::new(request_id, ResponseResult::AudioStopped),
+                    false,
+                ),
+                Err(message) => (
+                    Response::new(
+                        request_id,
+                        ResponseResult::Error {
+                            code: EngineErrorCode::AudioFailure,
+                            message,
+                        },
+                    ),
+                    false,
+                ),
+            }
+        }
+        RequestCommand::AudioDevices => {
+            if protocol_version != PROTOCOL_VERSION {
+                return unsupported_audio_protocol(request_id, protocol_version);
+            }
+            match server.audio.devices() {
+                Ok(devices) => (
+                    Response::new(request_id, ResponseResult::AudioDevices { devices }),
+                    false,
+                ),
+                Err(message) => (
+                    Response::new(
+                        request_id,
+                        ResponseResult::Error {
+                            code: EngineErrorCode::AudioFailure,
+                            message,
+                        },
+                    ),
+                    false,
+                ),
+            }
+        }
+        RequestCommand::AudioStatus => {
+            if protocol_version != PROTOCOL_VERSION {
+                return unsupported_audio_protocol(request_id, protocol_version);
+            }
+            (
                 Response::new(
                     request_id,
-                    ResponseResult::Error {
-                        code: EngineErrorCode::OutputFailure,
-                        message,
+                    ResponseResult::AudioStatus {
+                        status: server.audio.status(),
                     },
                 ),
-                true,
-            ),
-        },
+                false,
+            )
+        }
+        RequestCommand::Shutdown => {
+            server.audio.shutdown();
+            match server.output.shutdown() {
+                Ok(()) => (Response::new(request_id, ResponseResult::Shutdown), true),
+                Err(message) => (
+                    Response::new(
+                        request_id,
+                        ResponseResult::Error {
+                            code: EngineErrorCode::OutputFailure,
+                            message,
+                        },
+                    ),
+                    true,
+                ),
+            }
+        }
     }
+}
+
+fn unsupported_audio_protocol(request_id: String, protocol_version: u16) -> (Response, bool) {
+    (
+        Response::new(
+            request_id,
+            ResponseResult::Error {
+                code: EngineErrorCode::UnsupportedVersion,
+                message: format!(
+                    "Rust audio commands require protocol version {PROTOCOL_VERSION}; got {protocol_version}"
+                ),
+            },
+        ),
+        false,
+    )
 }
 
 fn render_error(status: FrameAckStatus) -> (EngineErrorCode, String) {
@@ -1785,9 +1940,93 @@ impl OutputWorkerShared {
     }
 }
 
+#[derive(Clone)]
+pub(crate) struct OutputAudioHandle {
+    shared: Arc<OutputWorkerShared>,
+    command_order: Arc<Mutex<()>>,
+}
+
+impl OutputAudioHandle {
+    pub(crate) fn submit_audio_update(
+        &self,
+        update: RenderAudioUpdate,
+    ) -> Result<bool, FrameAckStatus> {
+        submit_audio_update_shared(&self.shared, &self.command_order, update)
+    }
+
+    pub(crate) fn audio_acknowledgments(&self) -> (usize, u64, Vec<u64>) {
+        let health = self.shared.health.lock().expect("output health poisoned");
+        let beat_sequence = health
+            .beat_clocks
+            .iter()
+            .map(|clock| clock.last_event_sequence)
+            .min()
+            .unwrap_or(0);
+        (
+            health.pixel_counts.len(),
+            beat_sequence,
+            health.structure_event_sequences.clone(),
+        )
+    }
+}
+
+fn submit_audio_update_shared(
+    shared: &Arc<OutputWorkerShared>,
+    command_order: &Arc<Mutex<()>>,
+    update: RenderAudioUpdate,
+) -> Result<bool, FrameAckStatus> {
+    let _command_order = command_order
+        .lock()
+        .expect("output command-order lock poisoned");
+    let mut queue = shared.queue.lock().expect("output queue poisoned");
+    if queue.closed {
+        return Err(FrameAckStatus::ShuttingDown);
+    }
+    let mut health = shared.health.lock().expect("output health poisoned");
+    if !health.configured {
+        return Err(FrameAckStatus::NotConfigured);
+    }
+    let latest_request = {
+        let Some(scheduled) = queue.scheduled_render.as_mut() else {
+            return Err(FrameAckStatus::InvalidFrame);
+        };
+        if update
+            .audio
+            .as_ref()
+            .is_some_and(|audio| !valid_audio_input(audio, scheduled.request.outputs.len()))
+        {
+            return Err(FrameAckStatus::InvalidFrame);
+        }
+        if scheduled
+            .last_audio_update_sequence
+            .is_some_and(|sequence| update.sequence <= sequence)
+        {
+            return Ok(false);
+        }
+        if scheduled
+            .last_audio_timestamp_ns
+            .is_some_and(|timestamp| update.timestamp_ns < timestamp)
+        {
+            return Ok(false);
+        }
+        scheduled.last_audio_update_sequence = Some(update.sequence);
+        health.audio_update_sequence = Some(update.sequence);
+        scheduled.last_audio_timestamp_ns = Some(update.timestamp_ns);
+        Arc::make_mut(&mut scheduled.request).audio = update.audio;
+        Arc::clone(&scheduled.request)
+    };
+    if let Some(pending) = queue.pending_render.as_mut() {
+        pending.request = latest_request;
+    }
+    drop(health);
+    drop(queue);
+    shared.notify_queue_changed();
+    Ok(true)
+}
+
 struct OutputWorker {
     shared: Arc<OutputWorkerShared>,
-    command_order: Mutex<()>,
+    command_order: Arc<Mutex<()>>,
     thread: Mutex<Option<JoinHandle<()>>>,
     scheduler_thread: Mutex<Option<JoinHandle<()>>>,
 }
@@ -1812,7 +2051,7 @@ impl OutputWorker {
             .expect("Rust frame scheduler thread could not be created");
         Self {
             shared,
-            command_order: Mutex::new(()),
+            command_order: Arc::new(Mutex::new(())),
             thread: Mutex::new(Some(thread)),
             scheduler_thread: Mutex::new(Some(scheduler_thread)),
         }
@@ -1986,54 +2225,14 @@ impl OutputWorker {
     }
 
     fn submit_audio_update(&self, update: RenderAudioUpdate) -> Result<bool, FrameAckStatus> {
-        let _command_order = self
-            .command_order
-            .lock()
-            .expect("output command-order lock poisoned");
-        let mut queue = self.shared.queue.lock().expect("output queue poisoned");
-        if queue.closed {
-            return Err(FrameAckStatus::ShuttingDown);
+        submit_audio_update_shared(&self.shared, &self.command_order, update)
+    }
+
+    fn audio_handle(&self) -> OutputAudioHandle {
+        OutputAudioHandle {
+            shared: Arc::clone(&self.shared),
+            command_order: Arc::clone(&self.command_order),
         }
-        let mut health = self.shared.health.lock().expect("output health poisoned");
-        if !health.configured {
-            return Err(FrameAckStatus::NotConfigured);
-        }
-        let latest_request = {
-            let Some(scheduled) = queue.scheduled_render.as_mut() else {
-                return Err(FrameAckStatus::InvalidFrame);
-            };
-            if update
-                .audio
-                .as_ref()
-                .is_some_and(|audio| !valid_audio_input(audio, scheduled.request.outputs.len()))
-            {
-                return Err(FrameAckStatus::InvalidFrame);
-            }
-            if scheduled
-                .last_audio_update_sequence
-                .is_some_and(|sequence| update.sequence <= sequence)
-            {
-                return Ok(false);
-            }
-            if scheduled
-                .last_audio_timestamp_ns
-                .is_some_and(|timestamp| update.timestamp_ns < timestamp)
-            {
-                return Ok(false);
-            }
-            scheduled.last_audio_update_sequence = Some(update.sequence);
-            health.audio_update_sequence = Some(update.sequence);
-            scheduled.last_audio_timestamp_ns = Some(update.timestamp_ns);
-            Arc::make_mut(&mut scheduled.request).audio = update.audio;
-            Arc::clone(&scheduled.request)
-        };
-        if let Some(pending) = queue.pending_render.as_mut() {
-            pending.request = latest_request;
-        }
-        drop(health);
-        drop(queue);
-        self.shared.notify_queue_changed();
-        Ok(true)
     }
 
     fn submit_render_ordered(
@@ -3259,6 +3458,7 @@ fn advance_cycle_after_render(
         let mut section_change_events = vec![false; output_count];
         let mut section_change_timestamps_ns = vec![None; output_count];
         let mut drop_events = vec![false; output_count];
+        let mut structure_states = vec![None; output_count];
         let mut blocked_structure_events = vec![false; output_count];
         if let Some(audio) = audio {
             for event in &audio.structure_events {
@@ -3278,6 +3478,12 @@ fn advance_cycle_after_render(
                     continue;
                 }
                 *last_sequence = event.sequence;
+                structure_states[event.output_index] = Some(RenderMusicStructure {
+                    phase: event.phase,
+                    confidence: event.confidence,
+                    buildup_progress: event.buildup_progress,
+                    drop_event: event.drop_event,
+                });
                 section_change_events[event.output_index] |= event.section_change;
                 if event.section_change {
                     section_change_timestamps_ns[event.output_index] = Some(event.timestamp_ns);
@@ -3295,6 +3501,13 @@ fn advance_cycle_after_render(
             .collect::<Vec<_>>();
         let mut dynamic_gate_states = vec!["disabled".to_owned(); scheduled.request.outputs.len()];
         for (index, renderer) in renderers.iter().enumerate() {
+            if let Some(structure) = structure_states[index] {
+                let active_output = &mut Arc::make_mut(&mut scheduled.request).outputs[index];
+                if active_output.music_structure != Some(structure) {
+                    active_output.music_structure = Some(structure);
+                    changed = true;
+                }
+            }
             let output = scheduled.request.outputs[index].clone();
             let Some(cycling) = output.cycling.clone() else {
                 continue;
@@ -3945,10 +4158,10 @@ mod tests {
     use lumistripe_engine_config::{EngineConfig, OutputBackend, OutputConfig};
     use lumistripe_engine_protocol::{
         FRAME_ACK_BYTES, FRAME_HEADER_BYTES, FrameAck, FrameAckStatus, FrameHeader, LegacyConfig,
-        LegacyRequest, LegacyRequestCommand, LegacyResponseResult, PROTOCOL_VERSION,
-        RenderAnimationChoice, RenderAnimationSequence, RenderAnimationSequenceStep,
-        RenderAudioInput, RenderAudioUpdate, RenderBeatClockState, RenderBeatEvent,
-        RenderCycleOrder, RenderCycleTiming, RenderCycling, RenderDynamicIdle,
+        LegacyRequest, LegacyRequestCommand, LegacyResponseResult, PREVIOUS_PROTOCOL_VERSION,
+        PROTOCOL_VERSION, RenderAnimationChoice, RenderAnimationSequence,
+        RenderAnimationSequenceStep, RenderAudioInput, RenderAudioUpdate, RenderBeatClockState,
+        RenderBeatEvent, RenderCycleOrder, RenderCycleTiming, RenderCycling, RenderDynamicIdle,
         RenderDynamicIdleMode, RenderDynamicSelector, RenderEffect, RenderFrameRequest,
         RenderMusicActivityConfig, RenderMusicStructurePhase, RenderOutput, RenderPowerConfig,
         RenderSceneUpdate, RenderSchedulerConfig, RenderSelectorFeatures, RenderStructureEvent,
@@ -3990,7 +4203,12 @@ mod tests {
         }
 
         fn request(&self, command: RequestCommand) -> Response {
-            let request = Request::new("test-request", command);
+            self.request_with_version(PROTOCOL_VERSION, command)
+        }
+
+        fn request_with_version(&self, protocol_version: u16, command: RequestCommand) -> Response {
+            let mut request = Request::new("test-request", command);
+            request.protocol_version = protocol_version;
             let mut stream = UnixStream::connect(&self.socket).unwrap();
             stream
                 .write_all(&encode_request(&request).unwrap())
@@ -4632,6 +4850,7 @@ mod tests {
                         buildup_progress: 0.7,
                         drop_event: true,
                         section_change: true,
+                        phase_change: false,
                     }],
                     selector_features: Some(RenderSelectorFeatures {
                         energy_level: 0.8,
@@ -6370,6 +6589,16 @@ mod tests {
                 ..
             }
         ));
+        server.shutdown();
+    }
+
+    #[test]
+    fn v2_clients_receive_v2_responses_for_existing_commands() {
+        let server = ServerThread::start();
+        let response =
+            server.request_with_version(PREVIOUS_PROTOCOL_VERSION, RequestCommand::Health);
+        assert_eq!(response.protocol_version, PREVIOUS_PROTOCOL_VERSION);
+        assert!(matches!(response.result, ResponseResult::Health { .. }));
         server.shutdown();
     }
 

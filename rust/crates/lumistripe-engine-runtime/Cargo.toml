@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 libc.workspace = true
+lumistripe-engine-audio.workspace = true
 lumistripe-engine-config.workspace = true
 lumistripe-engine-animation-definitions.workspace = true
 lumistripe-engine-compositing.workspace = true

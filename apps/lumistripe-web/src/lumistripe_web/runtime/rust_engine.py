@@ -24,6 +24,7 @@ from typing import TypeAlias
 
 import numpy as np
 import numpy.typing as npt
+from lumistripe.audio.config import AudioConfig
 
 from .frame_exchange import LatestFrameExchange
 from .output_thread import (
@@ -38,7 +39,8 @@ from .output_thread import (
 PixelFrame: TypeAlias = npt.NDArray[np.uint8]
 JSONCommandData: TypeAlias = dict[str, object] | None
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
+FRAME_VERSION = 2
 MAX_CONTROL_MESSAGE_BYTES = 1_048_576
 FRAME_MAGIC = b"LSF2"
 FRAME_ACK_MAGIC = b"LSA2"
@@ -741,6 +743,7 @@ class RustRenderStructureEvent:
     buildup_progress: float
     drop_event: bool = False
     section_change: bool = False
+    phase_change: bool = False
 
     def to_wire(self) -> dict[str, object]:
         if type(self.output_index) is not int or self.output_index < 0:
@@ -757,9 +760,9 @@ class RustRenderStructureEvent:
             raise ValueError("Rust structure event buildup progress must be between zero and one")
         if not isinstance(self.drop_event, bool) or not isinstance(self.section_change, bool):
             raise TypeError("Rust structure event flags must be booleans")
-        if not (self.drop_event or self.section_change):
-            raise ValueError("Rust structure event must represent a one-shot edge")
-        return {
+        if not (self.drop_event or self.section_change or self.phase_change):
+            raise ValueError("Rust structure event must represent a one-shot edge or phase change")
+        result: dict[str, object] = {
             "output_index": self.output_index,
             "sequence": self.sequence,
             "timestamp_ns": self.timestamp_ns,
@@ -769,6 +772,9 @@ class RustRenderStructureEvent:
             "drop_event": self.drop_event,
             "section_change": self.section_change,
         }
+        if self.phase_change:
+            result["phase_change"] = True
+        return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -911,6 +917,67 @@ class EngineHealth:
     preview_outputs: tuple[bytes, ...] | None
 
 
+@dataclass(frozen=True, slots=True)
+class RustAudioDevice:
+    selector: str
+    host: str
+    name: str
+    is_default: bool
+    sample_rate: int
+    channels: int
+
+
+@dataclass(frozen=True, slots=True)
+class EngineAudioStatus:
+    active: bool
+    device: RustAudioDevice | None
+    frame: Mapping[str, object]
+    features: Mapping[str, object]
+    structure: Mapping[str, object]
+    processor: Mapping[str, object]
+    capture: Mapping[str, object]
+    last_frame_ns: int | None
+    last_error: str | None
+    audio_update_sequence: int
+    dropped_audio_updates: int
+    dropped_structure_events: int
+
+
+def audio_config_to_wire(config: AudioConfig) -> dict[str, object]:
+    """Flatten the shared Python audio config into the versioned Rust IPC shape."""
+    smoothing = config.smoothing
+    normalization = config.normalization
+    analysis = config.analysis
+    microphone = config.microphone
+    return {
+        "microphone_enabled": microphone.enabled,
+        "input_noise_floor": microphone.input_noise_floor,
+        "high_pass_hz": microphone.high_pass_hz,
+        "noise_floor": smoothing.noise_floor,
+        "rms_attack": smoothing.rms_attack,
+        "rms_release": smoothing.rms_release,
+        "band_attack": smoothing.band_attack,
+        "band_release": smoothing.band_release,
+        "beat_release": smoothing.beat_release,
+        "smoothing_enabled": smoothing.enabled,
+        "target_level": normalization.target_level,
+        "min_gain": normalization.min_gain,
+        "max_gain": normalization.max_gain,
+        "adapt_attack": normalization.adapt_attack,
+        "adapt_release": normalization.adapt_release,
+        "music_threshold": normalization.music_threshold,
+        "music_max_gain": normalization.music_max_gain,
+        "silence_floor": normalization.silence_floor,
+        "normalization_enabled": normalization.enabled,
+        "dc_block_enabled": normalization.dc_block_enabled,
+        "drop_bass_threshold": analysis.drop_bass_threshold,
+        "drop_bass_delta_threshold": analysis.drop_bass_delta_threshold,
+        "drop_onset_threshold": analysis.drop_onset_threshold,
+        "section_change_threshold": analysis.section_change_threshold,
+        "section_onset_threshold": analysis.section_onset_threshold,
+    }
+
+
 def _encode_request(
     request_id: str, command: str, data: JSONCommandData = None
 ) -> bytes:
@@ -996,6 +1063,7 @@ class RustEngineProcess:
         self._process: subprocess.Popen[bytes] | None = None
         self._closed = False
         self._pixel_counts: tuple[int, ...] = ()
+        self._request_lock = threading.Lock()
         try:
             self._process = subprocess.Popen(
                 [
@@ -1457,6 +1525,99 @@ class RustEngineProcess:
             raise RustEngineError("Rust engine returned an invalid output configuration")
         self._pixel_counts = pixel_counts
 
+    def start_audio(self, selector: str | None, config: AudioConfig) -> bool:
+        if selector is not None and not isinstance(selector, str):
+            raise TypeError("Rust audio selector must be a string or None")
+        result = self._request(
+            "audio_start",
+            {"selector": selector, "config": audio_config_to_wire(config)},
+            timeout=_CONFIGURE_TIMEOUT_SECONDS,
+        )
+        if result.get("type") != "audio_configured":
+            raise RustEngineError("Rust engine rejected audio capture start")
+        return _bool_field(result, "active")
+
+    def configure_audio(self, config: AudioConfig) -> bool:
+        result = self._request(
+            "audio_configure",
+            {"config": audio_config_to_wire(config)},
+            timeout=_CONFIGURE_TIMEOUT_SECONDS,
+        )
+        if result.get("type") != "audio_configured":
+            raise RustEngineError("Rust engine rejected audio configuration")
+        return _bool_field(result, "active")
+
+    def stop_audio(self) -> None:
+        result = self._request("audio_stop")
+        if result.get("type") != "audio_stopped":
+            raise RustEngineError("Rust engine did not stop audio capture")
+
+    def audio_devices(self) -> tuple[RustAudioDevice, ...]:
+        result = self._request("audio_devices")
+        raw_devices = result.get("devices")
+        if result.get("type") != "audio_devices" or not isinstance(raw_devices, list):
+            raise RustEngineError("Rust engine returned invalid audio devices")
+        return self._parse_audio_devices(raw_devices)
+
+    def audio_status(self) -> EngineAudioStatus:
+        result = self._request("audio_status")
+        raw_status = result.get("status")
+        if result.get("type") != "audio_status" or not isinstance(raw_status, dict):
+            raise RustEngineError("Rust engine returned invalid audio status")
+        raw_device = raw_status.get("device")
+        device = None
+        if raw_device is not None:
+            device_list = self._parse_audio_devices([raw_device])
+            device = device_list[0]
+        return EngineAudioStatus(
+            active=_bool_field(raw_status, "active"),
+            device=device,
+            frame=_mapping_field(raw_status, "frame"),
+            features=_mapping_field(raw_status, "features"),
+            structure=_mapping_field(raw_status, "structure"),
+            processor=_mapping_field(raw_status, "processor"),
+            capture=_mapping_field(raw_status, "capture"),
+            last_frame_ns=_optional_nonnegative_int_field(raw_status, "last_frame_ns"),
+            last_error=_optional_string_field(raw_status, "last_error"),
+            audio_update_sequence=_nonnegative_int_field(raw_status, "audio_update_sequence"),
+            dropped_audio_updates=_nonnegative_int_field(raw_status, "dropped_audio_updates"),
+            dropped_structure_events=_nonnegative_int_field(raw_status, "dropped_structure_events"),
+        )
+
+    @staticmethod
+    def _parse_audio_devices(raw_devices: list[object]) -> tuple[RustAudioDevice, ...]:
+        devices: list[RustAudioDevice] = []
+        for raw in raw_devices:
+            if not isinstance(raw, dict):
+                raise RustEngineError("Rust engine returned an invalid audio device")
+            selector = raw.get("selector")
+            host = raw.get("host")
+            name = raw.get("name")
+            sample_rate = raw.get("sample_rate")
+            channels = raw.get("channels")
+            if (
+                not isinstance(selector, str)
+                or not isinstance(host, str)
+                or not isinstance(name, str)
+                or type(sample_rate) is not int
+                or sample_rate <= 0
+                or type(channels) is not int
+                or channels <= 0
+                or type(raw.get("is_default")) is not bool
+            ):
+                raise RustEngineError("Rust engine returned an invalid audio device")
+            devices.append(
+                RustAudioDevice(
+                    selector=selector,
+                    host=host,
+                    name=name,
+                    is_default=raw["is_default"],
+                    sample_rate=sample_rate,
+                    channels=channels,
+                )
+            )
+        return tuple(devices)
+
     def render_frame(
         self,
         *,
@@ -1633,7 +1794,7 @@ class RustEngineProcess:
             payload_bytes += view.nbytes
             views.append(view)
         header = FRAME_HEADER.pack(
-            FRAME_MAGIC, PROTOCOL_VERSION, len(frames), sequence, payload_bytes
+            FRAME_MAGIC, FRAME_VERSION, len(frames), sequence, payload_bytes
         )
         try:
             _send_vectors(connection, [memoryview(header), *views])
@@ -1643,7 +1804,7 @@ class RustEngineProcess:
         magic, version, status, acknowledged_sequence, dropped = FRAME_ACK.unpack(
             ack_bytes
         )
-        if magic != FRAME_ACK_MAGIC or version != PROTOCOL_VERSION:
+        if magic != FRAME_ACK_MAGIC or version != FRAME_VERSION:
             raise RustEngineError("Rust engine returned an invalid frame acknowledgement")
         if acknowledged_sequence != sequence:
             raise RustEngineError("Rust engine frame sequence does not match the request")
@@ -1708,6 +1869,16 @@ class RustEngineProcess:
         data: JSONCommandData = None,
         *,
         timeout: float = _REQUEST_TIMEOUT_SECONDS,
+    ) -> dict[str, object]:
+        with self._request_lock:
+            return self._request_locked(command, data, timeout=timeout)
+
+    def _request_locked(
+        self,
+        command: str,
+        data: JSONCommandData,
+        *,
+        timeout: float,
     ) -> dict[str, object]:
         if self._closed:
             raise RustEngineError("Rust engine process is closed")
@@ -1787,6 +1958,7 @@ class RustEngineOutputThread:
     ) -> None:
         self._work_ready = threading.Event()
         self._render_lock = threading.Lock()
+        self._process_lock = threading.RLock()
         self._pending_render_request: _RenderRequest | None = None
         self._control_lock = threading.Lock()
         self._pending_scene_updates: deque[_SceneUpdateRequest] = deque()
@@ -2214,6 +2386,39 @@ class RustEngineOutputThread:
         if self._thread.is_alive():
             raise TimeoutError("Rust output bridge did not stop in time")
 
+    def start_audio(self, selector: str | None, config: AudioConfig) -> bool:
+        with self._process_lock:
+            process = self._require_process()
+            return process.start_audio(selector, config)
+
+    def configure_audio(self, config: AudioConfig) -> bool:
+        with self._process_lock:
+            process = self._require_process()
+            return process.configure_audio(config)
+
+    def stop_audio(self) -> None:
+        with self._process_lock:
+            process = self._require_process()
+            process.stop_audio()
+
+    def audio_devices(self) -> tuple[RustAudioDevice, ...]:
+        with self._process_lock:
+            process = self._require_process()
+            return process.audio_devices()
+
+    def audio_status(self) -> EngineAudioStatus:
+        with self._process_lock:
+            process = self._require_process()
+            return process.audio_status()
+
+    def _require_process(self) -> RustEngineProcess:
+        if self._stop_event.is_set() or not self._thread.is_alive():
+            raise RustEngineError("Rust output bridge is not running")
+        process = self._process
+        if process is None:
+            raise RustEngineError("Rust engine process is not ready")
+        return process
+
     @property
     def process_is_running(self) -> bool:
         process = getattr(self, "_process", None)
@@ -2226,7 +2431,8 @@ class RustEngineOutputThread:
             process = RustEngineProcess(binary_path=self._binary_path)
             process.configure(self._outputs)
             frame_connection = process.open_frame_stream()
-            self._process = process
+            with self._process_lock:
+                self._process = process
             self._record_heartbeat()
             self._started.set()
             while not self._stop_event.is_set():
@@ -2391,9 +2597,10 @@ class RustEngineOutputThread:
                 exchange.close(discard_pending=True)
             if frame_connection is not None:
                 frame_connection.close()
-            if process is not None:
-                process.close()
-            self._process = None
+            with self._process_lock:
+                if process is not None:
+                    process.close()
+                self._process = None
             with self._render_lock:
                 self._pending_render_request = None
             with self._control_lock:
@@ -2630,6 +2837,20 @@ def _bool_field(value: dict[str, object], key: str) -> bool:
     return result
 
 
+def _mapping_field(value: dict[str, object], key: str) -> Mapping[str, object]:
+    result = value.get(key)
+    if not isinstance(result, dict):
+        raise RustEngineError(f"Rust engine audio status {key} is invalid")
+    return result
+
+
+def _optional_string_field(value: dict[str, object], key: str) -> str | None:
+    result = value.get(key)
+    if result is not None and not isinstance(result, str):
+        raise RustEngineError(f"Rust engine audio status {key} is invalid")
+    return result
+
+
 def _nonnegative_int_field(value: dict[str, object], key: str) -> int:
     result = value.get(key)
     if type(result) is not int or result < 0:
@@ -2672,7 +2893,9 @@ def _nearest_rank_percentile(values: Sequence[float], quantile: float) -> float 
 
 
 __all__ = [
+    "EngineAudioStatus",
     "EngineHealth",
+    "RustAudioDevice",
     "RustEngineError",
     "RustEngineOutputThread",
     "RustEngineProcess",
@@ -2680,4 +2903,5 @@ __all__ = [
     "RustRenderCycling",
     "RustRenderStructureEvent",
     "RustSceneUpdateAck",
+    "audio_config_to_wire",
 ]

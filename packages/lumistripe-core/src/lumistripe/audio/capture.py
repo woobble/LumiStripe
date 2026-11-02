@@ -197,6 +197,15 @@ class AudioInput:
         )
         self._callback_duration_count = 0
         self._callback_duration_next = 0
+        self._callback_interval_jitter_samples_ns = (
+            [0] * _CALLBACK_TIMING_SAMPLE_CAPACITY
+            if self._profile_callback_timing
+            else []
+        )
+        self._callback_interval_jitter_count = 0
+        self._callback_interval_jitter_next = 0
+        self._last_callback_start_ns = 0
+        self._last_callback_expected_interval_ns = 0
 
         device = find_input_device(sounddevice, device_pattern)
         self._device_name = _device_name(device)
@@ -252,7 +261,12 @@ class AudioInput:
             finally:
                 if timing_started_ns is not None:
                     elapsed_ns = time.perf_counter_ns() - timing_started_ns
-                    self._record_callback_duration(elapsed_ns)
+                    self._record_callback_timing(
+                        timing_started_ns,
+                        elapsed_ns,
+                        frames,
+                        sample_rate,
+                    )
 
         stream = None
         try:
@@ -421,6 +435,10 @@ class AudioInput:
         with self._health_lock:
             self._callback_duration_count = 0
             self._callback_duration_next = 0
+            self._callback_interval_jitter_count = 0
+            self._callback_interval_jitter_next = 0
+            self._last_callback_start_ns = 0
+            self._last_callback_expected_interval_ns = 0
 
     def _callback_timing_samples_ms(self) -> tuple[float, ...]:
         """Return the bounded, opt-in callback timing window in milliseconds."""
@@ -441,13 +459,53 @@ class AudioInput:
                 for index in range(count)
             )
 
-    def _record_callback_duration(self, elapsed_ns: int) -> None:
+    def _callback_interval_jitter_samples_ms(self) -> tuple[float, ...]:
+        """Return bounded, opt-in callback interval jitter samples."""
+
+        if not self._profile_callback_timing:
+            return ()
+        with self._health_lock:
+            count = min(
+                self._callback_interval_jitter_count,
+                _CALLBACK_TIMING_SAMPLE_CAPACITY,
+            )
+            first = self._callback_interval_jitter_count - count
+            return tuple(
+                self._callback_interval_jitter_samples_ns[
+                    (first + index) % _CALLBACK_TIMING_SAMPLE_CAPACITY
+                ]
+                / 1_000_000.0
+                for index in range(count)
+            )
+
+    def _record_callback_timing(
+        self,
+        started_ns: int,
+        elapsed_ns: int,
+        frames: int,
+        sample_rate: float,
+    ) -> None:
+        if not self._profile_callback_timing:
+            return
+        expected_interval_ns = int(frames * 1_000_000_000 / sample_rate)
         with self._health_lock:
             self._callback_duration_samples_ns[self._callback_duration_next] = elapsed_ns
             self._callback_duration_next = (
                 self._callback_duration_next + 1
             ) % _CALLBACK_TIMING_SAMPLE_CAPACITY
             self._callback_duration_count += 1
+            if self._last_callback_start_ns:
+                interval_ns = started_ns - self._last_callback_start_ns
+                jitter_ns = abs(interval_ns - self._last_callback_expected_interval_ns)
+                self._callback_interval_jitter_samples_ns[
+                    self._callback_interval_jitter_next
+                ] = jitter_ns
+                self._callback_interval_jitter_next = (
+                    self._callback_interval_jitter_next + 1
+                ) % _CALLBACK_TIMING_SAMPLE_CAPACITY
+                self._callback_interval_jitter_count += 1
+            self._last_callback_start_ns = started_ns
+            self._last_callback_expected_interval_ns = expected_interval_ns
 
     def reconfigure(self, config: AudioConfig) -> None:
         self._wait_for_worker()

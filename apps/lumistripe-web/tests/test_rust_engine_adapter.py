@@ -10,23 +10,34 @@ import sys
 import threading
 import time
 from collections import deque
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 
 import lumistripe_web.runtime.rust_engine as rust_engine_module
+import lumistripe_web.runtime.worker as runtime_worker_module
 import numpy as np
 import pytest
 from lumistripe import Stripe
 from lumistripe.animation import AnimationPlayer
 from lumistripe.animation.catalog import animation_catalog
 from lumistripe.audio.beat import BeatClockTracker
-from lumistripe.audio.types import AudioFrame, AudioSnapshot, BeatEvent, MusicFeatures
+from lumistripe.audio.config import AudioConfig
+from lumistripe.audio.types import (
+    AudioFrame,
+    AudioProcessorStats,
+    AudioSnapshot,
+    BeatEvent,
+    MusicFeatures,
+)
 from lumistripe.gpio.spi import _FrameEncoder, encode_legacy_frame
 from lumistripe.playback import PlaybackMode, SwitchQuantization
 from lumistripe.selector import DynamicSelector, DynamicSelectorConfig
 from lumistripe_web.app import build_parser
 from lumistripe_web.runtime import RuntimeSettings
 from lumistripe_web.runtime.rust_engine import (
+    EngineAudioStatus,
+    RustAudioDevice,
     RustEngineError,
     RustEngineOutputThread,
     RustEngineProcess,
@@ -47,9 +58,11 @@ from lumistripe_web.runtime.rust_engine import (
     RustRenderTransition,
     _decode_response,
     _encode_request,
+    audio_config_to_wire,
 )
 from lumistripe_web.runtime.worker import RuntimeWorker
 from lumistripe_web.settings import (
+    AudioTuningProfile,
     CalibrationSettingsStore,
     StartupPlaybackSettings,
     StripeOutputSettings,
@@ -57,7 +70,8 @@ from lumistripe_web.settings import (
 )
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-PROTOCOL_FIXTURES = REPOSITORY_ROOT / "rust" / "test-fixtures" / "protocol-v2"
+PROTOCOL_FIXTURES = REPOSITORY_ROOT / "rust" / "test-fixtures" / "protocol-v3"
+PROTOCOL_V2_FIXTURES = REPOSITORY_ROOT / "rust" / "test-fixtures" / "protocol-v2"
 
 
 def _engine_binary() -> Path:
@@ -78,17 +92,24 @@ def _mock_spec(output_id: str, pixel_count: int, *, reversed: bool = False) -> R
 
 def test_runtime_defaults_to_python_and_rust_hardware_is_enabled_explicitly() -> None:
     assert RuntimeSettings().engine_backend == "python"
+    assert RuntimeSettings().audio_backend == "python"
     assert RuntimeSettings(engine_backend="rust").engine_backend == "rust"
     assert RuntimeSettings(engine_backend="rust", hardware=True).hardware is True
+    assert RuntimeSettings(engine_backend="rust", audio_backend="rust").audio_backend == "rust"
+    with pytest.raises(ValueError, match="requires the Rust engine"):
+        RuntimeSettings(audio_backend="rust")
 
 
 def test_cli_defaults_to_python_and_accepts_rust_hardware() -> None:
     defaults = build_parser().parse_args([])
     assert defaults.engine_backend == "python"
+    assert defaults.audio_backend == "python"
     assert defaults.engine_binary is None
     selected = build_parser().parse_args(
         [
             "--engine-backend",
+            "rust",
+            "--audio-backend",
             "rust",
             "--engine-binary",
             "/tmp/lumistripe-engine",
@@ -96,12 +117,13 @@ def test_cli_defaults_to_python_and_accepts_rust_hardware() -> None:
         ]
     )
     assert selected.engine_backend == "rust"
+    assert selected.audio_backend == "rust"
     assert selected.engine_binary == Path("/tmp/lumistripe-engine")
     assert selected.hardware is True
 
 
-def test_python_codec_matches_shared_v2_fixtures() -> None:
-    request = json.loads(_encode_request("fixture-health-2", "health"))
+def test_python_codec_matches_shared_v3_fixtures() -> None:
+    request = json.loads(_encode_request("fixture-health-3", "health"))
     expected_request = json.loads(
         (PROTOCOL_FIXTURES / "health-request.json").read_text(encoding="utf-8")
     )
@@ -110,7 +132,7 @@ def test_python_codec_matches_shared_v2_fixtures() -> None:
     response_bytes = (
         (PROTOCOL_FIXTURES / "health-response.json").read_bytes().rstrip(b"\n")
     )
-    result = _decode_response(response_bytes, "fixture-health-2")
+    result = _decode_response(response_bytes, "fixture-health-3")
     assert result == {
         "type": "health",
         "status": "ready",
@@ -134,9 +156,143 @@ def test_python_codec_matches_shared_v2_fixtures() -> None:
     }
 
 
+def test_audio_config_serializes_to_flat_versioned_wire_shape() -> None:
+    config = AudioConfig()
+    wire = audio_config_to_wire(config)
+    assert wire["microphone_enabled"] is False
+    assert wire["input_noise_floor"] == config.microphone.input_noise_floor
+    assert wire["high_pass_hz"] == config.microphone.high_pass_hz
+    assert wire["noise_floor"] == config.smoothing.noise_floor
+    assert wire["smoothing_enabled"] is True
+    assert wire["target_level"] == config.normalization.target_level
+    assert wire["normalization_enabled"] is True
+    assert wire["drop_bass_threshold"] == config.analysis.drop_bass_threshold
+
+
+def test_runtime_native_audio_uses_rust_capture_and_feeds_calibration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    device = RustAudioDevice(
+        selector="pipewire:usb-mic",
+        host="PipeWire",
+        name="USB Mic",
+        is_default=True,
+        sample_rate=44_100,
+        channels=1,
+    )
+    now = time.monotonic()
+    now_ns = time.monotonic_ns()
+    frame = {
+        "rms": 0.24,
+        "bands": [0.1] * 8,
+        "beat": False,
+        "beat_strength": 0.0,
+        "sequence": 1,
+        "timestamp": now,
+        "fresh": True,
+    }
+    features = asdict(MusicFeatures(energy=0.3, volume=0.24, bands=(0.1,) * 8))
+    features["bands"] = [0.1] * 8
+    processor = asdict(AudioProcessorStats(input_rms=0.24, input_peak=0.31))
+    status = EngineAudioStatus(
+        active=True,
+        device=device,
+        frame=frame,
+        features=features,
+        structure={
+            "phase": "groove",
+            "confidence": 0.8,
+            "buildup_progress": 0.0,
+            "drop_event": False,
+        },
+        processor=processor,
+        capture={
+            "callback_count": 1,
+            "callback_errors": 0,
+            "overflowed_batches": 0,
+            "dropped_samples": 0,
+            "last_callback_ns": now_ns,
+            "last_error_ns": None,
+        },
+        last_frame_ns=now_ns,
+        last_error=None,
+        audio_update_sequence=1,
+        dropped_audio_updates=0,
+        dropped_structure_events=0,
+    )
+
+    class FakeRustAudioThread(RustEngineOutputThread):
+        def __init__(self) -> None:
+            super().__init__((), ())
+            self.started: tuple[str | None, AudioConfig] | None = None
+            self.configured: AudioConfig | None = None
+
+        def audio_devices(self) -> tuple[RustAudioDevice, ...]:
+            return (device,)
+
+        def start_audio(self, selector: str | None, config: AudioConfig) -> bool:
+            self.started = (selector, config)
+            return True
+
+        def audio_status(self) -> EngineAudioStatus:
+            return status
+
+        def configure_audio(self, config: AudioConfig) -> bool:
+            self.configured = config
+            return True
+
+    monkeypatch.setattr(
+        runtime_worker_module,
+        "HardwareGainController",
+        lambda name: SimpleNamespace(
+            status=SimpleNamespace(
+                supported=False,
+                writable=False,
+                backend=None,
+                control=None,
+                value=None,
+                error=None,
+            ),
+            set_normalized=lambda value: None,
+        ),
+    )
+    audio_thread = FakeRustAudioThread()
+    worker = RuntimeWorker(
+        RuntimeSettings(
+            engine_backend="rust",
+            audio_backend="rust",
+            audio_source="mic",
+            settings_file=tmp_path / "settings.json",
+        ),
+        audio_factory=lambda *_: pytest.fail("Rust audio must not open Python capture"),
+    )
+    worker._output_thread = audio_thread
+    worker._selected_audio_device = "USB Mic"
+
+    worker._open_microphone_monitor()
+
+    assert audio_thread.started is not None
+    assert audio_thread.started[0] == "pipewire:usb-mic"
+    assert worker._audio_input is None
+    assert worker._audio_monitoring_active() is True
+    assert worker._audio_frame.fresh is True
+    assert worker._music_features.energy == pytest.approx(0.3)
+    assert worker._rust_music_structure_state.phase.value == "groove"
+    audio_settings = worker.audio_settings()
+    assert audio_settings.monitoring is True
+    assert audio_settings.devices[0].selector == "pipewire:usb-mic"
+    worker._apply_audio_settings(
+        "pipewire:usb-mic", AudioTuningProfile(target_level=0.5)
+    )
+    assert audio_thread.configured is not None
+    assert audio_thread.configured.microphone.enabled is True
+    calibration = worker._start_audio_calibration("pipewire:usb-mic", 0.5)
+    assert calibration.status == "capturing"
+
+
 def test_python_and_native_c_encoders_match_shared_sm16716_golden_frame() -> None:
     pixels = np.array([[255, 0, 16, 127], [2, 128, 64, 255]], dtype=np.uint8)
-    expected_hex = (PROTOCOL_FIXTURES / "sm16716-reference.hex").read_text(
+    expected_hex = (PROTOCOL_V2_FIXTURES / "sm16716-reference.hex").read_text(
         encoding="ascii"
     ).strip()
 
@@ -181,6 +337,38 @@ def test_one_rust_process_configures_and_transmits_all_outputs() -> None:
             connection.close()
         process.close()
     assert process.is_running is False
+
+
+def test_rust_process_audio_controls_report_devices_status_and_stop() -> None:
+    process = RustEngineProcess(binary_path=_engine_binary())
+    try:
+        devices = process.audio_devices()
+        assert all(device.selector and device.name for device in devices)
+        status = process.audio_status()
+        assert status.active is False
+        assert status.device is None
+        assert status.frame["fresh"] is False
+
+        with pytest.raises(RustEngineError, match="audio_failure"):
+            process.start_audio("lumistripe-no-such-input-device", AudioConfig())
+        failed_status = process.audio_status()
+        assert failed_status.active is False
+        assert failed_status.last_error is not None
+        recovery_deadline = time.monotonic() + 3.0
+        while time.monotonic() < recovery_deadline:
+            failed_status = process.audio_status()
+            if failed_status.last_error is not None and failed_status.last_error.startswith(
+                "audio device recovery failed:"
+            ):
+                break
+            time.sleep(0.05)
+        assert failed_status.active is False
+        assert failed_status.last_error is not None
+        assert failed_status.last_error.startswith("audio device recovery failed:")
+        process.stop_audio()
+        assert process.audio_status().last_error is None
+    finally:
+        process.close()
 
 
 def test_rust_process_renders_typed_scene_inputs_without_pixel_frames() -> None:

@@ -1353,6 +1353,29 @@ def test_audio_input_callback_timing_is_opt_in_and_bounded(
     audio_input.close()
 
 
+def test_audio_input_callback_interval_jitter_uses_expected_sample_period(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeSoundDevice()
+    monkeypatch.setattr("lumistripe.audio.importlib.import_module", lambda name: fake)
+    monkeypatch.setenv("LUMISTRIPE_PROFILE_AUDIO_CALLBACKS", "1")
+
+    audio_input = AudioInput.with_device("usb")
+    audio_input._clear_callback_timing_samples()
+    expected_interval_ns = int(512 * 1_000_000_000 / 44_100.0)
+    audio_input._record_callback_timing(1_000_000, 10_000, 512, 44_100.0)
+    audio_input._record_callback_timing(
+        1_000_000 + expected_interval_ns + 2_000,
+        20_000,
+        512,
+        44_100.0,
+    )
+
+    assert audio_input._callback_timing_samples_ms() == (0.01, 0.02)
+    assert audio_input._callback_interval_jitter_samples_ms() == pytest.approx((0.002,))
+    audio_input.close()
+
+
 def test_audio_input_with_config_uses_custom_smoothing(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = FakeSoundDevice()
     monkeypatch.setattr("lumistripe.audio.importlib.import_module", lambda name: fake)

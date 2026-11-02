@@ -40,12 +40,15 @@ from lumistripe.animation.catalog import (
     dynamic_sequence_eligible,
 )
 from lumistripe.audio.capture import AudioInput
+from lumistripe.audio.config import AUDIO_FRESH_SECONDS
 from lumistripe.audio.devices import list_input_device_details
 from lumistripe.audio.hardware_gain import HardwareGainController
+from lumistripe.audio.structure import MusicStructurePhase, MusicStructureState
 from lumistripe.audio.timeline import MusicalTimelineConfig
 from lumistripe.audio.types import (
     AudioFrame,
     AudioInputHealth,
+    AudioProcessorStats,
     AudioSnapshot,
     BandTuple,
     BeatClockState,
@@ -187,6 +190,8 @@ from .outputs import (
 )
 from .playback_service import PlaybackPolicy, PlaybackPolicyError
 from .rust_engine import (
+    EngineAudioStatus,
+    RustAudioDevice,
     RustEngineError,
     RustEngineOutputThread,
     RustOutputSpec,
@@ -573,6 +578,13 @@ class RuntimeWorker:
         self._stripe_test: _StripeTestSession | None = None
         self._audio_input: AudioInput | None = None
         self._audio_input_opened_at: float | None = None
+        self._rust_audio_requested = False
+        self._rust_audio_active = False
+        self._rust_audio_device_name: str | None = None
+        self._rust_audio_next_poll_at_s = 0.0
+        self._rust_music_structure_state = MusicStructureState()
+        self._rust_music_structure_drop_count = 0
+        self._rust_last_structure_drop_sequence = 0
         self._hardware_gain: HardwareGainController | None = None
         self._audio_source_setting = self.settings.audio_source
         self._configured_audio_source = self.settings.dynamic_audio_source()
@@ -794,17 +806,31 @@ class RuntimeWorker:
 
     def audio_settings(self) -> AudioSettingsResponse:
         try:
-            devices = list_input_device_details()
-            options_list = [
-                AudioDeviceOption(
-                    selector=str(device.index),
-                    name=device.name,
-                    settings=_profile_values(
-                        self._audio_profiles.get(device.name, AudioTuningProfile())
-                    ),
-                )
-                for device in devices
-            ]
+            if self.settings.audio_backend == "rust":
+                output_thread = self._rust_audio_output_thread()
+                rust_devices = output_thread.audio_devices()
+                options_list = [
+                    AudioDeviceOption(
+                        selector=device.selector,
+                        name=device.name,
+                        settings=_profile_values(
+                            self._audio_profiles.get(device.name, AudioTuningProfile())
+                        ),
+                    )
+                    for device in rust_devices
+                ]
+            else:
+                python_devices = list_input_device_details()
+                options_list = [
+                    AudioDeviceOption(
+                        selector=str(device.index),
+                        name=device.name,
+                        settings=_profile_values(
+                            self._audio_profiles.get(device.name, AudioTuningProfile())
+                        ),
+                    )
+                    for device in python_devices
+                ]
             if self.settings.hardware:
                 options_list.append(
                     AudioDeviceOption(
@@ -831,12 +857,12 @@ class RuntimeWorker:
                 )
             options = tuple(options_list)
             enumeration_error = None
-        except RuntimeError as exc:
+        except (RuntimeError, RustEngineError) as exc:
             options = ()
             enumeration_error = str(exc)
         active_name = self._active_audio_device_name
-        if active_name is None and self._audio_input is not None:
-            active_name = self._audio_input.device_name()
+        if active_name is None:
+            active_name = self._active_capture_device_name()
         selected_name = (
             BLUETOOTH_PROFILE_KEY
             if self._monitor_audio_source is AudioSource.BLUETOOTH
@@ -864,7 +890,7 @@ class RuntimeWorker:
         return AudioSettingsResponse(
             source=self._audio_source_setting,
             active_source=self._monitor_audio_source.value,
-            monitoring=self._audio_input is not None,
+            monitoring=self._audio_monitoring_active(),
             active_device=active_selector,
             fallback_device=fallback_selector,
             active_device_name=active_name,
@@ -887,6 +913,211 @@ class RuntimeWorker:
             spotify=self._spotify_status_response(),
             error=self._audio_monitor_error or enumeration_error,
         )
+
+    def _rust_audio_output_thread(self) -> RustEngineOutputThread:
+        output_thread = self._output_thread
+        if not isinstance(output_thread, RustEngineOutputThread):
+            raise RustEngineError("Rust audio backend requires a running Rust engine")
+        return output_thread
+
+    def _audio_capture_requested(self) -> bool:
+        return self._audio_input is not None or self._rust_audio_requested
+
+    def _audio_monitoring_active(self) -> bool:
+        return self._audio_input is not None or self._rust_audio_active
+
+    def _active_capture_device_name(self) -> str | None:
+        if self._audio_input is not None:
+            return self._audio_input.device_name()
+        return self._rust_audio_device_name
+
+    def _native_audio_device_key(self) -> str | None:
+        if self._monitor_audio_source is AudioSource.BLUETOOTH:
+            return BLUETOOTH_PROFILE_KEY
+        if self._monitor_audio_source is AudioSource.SPOTIFY:
+            return SPOTIFY_PROFILE_KEY
+        return self._active_capture_device_name() or self._selected_audio_device
+
+    def _refresh_rust_audio_status(self, *, force: bool = False) -> None:
+        if self.settings.audio_backend != "rust":
+            return
+        now = time.monotonic()
+        if not force and now < self._rust_audio_next_poll_at_s:
+            return
+        self._rust_audio_next_poll_at_s = now + AUDIO_TELEMETRY_INTERVAL_SECONDS
+        try:
+            status = self._rust_audio_output_thread().audio_status()
+            self._apply_rust_audio_status(status, now=now)
+        except RustEngineError as exc:
+            self._rust_audio_active = False
+            self._audio_frame = replace(self._audio_frame, fresh=False)
+            self._audio_monitor_error = str(exc)
+            self._audio_health = replace(self._audio_health, worker_error=str(exc))
+
+    def _apply_rust_audio_status(
+        self, status: EngineAudioStatus, *, now: float
+    ) -> None:
+        def number(mapping: Mapping[str, object], key: str) -> float:
+            value = mapping.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise RustEngineError(f"Rust audio status field {key} is invalid")
+            result = float(value)
+            if not isfinite(result):
+                raise RustEngineError(f"Rust audio status field {key} is invalid")
+            return result
+
+        def integer(mapping: Mapping[str, object], key: str) -> int:
+            value = mapping.get(key)
+            if type(value) is not int or value < 0:
+                raise RustEngineError(f"Rust audio status field {key} is invalid")
+            return value
+
+        def boolean(mapping: Mapping[str, object], key: str) -> bool:
+            value = mapping.get(key)
+            if type(value) is not bool:
+                raise RustEngineError(f"Rust audio status field {key} is invalid")
+            return value
+
+        def bands(mapping: Mapping[str, object], key: str) -> BandTuple:
+            value = mapping.get(key)
+            if not isinstance(value, list) or len(value) != 8:
+                raise RustEngineError(f"Rust audio status field {key} is invalid")
+            parsed = tuple(
+                float(item)
+                for item in value
+                if not isinstance(item, bool) and isinstance(item, (int, float))
+            )
+            if len(parsed) != 8 or not all(isfinite(item) for item in parsed):
+                raise RustEngineError(f"Rust audio status field {key} is invalid")
+            return cast(BandTuple, parsed)
+
+        frame = status.frame
+        last_frame_age = (
+            max(0.0, now - status.last_frame_ns / 1_000_000_000.0)
+            if status.last_frame_ns is not None
+            else None
+        )
+        self._rust_audio_active = status.active
+        self._rust_audio_device_name = status.device.name if status.device else None
+        if status.last_error is not None:
+            self._audio_monitor_error = status.last_error
+        elif status.active:
+            self._audio_monitor_error = None
+        frame_age = last_frame_age
+        fresh = (
+            status.active
+            and frame_age is not None
+            and frame_age <= AUDIO_FRESH_SECONDS
+        )
+        self._audio_frame = AudioFrame(
+            rms=number(frame, "rms"),
+            bands=bands(frame, "bands"),
+            beat=boolean(frame, "beat"),
+            beat_strength=number(frame, "beat_strength"),
+            sequence=integer(frame, "sequence"),
+            timestamp=number(frame, "timestamp"),
+            fresh=fresh,
+        )
+        self._music_features = MusicFeatures(
+            bpm=number(status.features, "bpm"),
+            bpm_confidence=number(status.features, "bpm_confidence"),
+            energy=number(status.features, "energy"),
+            volume=number(status.features, "volume"),
+            energy_level=number(status.features, "energy_level"),
+            bass=number(status.features, "bass"),
+            brightness=number(status.features, "brightness"),
+            onset_strength=number(status.features, "onset_strength"),
+            dynamic_range=number(status.features, "dynamic_range"),
+            beat=boolean(status.features, "beat"),
+            beat_strength=number(status.features, "beat_strength"),
+            bands=bands(status.features, "bands"),
+            bass_energy=number(status.features, "bass_energy"),
+            mid_energy=number(status.features, "mid_energy"),
+            treble_energy=number(status.features, "treble_energy"),
+            spectral_centroid=number(status.features, "spectral_centroid"),
+            spectral_flux=number(status.features, "spectral_flux"),
+            beat_confidence=number(status.features, "beat_confidence"),
+            rolling_loudness=number(status.features, "rolling_loudness"),
+            program_loudness=number(status.features, "program_loudness"),
+            musical_impact=number(status.features, "musical_impact"),
+            silence=boolean(status.features, "silence"),
+            drop_detected=boolean(status.features, "drop_detected"),
+            section_change=boolean(status.features, "section_change"),
+        )
+
+        processor = AudioProcessorStats(
+            feed_count=integer(status.processor, "feed_count"),
+            samples_seen=integer(status.processor, "samples_seen"),
+            fft_count=integer(status.processor, "fft_count"),
+            sample_abs_sum=number(status.processor, "sample_abs_sum"),
+            normalization_gain=number(status.processor, "normalization_gain"),
+            input_rms=number(status.processor, "input_rms"),
+            program_loudness=number(status.processor, "program_loudness"),
+            musical_impact=number(status.processor, "musical_impact"),
+            input_peak=number(status.processor, "input_peak"),
+            clipping_fraction=number(status.processor, "clipping_fraction"),
+            microphone_gate_open=boolean(status.processor, "microphone_gate_open"),
+            native_dropped_beat_events=integer(
+                status.processor, "native_dropped_beat_events"
+            ),
+            queued_dropped_beat_events=integer(
+                status.processor, "queued_dropped_beat_events"
+            ),
+        )
+        callback_count = integer(status.capture, "callback_count")
+        callback_errors = integer(status.capture, "callback_errors")
+        dropped_batches = integer(status.capture, "overflowed_batches")
+        last_callback_ns = status.capture.get("last_callback_ns")
+        callback_age = (
+            max(0.0, now - last_callback_ns / 1_000_000_000.0)
+            if isinstance(last_callback_ns, int) and last_callback_ns >= 0
+            else None
+        )
+        self._audio_health = AudioInputHealth(
+            callback_count=callback_count,
+            status_count=callback_errors,
+            last_status=status.last_error,
+            last_callback_age=callback_age,
+            last_frame_age=frame_age,
+            dropped_batches=dropped_batches,
+            dropped_beat_events=(
+                processor.native_dropped_beat_events
+                + processor.queued_dropped_beat_events
+            ),
+            pending_beat_events=0,
+            worker_error=status.last_error,
+            processor=processor,
+        )
+        structure = status.structure
+        phase_value = structure.get("phase")
+        if not isinstance(phase_value, str):
+            raise RustEngineError("Rust audio structure phase is invalid")
+        try:
+            phase = MusicStructurePhase(phase_value)
+        except ValueError as exc:
+            raise RustEngineError("Rust audio structure phase is invalid") from exc
+        native_structure = MusicStructureState(
+            phase=phase,
+            confidence=number(structure, "confidence"),
+            buildup_progress=number(structure, "buildup_progress"),
+            drop_event=boolean(structure, "drop_event"),
+        )
+        self._rust_music_structure_state = native_structure
+        if (
+            native_structure.drop_event
+            and self._audio_frame.sequence > self._rust_last_structure_drop_sequence
+        ):
+            self._rust_music_structure_drop_count += 1
+            self._rust_last_structure_drop_sequence = self._audio_frame.sequence
+        if self._audio_frame.fresh:
+            self._monitor_detector.update(self._music_features)
+            self._noise_samples.append(min(1.0, max(0.0, processor.input_rms)))
+            if self._audio_frame.beat:
+                self._last_beat_event = BeatEvent(
+                    sequence=self._audio_frame.sequence,
+                    timestamp=self._audio_frame.timestamp,
+                    strength=self._audio_frame.beat_strength,
+                )
 
     def bluetooth_status(self) -> BluetoothStatusResponse:
         return self._bluetooth_status_response()
@@ -2179,7 +2410,7 @@ class RuntimeWorker:
             decision = self._playback_policy.decide(
                 mode,
                 self._configured_audio_source,
-                audio_input_available=self._audio_input is not None,
+                audio_input_available=self._audio_monitoring_active(),
                 unavailable_message=self._audio_monitor_error,
             )
         except PlaybackPolicyError as exc:
@@ -2196,9 +2427,9 @@ class RuntimeWorker:
                         if self._monitor_audio_source is AudioSource.BLUETOOTH
                         else "Spotify: waiting for playback"
                         if self._monitor_audio_source is AudioSource.SPOTIFY
-                        else f"Input: {self._audio_input.device_name()}"
+                        else f"Input: {self._active_capture_device_name()}"
                     )
-                    if self._audio_input is not None
+                    if self._audio_monitoring_active()
                     else self._audio_status
                 )
             )
@@ -2552,17 +2783,20 @@ class RuntimeWorker:
 
     def _restart_stalled_audio_input(self, now: float) -> None:
         audio_input = self._audio_input
-        if audio_input is None or self._monitor_audio_source not in {
+        if not self._audio_capture_requested() or self._monitor_audio_source not in {
             AudioSource.MIC,
             AudioSource.BLUETOOTH,
             AudioSource.SPOTIFY,
         }:
             return
-
-        callback_age = getattr(
-            audio_input,
-            "last_callback_age",
-            self._audio_health.last_callback_age,
+        callback_age = (
+            self._audio_health.last_callback_age
+            if self.settings.audio_backend == "rust"
+            else getattr(
+                audio_input,
+                "last_callback_age",
+                self._audio_health.last_callback_age,
+            )
         )
         if callback_age is None:
             opened_at = self._audio_input_opened_at
@@ -2611,7 +2845,7 @@ class RuntimeWorker:
         for source in candidates:
             self._configured_audio_source = source
             if (
-                self._audio_input is not None
+                self._audio_capture_requested()
                 and self._monitor_audio_source is source
                 and not (
                     source is AudioSource.SPOTIFY and spotify_active_changed
@@ -2628,7 +2862,7 @@ class RuntimeWorker:
             ):
                 return
 
-            if self._audio_input is not None:
+            if self._audio_capture_requested():
                 self._close_audio_input()
             try:
                 if source is AudioSource.SPOTIFY:
@@ -2639,7 +2873,7 @@ class RuntimeWorker:
                     self._open_bluetooth_monitor(bluetooth)
                 else:
                     self._open_microphone_monitor()
-            except (BluetoothCommandError, RuntimeError) as exc:
+            except (BluetoothCommandError, RuntimeError, RustEngineError) as exc:
                 last_error = str(exc)
                 if source is AudioSource.SPOTIFY:
                     self._automatic_spotify_retry_at_s = (
@@ -2667,7 +2901,7 @@ class RuntimeWorker:
             return
 
         if self._configured_audio_source is AudioSource.DEMO:
-            if self._audio_input is not None:
+            if self._audio_capture_requested():
                 self._close_audio_input()
             self._monitor_audio_source = AudioSource.DEMO
             self._active_audio_device_name = None
@@ -2675,7 +2909,7 @@ class RuntimeWorker:
             self._audio_monitor_error = None
             return
         if self._configured_audio_source is AudioSource.OFF:
-            if self._audio_input is not None:
+            if self._audio_capture_requested():
                 self._close_audio_input()
             self._monitor_audio_source = AudioSource.OFF
             self._audio_status = "No audio source active."
@@ -2686,11 +2920,11 @@ class RuntimeWorker:
             spotify = self._spotify.status()
             if not spotify.connected or not spotify.logged_in:
                 self._spotify_last_active = None
-                if self._audio_input is not None:
+                if self._audio_capture_requested():
                     self._close_audio_input()
                 try:
                     self._open_spotify_monitor()
-                except (BluetoothCommandError, RuntimeError) as exc:
+                except (BluetoothCommandError, RuntimeError, RustEngineError) as exc:
                     self._monitor_audio_source = AudioSource.SPOTIFY
                     self._active_audio_device_name = None
                     self._audio_monitor_error = str(exc)
@@ -2703,7 +2937,7 @@ class RuntimeWorker:
             )
             self._spotify_last_active = spotify.is_active
             if active_changed and not spotify.is_active:
-                if self._audio_input is not None:
+                if self._audio_capture_requested():
                     self._close_audio_input()
                 self._monitor_audio_source = AudioSource.SPOTIFY
                 self._active_audio_device_name = None
@@ -2714,18 +2948,18 @@ class RuntimeWorker:
                 )
                 return
             refresh_spotify_route = active_changed and spotify.is_active
-            if refresh_spotify_route and self._audio_input is not None:
+            if refresh_spotify_route and self._audio_capture_requested():
                 self._close_audio_input()
             if (
-                self._audio_input is not None
+                self._audio_capture_requested()
                 and self._monitor_audio_source is AudioSource.SPOTIFY
             ):
                 return
-            if self._audio_input is not None:
+            if self._audio_capture_requested():
                 self._close_audio_input()
             try:
                 self._open_spotify_monitor(refresh_route=refresh_spotify_route)
-            except (BluetoothCommandError, RuntimeError) as exc:
+            except (BluetoothCommandError, RuntimeError, RustEngineError) as exc:
                 self._monitor_audio_source = AudioSource.SPOTIFY
                 self._active_audio_device_name = None
                 self._audio_monitor_error = str(exc)
@@ -2744,22 +2978,22 @@ class RuntimeWorker:
                 else None
             )
             if (
-                self._audio_input is not None
+                self._audio_capture_requested()
                 and self._monitor_audio_source is AudioSource.BLUETOOTH
                 and self._active_bluetooth_address == connected_address
             ):
                 return
-            if self._audio_input is not None:
+            if self._audio_capture_requested():
                 self._close_audio_input()
             try:
                 self._open_bluetooth_monitor(bluetooth)
-            except (BluetoothCommandError, RuntimeError) as exc:
+            except (BluetoothCommandError, RuntimeError, RustEngineError) as exc:
                 self._audio_monitor_error = str(exc)
                 self._audio_status = f"Bluetooth audio unavailable: {exc}"
             return
 
         if self._audio_source_setting == "bluetooth":
-            if self._audio_input is not None:
+            if self._audio_capture_requested():
                 self._close_audio_input()
             self._monitor_audio_source = AudioSource.BLUETOOTH
             self._active_audio_device_name = None
@@ -2772,19 +3006,45 @@ class RuntimeWorker:
             return
 
         if (
-            self._audio_input is not None
+            self._audio_capture_requested()
             and self._monitor_audio_source is AudioSource.MIC
         ):
             return
-        if self._audio_input is not None:
+        if self._audio_capture_requested():
             self._close_audio_input()
         try:
             self._open_microphone_monitor()
-        except RuntimeError as exc:
+        except (RuntimeError, RustEngineError) as exc:
             self._audio_monitor_error = str(exc)
             self._audio_status = f"Microphone unavailable: {exc}"
 
     def _open_microphone_monitor(self) -> None:
+        if self.settings.audio_backend == "rust":
+            output_thread = self._rust_audio_output_thread()
+            devices = output_thread.audio_devices()
+            selected = self._selected_audio_device
+            if selected:
+                device = self._find_rust_audio_device(devices, selected)
+                if device is None:
+                    raise RuntimeError(f'no Rust audio input matching "{selected}"')
+            else:
+                device = next((item for item in devices if item.is_default), None)
+                if device is None and devices:
+                    device = devices[0]
+            device_name = device.name if device is not None else selected
+            selector = device.selector if device is not None else selected
+            profile = self._audio_profiles.get(
+                device_name or "", AudioTuningProfile()
+            )
+            self._start_rust_audio_capture(
+                selector,
+                profile,
+                microphone=True,
+                source=AudioSource.MIC,
+            )
+            if self._rust_audio_device_name:
+                self._selected_audio_device = self._rust_audio_device_name
+            return
         profile = self._audio_profiles.get(
             self._selected_audio_device or "", AudioTuningProfile()
         )
@@ -2812,16 +3072,103 @@ profile.audio_config(microphone=True),
         self._audio_status = f"Input: {device_name}"
         self._audio_monitor_error = None
 
+    @staticmethod
+    def _find_rust_audio_device(
+        devices: tuple[RustAudioDevice, ...], selector: str
+    ) -> RustAudioDevice | None:
+        lowered = selector.casefold()
+        return next(
+            (
+                item
+                for item in devices
+                if item.selector == selector or item.name == selector
+            ),
+            next(
+                (item for item in devices if lowered in item.name.casefold()),
+                None,
+            ),
+        )
+
+    def _start_rust_audio_capture(
+        self,
+        selector: str | None,
+        profile: AudioTuningProfile,
+        *,
+        microphone: bool,
+        source: AudioSource,
+        display_name: str | None = None,
+        bluetooth_address: str | None = None,
+        previous_source: str | None = None,
+    ) -> None:
+        output_thread = self._rust_audio_output_thread()
+        self._rust_audio_requested = True
+        self._audio_input_opened_at = time.monotonic()
+        self._audio_profile = profile
+        active = output_thread.start_audio(
+            selector, profile.audio_config(microphone=microphone)
+        )
+        self._rust_audio_active = active
+        self._refresh_rust_audio_status(force=True)
+        if not active:
+            raise RuntimeError(
+                self._audio_health.worker_error
+                or self._audio_monitor_error
+                or "Rust audio capture did not become active"
+            )
+        self._monitor_audio_source = source
+        self._active_audio_device_name = (
+            display_name or self._rust_audio_device_name or selector
+        )
+        self._active_bluetooth_address = bluetooth_address
+        self._bluetooth_previous_default_source = previous_source
+        self._hardware_gain = (
+            HardwareGainController(self._rust_audio_device_name)
+            if microphone and self._rust_audio_device_name
+            else None
+        )
+        if (
+            microphone
+            and profile.hardware_gain_target is not None
+            and self._hardware_gain is not None
+        ):
+            self._hardware_gain.set_normalized(profile.hardware_gain_target)
+        self._apply_audio_profile(profile)
+        self._monitor_detector.reset()
+        self._noise_samples.clear()
+        self._audio_monitor_error = None
+        self._audio_status = (
+            f"Input: {self._active_audio_device_name}"
+            if source is AudioSource.MIC
+            else f"Bluetooth: {self._active_audio_device_name}"
+            if source is AudioSource.BLUETOOTH
+            else "Spotify: waiting for playback"
+        )
+
     def _open_bluetooth_monitor(self, status: BluetoothStatus) -> None:
         device = status.connected_device
         source = status.input_source
         if device is None or source is None:
             raise BluetoothCommandError("the connected Bluetooth input has no PipeWire audio source")
-        selector = capture_device_selector(list_input_device_details())
+        selector = (
+            None
+            if self.settings.audio_backend == "rust"
+            else capture_device_selector(list_input_device_details())
+        )
         previous_source = self._bluetooth.default_source()
         self._bluetooth.set_default_source(source)
         profile = self._audio_profiles.get(BLUETOOTH_PROFILE_KEY, AudioTuningProfile())
         try:
+            if self.settings.audio_backend == "rust":
+                self._start_rust_audio_capture(
+                    None,
+                    profile,
+                    microphone=False,
+                    source=AudioSource.BLUETOOTH,
+                    display_name=device.name,
+                    bluetooth_address=device.address,
+                    previous_source=previous_source,
+                )
+                return
             audio_input = self._audio_factory(selector, profile.audio_config())
         except Exception:
             self._bluetooth.restore_default_source(previous_source)
@@ -2856,21 +3203,48 @@ profile.audio_config(microphone=True),
         if not callable(ensure_route):
             raise BluetoothCommandError("the PipeWire Spotify route is unavailable")
         ensure_route()
-        devices = list_input_device_details()
         restore_source: str | None = None
-        try:
-            selector = spotify_capture_device_selector(devices)
-        except BluetoothCommandError:
-            # pipewire-alsa commonly exposes only its shared ``pulse`` or
-            # ``pipewire`` capture device to PortAudio. Route that device's
-            # default source to the dedicated Spotify monitor, just as the
-            # Bluetooth monitor does, instead of requiring a separate device
-            # entry for every PipeWire node.
-            selector = capture_device_selector(devices)
-            restore_source = self._bluetooth.default_source()
-            self._bluetooth.set_default_source(SPOTIFY_MONITOR)
+        native_selector: str | None = None
+        if self.settings.audio_backend == "rust":
+            native_devices = self._rust_audio_output_thread().audio_devices()
+            spotify_device = next(
+                (
+                    device
+                    for device in native_devices
+                    if "lumistripe spotify" in device.name.casefold()
+                    or "lumistripe_spotify" in device.name.casefold()
+                ),
+                None,
+            )
+            if spotify_device is not None:
+                native_selector = spotify_device.selector
+            else:
+                restore_source = self._bluetooth.default_source()
+                self._bluetooth.set_default_source(SPOTIFY_MONITOR)
+        else:
+            devices = list_input_device_details()
+            try:
+                selector = spotify_capture_device_selector(devices)
+            except BluetoothCommandError:
+                # pipewire-alsa commonly exposes only its shared ``pulse`` or
+                # ``pipewire`` capture device to PortAudio. Route that device's
+                # default source to the dedicated Spotify monitor, just as the
+                # Bluetooth monitor does, instead of requiring a separate device
+                # entry for every PipeWire node.
+                selector = capture_device_selector(devices)
+                restore_source = self._bluetooth.default_source()
+                self._bluetooth.set_default_source(SPOTIFY_MONITOR)
         profile = self._audio_profiles.get(SPOTIFY_PROFILE_KEY, AudioTuningProfile())
         try:
+            if self.settings.audio_backend == "rust":
+                self._start_rust_audio_capture(
+                    native_selector,
+                    profile,
+                    microphone=False,
+                    source=AudioSource.SPOTIFY,
+                    previous_source=restore_source,
+                )
+                return
             audio_input = self._audio_factory(selector, profile.audio_config())
         except Exception:
             if restore_source is not None:
@@ -2902,6 +3276,9 @@ profile.audio_config(microphone=True),
         if self._audio_calibration is not None:
             raise RuntimeCommandError("discard microphone calibration before changing audio settings")
         self._stop_audio_sync_calibration()
+        if self.settings.audio_backend == "rust":
+            self._apply_rust_audio_settings(device_name, profile)
+            return
         candidate: AudioInput | None = None
         current = self._audio_input
         current_opened_at = self._audio_input_opened_at
@@ -3017,10 +3394,117 @@ profile.audio_config(microphone=True),
                 raise
             raise RuntimeCommandError(str(exc)) from exc
 
+    def _apply_rust_audio_settings(
+        self, device_name: str, profile: AudioTuningProfile
+    ) -> None:
+        target_is_bluetooth = device_name == BLUETOOTH_PROFILE_KEY
+        target_is_spotify = device_name == SPOTIFY_PROFILE_KEY
+        current_name = self._rust_audio_device_name
+        target_is_active_mic = (
+            not target_is_bluetooth
+            and not target_is_spotify
+            and self._monitor_audio_source is AudioSource.MIC
+            and current_name == device_name
+        )
+        active_bluetooth = (
+            target_is_bluetooth
+            and self._monitor_audio_source is AudioSource.BLUETOOTH
+            and self._rust_audio_requested
+        )
+        active_spotify = (
+            target_is_spotify
+            and self._monitor_audio_source is AudioSource.SPOTIFY
+            and self._rust_audio_requested
+        )
+        should_open_mic = (
+            not target_is_bluetooth
+            and not target_is_spotify
+            and not target_is_active_mic
+            and (
+                self._configured_audio_source is AudioSource.MIC
+                or (
+                    self._audio_source_setting == "auto"
+                    and self._monitor_audio_source is AudioSource.MIC
+                )
+            )
+        )
+        applies_to_active_input = (
+            should_open_mic
+            or active_bluetooth
+            or active_spotify
+            or target_is_active_mic
+        )
+        next_profiles = dict(self._audio_profiles)
+        next_profiles[device_name] = profile
+        selected_device = (
+            device_name
+            if not target_is_bluetooth and not target_is_spotify
+            else self._selected_audio_device or ""
+        )
+        try:
+            if should_open_mic:
+                self._start_rust_audio_capture(
+                    device_name,
+                    profile,
+                    microphone=True,
+                    source=AudioSource.MIC,
+                )
+            elif active_bluetooth or active_spotify or target_is_active_mic:
+                active = self._rust_audio_output_thread().configure_audio(
+                    profile.audio_config(microphone=target_is_active_mic)
+                )
+                self._rust_audio_active = active
+                self._refresh_rust_audio_status(force=True)
+                if not active:
+                    raise RuntimeError(
+                        self._audio_health.worker_error
+                        or "Rust audio capture did not remain active"
+                    )
+
+            with self._settings_io_lock:
+                self._settings_store.save_audio(selected_device, next_profiles)
+            self._audio_profiles = next_profiles
+            if not target_is_bluetooth and not target_is_spotify:
+                self._selected_audio_device = (
+                    self._rust_audio_device_name or device_name
+                )
+            if applies_to_active_input or (target_is_bluetooth and not self._rust_audio_requested):
+                self._audio_profile = profile
+                if target_is_bluetooth or target_is_spotify:
+                    self._hardware_gain = None
+                elif self._rust_audio_device_name:
+                    self._hardware_gain = HardwareGainController(
+                        self._rust_audio_device_name
+                    )
+                    if profile.hardware_gain_target is not None:
+                        self._hardware_gain.set_normalized(
+                            profile.hardware_gain_target
+                        )
+                self._apply_audio_profile(profile)
+                self._monitor_detector.reset()
+                self._noise_samples.clear()
+                self._audio_monitor_error = None
+                if self._audio_monitoring_active():
+                    self._audio_status = (
+                        f"Bluetooth: {self._active_audio_device_name}"
+                        if self._monitor_audio_source is AudioSource.BLUETOOTH
+                        else "Spotify: waiting for playback"
+                        if self._monitor_audio_source is AudioSource.SPOTIFY
+                        else f"Input: {self._active_capture_device_name()}"
+                    )
+                elif not target_is_bluetooth and not target_is_spotify:
+                    self._audio_status = (
+                        "Microphone monitoring is disabled by the audio source."
+                    )
+        except Exception as exc:
+            if isinstance(exc, RuntimeCommandError):
+                raise
+            raise RuntimeCommandError(str(exc)) from exc
+
     def _start_audio_calibration(self, device: str, duration_seconds: float, two_step: bool = False) -> AudioCalibrationSessionResponse:
         if self._audio_calibration is not None:
             raise RuntimeCommandError("an audio calibration session is already active")
-        if self._audio_input is None:
+        if not self._audio_monitoring_active():
             raise RuntimeCommandError(self._audio_monitor_error or "microphone input is unavailable")
         device_name = self._device_name_for_selector(device)
         if device_name == BLUETOOTH_PROFILE_KEY:
@@ -3033,7 +3517,7 @@ profile.audio_config(microphone=True),
                 raise RuntimeCommandError(
                     "pair Spotify and select the active Spotify stream before calibrating"
                 )
-        elif self._audio_input.device_name() != device_name:
+        elif self._current_audio_calibration_device() != device_name:
             raise RuntimeCommandError("select the active microphone before calibrating")
         if two_step and self._monitor_audio_source is not AudioSource.MIC:
             raise RuntimeCommandError("two-step calibration requires microphone input")
@@ -3042,16 +3526,23 @@ profile.audio_config(microphone=True),
         self._audio_calibration = session
         return self._publish_audio_calibration(session.session_id)
 
+    def _current_audio_calibration_device(self) -> str | None:
+        if self._monitor_audio_source is AudioSource.BLUETOOTH:
+            return BLUETOOTH_PROFILE_KEY
+        if self._monitor_audio_source is AudioSource.SPOTIFY:
+            return SPOTIFY_PROFILE_KEY
+        if self._audio_input is not None:
+            return self._audio_input.device_name()
+        if self._rust_audio_active:
+            return self._rust_audio_device_name
+        return None
+
     def _tick_audio_calibration(self) -> None:
         session = self._audio_calibration
         if session is None or session.error:
             return
-        active_device = (
-            BLUETOOTH_PROFILE_KEY if self._monitor_audio_source is AudioSource.BLUETOOTH
-            else SPOTIFY_PROFILE_KEY if self._monitor_audio_source is AudioSource.SPOTIFY
-            else self._audio_input.device_name() if self._audio_input is not None else None
-        )
-        if self._audio_input is None or active_device != session.device:
+        active_device = self._current_audio_calibration_device()
+        if not self._audio_monitoring_active() or active_device != session.device:
             session.error = "Audio device changed or disconnected. Discard and measure again."
             session.result = None
             return
@@ -3096,7 +3587,11 @@ profile.audio_config(microphone=True),
         session = self._audio_calibration
         if session is None or session.session_id != session_id or session.phase != "waiting_music" or session.error:
             raise RuntimeCommandError("calibration is not waiting for music")
-        if self._audio_input is None or self._audio_input.device_name() != session.device or not self._audio_frame.fresh:
+        if (
+            not self._audio_monitoring_active()
+            or self._current_audio_calibration_device() != session.device
+            or not self._audio_frame.fresh
+        ):
             raise RuntimeCommandError("microphone input is unavailable; discard and measure again")
         session.phase = "music"
         session.started_at = time.monotonic()
@@ -3114,7 +3609,11 @@ profile.audio_config(microphone=True),
             return self.audio_settings()
         if session.result is None or session.error:
             raise RuntimeCommandError("audio calibration has no valid recommendation")
-        if session.two_step and (self._audio_input is None or self._audio_input.device_name() != session.device or not self._audio_frame.fresh):
+        if session.two_step and (
+            not self._audio_monitoring_active()
+            or self._current_audio_calibration_device() != session.device
+            or not self._audio_frame.fresh
+        ):
             raise RuntimeCommandError("microphone input changed; discard and measure again")
         result = session.result
         profile = self._audio_profiles.get(session.device, AudioTuningProfile())
@@ -3760,17 +4259,26 @@ profile.audio_config(microphone=True),
             return BLUETOOTH_PROFILE_KEY
         if selector == "spotify":
             return SPOTIFY_PROFILE_KEY
+        if self.settings.audio_backend == "rust":
+            try:
+                rust_devices = self._rust_audio_output_thread().audio_devices()
+            except RustEngineError as exc:
+                raise RuntimeCommandError(str(exc)) from exc
+            rust_device = self._find_rust_audio_device(rust_devices, selector)
+            if rust_device is not None:
+                return rust_device.name
+            raise RuntimeCommandError(f'no input device matching "{selector}"')
         try:
-            devices = list_input_device_details()
+            python_devices = list_input_device_details()
         except RuntimeError as exc:
             raise RuntimeCommandError(str(exc)) from exc
         lowered = selector.lower()
-        for device in devices:
-            if str(device.index) == selector or device.name == selector:
-                return device.name
-        for device in devices:
-            if lowered in device.name.lower():
-                return device.name
+        for python_device in python_devices:
+            if str(python_device.index) == selector or python_device.name == selector:
+                return python_device.name
+        for python_device in python_devices:
+            if lowered in python_device.name.lower():
+                return python_device.name
         raise RuntimeCommandError(f'no input device matching "{selector}"')
 
     def _set_mode(self, mode: PlaybackMode) -> None:
@@ -3780,7 +4288,7 @@ profile.audio_config(microphone=True),
             decision = self._playback_policy.decide(
                 mode,
                 self._configured_audio_source,
-                audio_input_available=self._audio_input is not None,
+                audio_input_available=self._audio_monitoring_active(),
                 unavailable_message=self._audio_monitor_error,
             )
         except PlaybackPolicyError as exc:
@@ -3791,13 +4299,13 @@ profile.audio_config(microphone=True),
         self._demo_tick = 0
         self._audio_frame = AudioFrame()
         self._music_features = MusicFeatures()
-        if self._audio_input is not None:
+        if self._audio_monitoring_active():
             self._audio_status = (
                 f"Bluetooth: {self._active_audio_device_name}"
                 if self._monitor_audio_source is AudioSource.BLUETOOTH
                 else "Spotify: waiting for playback"
                 if self._monitor_audio_source is AudioSource.SPOTIFY
-                else f"Input: {self._audio_input.device_name()}"
+                else f"Input: {self._active_capture_device_name()}"
             )
         elif next_source is AudioSource.DEMO:
             self._audio_status = "Using internal demo beat."
@@ -3990,6 +4498,29 @@ profile.audio_config(microphone=True),
                     min(1.0, max(0.0, self._audio_health.processor.input_rms))
                 )
 
+        elif (
+            self.settings.audio_backend == "rust"
+            and self._rust_audio_requested
+        ):
+            self._refresh_rust_audio_status()
+            if self._rust_audio_active:
+                snapshot = (
+                    AudioSnapshot.from_parts(
+                        self._audio_frame,
+                        self._music_features,
+                        self._audio_health,
+                        beat_event_stream=True,
+                    )
+                    if self._audio_frame.fresh
+                    else AudioSnapshot.silence(
+                        frame=self._audio_frame,
+                        health=self._audio_health,
+                        beat_event_stream=True,
+                    )
+                )
+            else:
+                self._audio_frame = AudioFrame()
+                self._music_features = MusicFeatures()
         elif self._active_audio_source is AudioSource.DEMO:
             snapshot = demo_snapshot(self._demo_tick)
             self._demo_tick += 1
@@ -4057,6 +4588,11 @@ profile.audio_config(microphone=True),
             or not outputs
         ):
             return None
+        native_audio = self.settings.audio_backend == "rust"
+        if native_audio:
+            # The Rust capture worker submits samples, beats, selector features,
+            # and structure events directly to the Rust scheduler.
+            snapshot = None
         render_error = output_thread.take_render_error()
         if render_error is not None:
             self._rust_scene_rendering_disabled = True
@@ -4288,8 +4824,12 @@ profile.audio_config(microphone=True),
                 )
             delay_values.append(delay)
         delays = tuple(delay_values)
-        structure_events = self._remember_rust_structure_events(
-            snapshot, outputs, per_output_engines
+        structure_events = (
+            ()
+            if native_audio
+            else self._remember_rust_structure_events(
+                snapshot, outputs, per_output_engines
+            )
         )
         if structure_events is None:
             self._rust_scene_rendering_disabled = True
@@ -4306,26 +4846,30 @@ profile.audio_config(microphone=True),
             for engine in playback_engines
         )
         self._last_scheduler_time_ms = scheduler_time_ns / 1_000_000.0
-        audio_inputs = tuple(
-            self._rust_audio_input(
-                (
-                    snapshot or AudioSnapshot.silence()
-                    if engine.mode is PlaybackMode.DYNAMIC
-                    else engine.last_render_audio_snapshot
-                ),
-                feature_sequence=(
-                    self._rust_dynamic_feature_sequence
-                    if engine.mode is PlaybackMode.DYNAMIC
-                    else None
-                ),
-                beat_events=(
-                    tuple(self._rust_pending_beat_events)
-                    if engine.mode is PlaybackMode.DYNAMIC
-                    else None
-                ),
-                structure_events=structure_events,
+        audio_inputs = (
+            tuple(None for _ in per_output_engines)
+            if native_audio
+            else tuple(
+                self._rust_audio_input(
+                    (
+                        snapshot or AudioSnapshot.silence()
+                        if engine.mode is PlaybackMode.DYNAMIC
+                        else engine.last_render_audio_snapshot
+                    ),
+                    feature_sequence=(
+                        self._rust_dynamic_feature_sequence
+                        if engine.mode is PlaybackMode.DYNAMIC
+                        else None
+                    ),
+                    beat_events=(
+                        tuple(self._rust_pending_beat_events)
+                        if engine.mode is PlaybackMode.DYNAMIC
+                        else None
+                    ),
+                    structure_events=structure_events,
+                )
+                for engine in per_output_engines
             )
-            for engine in per_output_engines
         )
         if any(audio != audio_inputs[0] for audio in audio_inputs[1:]):
             self._rust_scene_rendering_disabled = True
@@ -4387,7 +4931,7 @@ profile.audio_config(microphone=True),
                 color = engine.idle_color.as_rgba_array()
                 solid_color = (int(color[0]), int(color[1]), int(color[2]))
                 brightness = engine.idle_brightness
-            if rust_dynamic_owner:
+            if rust_dynamic_owner and not native_audio:
                 structure = engine.music_structure_state
                 music_structure = RustRenderMusicStructure(
                     phase=structure.phase.value,
@@ -4648,7 +5192,7 @@ profile.audio_config(microphone=True),
             self._topology.effective_power_budget_watts,
         )
         audio_signature = audio_inputs[0]
-        pending_audio_events = bool(
+        pending_audio_events = not native_audio and bool(
             self._rust_pending_beat_events or structure_events
         )
         retry_audio_events = pending_audio_events and (
@@ -4656,7 +5200,10 @@ profile.audio_config(microphone=True),
             or now_s - self._rust_last_audio_update_retry_at_s >= 0.1
         )
         control_changed = control_signature != self._rust_last_control_signature
-        audio_changed = audio_signature != self._rust_last_audio_signature
+        audio_changed = (
+            not native_audio
+            and audio_signature != self._rust_last_audio_signature
+        )
         if not control_changed and not audio_changed and not retry_audio_events:
             self._pending_preview_frames = None
             return min(delays, default=MIN_FRAME_SECONDS)
@@ -5003,9 +5550,47 @@ profile.audio_config(microphone=True),
             dynamic_playbacks[0] if dynamic_playbacks else self.playback,
         )
         clock = structure_engine.beat_clock_state
+        native_beat_event_sequence = 0
+        if self.settings.audio_backend == "rust":
+            output_thread = self._output_thread
+            output_stats = (
+                output_thread.stats()
+                if isinstance(output_thread, RustEngineOutputThread)
+                else None
+            )
+            if output_stats is not None and output_stats.beat_clocks:
+                native_clock = output_stats.beat_clocks[0]
+                clock = BeatClockState(
+                    bpm=native_clock.bpm,
+                    phase=native_clock.phase,
+                    confidence=native_clock.confidence,
+                    beat_index=native_clock.beat_index,
+                    next_beat_at=(
+                        native_clock.next_beat_at_ns / 1_000_000_000.0
+                        if native_clock.next_beat_at_ns is not None
+                        else None
+                    ),
+                    last_beat_at=(
+                        native_clock.last_beat_at_ns / 1_000_000_000.0
+                        if native_clock.last_beat_at_ns is not None
+                        else None
+                    ),
+                )
+                native_beat_event_sequence = max(
+                    item.last_event_sequence for item in output_stats.beat_clocks
+                )
         scheduler_diagnostics = structure_engine.layered_renderer.diagnostics()
         rust_effect_scheduler = self._rust_effect_scheduler_state()
-        structure_state = structure_engine.music_structure_state
+        native_structure_active = (
+            self.settings.audio_backend == "rust"
+            and bool(dynamic_playbacks)
+            and self._rust_audio_active
+        )
+        structure_state = (
+            self._rust_music_structure_state
+            if self.settings.audio_backend == "rust"
+            else structure_engine.music_structure_state
+        )
         drop_accent = scheduler_diagnostics.drop_accent
         calibration_output_diagnostics = (
             self._sync_calibration_player.diagnostics()
@@ -5047,7 +5632,11 @@ profile.audio_config(microphone=True),
             beat_index=clock.beat_index,
             next_beat_in_ms=next_beat_in_ms,
             beat_event_sequence=(
-                self._last_beat_event.sequence if self._last_beat_event is not None else 0
+                native_beat_event_sequence
+                if self.settings.audio_backend == "rust"
+                else self._last_beat_event.sequence
+                if self._last_beat_event is not None
+                else 0
             ),
             dropped_beat_events=(
                 self._audio_health.dropped_beat_events + self._rust_dropped_beat_events
@@ -5148,13 +5737,21 @@ profile.audio_config(microphone=True),
             music_structure_phase=structure_state.phase.value,
             music_structure_confidence=structure_state.confidence,
             music_structure_buildup_progress=structure_state.buildup_progress,
-            music_structure_drop_count=structure_engine.confirmed_drop_count,
+            music_structure_drop_count=(
+                self._rust_music_structure_drop_count
+                if self.settings.audio_backend == "rust"
+                else structure_engine.confirmed_drop_count
+            ),
             music_structure_active=(
-                structure_engine.mode is PlaybackMode.DYNAMIC
+                native_structure_active
+                if self.settings.audio_backend == "rust"
+                else structure_engine.mode is PlaybackMode.DYNAMIC
                 and structure_engine.music_active
             ),
             music_structure_fresh=(
-                structure_engine.mode is PlaybackMode.DYNAMIC
+                native_structure_active and self._audio_frame.fresh
+                if self.settings.audio_backend == "rust"
+                else structure_engine.mode is PlaybackMode.DYNAMIC
                 and structure_engine.music_active
                 and self._audio_frame.fresh
             ),
@@ -5292,7 +5889,7 @@ profile.audio_config(microphone=True),
             audio_status=self._audio_status,
             configured_audio_source=self._audio_source_setting,
             active_audio_source=self._monitor_audio_source.value,
-            audio_monitoring=self._audio_input is not None,
+            audio_monitoring=self._audio_monitoring_active(),
             active_effects=active_effects,
             uptime_seconds=uptime_seconds,
             frame_rate=self._frame_rate,
@@ -5717,7 +6314,7 @@ profile.audio_config(microphone=True),
             if self.playback.mode is not PlaybackMode.DYNAMIC and self._active_audio_source is not AudioSource.DEMO:
                 return "inactive"
             return "demo"
-        if self._audio_input is None:
+        if not self._audio_monitoring_active():
             return "unavailable"
         if self._audio_health.status_count > 0:
             return "degraded"
@@ -5942,8 +6539,12 @@ profile.audio_config(microphone=True),
 
     def _close_audio_input(self) -> None:
         audio_input = self._audio_input
+        native_requested = self._rust_audio_requested
         previous_source = self._bluetooth_previous_default_source
         self._audio_input = None
+        self._rust_audio_requested = False
+        self._rust_audio_active = False
+        self._rust_audio_device_name = None
         self._active_audio_source = AudioSource.OFF
         self._monitor_audio_source = AudioSource.OFF
         self._active_audio_device_name = None
@@ -5953,6 +6554,8 @@ profile.audio_config(microphone=True),
         try:
             if audio_input is not None:
                 audio_input.close()
+            elif native_requested:
+                self._rust_audio_output_thread().stop_audio()
         finally:
             if previous_source is not None:
                 self._bluetooth.restore_default_source(previous_source)

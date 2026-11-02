@@ -1,5 +1,10 @@
 # Rust engine local IPC, version 2
 
+Control protocol v3 is current and adds optional Rust audio capture, DSP,
+device discovery, and status commands. This document records the v2 rendering
+and output contract, which remains supported for existing clients. See the
+[v3 protocol](rust-engine-ipc-v3.md) for the additive audio commands.
+
 Version 2 keeps low-rate control and health messages as UTF-8 JSON lines and
 uses a compact binary packet for complete multi-output RGBA frame sets. The
 Python adapter uses one private Unix-domain socket for control requests and

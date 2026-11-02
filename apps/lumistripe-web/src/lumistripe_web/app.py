@@ -148,7 +148,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--engine-backend",
         choices=("python", "rust"),
         default="python",
-        help="Output backend (Rust is opt-in; animations remain in Python)",
+        help="Output backend (Rust is opt-in for supported scene rendering)",
+    )
+    parser.add_argument(
+        "--audio-backend",
+        choices=("python", "rust"),
+        default="python",
+        help="Audio capture and DSP backend (Rust requires --engine-backend rust)",
     )
     parser.add_argument(
         "--engine-binary",
@@ -223,6 +229,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         parser.error("--spi-speed-2 requires --spi-device-2")
     if args.output_backend == "gpio" and args.spi_device_2 is not None:
         parser.error("--spi-device-2 requires --output-backend spi")
+    if args.audio_backend == "rust" and args.engine_backend != "rust":
+        parser.error("--audio-backend rust requires --engine-backend rust")
     if (args.ssl_certfile is None) != (args.ssl_keyfile is None):
         parser.error("--ssl-certfile and --ssl-keyfile must be used together")
     pairing_code = args.pairing_code
@@ -235,6 +243,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         pixels=args.pixels,
         hardware=args.hardware,
         engine_backend=args.engine_backend,
+        audio_backend=args.audio_backend,
         engine_binary=args.engine_binary,
         output_backend=args.output_backend,
         spi_device=args.spi_device,

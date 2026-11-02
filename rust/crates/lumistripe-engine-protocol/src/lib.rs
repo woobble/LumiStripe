@@ -1,11 +1,16 @@
 //! Versioned control messages and compact binary frame-set packets.
 
+use lumistripe_engine_audio::{
+    AudioCaptureStats, AudioConfig, AudioFrame, AudioProcessorStats, InputAudioDevice,
+    MusicFeatures, MusicStructureState,
+};
 use lumistripe_engine_config::EngineConfig;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::fmt;
 
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
+pub const PREVIOUS_PROTOCOL_VERSION: u16 = 2;
 pub const LEGACY_PROTOCOL_VERSION: u16 = 1;
 pub const MAX_CONTROL_MESSAGE_BYTES: usize = 1_048_576;
 pub const MAX_RENDER_STRUCTURE_EVENTS: usize = 256;
@@ -42,6 +47,16 @@ pub enum RequestCommand {
     AudioUpdate {
         update: RenderAudioUpdate,
     },
+    AudioStart {
+        selector: Option<String>,
+        config: AudioConfig,
+    },
+    AudioConfigure {
+        config: AudioConfig,
+    },
+    AudioStop,
+    AudioDevices,
+    AudioStatus,
     Shutdown,
 }
 
@@ -377,12 +392,14 @@ pub struct RenderStructureEvent {
     pub drop_event: bool,
     #[serde(default)]
     pub section_change: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub phase_change: bool,
 }
 
 impl RenderStructureEvent {
     pub fn is_valid(self) -> bool {
         self.sequence > 0
-            && (self.drop_event || self.section_change)
+            && (self.drop_event || self.section_change || self.phase_change)
             && self.confidence.is_finite()
             && (0.0..=1.0).contains(&self.confidence)
             && self.buildup_progress.is_finite()
@@ -965,11 +982,48 @@ pub enum ResponseResult {
         sequence: u64,
         accepted: bool,
     },
+    AudioConfigured {
+        active: bool,
+    },
+    AudioStopped,
+    AudioDevices {
+        devices: Vec<InputAudioDevice>,
+    },
+    AudioStatus {
+        status: EngineAudioStatus,
+    },
     Shutdown,
     Error {
         code: EngineErrorCode,
         message: String,
     },
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct EngineAudioStatus {
+    pub active: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<InputAudioDevice>,
+    #[serde(default)]
+    pub frame: AudioFrame,
+    #[serde(default)]
+    pub features: MusicFeatures,
+    #[serde(default)]
+    pub structure: MusicStructureState,
+    #[serde(default)]
+    pub processor: AudioProcessorStats,
+    #[serde(default)]
+    pub capture: AudioCaptureStats,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_frame_ns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    #[serde(default)]
+    pub audio_update_sequence: u64,
+    #[serde(default)]
+    pub dropped_audio_updates: u64,
+    #[serde(default)]
+    pub dropped_structure_events: u64,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -985,6 +1039,7 @@ pub enum EngineErrorCode {
     InvalidConfig,
     InvalidFrame,
     InvalidRender,
+    AudioFailure,
     NotConfigured,
     OutputFailure,
     ShuttingDown,
@@ -1174,54 +1229,19 @@ mod tests {
     use super::{
         FRAME_ACK_BYTES, FRAME_HEADER_BYTES, FrameAck, FrameAckStatus, FrameHeader,
         LEGACY_PROTOCOL_VERSION, LegacyConfig, LegacyRequest, LegacyRequestCommand, LegacyResponse,
-        LegacyResponseResult, PROTOCOL_VERSION, RenderAnimationChoice, RenderAudioInput,
-        RenderBeatEvent, RenderCycleOrder, RenderCycleTiming, RenderCycling, RenderDynamicSelector,
-        RenderEffect, RenderFrameRequest, RenderOutput, RenderPowerConfig, RenderSchedulerConfig,
-        RenderSwitchQuantization, RenderTransition, Request, RequestCommand, Response,
-        ResponseResult, decode_frame_ack, decode_frame_header, encode_frame_ack,
+        LegacyResponseResult, PREVIOUS_PROTOCOL_VERSION, PROTOCOL_VERSION, RenderAnimationChoice,
+        RenderAudioInput, RenderBeatEvent, RenderCycleOrder, RenderCycleTiming, RenderCycling,
+        RenderDynamicSelector, RenderEffect, RenderFrameRequest, RenderOutput, RenderPowerConfig,
+        RenderSchedulerConfig, RenderSwitchQuantization, RenderTransition, Request, RequestCommand,
+        Response, ResponseResult, decode_frame_ack, decode_frame_header, encode_frame_ack,
         encode_frame_header,
     };
     use lumistripe_engine_config::{EngineConfig, OutputBackend, OutputConfig};
     use serde_json::{Map, Value, json};
 
-    #[test]
-    fn dynamic_selector_defaults_new_quantization_fields_for_v2_clients() {
-        let selector: RenderDynamicSelector = serde_json::from_value(json!({
-            "min_duration_ns": 0,
-            "max_duration_ns": 1_000_000_000,
-            "switch_cooldown_ns": 0,
-            "drop_cooldown_ns": 0,
-            "randomness": 0.0,
-            "history_size": 0,
-            "seed": 7,
-            "switch_margin": 0.0
-        }))
-        .unwrap();
-        assert_eq!(selector.switch_quantization, RenderSwitchQuantization::Off);
-        assert_eq!(selector.bars_per_phrase, 8);
-        assert_eq!(selector.clock_confidence_threshold, 0.65);
-        assert_eq!(selector.subdivisions_per_beat, 1);
-        assert_eq!(selector.sync_offset_ns, 0);
-        assert!(selector.is_valid());
-    }
-
-    #[test]
-    fn health_request_matches_shared_v2_fixture() {
-        let request = Request::new("fixture-health-2", RequestCommand::Health);
-        let actual: Value =
-            serde_json::from_slice(&super::encode_request(&request).unwrap()).unwrap();
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../../test-fixtures/protocol-v2/health-request.json"
-        ))
-        .unwrap();
-        assert_eq!(actual, fixture);
-        assert_eq!(request.protocol_version, PROTOCOL_VERSION);
-    }
-
-    #[test]
-    fn health_response_matches_shared_v2_fixture() {
-        let response = Response::new(
-            "fixture-health-2",
+    fn health_response(request_id: &str) -> Response {
+        Response::new(
+            request_id,
             ResponseResult::Health {
                 status: super::EngineStatus::Ready,
                 configured: false,
@@ -1263,7 +1283,48 @@ mod tests {
                 limiting_output_index: None,
                 preview_outputs: None,
             },
-        );
+        )
+    }
+
+    #[test]
+    fn dynamic_selector_defaults_new_quantization_fields_for_v2_clients() {
+        let selector: RenderDynamicSelector = serde_json::from_value(json!({
+            "min_duration_ns": 0,
+            "max_duration_ns": 1_000_000_000,
+            "switch_cooldown_ns": 0,
+            "drop_cooldown_ns": 0,
+            "randomness": 0.0,
+            "history_size": 0,
+            "seed": 7,
+            "switch_margin": 0.0
+        }))
+        .unwrap();
+        assert_eq!(selector.switch_quantization, RenderSwitchQuantization::Off);
+        assert_eq!(selector.bars_per_phrase, 8);
+        assert_eq!(selector.clock_confidence_threshold, 0.65);
+        assert_eq!(selector.subdivisions_per_beat, 1);
+        assert_eq!(selector.sync_offset_ns, 0);
+        assert!(selector.is_valid());
+    }
+
+    #[test]
+    fn health_request_matches_shared_v2_fixture() {
+        let mut request = Request::new("fixture-health-2", RequestCommand::Health);
+        request.protocol_version = PREVIOUS_PROTOCOL_VERSION;
+        let actual: Value =
+            serde_json::from_slice(&super::encode_request(&request).unwrap()).unwrap();
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../test-fixtures/protocol-v2/health-request.json"
+        ))
+        .unwrap();
+        assert_eq!(actual, fixture);
+        assert_eq!(request.protocol_version, PREVIOUS_PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn health_response_matches_shared_v2_fixture() {
+        let mut response = health_response("fixture-health-2");
+        response.protocol_version = PREVIOUS_PROTOCOL_VERSION;
         let actual: Value =
             serde_json::from_slice(&super::encode_response(&response).unwrap()).unwrap();
         let fixture: Value = serde_json::from_str(include_str!(
@@ -1271,6 +1332,32 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(actual, fixture);
+    }
+
+    #[test]
+    fn health_request_matches_shared_v3_fixture() {
+        let request = Request::new("fixture-health-3", RequestCommand::Health);
+        let actual: Value =
+            serde_json::from_slice(&super::encode_request(&request).unwrap()).unwrap();
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../test-fixtures/protocol-v3/health-request.json"
+        ))
+        .unwrap();
+        assert_eq!(actual, fixture);
+        assert_eq!(request.protocol_version, PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn health_response_matches_shared_v3_fixture() {
+        let response = health_response("fixture-health-3");
+        let actual: Value =
+            serde_json::from_slice(&super::encode_response(&response).unwrap()).unwrap();
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../test-fixtures/protocol-v3/health-response.json"
+        ))
+        .unwrap();
+        assert_eq!(actual, fixture);
+        assert_eq!(response.protocol_version, PROTOCOL_VERSION);
     }
 
     #[test]

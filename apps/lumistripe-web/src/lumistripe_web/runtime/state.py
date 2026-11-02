@@ -32,6 +32,7 @@ class RuntimeSettings:
     pixels: int = 80
     hardware: bool = False
     engine_backend: Literal["python", "rust"] = "python"
+    audio_backend: Literal["python", "rust"] = "python"
     engine_binary: Path | None = None
     output_backend: str = "spi"
     spi_device: str = "/dev/spidev0.0"
@@ -52,6 +53,10 @@ class RuntimeSettings:
             raise ValueError("pixels must be greater than zero")
         if self.engine_backend not in {"python", "rust"}:
             raise ValueError(f"invalid engine backend: {self.engine_backend}")
+        if self.audio_backend not in {"python", "rust"}:
+            raise ValueError(f"invalid audio backend: {self.audio_backend}")
+        if self.audio_backend == "rust" and self.engine_backend != "rust":
+            raise ValueError("the Rust audio backend requires the Rust engine backend")
         if self.output_backend not in {"spi", "gpio"}:
             raise ValueError(f"invalid output backend: {self.output_backend}")
         if self.spi_speed_hz <= 0:
