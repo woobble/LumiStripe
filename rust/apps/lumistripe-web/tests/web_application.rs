@@ -144,9 +144,213 @@ fn migrated_http_contract_matches_fastapi_openapi_subset() {
             Some("#/components/schemas/DashboardState"),
         ),
         (
+            "/api/animations/{animation_name}/settings",
+            "get",
+            None,
+            Some("#/components/schemas/AnimationSettingsResponse"),
+        ),
+        (
+            "/api/animations/{animation_name}/settings",
+            "put",
+            Some("#/components/schemas/AnimationSettingsUpdateRequest"),
+            Some("#/components/schemas/AnimationSettingsResponse"),
+        ),
+        (
+            "/api/animations/{animation_name}/settings/reset",
+            "post",
+            None,
+            Some("#/components/schemas/AnimationSettingsResponse"),
+        ),
+        (
             "/api/blackout",
             "post",
             Some("#/components/schemas/BlackoutRequest"),
+            Some("#/components/schemas/DashboardState"),
+        ),
+        (
+            "/api/identity",
+            "get",
+            None,
+            Some("#/components/schemas/IdentitySettingsResponse"),
+        ),
+        (
+            "/api/identity",
+            "put",
+            Some("#/components/schemas/IdentitySettingsRequest"),
+            Some("#/components/schemas/IdentitySettingsResponse"),
+        ),
+        (
+            "/api/stripes",
+            "get",
+            None,
+            Some("#/components/schemas/StripeTopology"),
+        ),
+        (
+            "/api/stripes",
+            "put",
+            Some("#/components/schemas/StripeTopologyRequest"),
+            Some("#/components/schemas/DashboardState"),
+        ),
+        (
+            "/api/stripes/test",
+            "post",
+            Some("#/components/schemas/StripeTestRequest"),
+            Some("#/components/schemas/DashboardState"),
+        ),
+        (
+            "/api/audio/settings",
+            "get",
+            None,
+            Some("#/components/schemas/AudioSettingsResponse"),
+        ),
+        (
+            "/api/audio/settings",
+            "put",
+            Some("#/components/schemas/AudioSettingsRequest"),
+            Some("#/components/schemas/AudioSettingsResponse"),
+        ),
+        (
+            "/api/audio/settings/reset",
+            "post",
+            Some("#/components/schemas/AudioResetRequest"),
+            Some("#/components/schemas/AudioSettingsResponse"),
+        ),
+        (
+            "/api/audio/device",
+            "put",
+            Some("#/components/schemas/AudioDeviceRequest"),
+            Some("#/components/schemas/AudioSettingsResponse"),
+        ),
+        (
+            "/api/audio/source",
+            "put",
+            Some("#/components/schemas/AudioSourceRequest"),
+            Some("#/components/schemas/AudioSettingsResponse"),
+        ),
+        (
+            "/api/audio/sync-offset",
+            "put",
+            Some("#/components/schemas/AudioSyncOffsetRequest"),
+            Some("#/components/schemas/AudioSettingsResponse"),
+        ),
+        (
+            "/api/audio/sync-calibration",
+            "post",
+            Some("#/components/schemas/AudioSyncCalibrationRequest"),
+            Some("#/components/schemas/AudioSyncCalibrationResponse"),
+        ),
+        (
+            "/api/audio/calibration/session",
+            "post",
+            Some("#/components/schemas/AudioCalibrationStartRequest"),
+            Some("#/components/schemas/AudioCalibrationSessionResponse"),
+        ),
+        (
+            "/api/audio/calibration/session/{session_id}",
+            "get",
+            None,
+            Some("#/components/schemas/AudioCalibrationSessionResponse"),
+        ),
+        (
+            "/api/audio/calibration/session/{session_id}/music",
+            "post",
+            None,
+            Some("#/components/schemas/AudioCalibrationSessionResponse"),
+        ),
+        (
+            "/api/audio/calibration/session/{session_id}/finish",
+            "post",
+            Some("#/components/schemas/AudioCalibrationFinishRequest"),
+            Some("#/components/schemas/AudioSettingsResponse"),
+        ),
+        (
+            "/api/calibration/session",
+            "post",
+            Some("#/components/schemas/CalibrationStartRequest"),
+            Some("#/components/schemas/CalibrationSessionResponse"),
+        ),
+        (
+            "/api/calibration/session/{session_id}",
+            "put",
+            Some("#/components/schemas/CalibrationUpdateRequest"),
+            Some("#/components/schemas/DashboardState"),
+        ),
+        (
+            "/api/calibration/session/{session_id}/finish",
+            "post",
+            Some("#/components/schemas/CalibrationFinishRequest"),
+            Some("#/components/schemas/DashboardState"),
+        ),
+        (
+            "/api/music-idle",
+            "put",
+            Some("#/components/schemas/MusicIdleRequest"),
+            Some("#/components/schemas/DashboardState"),
+        ),
+        (
+            "/api/startup",
+            "get",
+            None,
+            Some("#/components/schemas/StartupSettingsResponse"),
+        ),
+        (
+            "/api/startup",
+            "put",
+            Some("#/components/schemas/StartupSettingsRequest"),
+            Some("#/components/schemas/StartupSettingsResponse"),
+        ),
+        (
+            "/api/transitions/settings",
+            "get",
+            None,
+            Some("#/components/schemas/TransitionSettingsResponse"),
+        ),
+        (
+            "/api/transitions/settings",
+            "put",
+            Some("#/components/schemas/TransitionSettingsRequest"),
+            Some("#/components/schemas/DashboardState"),
+        ),
+        (
+            "/api/sequencer/settings",
+            "get",
+            None,
+            Some("#/components/schemas/SequencerSettingsResponse"),
+        ),
+        (
+            "/api/sequencer/settings",
+            "put",
+            Some("#/components/schemas/SequencerSettingsRequest"),
+            Some("#/components/schemas/DashboardState"),
+        ),
+        (
+            "/api/sequencer/sequences",
+            "get",
+            None,
+            Some("#/components/schemas/SequenceLibraryResponse"),
+        ),
+        (
+            "/api/sequencer/sequences",
+            "post",
+            Some("#/components/schemas/SequenceCreateRequest"),
+            Some("#/components/schemas/DashboardState"),
+        ),
+        (
+            "/api/sequencer/sequences/{sequence_id}",
+            "put",
+            Some("#/components/schemas/SequenceDefinitionRequest"),
+            Some("#/components/schemas/DashboardState"),
+        ),
+        (
+            "/api/sequencer/sequences/{sequence_id}",
+            "delete",
+            None,
+            Some("#/components/schemas/DashboardState"),
+        ),
+        (
+            "/api/sequencer/active",
+            "put",
+            Some("#/components/schemas/SequenceActiveRequest"),
             Some("#/components/schemas/DashboardState"),
         ),
         (
@@ -172,6 +376,8 @@ fn migrated_http_contract_matches_fastapi_openapi_subset() {
     let paths = spec["paths"]
         .as_object()
         .expect("OpenAPI paths should exist");
+    let mut rust_subset = std::collections::BTreeMap::new();
+    let mut fastapi_subset = std::collections::BTreeMap::new();
     for (path, method, request_schema, response_schema) in contracts {
         let operation = paths[path][method]
             .as_object()
@@ -181,13 +387,17 @@ fn migrated_http_contract_matches_fastapi_openapi_subset() {
             !response.is_null(),
             "FastAPI OpenAPI is missing the success response for {method} {path}"
         );
+        let actual_request_schema = operation
+            .get("requestBody")
+            .and_then(|request| request["content"]["application/json"]["schema"]["$ref"].as_str());
 
         match request_schema {
             Some(expected) => {
-                let actual =
-                    operation["requestBody"]["content"]["application/json"]["schema"]["$ref"]
-                        .as_str();
-                assert_eq!(actual, Some(expected), "request schema for {method} {path}");
+                assert_eq!(
+                    actual_request_schema,
+                    Some(expected),
+                    "request schema for {method} {path}"
+                );
                 assert!(
                     operation["responses"]["422"].is_object(),
                     "FastAPI OpenAPI is missing validation errors for {method} {path}"
@@ -207,7 +417,28 @@ fn migrated_http_contract_matches_fastapi_openapi_subset() {
                 "response schema for {method} {path}"
             );
         }
+        let actual_response_schema =
+            response["content"]["application/json"]["schema"]["$ref"].as_str();
+        let operation_key = format!("{method} {path}");
+        rust_subset.insert(
+            operation_key.clone(),
+            json!({
+                "request_schema": request_schema,
+                "response_schema": response_schema,
+            }),
+        );
+        fastapi_subset.insert(
+            operation_key,
+            json!({
+                "request_schema": actual_request_schema,
+                "response_schema": actual_response_schema,
+            }),
+        );
     }
+    assert_eq!(
+        rust_subset, fastapi_subset,
+        "Rust migrated OpenAPI subset must match the FastAPI reference"
+    );
 }
 
 async fn websocket(
@@ -244,12 +475,19 @@ fn websocket_request(
 }
 
 fn app_config(static_dir: PathBuf) -> AppConfig {
+    let settings_file = static_dir.join("settings.json");
     AppConfig {
         outputs: vec![EngineOutputOptions {
             id: "main".to_owned(),
             name: "Main stripe".to_owned(),
             pixel_count: 8,
             backend: OutputBackend::Mock,
+            reversed: false,
+            zone_count: 1,
+            zone_pattern: lumistripe_web::ZonePattern::Repeat,
+            voltage_v: 5.0,
+            full_white_current_a: 0.06,
+            power_limit_watts: None,
         }],
         runtime_kind: "simulation",
         output_backend: "simulation",
@@ -258,6 +496,7 @@ fn app_config(static_dir: PathBuf) -> AppConfig {
         audio_device: None,
         secure_cookie: false,
         static_dir: Some(static_dir),
+        settings_file,
     }
 }
 
@@ -267,6 +506,11 @@ async fn serves_compatible_http_websockets_and_supervises_the_engine_process() {
     fs::write(
         static_dir.path().join("index.html"),
         "<!doctype html><title>fixture</title>",
+    )
+    .unwrap();
+    fs::write(
+        static_dir.path().join("settings.json"),
+        r#"{"version":12,"future_feature":{"keep":true},"music_idle":{"shared":{"mode":"off","future_idle":{"keep":true}}},"transition_settings":{"enabled":true,"duration_ms":300,"effect":"crossfade","future_option":{"keep":true}}}"#,
     )
     .unwrap();
     let engine_binary = std::env::var_os("LUMISTRIPE_ENGINE_TEST_BINARY")
@@ -376,6 +620,699 @@ async fn serves_compatible_http_websockets_and_supervises_the_engine_process() {
     assert_eq!(initial.status, StatusCode::OK);
     assert_eq!(initial.body["running"], true);
     assert!(initial.body.get("stripe_topology").is_some());
+
+    let initial_topology = request(
+        &router,
+        Method::GET,
+        "/api/stripes",
+        None,
+        Some(&cookie),
+        None,
+    )
+    .await;
+    assert_eq!(initial_topology.status, StatusCode::OK);
+    assert_eq!(initial_topology.body["outputs"][0]["id"], "main");
+
+    let identity = request(
+        &router,
+        Method::GET,
+        "/api/identity",
+        None,
+        Some(&cookie),
+        None,
+    )
+    .await;
+    assert_eq!(identity.status, StatusCode::OK);
+    assert_eq!(identity.body["application_name"], "LumiStripe");
+    assert_eq!(identity.body["spotify_device_name"], "LumiStripe");
+    assert_eq!(identity.body["spotify_restart_requested"], false);
+    let identity_updated = request(
+        &router,
+        Method::PUT,
+        "/api/identity",
+        Some(json!({
+            "application_name": "Studio lights",
+            "spotify_device_name": "LumiStripe",
+        })),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(identity_updated.status, StatusCode::OK);
+    assert_eq!(identity_updated.body["application_name"], "Studio lights");
+    assert_eq!(identity_updated.body["spotify_restart_requested"], false);
+    let identity_persisted: Value =
+        serde_json::from_slice(&fs::read(static_dir.path().join("settings.json")).unwrap())
+            .unwrap();
+    assert_eq!(identity_persisted["application_name"], "Studio lights");
+    assert_eq!(identity_persisted["future_feature"]["keep"], true);
+
+    let audio_settings = request(
+        &router,
+        Method::GET,
+        "/api/audio/settings",
+        None,
+        Some(&cookie),
+        None,
+    )
+    .await;
+    assert_eq!(
+        audio_settings.status,
+        StatusCode::OK,
+        "{}",
+        audio_settings.body_text
+    );
+    assert_object_keys(
+        &audio_settings.body,
+        &[
+            "source",
+            "active_source",
+            "monitoring",
+            "active_device",
+            "fallback_device",
+            "active_device_name",
+            "devices",
+            "settings",
+            "configured_noise_floor",
+            "sync_route",
+            "sync_offset_ms",
+            "hardware_gain_supported",
+            "hardware_gain_writable",
+            "hardware_gain_backend",
+            "hardware_gain_control",
+            "hardware_gain_value",
+            "hardware_gain_error",
+            "bluetooth",
+            "spotify",
+            "error",
+        ],
+    );
+    assert_object_keys(
+        &audio_settings.body["settings"],
+        &[
+            "target_level",
+            "hardware_gain_target",
+            "noise_floor",
+            "input_noise_floor",
+            "dynamic_response",
+            "rms_attack",
+            "rms_release",
+            "band_attack",
+            "band_release",
+            "beat_release",
+            "energy_threshold",
+            "onset_threshold",
+            "beat_density_threshold",
+            "brightness_threshold",
+            "spectral_balance_ratio",
+        ],
+    );
+
+    let audio_profile = request(
+        &router,
+        Method::PUT,
+        "/api/audio/settings",
+        Some(json!({
+            "device": "USB microphone",
+            "settings": {"target_level": 0.5, "input_noise_floor": 0.02, "energy_threshold": 0.06}
+        })),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(
+        audio_profile.status,
+        StatusCode::OK,
+        "{}",
+        audio_profile.body_text
+    );
+    assert_eq!(audio_profile.body["settings"]["target_level"], 0.5);
+    assert_eq!(audio_profile.body["settings"]["input_noise_floor"], 0.02);
+    let settings_after_profile: Value =
+        serde_json::from_slice(&fs::read(static_dir.path().join("settings.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        settings_after_profile["selected_audio_device"],
+        "USB microphone"
+    );
+    assert_eq!(
+        settings_after_profile["audio_profiles"]["USB microphone"]["target_level"],
+        0.5
+    );
+    assert_eq!(settings_after_profile["future_feature"]["keep"], true);
+
+    let audio_offset = request(
+        &router,
+        Method::PUT,
+        "/api/audio/sync-offset",
+        Some(json!({"offset_ms": -23.5})),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(
+        audio_offset.status,
+        StatusCode::OK,
+        "{}",
+        audio_offset.body_text
+    );
+    assert_eq!(audio_offset.body["sync_offset_ms"], -23.5);
+    let settings_after_offset: Value =
+        serde_json::from_slice(&fs::read(static_dir.path().join("settings.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        settings_after_offset["audio_sync_offsets_ms"]["off|USB microphone|default"],
+        -23.5
+    );
+
+    let audio_profile_reset = request(
+        &router,
+        Method::POST,
+        "/api/audio/settings/reset",
+        Some(json!({"device": "USB microphone"})),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(audio_profile_reset.status, StatusCode::OK);
+    assert_eq!(audio_profile_reset.body["settings"]["target_level"], 0.36);
+    assert_eq!(audio_profile_reset.body["sync_offset_ms"], -23.5);
+
+    let telemetry_profile = request(
+        &router,
+        Method::PUT,
+        "/api/audio/settings",
+        Some(json!({
+            "device": "USB microphone",
+            "settings": {"noise_floor": 0.041, "input_noise_floor": 0.022}
+        })),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(telemetry_profile.status, StatusCode::OK);
+
+    let sync_calibration_stopped = request(
+        &router,
+        Method::POST,
+        "/api/audio/sync-calibration",
+        Some(json!({"active": false})),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(sync_calibration_stopped.status, StatusCode::OK);
+    assert_eq!(sync_calibration_stopped.body["start_at_ms"], Value::Null);
+
+    let no_microphone = request(
+        &router,
+        Method::POST,
+        "/api/audio/calibration/session",
+        Some(json!({"device": "missing microphone"})),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(no_microphone.status, StatusCode::CONFLICT);
+    let missing_audio_calibration = request(
+        &router,
+        Method::GET,
+        "/api/audio/calibration/session/not-a-session",
+        None,
+        Some(&cookie),
+        None,
+    )
+    .await;
+    assert_eq!(missing_audio_calibration.status, StatusCode::NOT_FOUND);
+
+    let audio_source_off = request(
+        &router,
+        Method::PUT,
+        "/api/audio/source",
+        Some(json!({"source": "off"})),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(
+        audio_source_off.status,
+        StatusCode::OK,
+        "{}",
+        audio_source_off.body_text
+    );
+    assert_eq!(audio_source_off.body["source"], "off");
+    let unsupported_audio_source = request(
+        &router,
+        Method::PUT,
+        "/api/audio/source",
+        Some(json!({"source": "spotify"})),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(unsupported_audio_source.status, StatusCode::CONFLICT);
+
+    let invalid_topology = request(
+        &router,
+        Method::PUT,
+        "/api/stripes",
+        Some(json!({"layout":"mirrored","outputs":[{"id":"dup","name":"A","pixels":8},{"id":"dup","name":"B","pixels":8}]})),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(invalid_topology.status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let stripe_test = request(
+        &router,
+        Method::POST,
+        "/api/stripes/test",
+        Some(json!({"stripe_id":"main","pattern":"blue"})),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(
+        stripe_test.status,
+        StatusCode::OK,
+        "{}",
+        stripe_test.body_text
+    );
+    assert_eq!(
+        stripe_test.body["stripe_topology"]["outputs"][0]["id"],
+        "main"
+    );
+
+    let calibration_started = request(
+        &router,
+        Method::POST,
+        "/api/calibration/session",
+        Some(json!({"output_index": 0})),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(calibration_started.status, StatusCode::OK);
+    assert_eq!(
+        calibration_started.body["state"]["calibration"]["active"],
+        true
+    );
+    let calibration_id = calibration_started.body["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let calibration_update = request(
+        &router,
+        Method::PUT,
+        &format!("/api/calibration/session/{calibration_id}"),
+        Some(json!({"red":128,"green":200,"blue":240,"pattern":"red"})),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(calibration_update.status, StatusCode::OK);
+    assert_eq!(calibration_update.body["calibration"]["pattern"], "red");
+    let calibration_saved = request(
+        &router,
+        Method::POST,
+        &format!("/api/calibration/session/{calibration_id}/finish"),
+        Some(json!({"save":true})),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(calibration_saved.status, StatusCode::OK);
+    assert_eq!(calibration_saved.body["calibration"]["active"], false);
+    let saved_corrections: Value =
+        serde_json::from_slice(&fs::read(static_dir.path().join("settings.json")).unwrap())
+            .unwrap();
+    assert_eq!(saved_corrections["color_correction"]["main"]["red"], 128);
+
+    let calibration_cancelled = request(
+        &router,
+        Method::POST,
+        "/api/calibration/session",
+        Some(json!({"output_index": 0})),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    let cancelled_id = calibration_cancelled.body["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let _ = request(
+        &router,
+        Method::PUT,
+        &format!("/api/calibration/session/{cancelled_id}"),
+        Some(json!({"red":10,"green":20,"blue":30,"pattern":"blue"})),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    let calibration_restored = request(
+        &router,
+        Method::POST,
+        &format!("/api/calibration/session/{cancelled_id}/finish"),
+        Some(json!({"save":false})),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(calibration_restored.status, StatusCode::OK);
+    let corrections_after_cancel: Value =
+        serde_json::from_slice(&fs::read(static_dir.path().join("settings.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        corrections_after_cancel["color_correction"]["main"]["red"],
+        128
+    );
+
+    let startup = request(
+        &router,
+        Method::GET,
+        "/api/startup",
+        None,
+        Some(&cookie),
+        None,
+    )
+    .await;
+    assert_eq!(startup.status, StatusCode::OK);
+    assert_eq!(startup.body["restore_last_state"], false);
+    assert_eq!(startup.body["remembered"]["mode"], "static");
+
+    let startup_updated = request(
+        &router,
+        Method::PUT,
+        "/api/startup",
+        Some(json!({"restore_last_state": true})),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(startup_updated.status, StatusCode::OK);
+    assert_eq!(startup_updated.body["restore_last_state"], true);
+    assert_eq!(
+        startup_updated.body["remembered"]["animation"],
+        "rainbow_cycle"
+    );
+
+    let idle = request(
+        &router,
+        Method::PUT,
+        "/api/music-idle",
+        Some(json!({
+            "mode": "animation",
+            "color": "#123456",
+            "animation": "rainbow_cycle",
+            "brightness": 0.45
+        })),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(idle.status, StatusCode::OK);
+    assert_eq!(idle.body["music_idle"]["mode"], "animation");
+    assert_eq!(idle.body["music_idle"]["animation"], "rainbow_cycle");
+
+    let initial_animation_settings = request(
+        &router,
+        Method::GET,
+        "/api/animations/rainbow_cycle/settings",
+        None,
+        Some(&cookie),
+        None,
+    )
+    .await;
+    assert_eq!(initial_animation_settings.status, StatusCode::OK);
+    assert_eq!(initial_animation_settings.body["values"]["speed"], 50);
+
+    let mut updated_values = initial_animation_settings.body["values"].clone();
+    updated_values["speed"] = json!(70);
+    let updated_animation_settings = request(
+        &router,
+        Method::PUT,
+        "/api/animations/rainbow_cycle/settings",
+        Some(json!({"values": updated_values})),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(
+        updated_animation_settings.status,
+        StatusCode::OK,
+        "{}",
+        updated_animation_settings.body_text
+    );
+    assert_eq!(updated_animation_settings.body["values"]["speed"], 70);
+
+    let reset_animation_settings = request(
+        &router,
+        Method::POST,
+        "/api/animations/rainbow_cycle/settings/reset",
+        None,
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(reset_animation_settings.status, StatusCode::OK);
+    assert_eq!(reset_animation_settings.body["values"]["speed"], 50);
+
+    let initial_transitions = request(
+        &router,
+        Method::GET,
+        "/api/transitions/settings",
+        None,
+        Some(&cookie),
+        None,
+    )
+    .await;
+    assert_eq!(initial_transitions.status, StatusCode::OK);
+    assert_eq!(
+        initial_transitions.body,
+        json!({"enabled": true, "duration_ms": 300, "effect": "crossfade"})
+    );
+
+    let initial_sequencer = request(
+        &router,
+        Method::GET,
+        "/api/sequencer/settings",
+        None,
+        Some(&cookie),
+        None,
+    )
+    .await;
+    assert_eq!(initial_sequencer.status, StatusCode::OK);
+    assert_eq!(
+        initial_sequencer.body,
+        json!({"switch_quantization": "off", "bars_per_phrase": 8})
+    );
+
+    let initial_library = request(
+        &router,
+        Method::GET,
+        "/api/sequencer/sequences",
+        None,
+        Some(&cookie),
+        None,
+    )
+    .await;
+    assert_eq!(initial_library.status, StatusCode::OK);
+    assert_eq!(
+        initial_library.body,
+        json!({"sequences": [], "active_sequence_id": null})
+    );
+
+    let invalid_sequence = request(
+        &router,
+        Method::POST,
+        "/api/sequencer/sequences",
+        Some(json!({
+            "id": "invalid",
+            "name": "Invalid",
+            "repeat": true,
+            "steps": [{"animation_name": "rainbow_cycle", "duration_bars": 3}]
+        })),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(invalid_sequence.status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let created_sequence = request(
+        &router,
+        Method::POST,
+        "/api/sequencer/sequences",
+        Some(json!({
+            "id": "night",
+            "name": "Night",
+            "repeat": true,
+            "steps": [{"animation_name": "rainbow_cycle", "duration_bars": 2}]
+        })),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(created_sequence.status, StatusCode::OK);
+    assert_eq!(
+        created_sequence.body["sequence_library"]["sequences"][0],
+        json!({"id": "night", "name": "Night"})
+    );
+
+    let activated_sequence = request(
+        &router,
+        Method::PUT,
+        "/api/sequencer/active",
+        Some(json!({"sequence_id": "night"})),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(activated_sequence.status, StatusCode::OK);
+    assert_eq!(
+        activated_sequence.body["sequence_library"]["active_sequence_id"],
+        "night"
+    );
+    let persisted_sequence: Value =
+        serde_json::from_slice(&fs::read(static_dir.path().join("settings.json")).unwrap())
+            .unwrap();
+    assert_eq!(persisted_sequence["animation_sequences"][0]["id"], "night");
+    assert_eq!(persisted_sequence["active_sequence_id"], "night");
+
+    let updated_sequence = request(
+        &router,
+        Method::PUT,
+        "/api/sequencer/sequences/night",
+        Some(json!({
+            "name": "Evening",
+            "repeat": false,
+            "steps": [{"animation_name": "rainbow_cycle", "duration_bars": 4}]
+        })),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(updated_sequence.status, StatusCode::OK);
+    assert_eq!(
+        updated_sequence.body["sequence_library"]["sequences"][0]["name"],
+        "Evening"
+    );
+
+    let deleted_sequence = request(
+        &router,
+        Method::DELETE,
+        "/api/sequencer/sequences/night",
+        None,
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(deleted_sequence.status, StatusCode::OK);
+    assert_eq!(
+        deleted_sequence.body["sequence_library"],
+        json!({"sequences": [], "active_sequence_id": null})
+    );
+    let persisted_after_delete: Value =
+        serde_json::from_slice(&fs::read(static_dir.path().join("settings.json")).unwrap())
+            .unwrap();
+    assert_eq!(persisted_after_delete["animation_sequences"], json!([]));
+    assert_eq!(persisted_after_delete["active_sequence_id"], Value::Null);
+
+    let sequencer = request(
+        &router,
+        Method::PUT,
+        "/api/sequencer/settings",
+        Some(json!({"switch_quantization": "phrase", "bars_per_phrase": 4})),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(sequencer.status, StatusCode::OK);
+    assert_eq!(
+        sequencer.body["sequencer_settings"],
+        json!({"switch_quantization": "phrase", "bars_per_phrase": 4})
+    );
+
+    let transitions = request(
+        &router,
+        Method::PUT,
+        "/api/transitions/settings",
+        Some(json!({"enabled": false, "duration_ms": 600, "effect": "wipe"})),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(transitions.status, StatusCode::OK);
+    assert_eq!(
+        transitions.body["transition_settings"],
+        json!({"enabled": false, "duration_ms": 600, "effect": "wipe"})
+    );
+    let persisted: Value =
+        serde_json::from_slice(&fs::read(static_dir.path().join("settings.json")).unwrap())
+            .unwrap();
+    assert_eq!(persisted["transition_settings"]["duration_ms"], 600);
+    assert_eq!(persisted["switch_quantization"], "phrase");
+    assert_eq!(persisted["bars_per_phrase"], 4);
+    assert_eq!(persisted["restore_last_state"], true);
+    assert_eq!(
+        persisted["remembered_playback"]["animation"],
+        "rainbow_cycle"
+    );
+    assert_eq!(persisted["music_idle"]["shared"]["mode"], "animation");
+    assert_eq!(
+        persisted["animation_settings"]["shared"]["rainbow_cycle"]["speed"],
+        50
+    );
+    assert_eq!(persisted["future_feature"]["keep"], true);
+    assert_eq!(
+        persisted["transition_settings"]["future_option"]["keep"],
+        true
+    );
+    assert_eq!(
+        persisted["music_idle"]["shared"]["future_idle"]["keep"],
+        true
+    );
+
+    let startup_disabled = request(
+        &router,
+        Method::PUT,
+        "/api/startup",
+        Some(json!({"restore_last_state": false})),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(startup_disabled.status, StatusCode::OK);
+
+    let settings_path = static_dir.path().join("settings.json");
+    fs::remove_file(&settings_path).unwrap();
+    fs::create_dir(&settings_path).unwrap();
+    let persistence_failure = request(
+        &router,
+        Method::PUT,
+        "/api/transitions/settings",
+        Some(json!({"enabled": true, "duration_ms": 900, "effect": "fade_black"})),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(
+        persistence_failure.status,
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    let after_rollback = request(
+        &router,
+        Method::GET,
+        "/api/state",
+        None,
+        Some(&cookie),
+        None,
+    )
+    .await;
+    assert_eq!(
+        after_rollback.body["transition_settings"],
+        json!({"enabled": false, "duration_ms": 600, "effect": "wipe"})
+    );
     assert_object_keys(
         &initial.body,
         &[
@@ -622,8 +1559,27 @@ async fn serves_compatible_http_websockets_and_supervises_the_engine_process() {
         Message::Text(text) => serde_json::from_str(text.as_str()).unwrap(),
         message => panic!("audio stream sent unexpected message: {message:?}"),
     };
+    let current_audio_settings = request(
+        &router,
+        Method::GET,
+        "/api/audio/settings",
+        None,
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(current_audio_settings.status, StatusCode::OK);
     assert!(audio_json.get("sequence").is_some());
     assert_eq!(audio_json["bands"].as_array().unwrap().len(), 8);
+    assert_eq!(audio_json["configured_noise_floor"], 0.041);
+    assert_eq!(
+        audio_json["sync_route"],
+        current_audio_settings.body["sync_route"]
+    );
+    assert_eq!(
+        audio_json["sync_offset_ms"],
+        current_audio_settings.body["sync_offset_ms"]
+    );
     assert_object_keys(
         &audio_json,
         &[
@@ -718,8 +1674,25 @@ async fn serves_compatible_http_websockets_and_supervises_the_engine_process() {
     }
     preview_socket.close(None).await.unwrap();
 
+    let demo_audio = request(
+        &router,
+        Method::PUT,
+        "/api/audio/source",
+        Some(json!({"source": "demo"})),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(
+        demo_audio.status,
+        StatusCode::OK,
+        "{}",
+        demo_audio.body_text
+    );
+    assert_eq!(demo_audio.body["source"], "demo");
+
     // Kill only the direct engine child owned by this test. The supervisor must
-    // restart it, reapply the scene, and restore the ready health state.
+    // restart it, reapply the scene and audio configuration, and restore health.
     let child_pids = direct_engine_children(std::process::id());
     assert_eq!(
         child_pids.len(),
@@ -744,6 +1717,21 @@ async fn serves_compatible_http_websockets_and_supervises_the_engine_process() {
     assert!(
         recovered,
         "engine supervisor should restart and reconfigure the child"
+    );
+    let restored_audio = request(
+        &router,
+        Method::GET,
+        "/api/state",
+        None,
+        Some(&cookie),
+        None,
+    )
+    .await;
+    assert_eq!(restored_audio.status, StatusCode::OK);
+    assert_eq!(restored_audio.body["active_audio_source"], "demo");
+    assert_eq!(
+        restored_audio.body["audio_status"],
+        "Using the internal demo beat."
     );
     eprintln!(
         "mock engine crash recovery and scene reapply: {:.1} ms",

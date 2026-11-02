@@ -20,7 +20,6 @@ struct AuthState {
     pairing_code: Option<String>,
     records: Mutex<AuthRecords>,
 }
-
 #[derive(Default)]
 struct AuthRecords {
     sessions: HashMap<String, Instant>,
@@ -143,7 +142,25 @@ impl PairingAuth {
     }
 }
 
-fn random_session_token() -> String {
+#[cfg(test)]
+impl PairingAuth {
+    fn authenticated_at(&self, session: Option<&str>, now: Instant) -> bool {
+        if !self.required() {
+            return true;
+        }
+        let Some(session) = session else {
+            return false;
+        };
+        let mut records = self.lock_records();
+        self.cleanup(&mut records, now);
+        records
+            .sessions
+            .get(session)
+            .is_some_and(|expires_at| *expires_at > now)
+    }
+}
+
+pub(crate) fn random_session_token() -> String {
     let mut bytes = [0_u8; 32];
     rand::rngs::SysRng
         .try_fill_bytes(&mut bytes)
@@ -195,23 +212,5 @@ mod tests {
         assert!(auth.authenticated(None));
         let token = auth.pair("1234").unwrap();
         assert!(auth.authenticated(Some(&token)));
-    }
-}
-
-impl PairingAuth {
-    #[cfg(test)]
-    fn authenticated_at(&self, session: Option<&str>, now: Instant) -> bool {
-        if !self.required() {
-            return true;
-        }
-        let Some(session) = session else {
-            return false;
-        };
-        let mut records = self.lock_records();
-        self.cleanup(&mut records, now);
-        records
-            .sessions
-            .get(session)
-            .is_some_and(|expires_at| *expires_at > now)
     }
 }

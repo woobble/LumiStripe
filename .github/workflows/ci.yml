@@ -76,7 +76,15 @@ jobs:
           cargo build --locked --manifest-path rust/Cargo.toml
           --package lumistripe-engine --bin lumistripe-engine
 
+      - name: Build Rust web backend and engine for Python API parity
+        if: matrix.python-version == '3.12'
+        run: >-
+          cargo build --locked --manifest-path rust/Cargo.toml
+          --package lumistripe-web --package lumistripe-engine
+
       - name: Test Python
+        env:
+          LUMISTRIPE_RUST_WEB_BINARY: ${{ matrix.python-version == '3.12' && format('{0}/rust/target/debug/lumistripe-web', github.workspace) || '' }}
         run: uv run python -m pytest -q --junitxml=junit.xml -o junit_family=legacy
 
       - name: Check device-optimized native validation
@@ -381,10 +389,33 @@ jobs:
       - name: Install Raspberry Pi native build dependencies
         run: |
           set -eu
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends \
-            build-essential ca-certificates curl pkg-config libasound2-dev \
-            libpipewire-0.3-dev libpulse-dev
+          missing=0
+          command -v cc >/dev/null 2>&1 || missing=1
+          command -v make >/dev/null 2>&1 || missing=1
+          command -v curl >/dev/null 2>&1 || missing=1
+          command -v pkg-config >/dev/null 2>&1 || missing=1
+          test -s /etc/ssl/certs/ca-certificates.crt || missing=1
+          test -f /usr/include/alsa/asoundlib.h || missing=1
+          pkg-config --exists libpipewire-0.3 || missing=1
+          pkg-config --exists libpulse || missing=1
+          if test "$missing" -eq 1; then
+            if ! command -v apt-get >/dev/null 2>&1; then
+              echo "Required Raspberry Pi native packages are missing and apt-get is unavailable" >&2
+              exit 1
+            fi
+            if command -v sudo >/dev/null 2>&1; then
+              apt=(sudo apt-get)
+            elif test "$(id -u)" -eq 0; then
+              apt=(apt-get)
+            else
+              echo "Install the Raspberry Pi native build packages on the runner or provide sudo" >&2
+              exit 1
+            fi
+            "${apt[@]}" update
+            "${apt[@]}" install --yes --no-install-recommends \
+              build-essential ca-certificates curl pkg-config libasound2-dev \
+              libpipewire-0.3-dev libpulse-dev
+          fi
 
       - name: Verify Raspberry Pi runner
         run: |

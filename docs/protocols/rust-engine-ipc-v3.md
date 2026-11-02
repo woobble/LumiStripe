@@ -30,6 +30,10 @@ capture recovery in the background.
 
 `selector` may be `null` to choose the first available default input in host
 priority order, a selector returned by `audio_devices`, or a device name match.
+The reserved selector `demo` starts the built-in synthetic beat source without
+opening a capture device. It emits frames through the same audio worker and
+render scheduler path as captured audio; `audio_status` remains active with no
+device attached. `audio_stop` stops either source.
 Linux host priority is PipeWire, PulseAudio, then ALSA. The stream uses the
 selected device's default sample rate and channel count and converts each input
 frame to mono. The device selector is stable only as provided by the host; use

@@ -22,6 +22,7 @@ const AUDIO_EVENT_HISTORY_CAPACITY: usize = 256;
 const AUDIO_STALL_TIMEOUT_NS: u64 = 1_500_000_000;
 const AUDIO_INITIAL_CALLBACK_TIMEOUT_NS: u64 = 3_000_000_000;
 const AUDIO_RECOVERY_DELAY_NS: u64 = 1_000_000_000;
+const DEMO_FRAME_INTERVAL_NS: u64 = 40_000_000;
 
 enum AudioCommand {
     Start {
@@ -172,6 +173,10 @@ struct WorkerState {
     config: AudioConfig,
     selector: Option<String>,
     desired_active: bool,
+    demo_active: bool,
+    next_demo_frame_ns: u64,
+    demo_frame: AudioFrame,
+    demo_features: MusicFeatures,
     session: Option<AudioSession>,
     retry_at_ns: u64,
     last_error: Option<String>,
@@ -191,6 +196,10 @@ impl Default for WorkerState {
             config: AudioConfig::default(),
             selector: None,
             desired_active: false,
+            demo_active: false,
+            next_demo_frame_ns: 0,
+            demo_frame: AudioFrame::default(),
+            demo_features: MusicFeatures::default(),
             session: None,
             retry_at_ns: 0,
             last_error: None,
@@ -249,6 +258,7 @@ fn audio_worker_loop(
 
         if !shutdown {
             state.process_available_audio(&output);
+            state.process_demo_audio(&output);
             state.recover_stalled_capture();
             write_status(&state, &status);
         }
@@ -259,10 +269,19 @@ impl WorkerState {
     fn start(&mut self, selector: Option<String>, config: AudioConfig) -> Result<bool, String> {
         config.validate()?;
         self.stop_session();
-        self.selector = selector;
+        self.demo_active = selector.as_deref() == Some("demo");
+        self.selector = if self.demo_active { None } else { selector };
         self.config = config;
         self.desired_active = true;
         self.clear_pending_events();
+        if self.demo_active {
+            self.next_demo_frame_ns = 0;
+            self.demo_frame = AudioFrame::default();
+            self.demo_features = MusicFeatures::default();
+            self.retry_at_ns = 0;
+            self.publish_error(None);
+            return Ok(true);
+        }
         self.open_session()
     }
 
@@ -273,6 +292,10 @@ impl WorkerState {
             self.publish_error(None);
             return Ok(false);
         }
+        if self.demo_active {
+            self.publish_error(None);
+            return Ok(true);
+        }
         self.stop_session();
         self.clear_pending_events();
         self.open_session()
@@ -280,6 +303,7 @@ impl WorkerState {
 
     fn stop(&mut self) {
         self.desired_active = false;
+        self.demo_active = false;
         self.stop_session();
         self.clear_pending_events();
         self.publish_error(None);
@@ -341,6 +365,23 @@ impl WorkerState {
             };
             self.process_batch(output, batch);
         }
+    }
+
+    fn process_demo_audio(&mut self, output: &OutputAudioHandle) {
+        if !self.demo_active {
+            return;
+        }
+        let now_ns = monotonic_time_ns();
+        if now_ns < self.next_demo_frame_ns {
+            return;
+        }
+        self.next_demo_frame_ns = now_ns.saturating_add(DEMO_FRAME_INTERVAL_NS);
+        self.feature_sequence = self.feature_sequence.saturating_add(1);
+        let (mut frame, features) = demo_snapshot(self.feature_sequence, now_ns);
+        frame.sequence = self.feature_sequence;
+        self.demo_frame = frame;
+        self.demo_features = features;
+        self.submit_audio_frame(output, frame, features);
     }
 
     fn process_batch(
@@ -563,7 +604,11 @@ impl WorkerState {
                 ));
             }
         }
-        if self.desired_active && self.session.is_none() && now >= self.retry_at_ns {
+        if self.desired_active
+            && !self.demo_active
+            && self.session.is_none()
+            && now >= self.retry_at_ns
+        {
             if let Err(error) = self.open_session() {
                 self.publish_error(Some(format!("audio device recovery failed: {error}")));
             }
@@ -582,6 +627,16 @@ fn write_status(state: &WorkerState, shared: &Mutex<EngineAudioStatus>) {
         status.processor = session.processor.stats();
         status.capture = session.capture.stats();
         status.last_frame_ns = session.last_frame_ns;
+    } else if state.demo_active {
+        status.active = true;
+        status.device = None;
+        status.frame = state.demo_frame;
+        status.features = state.demo_features;
+        status.structure = MusicStructureState::default();
+        status.processor = AudioProcessorStats::default();
+        status.capture = Default::default();
+        status.last_frame_ns =
+            (state.demo_frame.sequence > 0).then(|| seconds_to_ns(state.demo_frame.timestamp));
     } else {
         status.active = false;
         status.device = None;
@@ -596,6 +651,94 @@ fn write_status(state: &WorkerState, shared: &Mutex<EngineAudioStatus>) {
     status.audio_update_sequence = state.audio_update_sequence;
     status.dropped_audio_updates = state.dropped_audio_updates;
     status.dropped_structure_events = state.dropped_structure_events;
+}
+
+fn demo_snapshot(sequence: u64, timestamp_ns: u64) -> (AudioFrame, MusicFeatures) {
+    let frame_index = sequence.saturating_sub(1);
+    let measure_position = frame_index % 100;
+    let beat_index = measure_position / 25;
+    let phase = (measure_position % 25) as f32 / 25.0;
+    let decay = (-phase * 5.0).exp();
+    let fast = (-phase * 12.0).exp();
+    let slow = (-phase * 2.0).exp();
+    let kick = if matches!(beat_index, 0 | 2) {
+        fast
+    } else {
+        0.001
+    };
+    let snare = if matches!(beat_index, 1 | 3) {
+        decay * 0.8
+    } else {
+        0.001
+    };
+    let bass_scale = [1.0, 1.0, 1.0, 0.75][(frame_index / 100 % 4) as usize];
+    let bass = slow * 0.6 * bass_scale;
+    let beat_position = measure_position % 25;
+    let hat = if beat_position < 2 || (12..14).contains(&beat_position) {
+        0.35
+    } else {
+        0.001
+    };
+    let accent = if (62..64).contains(&measure_position) {
+        0.2
+    } else {
+        0.0
+    };
+    let bands = [
+        kick.min(1.0),
+        bass.min(1.0),
+        (snare * 0.3 + kick * 0.15).min(1.0),
+        snare.min(1.0),
+        (snare * 0.5 + hat * 0.3).min(1.0),
+        (hat + accent).min(1.0),
+        ((hat + accent) * 0.4).min(1.0),
+        ((hat + accent) * 0.15).min(1.0),
+    ];
+    let rms = (bands.iter().sum::<f32>() / bands.len() as f32)
+        .sqrt()
+        .min(1.0);
+    let beat = beat_index == 0;
+    let beat_strength = if beat { 0.7 + kick * 0.3 } else { 0.0 };
+    let low = ((bands[0] + bands[1]) * 0.5).clamp(0.0, 1.0);
+    let mid = ((bands[2] + bands[3] + bands[4]) / 3.0).clamp(0.0, 1.0);
+    let high = ((bands[5] + bands[6] + bands[7]) / 3.0).clamp(0.0, 1.0);
+    let brightness = (high * 0.55 + rms * 0.25 + (1.0 - low) * high * 0.2).clamp(0.0, 1.0);
+    let onset = if beat { beat_strength } else { rms * 0.18 };
+    let silence = rms <= 0.003 && bands.iter().copied().fold(0.0_f32, f32::max) <= 0.003;
+    let frame = AudioFrame {
+        rms,
+        bands,
+        beat,
+        beat_strength,
+        sequence,
+        timestamp: timestamp_ns as f64 / 1_000_000_000.0,
+        fresh: true,
+    };
+    let features = MusicFeatures {
+        energy: rms,
+        volume: rms,
+        energy_level: rms,
+        bass: low,
+        brightness,
+        onset_strength: onset,
+        dynamic_range: beat_strength,
+        beat,
+        beat_strength,
+        bands,
+        bass_energy: low,
+        mid_energy: mid,
+        treble_energy: high,
+        spectral_centroid: brightness,
+        spectral_flux: onset,
+        beat_confidence: beat_strength,
+        rolling_loudness: rms,
+        program_loudness: rms,
+        musical_impact: (rms * 1.5).min(1.0),
+        silence,
+        drop_detected: beat && low > 0.75 && onset > 0.55,
+        ..MusicFeatures::default()
+    };
+    (frame, features)
 }
 
 fn structure_phase(
@@ -621,4 +764,45 @@ fn seconds_to_ns(seconds: f64) -> u64 {
         return 0;
     }
     (seconds * 1_000_000_000.0).round().min(u64::MAX as f64) as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WorkerState, demo_snapshot, write_status};
+    use lumistripe_engine_audio::AudioConfig;
+    use lumistripe_engine_protocol::EngineAudioStatus;
+    use std::sync::Mutex;
+
+    #[test]
+    fn demo_source_starts_without_opening_a_capture_device() {
+        let mut state = WorkerState::default();
+
+        assert!(
+            state
+                .start(Some("demo".to_owned()), AudioConfig::default())
+                .unwrap()
+        );
+        assert!(state.demo_active);
+        assert!(state.session.is_none());
+
+        let status = Mutex::new(EngineAudioStatus::default());
+        write_status(&state, &status);
+        let status = status.lock().unwrap();
+        assert!(status.active);
+        assert!(status.device.is_none());
+    }
+
+    #[test]
+    fn demo_snapshot_emits_beat_and_audio_features() {
+        let (kick, kick_features) = demo_snapshot(1, 1_000_000_000);
+        let (snare, _) = demo_snapshot(26, 2_000_000_000);
+
+        assert!(kick.beat);
+        assert!(!snare.beat);
+        assert_eq!(kick.sequence, 1);
+        assert!(kick.fresh);
+        assert!(kick.rms > 0.0);
+        assert!(kick_features.musical_impact > 0.0);
+        assert_eq!(kick_features.bpm, 120.0);
+    }
 }

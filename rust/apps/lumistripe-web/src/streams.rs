@@ -1,5 +1,7 @@
 use crate::app::{AppState, websocket_origin_allowed};
+use crate::audio::AudioStreamContext;
 use crate::auth::SESSION_COOKIE;
+use crate::control::ControlPlane;
 use crate::preview::encode_preview_frame;
 use axum::extract::State;
 use axum::extract::ws::{CloseCode, CloseFrame, Message, WebSocket, WebSocketUpgrade};
@@ -11,6 +13,7 @@ use lumistripe_engine_audio::MusicStructurePhase;
 use lumistripe_engine_client::EngineClient;
 use lumistripe_engine_protocol::{EngineAudioStatus, ResponseResult};
 use serde_json::{Value, json};
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -61,6 +64,7 @@ pub fn spawn_health_publisher(
 pub fn spawn_audio_telemetry_publisher(
     client: EngineClient,
     health: EngineHealthReceiver,
+    control: ControlPlane,
     cancellation: CancellationToken,
     publisher: watch::Sender<Option<Result<Arc<Value>, String>>>,
 ) -> JoinHandle<()> {
@@ -69,6 +73,9 @@ pub fn spawn_audio_telemetry_publisher(
         poll.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut drop_count = 0_u64;
         let mut was_drop = false;
+        let mut noise_samples = VecDeque::with_capacity(300);
+        let mut last_audio_sequence = None;
+        let mut previous_context: Option<AudioStreamContext> = None;
         let mut last_error: Option<String> = None;
         loop {
             tokio::select! {
@@ -81,9 +88,25 @@ pub fn spawn_audio_telemetry_publisher(
                                 .as_ref()
                                 .and_then(|result| result.as_ref().ok())
                                 .map(Arc::as_ref);
+                            let context = control.audio_stream_context();
+                            if previous_context
+                                .as_ref()
+                                .is_some_and(|previous| previous != &context)
+                            {
+                                noise_samples.clear();
+                                last_audio_sequence = None;
+                            }
+                            previous_context = Some(context.clone());
+                            record_noise_sample(
+                                &mut noise_samples,
+                                &mut last_audio_sequence,
+                                &status,
+                            );
                             let telemetry = audio_telemetry(
                                 &status,
                                 health_response,
+                                &context,
+                                estimated_noise_floor(&noise_samples),
                                 &mut drop_count,
                                 &mut was_drop,
                             );
@@ -160,6 +183,8 @@ pub fn spawn_preview_publisher(
 fn audio_telemetry(
     status: &EngineAudioStatus,
     health: Option<&ResponseResult>,
+    context: &AudioStreamContext,
+    estimated_noise_floor: f64,
     drop_count: &mut u64,
     was_drop: &mut bool,
 ) -> Value {
@@ -185,10 +210,6 @@ fn audio_telemetry(
     let next_beat_in_ms = clock
         .and_then(|clock| clock.next_beat_at_ns)
         .map(|next| next.saturating_sub(crate::state::monotonic_time_ns()) as f64 / 1_000_000.0);
-    let device_route = status
-        .device
-        .as_ref()
-        .map(|device| format!("rust|{}|{}", device.host, device.selector));
     let bands = frame.bands.map(clamp_unit_f32);
     let active = status.active;
     let phase = phase_name(structure.phase);
@@ -208,7 +229,7 @@ fn audio_telemetry(
         "input_peak": clamp_unit_f32(processor.input_peak),
         "clipping_fraction": clamp_unit_f32(processor.clipping_fraction),
         "microphone_gate_open": processor.microphone_gate_open,
-        "configured_input_noise_floor": if active { Some(0.015) } else { None },
+        "configured_input_noise_floor": context.configured_input_noise_floor,
         "sequence": frame.sequence,
         "fresh": frame.fresh,
         "input_level": clamp_unit_f32(processor.input_rms),
@@ -237,10 +258,10 @@ fn audio_telemetry(
         "calibration_output_underflow_count": 0,
         "calibration_output_overflow_count": 0,
         "calibration_output_callback_error_count": 0,
-        "sync_offset_ms": 0.0,
-        "sync_route": device_route.unwrap_or_else(|| "mic|unknown|default".to_owned()),
-        "estimated_noise_floor": 0.0,
-        "configured_noise_floor": 0.015,
+        "sync_offset_ms": context.sync_offset_ms,
+        "sync_route": context.sync_route,
+        "estimated_noise_floor": estimated_noise_floor,
+        "configured_noise_floor": context.configured_noise_floor,
         "normalization_gain": f64::from(processor.normalization_gain.max(0.0)),
         "hardware_gain_value": Value::Null,
         "program_loudness": clamp_unit_f32(processor.program_loudness),
@@ -252,7 +273,7 @@ fn audio_telemetry(
         "gate_beat_density": clamp_unit_f32(features.beat_confidence),
         "gate_brightness": clamp_unit_f32(features.brightness),
         "gate_spectral_balance": spectral_balance,
-        "gate_reason": if active { "rust_audio_capture_active" } else { "no_audio_input" },
+        "gate_reason": if active && context.source == "demo" { "demo_audio_active" } else if active { "rust_audio_capture_active" } else { "no_audio_input" },
         "gate_checks": [],
         "music_structure_phase": phase,
         "music_structure_confidence": structure.confidence.clamp(0.0, 1.0),
@@ -264,6 +285,34 @@ fn audio_telemetry(
         "drop_accent_reason": scheduler.and_then(|state| state.drop_accent_reason.as_deref()),
         "health": if active { "ok" } else if status.last_error.is_some() { "unavailable" } else { "inactive" },
     })
+}
+
+fn record_noise_sample(
+    samples: &mut VecDeque<f64>,
+    last_sequence: &mut Option<u64>,
+    status: &EngineAudioStatus,
+) {
+    let frame = status.frame;
+    if !frame.fresh || *last_sequence == Some(frame.sequence) {
+        return;
+    }
+    if last_sequence.is_some_and(|previous| frame.sequence < previous) {
+        samples.clear();
+    }
+    samples.push_back(f64::from(status.processor.input_rms.clamp(0.0, 1.0)));
+    if samples.len() > 300 {
+        samples.pop_front();
+    }
+    *last_sequence = Some(frame.sequence);
+}
+
+fn estimated_noise_floor(samples: &VecDeque<f64>) -> f64 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let mut ordered = samples.iter().copied().collect::<Vec<_>>();
+    ordered.sort_by(f64::total_cmp);
+    ordered[(ordered.len() - 1) / 5]
 }
 
 fn clamp_unit_f32(value: f32) -> f64 {
@@ -604,4 +653,79 @@ async fn send_state_watch(
     }
     reader.abort();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{audio_telemetry, estimated_noise_floor, record_noise_sample};
+    use crate::audio::AudioStreamContext;
+    use lumistripe_engine_audio::{AudioFrame, AudioProcessorStats};
+    use lumistripe_engine_protocol::EngineAudioStatus;
+    use std::collections::VecDeque;
+
+    fn status(sequence: u64, fresh: bool, input_rms: f32) -> EngineAudioStatus {
+        EngineAudioStatus {
+            frame: AudioFrame {
+                sequence,
+                fresh,
+                ..Default::default()
+            },
+            processor: AudioProcessorStats {
+                input_rms,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn noise_floor_uses_recent_unique_fresh_engine_frames() {
+        let mut samples = VecDeque::new();
+        let mut last_sequence = None;
+        for (sequence, level) in [0.3, 0.1, 0.2, 0.4, 0.05, 0.6].into_iter().enumerate() {
+            record_noise_sample(
+                &mut samples,
+                &mut last_sequence,
+                &status(sequence as u64 + 1, true, level),
+            );
+        }
+        record_noise_sample(&mut samples, &mut last_sequence, &status(6, true, 0.9));
+        record_noise_sample(&mut samples, &mut last_sequence, &status(7, false, 0.7));
+
+        assert_eq!(samples.len(), 6);
+        assert_eq!(estimated_noise_floor(&samples), f64::from(0.1_f32));
+
+        record_noise_sample(&mut samples, &mut last_sequence, &status(1, true, 0.25));
+        assert_eq!(samples.len(), 1);
+        assert_eq!(estimated_noise_floor(&samples), 0.25);
+    }
+
+    #[test]
+    fn audio_telemetry_reports_profile_noise_floors_and_route_settings() {
+        let status = status(3, true, 0.12);
+        let context = AudioStreamContext {
+            source: "auto".to_owned(),
+            sync_route: "mic|USB mic|default".to_owned(),
+            sync_offset_ms: -24.5,
+            configured_input_noise_floor: Some(0.02),
+            configured_noise_floor: 0.04,
+        };
+        let mut drop_count = 0;
+        let mut was_drop = false;
+
+        let telemetry = audio_telemetry(
+            &status,
+            None,
+            &context,
+            0.03,
+            &mut drop_count,
+            &mut was_drop,
+        );
+
+        assert_eq!(telemetry["configured_input_noise_floor"], 0.02);
+        assert_eq!(telemetry["configured_noise_floor"], 0.04);
+        assert_eq!(telemetry["estimated_noise_floor"], 0.03);
+        assert_eq!(telemetry["sync_route"], "mic|USB mic|default");
+        assert_eq!(telemetry["sync_offset_ms"], -24.5);
+    }
 }

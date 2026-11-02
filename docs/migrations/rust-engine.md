@@ -119,11 +119,29 @@ manager. `--audio-device` selects a Rust-discovered host/device selector or
 matching device name. Leaving `--audio-backend` unset preserves Python/native-C
 capture and DSP.
 
+The standalone Axum web binary reads the Python-compatible versioned settings
+file at `~/.config/lumistripe/settings.json`. Override it with
+`--settings-file PATH` or `LUMISTRIPE_SETTINGS_FILE`. It rejects invalid or
+unsupported settings rather than replacing them with defaults. Its actor owns
+settings writes and atomically persists identity, topology, startup, playback,
+audio-profile, calibration, transition, music-idle, and sequencer changes while
+preserving unrelated fields. Scene and topology updates are applied only after
+the engine acknowledges them; a failed persistence or reconfiguration restores
+the previous acknowledged scene. Saved sequences are sent through the existing
+engine scene protocol to the Rust scheduler. Stripe topology and calibration
+sessions run through the same bounded application actor.
+The engine supervisor snapshots the latest acknowledged configuration, scene,
+and active Rust audio input. Each new engine process receives that audio request
+once after its configuration and scene; an unavailable input leaves rendering
+available and is reported through the engine audio status.
+
 ## Raspberry Pi deployment
 
-The trusted Raspberry Pi CI job installs its native build packages with `sudo`
-and uses a host-provisioned Rust toolchain; it does not bootstrap Rust with
-`curl`. The runner account needs passwordless `sudo` for package installation.
+The trusted Raspberry Pi CI job verifies its native build packages first and
+installs only when something is missing. It uses `sudo` when available or runs
+`apt-get` directly when the runner is root; a non-root runner without `sudo`
+must be provisioned with the packages in advance. The job uses a host-provisioned
+Rust toolchain and does not bootstrap Rust with `curl`.
 The job only runs for pushes to `main` and manual dispatches from `main`; pull
 request code stays on hosted runners. Outside CI, install the OS prerequisites
 once as root:
@@ -182,7 +200,15 @@ implementation installed as the rollback path.
 
 | Capability | Python backend | Rust backend | Validation state |
 | --- | --- | --- | --- |
-| FastAPI routes, REST models, dashboard, WebSocket preview | Supported | Existing Python path remains active | Preserved |
+| FastAPI routes, REST models, dashboard, WebSocket preview | Supported | Python remains the default; the standalone Axum server exposes compatible state, control, topology, calibration, animation, startup, audio-tuning, transition, and sequencer routes | Rust HTTP/OpenAPI/WebSocket tests and Python/Rust mock-output API parity test |
+| Versioned dashboard settings | Full v1–v12 loader and atomic persistence | Rust reads Python-generated v1–v12 files and transactionally persists identity, topology, startup, playback, animation, transition, audio-profile, calibration, and sequencer settings while preserving unrelated fields | Rust settings compatibility, persistence, acknowledgement, and rollback tests |
+| Startup playback restoration | Supported | Rust restores remembered mode, color, animation, brightness, and blackout; global playback updates refresh remembered state when restoration is enabled | Rust startup-scene and HTTP persistence tests |
+| Animation settings | Supported for all catalogued settings | Rust validates against the generated catalog, supports shared and independent-output values, applies values to scenes, and resets to catalog defaults | Rust animation-settings HTTP and persistence tests |
+| Sequencer settings and saved sequences | Supported | Rust persists the library and sends the selected sequence to the existing Rust scheduler; the Axum API supports list, create, update, delete, activate, and deactivate | Rust scene and sequence-library HTTP tests; scheduler timing tests |
+| Stripe topology API | Python runtime | Rust implements `GET/PUT /api/stripes` and `POST /api/stripes/test`; validates layout, output uniqueness, backend resources, zones, and power settings, then waits for engine acknowledgement before persistence with rollback on failure | Rust mock-engine topology acknowledgement and persistence rollback tests; physical SPI/GPIO test patterns require target hardware |
+| Color and microphone calibration | Python runtime | Rust color-calibration sessions apply test patterns and restore saved corrections on cancel/expiry; microphone calibration uses Rust audio telemetry and applies recommended profiles through acknowledged audio/scene updates | Rust calibration lifecycle and profile persistence tests; microphone capture was not tested against physical audio hardware |
+| Audio tuning and synchronization | Python runtime | Rust exposes microphone device/profile selection, reset, source mode (`auto`, `demo`, `mic`, `off`), per-route sync offsets, and microphone calibration. The demo source feeds synthetic frames through the Rust audio worker and render scheduler. Bluetooth/Spotify management remains delegated; active output-tone sync calibration needs the later PipeWire output provider | Rust mock-engine audio/API tests; Bluetooth, Spotify, and tone-output calibration remain unavailable in the Rust application |
+| Application identity | Python runtime | Rust reads and persists application and Spotify device names; it reports `spotify_restart_requested: false` because the external Spotify service remains delegated | Rust identity HTTP and settings persistence test |
 | Animation catalog and pixel rendering | Supported | All catalog animations and effects render in Rust for supported scene modes | Python/C rollback remains available |
 | Rust monotonic frame scheduling | Python worker loop | Deadline-based scheduler with animation timing cap, skipped-deadline telemetry, and bounded latest render | Rust scheduler integration tests |
 | Cycling selection | Python `PlaybackEngine` | Rust owns sequential/shuffle choice, fixed/per-animation deadlines, animation restart, and transition when scheduler is active | Rust runtime and Python adapter IPC tests |
@@ -249,9 +275,10 @@ it does not substitute for measurements on the target boards and devices.
 ### Preserved behavior and software gates
 
 - [x] Python/native-C remains the default and rollback backend.
-- [x] Rust remains explicitly selectable for rendering and audio. FastAPI,
-  dashboard state, Bluetooth/Spotify source management, and configuration
-  persistence continue through the Python application.
+- [x] Rust remains explicitly selectable for rendering and audio. The Python
+  application retains unported APIs and Bluetooth/Spotify service management;
+  the standalone Axum application owns migrated state, settings, topology,
+  playback, sequencer, and calibration workflows.
 - [x] The workspace includes Python/C audio fixtures, Rust differential DSP
   tests, animation/effect goldens, bounded-queue tests, and process-level IPC
   tests.

@@ -1,3 +1,6 @@
+use crate::settings::{
+    StripeBackend as SettingsStripeBackend, StripeTopologySettings, ZonePattern,
+};
 use clap::{Parser, ValueEnum};
 use lumistripe_engine_config::{EngineConfig, OutputBackend, OutputConfig};
 use std::path::PathBuf;
@@ -39,6 +42,8 @@ pub struct CliOptions {
     pub pairing_code: Option<String>,
     #[arg(long, env = "LUMISTRIPE_WEB_STATIC_DIR")]
     pub static_dir: Option<PathBuf>,
+    #[arg(long, env = "LUMISTRIPE_SETTINGS_FILE")]
+    pub settings_file: Option<PathBuf>,
     #[arg(long, env = "LUMISTRIPE_AUDIO_DEVICE")]
     pub audio_device: Option<String>,
     #[arg(long, env = "LUMISTRIPE_SECURE_COOKIE", default_value_t = false)]
@@ -59,6 +64,12 @@ pub struct EngineOutputOptions {
     pub name: String,
     pub pixel_count: usize,
     pub backend: OutputBackend,
+    pub reversed: bool,
+    pub zone_count: usize,
+    pub zone_pattern: ZonePattern,
+    pub voltage_v: f64,
+    pub full_white_current_a: f64,
+    pub power_limit_watts: Option<f64>,
 }
 
 #[derive(Clone, Debug)]
@@ -71,6 +82,7 @@ pub struct AppConfig {
     pub audio_device: Option<String>,
     pub secure_cookie: bool,
     pub static_dir: Option<PathBuf>,
+    pub settings_file: PathBuf,
 }
 
 impl CliOptions {
@@ -132,17 +144,29 @@ impl CliOptions {
             }
         };
         let mut outputs = vec![EngineOutputOptions {
-            id: "main".to_owned(),
-            name: "Main stripe".to_owned(),
+            id: "primary".to_owned(),
+            name: "Primary".to_owned(),
             pixel_count: self.pixels,
             backend: primary_backend,
+            reversed: false,
+            zone_count: 1,
+            zone_pattern: ZonePattern::Repeat,
+            voltage_v: 5.0,
+            full_white_current_a: 0.06,
+            power_limit_watts: None,
         }];
         if let (Some(pixel_count), Some(backend)) = (self.pixels_2, secondary_backend) {
             outputs.push(EngineOutputOptions {
                 id: "secondary".to_owned(),
-                name: "Secondary stripe".to_owned(),
+                name: "Secondary".to_owned(),
                 pixel_count,
                 backend,
+                reversed: false,
+                zone_count: 1,
+                zone_pattern: ZonePattern::Repeat,
+                voltage_v: 5.0,
+                full_white_current_a: 0.06,
+                power_limit_watts: None,
             });
         }
         let devices = outputs.iter().map(output_device_name).collect();
@@ -162,6 +186,7 @@ impl CliOptions {
                 audio_device: self.audio_device,
                 secure_cookie: self.secure_cookie,
                 static_dir: self.static_dir,
+                settings_file: self.settings_file.unwrap_or_else(default_settings_file),
             },
             engine_binary,
             self.host,
@@ -178,12 +203,103 @@ impl AppConfig {
                 .map(|output| OutputConfig {
                     id: output.id.clone(),
                     pixel_count: output.pixel_count,
-                    reversed: false,
+                    reversed: output.reversed,
                     backend: output.backend.clone(),
                 })
                 .collect(),
         )
         .expect("CLI validation produces a valid engine output configuration")
+    }
+
+    pub fn apply_topology(&mut self, topology: &StripeTopologySettings) -> Result<(), String> {
+        topology
+            .validate()
+            .map_err(|error| format!("saved stripe topology is invalid: {error}"))?;
+        if topology.outputs.is_empty() {
+            return Err("saved stripe topology has no physical LED outputs".to_owned());
+        }
+        let simulated_backend = match self.output_backend {
+            "simulation" => Some(OutputBackend::Mock),
+            "mock_spi" => Some(OutputBackend::MockSpi),
+            _ => None,
+        };
+        let outputs = topology
+            .outputs
+            .iter()
+            .map(|output| {
+                let backend = simulated_backend
+                    .clone()
+                    .unwrap_or_else(|| match output.backend {
+                        SettingsStripeBackend::Spi => OutputBackend::Spi {
+                            device: output.spi_device.clone(),
+                            speed_hz: output.spi_speed_hz,
+                        },
+                        SettingsStripeBackend::Gpio => OutputBackend::Gpio {
+                            chip: output.chip.clone(),
+                            data_pin: output.data_pin,
+                            clock_pin: output.clock_pin,
+                        },
+                    });
+                EngineOutputOptions {
+                    id: output.id.clone(),
+                    name: output.name.clone(),
+                    pixel_count: output.pixels,
+                    backend,
+                    reversed: output.reversed,
+                    zone_count: output.zone_count,
+                    zone_pattern: output.zone_pattern,
+                    voltage_v: output.voltage_v,
+                    full_white_current_a: output.full_white_current_a,
+                    power_limit_watts: output.power_limit_watts,
+                }
+            })
+            .collect::<Vec<_>>();
+        let engine_config = EngineConfig::new(
+            outputs
+                .iter()
+                .map(|output| OutputConfig {
+                    id: output.id.clone(),
+                    pixel_count: output.pixel_count,
+                    reversed: output.reversed,
+                    backend: output.backend.clone(),
+                })
+                .collect(),
+        )
+        .map_err(|error| format!("saved stripe topology cannot configure the engine: {error}"))?;
+        self.outputs = outputs;
+        if simulated_backend.is_none() {
+            self.runtime_kind = "hardware";
+            self.output_backend = match self.outputs.first().map(|output| &output.backend) {
+                Some(OutputBackend::Spi { .. })
+                    if self
+                        .outputs
+                        .iter()
+                        .all(|output| matches!(&output.backend, OutputBackend::Spi { .. })) =>
+                {
+                    "spi"
+                }
+                Some(OutputBackend::Gpio { .. })
+                    if self
+                        .outputs
+                        .iter()
+                        .all(|output| matches!(&output.backend, OutputBackend::Gpio { .. })) =>
+                {
+                    "gpio"
+                }
+                Some(_) => "mixed",
+                None => "none",
+            };
+        }
+        self.output_devices = self.outputs.iter().map(output_device_name).collect();
+        self.spi_speed_hz = self
+            .outputs
+            .iter()
+            .find_map(|output| match &output.backend {
+                OutputBackend::Spi { speed_hz, .. } => Some(*speed_hz),
+                _ => None,
+            });
+        let _ = engine_config;
+        Ok(())
     }
 }
 
@@ -204,4 +320,84 @@ fn default_engine_binary() -> PathBuf {
         .ok()
         .and_then(|path| path.parent().map(|parent| parent.join("lumistripe-engine")))
         .unwrap_or_else(|| PathBuf::from("lumistripe-engine"))
+}
+
+fn default_settings_file() -> PathBuf {
+    if let Some(path) = std::env::var_os("HOME").filter(|path| !path.is_empty()) {
+        return PathBuf::from(path).join(".config/lumistripe/settings.json");
+    }
+    PathBuf::from(".config/lumistripe/settings.json")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AppConfig, EngineOutputOptions};
+    use crate::settings::{
+        StripeBackend, StripeOutputSettings, StripeTopologySettings, ZonePattern,
+    };
+    use lumistripe_engine_config::OutputBackend;
+    use std::path::PathBuf;
+
+    #[test]
+    fn persisted_topology_preserves_simulation_and_applies_hardware_backends() {
+        let mut config = AppConfig {
+            outputs: vec![EngineOutputOptions {
+                id: "cli".to_owned(),
+                name: "CLI output".to_owned(),
+                pixel_count: 8,
+                backend: OutputBackend::Mock,
+                reversed: false,
+                zone_count: 1,
+                zone_pattern: ZonePattern::Repeat,
+                voltage_v: 5.0,
+                full_white_current_a: 0.06,
+                power_limit_watts: None,
+            }],
+            runtime_kind: "simulation",
+            output_backend: "simulation",
+            output_devices: vec!["simulation".to_owned()],
+            spi_speed_hz: None,
+            audio_device: None,
+            secure_cookie: false,
+            static_dir: None,
+            settings_file: PathBuf::new(),
+        };
+        let topology = StripeTopologySettings {
+            layout: crate::settings::StripeLayout::Continuous,
+            outputs: vec![StripeOutputSettings {
+                id: "left".to_owned(),
+                name: "Left".to_owned(),
+                pixels: 100,
+                backend: StripeBackend::Gpio,
+                reversed: true,
+                zone_count: 4,
+                zone_pattern: ZonePattern::Alternate,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let mut hardware_config = config.clone();
+        hardware_config.runtime_kind = "hardware";
+        hardware_config.output_backend = "spi";
+        hardware_config.apply_topology(&topology).unwrap();
+
+        assert_eq!(hardware_config.runtime_kind, "hardware");
+        assert_eq!(hardware_config.output_backend, "gpio");
+        assert!(matches!(
+            hardware_config.outputs[0].backend,
+            OutputBackend::Gpio { .. }
+        ));
+
+        config.apply_topology(&topology).unwrap();
+
+        assert_eq!(config.runtime_kind, "simulation");
+        assert_eq!(config.output_backend, "simulation");
+        assert_eq!(config.outputs[0].id, "left");
+        assert_eq!(config.outputs[0].zone_count, 4);
+        assert_eq!(config.outputs[0].zone_pattern, ZonePattern::Alternate);
+        assert_eq!(config.engine_config().pixel_counts(), vec![100]);
+        assert!(config.engine_config().outputs[0].reversed);
+        assert!(matches!(config.outputs[0].backend, OutputBackend::Mock));
+    }
 }
