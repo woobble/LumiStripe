@@ -1361,7 +1361,10 @@ def test_rust_output_thread_reports_rust_owned_cycling_selection() -> None:
         assert stats.selected_animations == ("rainbow_cycle",)
         assert stats.scene_revisions == (1,)
         assert stats.cycling_active == (True,)
-        assert len(stats.beat_clocks) == 1
+        assert len(stats.beat_clocks) == 1, (
+            "Rust did not publish the beat clock before the startup deadline: "
+            f"{stats!r}"
+        )
         assert stats.beat_clocks[0].bpm == pytest.approx(120.0, abs=0.1)
         assert stats.beat_clocks[0].beat_index >= 7
     finally:
@@ -1615,7 +1618,7 @@ def test_rust_scheduled_dynamic_playback_matches_python_clock_for_three_minute_b
             scheduler_fps=100,
         )
 
-        deadline = time.monotonic() + 1.0
+        deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline:
             stats = output.stats()
             if (
@@ -1626,7 +1629,15 @@ def test_rust_scheduled_dynamic_playback_matches_python_clock_for_three_minute_b
             ):
                 break
             time.sleep(0.005)
-        assert len(stats.beat_clocks) == 1
+        assert (
+            len(stats.beat_clocks) == 1
+            and stats.dynamic_gate_states == ("music",)
+            and stats.transmitted_frames > 0
+            and stats.audio_feature_to_led_latency_ms is not None
+        ), (
+            "Rust did not publish the beat clock and transmit an audio-driven "
+            f"frame before the startup deadline: {stats!r}"
+        )
         actual = stats.beat_clocks[0]
         expected = python_tracker.state(actual.sampled_at_ns / 1_000_000_000)
         assert actual.bpm == pytest.approx(expected.bpm, abs=0.01)

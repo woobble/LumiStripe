@@ -14,16 +14,16 @@ Per-call latency is milliseconds. Rust's third column includes one
 
 | Hops per call | Python/native-C p50 / p95 / p99 | Rust DSP p50 / p95 / p99 | Rust DSP + structure p50 / p95 / p99 | Python C p95 / Rust DSP+structure p95 |
 | ---: | ---: | ---: | ---: | ---: |
-| 1 | 0.0254 / 0.0266 / 0.0305 | 0.0084 / 0.0091 / 0.0107 | 0.0090 / 0.0098 / 0.0116 | 2.7× |
-| 4 | 0.0754 / 0.0779 / 0.0867 | 0.0333 / 0.0365 / 0.0377 | 0.0358 / 0.0387 / 0.0411 | 2.0× |
-| 16 | 0.2842 / 0.3194 / 0.6303 | 0.1432 / 0.1492 / 0.1515 | 0.1673 / 0.1797 / 0.1813 | 1.8× |
+| 1 | 0.0253 / 0.0273 / 0.0373 | 0.0078 / 0.0085 / 0.0096 | 0.0086 / 0.0096 / 0.0109 | 2.8× |
+| 4 | 0.0755 / 0.0777 / 0.0790 | 0.0311 / 0.0342 / 0.0370 | 0.0340 / 0.0374 / 0.0401 | 2.1× |
+| 16 | 0.2838 / 0.2878 / 0.2940 | 0.1369 / 0.1422 / 0.1540 | 0.1603 / 0.1719 / 0.1750 | 1.7× |
 
 The Rust DSP and DSP-plus-structure passes each recorded zero allocator calls
 over the measured 4096 calls at all three batch sizes. Beat events are drained
-into a fixed-size stack buffer. Python reached 451×, 614×, and 631× real-time
+into a fixed-size stack buffer. Python reached 447×, 612×, and 653× real-time
 headroom for one, four, and sixteen hops; Rust DSP-plus-structure reached
-1234×, 1285×, and 1098×. CPU utilization was approximately one core for both.
-Peak process RSS was 46.9 MiB for Python/native-C and 56.3 MiB for Rust in this
+1320×, 1344×, and 1149×. CPU utilization was approximately one core for both.
+Peak process RSS was 46.4 MiB for Python/native-C and 56.0 MiB for Rust in this
 run; these process totals include interpreter/runtime overhead and do not
 measure incremental audio-state memory. Python `tracemalloc` observed 2.4 KiB
 to 14.6 KiB of transient Python-managed peak bytes; it cannot see native C

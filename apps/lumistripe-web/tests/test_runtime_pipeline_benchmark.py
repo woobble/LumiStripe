@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import argparse
 import sys
+from types import SimpleNamespace
 
 import pytest
 
 from scripts.benchmark_runtime_pipeline import (
     _counter_delta,
+    _output_counter_delta,
     _parse_args,
     _topology,
     parse_csv_ints,
@@ -32,6 +34,27 @@ def test_counter_delta_handles_missing_and_reset_counters() -> None:
     assert _counter_delta(3, 5) == 0
     assert _counter_delta(0, None) == 0
     assert _counter_delta(None, 0) is None
+
+
+def test_output_counter_delta_handles_python_backend_without_rust_output_stats() -> None:
+    assert (
+        _output_counter_delta(
+            None,
+            None,
+            field="scheduler_missed_deadlines",
+        )
+        is None
+    )
+    assert _output_counter_delta(
+        SimpleNamespace(scheduler_missed_deadlines=12),
+        SimpleNamespace(scheduler_missed_deadlines=8),
+        field="scheduler_missed_deadlines",
+    ) == 4
+    assert _output_counter_delta(
+        SimpleNamespace(scene_control_revision=3),
+        None,
+        field="scene_control_revision",
+    ) == 3
 
 
 def test_parse_csv_ints_rejects_nonpositive_values() -> None:
@@ -89,6 +112,12 @@ def test_benchmark_cli_accepts_python_and_rust_backends(
             "python,rust",
             "--engine-binary",
             str(binary),
+            "--audio-source",
+            "mic",
+            "--audio-device",
+            "pipewire:usb-microphone",
+            "--audio-backends",
+            "rust",
             "--output-counts",
             "1,2",
         ],
@@ -97,4 +126,7 @@ def test_benchmark_cli_accepts_python_and_rust_backends(
     args = _parse_args()
 
     assert args.engine_backends == ("python", "rust")
+    assert args.audio_backends == ("rust",)
+    assert args.audio_source == "mic"
+    assert args.audio_device == "pipewire:usb-microphone"
     assert args.output_counts == (1, 2)

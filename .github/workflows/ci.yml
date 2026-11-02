@@ -372,6 +372,14 @@ jobs:
           persist-credentials: false
           submodules: recursive
 
+      - name: Install Raspberry Pi native build dependencies
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential ca-certificates curl pkg-config libasound2-dev \
+            libpipewire-0.3-dev libpulse-dev
+
       - name: Verify Raspberry Pi runner
         run: |
           set -eu
@@ -411,6 +419,8 @@ jobs:
       - name: Install Raspberry Pi native profile
         env:
           LUMISTRIPE_BUILD_EXTENSIONS: all
+          UV_CACHE_DIR: ${{ runner.temp }}/uv-cache
+          UV_LINK_MODE: copy
         # The ARM64 runner is persistent. The native profile is a build-time
         # setting, so a normal sync can incorrectly reuse a prior pure-Python
         # editable install of lumistripe-core.
@@ -529,6 +539,46 @@ jobs:
                   raise SystemExit(f"runtime output failed: {case}")
           PY
 
+      - name: Benchmark live Rust CPAL microphone or USB input on Raspberry Pi 5
+        if: ${{ vars.LUMISTRIPE_RUST_AUDIO_DEVICE != '' }}
+        env:
+          LUMISTRIPE_AUDIO_DEVICE: ${{ vars.LUMISTRIPE_RUST_AUDIO_DEVICE }}
+          LUMISTRIPE_BUILD_EXTENSIONS: all
+          UV_CACHE_DIR: ${{ runner.temp }}/uv-cache
+        run: |
+          set -eu
+          benchmark_dir="$RUNNER_TEMP/lumistripe-rust-renderer-benchmarks"
+          mkdir -p "$benchmark_dir"
+          uv run --locked python scripts/benchmark_runtime_pipeline.py \
+            --led-counts 300 --output-counts 1 --layouts mirrored \
+            --zone-counts 1 --modes dynamic --power-limits off \
+            --engine-backends rust --audio-backends rust \
+            --engine-binary rust/target/release/lumistripe-engine \
+            --audio-source mic --audio-device "$LUMISTRIPE_AUDIO_DEVICE" \
+            --warmup 2 --duration 20 \
+            --output "$benchmark_dir/runtime-pi5-rust-cpal-capture.json"
+          uv run --locked python - "$benchmark_dir/runtime-pi5-rust-cpal-capture.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          if report["case_count"] != 1:
+              raise SystemExit(f"expected one CPAL runtime case, got {report['case_count']}")
+          case = report["results"][0]
+          capture = case["audio_capture"]
+          if not capture["active"] or capture["callback_count"] <= 0:
+              raise SystemExit(f"CPAL capture produced no callbacks: {capture}")
+          if not capture["sample_rate"] or capture["sample_rate"] <= 0:
+              raise SystemExit(f"CPAL reported an invalid sample rate: {capture}")
+          if capture["last_error"] is not None or any(
+              capture[field] for field in ("callback_errors", "overflowed_batches", "dropped_samples")
+          ):
+              raise SystemExit(f"CPAL capture reported errors or drops: {capture}")
+          if case["output_effective_fps"] <= 0:
+              raise SystemExit(f"Rust output produced no frames during capture: {case}")
+          PY
+
       - name: Benchmark scalar C and Rust renderer profiles on Raspberry Pi 5
         env:
           LUMISTRIPE_BUILD_EXTENSIONS: render
@@ -633,10 +683,14 @@ jobs:
                 awk '{ printf "%.3f C\n", $1 / 1000 }' "$temperature_file"
               fi
             done
-            rustc -vV
-            cc --version
-            uv --version
-            uv run --locked python -c 'import platform, sys; print(sys.version); print(platform.platform()); print(platform.processor())'
+            if command -v rustc >/dev/null 2>&1; then rustc -vV; else echo 'rustc=unavailable'; fi
+            if command -v cc >/dev/null 2>&1; then cc --version; else echo 'cc=unavailable'; fi
+            if command -v uv >/dev/null 2>&1; then
+              uv --version
+              uv run --locked python -c 'import platform, sys; print(sys.version); print(platform.platform()); print(platform.processor())'
+            else
+              echo 'uv=unavailable'
+            fi
           } > "$RUNNER_TEMP/lumistripe-rust-renderer-benchmarks/environment.txt"
 
       - name: Upload Raspberry Pi renderer benchmark results

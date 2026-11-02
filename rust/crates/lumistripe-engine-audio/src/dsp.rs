@@ -1005,4 +1005,27 @@ mod tests {
         );
         assert_eq!(processor.drain_beat_events_into(&mut events), 0);
     }
+
+    #[test]
+    fn spectral_frequency_scaling_uses_the_capture_sample_rate() {
+        let tone_hz = 1_000.0_f32;
+        for sample_rate in [44_100.0_f32, 48_000.0] {
+            let mut processor = AudioProcessor::new(AudioConfig::raw(), sample_rate).unwrap();
+            let samples = (0..AUDIO_WINDOW_SIZE)
+                .map(|index| {
+                    0.4 * (std::f32::consts::TAU * tone_hz * index as f32 / sample_rate).sin()
+                })
+                .collect::<Vec<_>>();
+
+            processor
+                .feed_samples(&samples, AUDIO_WINDOW_SIZE as f64 / f64::from(sample_rate))
+                .unwrap();
+
+            let estimated_hz = processor.features().spectral_centroid * sample_rate / 2.0;
+            assert!(
+                (estimated_hz - tone_hz).abs() < 100.0,
+                "{sample_rate} Hz input estimated the tone at {estimated_hz} Hz"
+            );
+        }
+    }
 }

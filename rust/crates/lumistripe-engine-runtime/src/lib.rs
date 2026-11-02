@@ -4158,15 +4158,15 @@ mod tests {
     use lumistripe_engine_config::{EngineConfig, OutputBackend, OutputConfig};
     use lumistripe_engine_protocol::{
         FRAME_ACK_BYTES, FRAME_HEADER_BYTES, FrameAck, FrameAckStatus, FrameHeader, LegacyConfig,
-        LegacyRequest, LegacyRequestCommand, LegacyResponseResult, PREVIOUS_PROTOCOL_VERSION,
-        PROTOCOL_VERSION, RenderAnimationChoice, RenderAnimationSequence,
-        RenderAnimationSequenceStep, RenderAudioInput, RenderAudioUpdate, RenderBeatClockState,
-        RenderBeatEvent, RenderCycleOrder, RenderCycleTiming, RenderCycling, RenderDynamicIdle,
-        RenderDynamicIdleMode, RenderDynamicSelector, RenderEffect, RenderFrameRequest,
-        RenderMusicActivityConfig, RenderMusicStructurePhase, RenderOutput, RenderPowerConfig,
-        RenderSceneUpdate, RenderSchedulerConfig, RenderSelectorFeatures, RenderStructureEvent,
-        RenderSwitchQuantization, RenderTransition, Request, RequestCommand, Response,
-        ResponseResult, decode_frame_ack, decode_legacy_response, decode_response,
+        LegacyRequest, LegacyRequestCommand, LegacyResponseResult, MAX_CONTROL_MESSAGE_BYTES,
+        MAX_FRAME_BYTES, PREVIOUS_PROTOCOL_VERSION, PROTOCOL_VERSION, RenderAnimationChoice,
+        RenderAnimationSequence, RenderAnimationSequenceStep, RenderAudioInput, RenderAudioUpdate,
+        RenderBeatClockState, RenderBeatEvent, RenderCycleOrder, RenderCycleTiming, RenderCycling,
+        RenderDynamicIdle, RenderDynamicIdleMode, RenderDynamicSelector, RenderEffect,
+        RenderFrameRequest, RenderMusicActivityConfig, RenderMusicStructurePhase, RenderOutput,
+        RenderPowerConfig, RenderSceneUpdate, RenderSchedulerConfig, RenderSelectorFeatures,
+        RenderStructureEvent, RenderSwitchQuantization, RenderTransition, Request, RequestCommand,
+        Response, ResponseResult, decode_frame_ack, decode_legacy_response, decode_response,
         encode_frame_header, encode_legacy_request, encode_request,
     };
     use std::fs;
@@ -4332,6 +4332,28 @@ mod tests {
             thread::sleep(Duration::from_millis(5));
         }
         // Shutdown must also release an idle persistent frame stream promptly.
+        server.shutdown();
+    }
+
+    #[test]
+    fn oversized_binary_frame_is_rejected_without_stopping_the_server() {
+        let server = ServerThread::start();
+        let mut stream = UnixStream::connect(&server.socket).unwrap();
+        let mut header = [0u8; FRAME_HEADER_BYTES];
+        header[..4].copy_from_slice(b"LSF2");
+        header[4..6].copy_from_slice(&2u16.to_le_bytes());
+        header[6..8].copy_from_slice(&1u16.to_le_bytes());
+        header[8..16].copy_from_slice(&9u64.to_le_bytes());
+        header[16..20].copy_from_slice(&((MAX_FRAME_BYTES + 1) as u32).to_le_bytes());
+        stream.write_all(&header).unwrap();
+
+        let mut encoded_ack = [0u8; FRAME_ACK_BYTES];
+        stream.read_exact(&mut encoded_ack).unwrap();
+        let ack = decode_frame_ack(&encoded_ack).unwrap();
+        assert_eq!(ack.status, FrameAckStatus::InvalidFrame);
+        assert_eq!(ack.sequence, 0);
+
+        assert_eq!(health(server.request(RequestCommand::Health)), (0, 0, 0));
         server.shutdown();
     }
 
@@ -6612,6 +6634,21 @@ mod tests {
             .unwrap();
         let mut response = [0u8; 1];
         assert_eq!(stream.read(&mut response).unwrap(), 0);
+
+        assert_eq!(health(server.request(RequestCommand::Health)), (0, 0, 0));
+        server.shutdown();
+    }
+
+    #[test]
+    fn oversized_control_requests_are_rejected_without_stopping_the_server() {
+        let server = ServerThread::start();
+        let mut stream = UnixStream::connect(&server.socket).unwrap();
+        stream
+            .write_all(&vec![b'x'; MAX_CONTROL_MESSAGE_BYTES + 1])
+            .unwrap();
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).unwrap();
+        assert!(response.is_empty());
 
         assert_eq!(health(server.request(RequestCommand::Health)), (0, 0, 0));
         server.shutdown();

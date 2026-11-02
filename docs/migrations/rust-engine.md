@@ -121,9 +121,12 @@ capture and DSP.
 
 ## Raspberry Pi deployment
 
-The persistent Raspberry Pi CI runner uses a host-provisioned Rust toolchain
-and system headers; workflow steps run as the runner account and do not invoke
-`sudo` or bootstrap Rust with `curl`. Install the OS prerequisites once as root:
+The trusted Raspberry Pi CI job installs its native build packages with `sudo`
+and uses a host-provisioned Rust toolchain; it does not bootstrap Rust with
+`curl`. The runner account needs passwordless `sudo` for package installation.
+The job only runs for pushes to `main` and manual dispatches from `main`; pull
+request code stays on hosted runners. Outside CI, install the OS prerequisites
+once as root:
 
 ```bash
 apt-get update
@@ -143,6 +146,13 @@ Confirm `rustc` and `cargo` are on that account's `PATH` when the runner service
 starts, then restart the service. The Pi job verifies those tools, ARM64, the
 CA bundle, ALSA/PipeWire/PulseAudio headers and pkg-config metadata, and
 recursive submodule checkout before building.
+
+To include live microphone or USB capture in the Pi job, set the repository
+variable `LUMISTRIPE_RUST_AUDIO_DEVICE` to a CPAL selector or matching device
+name. The job records a 20-second Rust audio-to-virtual-LED capture sample in
+its benchmark artifact. Run once per physical input. Bluetooth and Spotify
+monitor routes require an active source-manager session and should be measured
+separately with `--audio-source bluetooth` or `--audio-source spotify`.
 
 Build the engine for the target Pi and install the standalone binary outside
 the checkout so application updates do not replace it:
@@ -229,6 +239,122 @@ temperature/governor data, and stage timings before making an optimization
 claim. Physical GPIO/SPI waveform, timing, cleanup, and failure-recovery checks
 also remain outstanding; mock tests and hosted ARM64 runs do not establish
 electrical timing safety.
+
+## Production-readiness acceptance checklist
+
+Keep the Rust engine opt-in until every hardware acceptance item below has
+current, reproducible evidence. Automated coverage confirms software behavior;
+it does not substitute for measurements on the target boards and devices.
+
+### Preserved behavior and software gates
+
+- [x] Python/native-C remains the default and rollback backend.
+- [x] Rust remains explicitly selectable for rendering and audio. FastAPI,
+  dashboard state, Bluetooth/Spotify source management, and configuration
+  persistence continue through the Python application.
+- [x] The workspace includes Python/C audio fixtures, Rust differential DSP
+  tests, animation/effect goldens, bounded-queue tests, and process-level IPC
+  tests.
+- [x] Hosted x86_64 and ARM64 jobs build and test the Rust workspace.
+- [x] `cargo-audit` reports no known vulnerabilities in the 201 locked Rust
+  dependencies (advisory database updated 2026-11-02).
+- [x] Local Python 3.12 full suite: 7,370 passed and 168 skipped. The full Rust
+  workspace tests and the focused Loom bounded-slot check also pass. The Rust
+  scheduler startup test passed five consecutive focused runs with the more
+  tolerant five-second deadline.
+- [x] Frontend REST contract regeneration is clean; frontend lint, 175 tests,
+  and production build pass. `uv build --all-packages` builds all five Python
+  workspace distributions.
+- [ ] Rerun the hosted build/test matrix on this workflow revision. In the
+  latest run on 2026-11-02, Rust x86_64/ARM64, Python 3.13/3.14, frontend, and
+  all four distribution jobs passed. Python 3.12 failed in the Rust scheduler
+  startup test before its first output frame; the local suite now passes with
+  the longer startup deadline and an explicit transmitted-frame assertion.
+- [ ] The Pi 5 workflow must pass end to end. Its latest run stopped at runner
+  verification because `pkg-config` was absent. The workflow now installs the
+  native OS packages before verification; a Pi run is still needed to validate
+  that environment fix.
+
+### Audio capture acceptance
+
+- [x] Software coverage exercises bounded capture queues, overflow accounting,
+  discontinuity propagation, DSP reference fixtures, and the Rust-to-Python
+  calibration contract.
+- [x] CPAL's selected input sample rate is passed into the Rust DSP processor.
+- [ ] On Pi 4 and Pi 5, verify CPAL capture from a microphone and USB input.
+  Record host/device selector, actual sample rate, callback duration, callback
+  jitter, queue drops, and at least 20 minutes of stable capture. The Pi 5 job
+  can run a 20-second sample when `LUMISTRIPE_RUST_AUDIO_DEVICE` is configured.
+- [ ] Verify Bluetooth and Spotify monitor routing through the existing source
+  manager with Python and CPAL capture. Include disconnect/reconnect, recovery,
+  and calibration measurements for each route.
+- [ ] Compare Python and Rust calibration outputs against the same recorded
+  source and record the accepted measurement tolerance.
+
+### Performance acceptance
+
+- [x] Synthetic x86_64 Python/native-C versus Rust DSP results are recorded in
+  [`../performance/rust-audio-dsp-comparison.md`](../performance/rust-audio-dsp-comparison.md).
+- [ ] Historical Pi 5 renderer-only evidence is available from [workflow run
+  41421435690](https://github.com/woobble/LumiStripe/actions/runs/41421435690),
+  source revision `767a41b71d58504677fcde39a85bf8f4510de801`. On a Pi 5 Model B
+  Rev 1.0 (`aarch64`, Linux 7.0.0-1020-raspi, `ondemand`, 56.75 °C at capture),
+  the artifact measured 54 animation cases at 300 LEDs on one output, with 200
+  warmup and 1,000 measured frames per case. In the C-Neon profile, median
+  per-case p95 render time was 7.65 µs for LLVM Rust and 8.15 µs for scalar
+  Rust; the slowest case was Aurora at 42.76/42.82 µs respectively. Native C's
+  slowest case was Twinkle at 139.15 µs, and Python's was BeatTunnel at
+  8.04 ms. A separate 54-animation/19-effect-layer report recorded maximum
+  Rust p95 of 52.09 µs for the Confetti effect layer and zero measured Rust
+  allocations per frame. This is per-kernel renderer evidence from an older
+  source revision; it does not include live CPAL capture, Python supervision,
+  IPC, physical SPI/GPIO timing, or full audio-to-LED latency, and does not
+  satisfy the current hardware matrix.
+- [ ] Run the audio-to-LED matrix on Pi 4 and Pi 5 with real audio and
+  representative LED counts. Retain source revision, selected Dynamic
+  animations, p50/p95/p99 frame and capture-to-LED latency, synchronization
+  jitter, missed/dropped frames, per-thread CPU, RSS/allocation data, CPU
+  governor, temperature, and output configuration.
+- [ ] Explain Dynamic FPS changes by separating Python policy, Rust render,
+  IPC, audio, and physical output time. Profile before optimizing, then repeat
+  the same matrix.
+- [ ] Compare Rust against Python/native-C and scalar C on both Pi models.
+  Synthetic x86_64 and hosted ARM64 results do not satisfy this gate.
+
+### Physical output and failure recovery
+
+- [x] Mock tests cover SPI/GPIO encoding, multi-output finalization, blackout,
+  bounded retries, shutdown, owner death, and process crash recovery.
+- [ ] On SPI and GPIO outputs, measure clock/data timing and inter-output skew
+  with a logic analyzer at supported pixel counts. Verify blackout on startup,
+  explicit blackout, graceful shutdown, and forced termination.
+- [ ] Inject device-open, short-write, transient transfer, permanent transfer,
+  worker panic, and process-kill failures. Confirm bounded recovery, safe output
+  state, released device handles, and successful restart.
+- [ ] Run overnight playback with topology/configuration changes and record
+  memory, queue bounds, frame loss, and output health.
+
+### Concurrency and safety review
+
+- [x] Mutable playback and hardware state have explicit worker ownership;
+  capture callbacks use a bounded SPSC queue and render updates use bounded or
+  latest-wins queues.
+- [x] A Loom model covers the bounded latest-frame slot.
+- [x] Reviewed unsafe blocks in the Rust audio and output crates: GPIO MMIO
+  pins and register layouts are validated before access, mappings and file
+  descriptors have paired cleanup, and the MMIO writer is moved to one worker.
+  Capture and benchmark syscalls use initialized result storage; the benchmark
+  allocator delegates the allocation contract to `System`.
+- [x] Reviewed IPC and queue limits: 1 MiB control requests, 128 KiB frame
+  payloads, an eight-batch CPAL ring, bounded work queues, and one retry for
+  transient hardware writes. Oversized control/frame requests are rejected
+  without stopping the engine; queue replacement, invalid packets, retries,
+  shutdown, and recovery have automated coverage.
+- [ ] Run available sanitizers or Miri-compatible tests. The local toolchain
+  does not provide `cargo-miri`; physical GPIO/SPI recovery checks remain
+  separate from this software review.
+- [ ] Run the overnight physical stress matrix and inspect memory, queue bounds,
+  frame loss, device recovery, shutdown ordering, and long-duration counters.
 
 ## Validation and measurement
 

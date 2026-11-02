@@ -69,6 +69,20 @@ def _counter_delta(after: int | None, before: int | None) -> int | None:
     return max(0, after - (before or 0))
 
 
+def _output_counter_delta(
+    after: Any | None,
+    before: Any | None,
+    *,
+    field: str,
+) -> int | None:
+    if after is None:
+        return None
+    return _counter_delta(
+        getattr(after, field),
+        getattr(before, field, None),
+    )
+
+
 def parse_csv_ints(value: str, *, argument: str) -> tuple[int, ...]:
     try:
         values = tuple(int(part.strip()) for part in value.split(","))
@@ -375,6 +389,7 @@ def _run_case(
     spi_speed_hz: int,
     power_budget_watts: float,
     audio_source: str | None,
+    audio_device: str | None,
 ) -> dict[str, object]:
     gc.collect()
     if trace_allocations:
@@ -411,6 +426,7 @@ def _run_case(
                     spi_speed_hz_2=(spi_speed_hz if output_count == 2 else None),
                     audio_source=audio_source
                     or ("demo" if mode == "dynamic" else "off"),
+                    audio_device=audio_device,
                     settings_file=settings_file,
                 )
             )
@@ -619,11 +635,10 @@ def _run_case(
                 "output_frame_latency_sample_count": (
                     output_stats.frame_latency_sample_count if output_stats else 0
                 ),
-                "output_scheduler_missed_deadlines": _counter_delta(
-                    output_stats.scheduler_missed_deadlines,
-                    output_stats_before.scheduler_missed_deadlines
-                    if output_stats_before
-                    else None,
+                "output_scheduler_missed_deadlines": _output_counter_delta(
+                    output_stats,
+                    output_stats_before,
+                    field="scheduler_missed_deadlines",
                 ),
                 "audio_capture": (
                     _audio_capture_metrics(
@@ -638,17 +653,15 @@ def _run_case(
                         elapsed,
                     )
                 ),
-                "output_control_update_count": _counter_delta(
-                    output_stats.scene_control_revision,
-                    output_stats_before.scene_control_revision
-                    if output_stats_before
-                    else None,
+                "output_control_update_count": _output_counter_delta(
+                    output_stats,
+                    output_stats_before,
+                    field="scene_control_revision",
                 ),
-                "output_audio_update_count": _counter_delta(
-                    output_stats.audio_update_sequence,
-                    output_stats_before.audio_update_sequence
-                    if output_stats_before
-                    else None,
+                "output_audio_update_count": _output_counter_delta(
+                    output_stats,
+                    output_stats_before,
+                    field="audio_update_sequence",
                 ),
                 "output_control_updates_replaced": (
                     output_stats.scene_updates_replaced
@@ -800,6 +813,10 @@ def _parse_args() -> argparse.Namespace:
         choices=("auto", "off", "demo", "mic", "bluetooth", "spotify"),
         help="override the default off/static and demo/dynamic source selection",
     )
+    parser.add_argument(
+        "--audio-device",
+        help="select an input by host/device selector or matching device name",
+    )
     parser.add_argument("--output", type=Path, help="write JSON to this path instead of stdout")
     args = parser.parse_args()
     args.led_counts = parse_csv_ints(args.led_counts, argument="--led-counts")
@@ -901,6 +918,7 @@ def main() -> int:
             spi_speed_hz=args.spi_speed_hz,
             power_budget_watts=args.power_budget_watts,
             audio_source=args.audio_source,
+            audio_device=args.audio_device,
         )
         for led_count in args.led_counts
         for output_count in args.output_counts
