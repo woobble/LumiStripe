@@ -256,6 +256,32 @@ scene/audio update counts. Rust-mode audio results also include capture-to-LED
 feature latency p50/p95/p99 and p99-minus-p50 synchronization jitter when the
 audio source provides capture timestamps.
 
+### Supplied Raspberry Pi 5 runtime matrix
+
+A user-supplied run identified a Raspberry Pi 5 Model B Rev 1.0 running
+Linux 7.0.0-1020-raspi on `aarch64`. It completed all 32 matrix cases with
+physical SPI output enabled and demo audio. Rust reported no output failures
+and no scheduler deadline misses. Static output ran at about 60 FPS; Dynamic
+output ranged from 34.8 to 40.6 FPS. Rust output drops peaked at four frames in
+the 600-LED Dynamic cases. Measured SPI transmission time was about 7.9–8.1 ms
+for 300 LEDs and 15.7–15.9 ms for 600 LEDs. Rust process RSS stayed between
+11.5 and 11.7 MiB, and combined Python/Rust process CPU use ranged from 5.8%
+to 19.1%. In Dynamic Rust cases, audio-feature-to-LED latency p50 ranged from
+27.7 to 39.4 ms, p95 from 53.3 to 71.2 ms, and p99-minus-p50 jitter from 20.5
+to 34.7 ms.
+
+In Rust cases, the generic `frames`, `effective_fps`, `expected_interval_ms`,
+`actual_frame_interval_ms`, and `missed_deadlines` fields describe the Python
+runtime supervisor's `_step` loop. That loop ran at about 20 Hz in this run;
+Rust's independently scheduled physical output cadence is reported by
+`output_effective_fps`, with scheduler misses in
+`output_scheduler_missed_deadlines`. Do not use the generic frame fields as
+Rust renderer measurements. The supplied JSON did not include a source
+revision, thermal/governor readings, or selected Dynamic animation names, so
+those details still need to be recorded for a reproducible comparison. Pi 4
+runtime measurements and physical waveform, shutdown/blackout, and crash
+recovery checks also remain outstanding.
+
 ```bash
 CARGO_HOME=/tmp/lumistripe-cargo-home cargo fmt --manifest-path rust/Cargo.toml --all -- --check
 CARGO_HOME=/tmp/lumistripe-cargo-home cargo test --locked --manifest-path rust/Cargo.toml --workspace
