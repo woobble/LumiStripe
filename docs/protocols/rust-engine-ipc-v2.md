@@ -35,8 +35,71 @@ Power estimates describe the corrected frame before alpha scaling. The output
 array and optional limiting index use the same order as the configured outputs.
 `preview_outputs` contains post-correction, post-power-limit RGBA samples in
 physical output order, with at most 128 evenly spaced pixels per output.
-These fields are omitted until a direct render completes, preserving the
-existing health fixture and compatibility with clients that ignore additions.
+`scheduler_missed_deadlines` reports elapsed frame deadlines skipped while the
+Rust scheduler was delayed. It is omitted while zero, preserving compatibility
+with clients that ignore additions. When animation scenes are active, health
+also reports `selected_animations`, `scene_revisions`, and `cycling_active` in
+configured output order. They describe the selection Rust is currently
+rendering, including selections made by Cycling policy. Scheduled render health
+reports `audio_feature_to_led_latency_ms` and p50/p95/p99 values when audio
+features carry `feature_timestamp_ns`. The timestamp is the audio capture time
+in the shared monotonic clock domain; latency ends after the corresponding LED
+output transaction completes. The percentile window is bounded to the most
+recent 256 output frames. A future or absent capture timestamp is not measured.
+Scheduled render health also reports one `beat_clocks` entry per output with its
+`sampled_at_ns`, BPM,
+phase, confidence, beat index, and predicted beat timestamps. The sample timestamp
+uses the same monotonic nanosecond domain as render inputs. Each clock also
+reports `last_event_sequence`, the highest timestamped beat event it consumed.
+Dynamic outputs that include an activity configuration also report one
+`dynamic_gate_states` value per output: `idle`, `candidate`, or `music`.
+Outputs without a Rust-owned Dynamic activity gate report `disabled`. The field
+is omitted when no render schedule is active.
+When any output has a saved Dynamic sequence, `sequence_playback` reports
+sequence progress per configured output, including the optional sequence ID,
+whether it is active or waiting for a confident clock, the current step and
+animation, remaining bars, and the next transition timestamp. Entries follow
+configured output order; outputs without a sequence have an inactive state.
+The field is omitted when no sequence is configured. Transition timestamps use
+the same monotonic nanosecond domain as render inputs.
+When any Dynamic output has an `effect_scheduler`, `effect_schedulers` reports
+active effects, cooldowns, trigger results, drop-accent state, and beat-tick
+lateness per output. Outputs without effect scheduling have an inactive entry.
+
+The scheduled runtime uses separate scene and audio control messages. A
+`scene_update` is a complete pixel-free snapshot with a monotonically
+increasing `revision`, timestamp, brightness, power settings, output scenes,
+and scheduler configuration:
+
+```json
+{"protocol_version":2,"request_id":"scene-1","command":{"type":"scene_update","data":{"update":{"revision":1,"timestamp_ns":1256000000,"brightness":1.0,"outputs":[{"animation":"rainbow"}],"scheduler":{"max_fps":60}}}}}
+```
+
+Rust processes scene updates in request order and acknowledges the revision
+with `scene_updated`. Revisions are independent of legacy render sequence IDs.
+The response's `replaced` flag reports when a newer schedule replaced one that
+had not rendered yet; the revision was still processed in order. The Python
+bridge uses a bounded 64-entry pending FIFO; a topology reconfiguration clears
+snapshots for the previous output set. If the queue fills, the runtime
+reports the failure and returns to the Python renderer instead of discarding a
+control update. The acknowledgement means Rust accepted the schedule, not that
+an LED frame has finished transmission. Health reports the latest accepted
+`scene_control_revision`.
+
+An `audio_update` carries a monotonically increasing `sequence`, monotonic
+timestamp, and the latest optional audio snapshot:
+
+```json
+{"protocol_version":2,"request_id":"audio-1","command":{"type":"audio_update","data":{"update":{"sequence":1,"timestamp_ns":1272000000,"audio":null}}}}
+```
+
+The Python bridge holds at most one pending audio snapshot; a newer snapshot
+replaces it. One-shot beat and structure events remain in each snapshot until
+Rust health confirms that their per-output sequences were consumed. Rust
+ignores duplicate or out-of-order audio sequences and rejects timestamps older
+than the last accepted audio timestamp. The `audio_updated` response reports
+whether the snapshot was accepted, while health reports the latest
+`audio_update_sequence`.
 
 ### Direct Rust rendering
 
@@ -45,6 +108,146 @@ The configured output count and order must match `frame.outputs`. Rust keeps
 each animation instance, effect state, and scratch frame in the output worker.
 It renders into reusable buffers and queues the result for output. A newer
 pending render replaces a stale pending render.
+
+`audio.feature_timestamp_ns` optionally carries the capture time for the
+current feature snapshot. Rust uses it to measure capture-to-output latency.
+`audio.fallback_bpm` is an optional tempo hint, and `audio.beat_events` carries
+timestamped beat events detected by Python. Event timestamps use the same
+monotonic nanosecond domain as `frame.timestamp_ns`. Rust deduplicates events by
+sequence and ignores events whose timestamps do not advance the clock. The
+Python bridge retains up to 256 unacknowledged beat events and includes them in
+subsequent scene updates until every configured Rust beat clock reports that it
+consumed their sequence. Replaced latest-wins scene updates therefore do not
+consume one-shot beat events. If the bounded replay window overflows, the oldest
+events are dropped and counted in audio health.
+`audio.structure_events` carries one-shot music-structure edges separately
+from replaceable feature snapshots. Each event contains its output index,
+per-output sequence, monotonic timestamp, phase, confidence, buildup progress,
+and `drop_event` or `section_change` flags. The batch is capped at 256 events;
+the Python bridge replays pending events until health reports the corresponding
+`structure_event_sequences` entry for each output. Rust ignores duplicate or
+older event sequences, so replaced scene updates do not lose an edge or apply
+it twice. Events are consumed in sequence order once their timestamps are due;
+the flags in one eligible batch are coalesced into one scheduler update per
+output. If the replay window fills, the bridge falls back to Python playback
+instead of growing the queue or dropping unacknowledged edges. A structure event
+must contain at least one edge flag.
+Each beat event may include a normalized `strength`; `audio.beat_event_stream`
+identifies producers that provide timestamped events even when the latest batch
+is empty. `audio.effect_features` carries the effect scheduler's normalized
+beat strength and musical impact. The selector feature object continues to
+carry onset, spectrum, and structure-related feature inputs.
+Dynamic selector inputs may include `audio.feature_sequence`, a monotonically
+increasing producer sequence. Rust evaluates selector scores once for each new
+sequence and ignores duplicate or older values, so the scheduler's render FPS
+does not change how quickly seeded selector randomness advances. If omitted,
+Rust uses the enclosing render request sequence. Latest-wins may skip intermediate
+feature sequences when the producer outpaces the engine.
+`selector.activity` optionally configures Rust's smoothed feature thresholds,
+activation delay, hysteresis, beat-density window, and idle-release frame count.
+When present, `cycling.dynamic_idle` selects `off`, `solid`, or `animation`
+behavior while the gate is idle or a candidate. Idle animation mode includes
+its animation name and saved settings; solid mode includes its RGB color and
+brightness. Rust keeps the active Dynamic selection while it renders the idle
+scene, and health reports that active selection in `selected_animations`.
+`audio_enabled` defaults to true on each output and may be set false to render
+that output without the current audio frame.
+
+The selector may include `switch_quantization` (`off`, `beat`, `bar`, or
+`phrase`), `bars_per_phrase` (4, 8, or 16), `clock_confidence_threshold`,
+`subdivisions_per_beat` (1, 2, or 4), and signed `sync_offset_ns` (from
+-500,000,000 to 500,000,000). These fields default to unquantized switching
+when omitted. Beat, bar, and phrase switches wait for a confident boundary from
+the per-output Rust beat clock. A pending candidate follows newer selector
+intent while retaining its scheduled boundary; a lost or uncertain clock clears
+it. Late or transition-blocked candidates move to the next matching boundary.
+
+An optional `scheduler` enables autonomous Rust rendering after the scene has
+been submitted:
+
+```json
+{"protocol_version":2,"request_id":"req-4","command":{"type":"render","data":{"frame":{"sequence":8,"timestamp_ns":1256000000,"delta_ns":16000000,"brightness":0.8,"audio":null,"outputs":[{"animation":"rainbow"}]},"scheduler":{"max_fps":60}}}}
+```
+
+Cycling scenes carry their mode and choices on each output. Rust owns the
+selection clock and switches only after a successful output update:
+
+```json
+{"protocol_version":2,"request_id":"req-5","command":{"type":"render","data":{"frame":{"sequence":9,"timestamp_ns":1272000000,"delta_ns":16000000,"brightness":1.0,"audio":null,"outputs":[{"animation":"rainbow","cycling":{"order":"shuffle","timing":"per_animation","interval_ns":30000000000,"seed":7,"choices":[{"animation":"rainbow","settings":{}},{"animation":"rainbow_cycle","settings":{"speed":2}}],"transition_duration_ns":300000000,"transition_mode":"crossfade"}}]},"scheduler":{"max_fps":60}}}}
+```
+
+`cycling` is optional and configured independently for each output. `order` is
+`sequential` or `shuffle`; `timing` is `per_animation` or `fixed`. Fixed timing
+uses `interval_ns`; per-animation timing uses the catalog's
+`frames_per_cycle` and actual Rust-rendered frames. `choices` contains the
+automatic animation catalog entries and each animation's saved settings.
+Shuffle uses the same MT19937 draw sequence as Python `random.Random` for
+non-negative seeds that fit in 64 bits. When a selection changes, Rust restarts
+that animation, increments its scene revision, and starts the configured
+transition from the previous rendered frame. A zero transition duration
+disables the transition. A scene update with the same active animation and
+cycling config preserves the cycle clock and random state.
+
+Dynamic mode uses the same per-output choices and adds a `selector` object to
+`cycling`. When present, Rust ranks the catalog's `dynamic_metadata` using the
+latest `audio.selector_features`, then applies minimum/maximum duration,
+switch cooldown, score margin, drop hold, and section-change timing before
+changing the scene. `selector_features` carries the Python-produced energy,
+spectrum, beat-confidence, BPM, silence, drop, and section-change values; it
+does not move capture, FFT, or DSP into Rust. Seeded score jitter uses the same
+Python-compatible MT19937 draws as other Rust selection. Selection is evaluated
+once per `feature_sequence` update rather than on each scheduled render. The
+initial active Dynamic selection is immediate. `switch_quantization` controls
+when later candidates commit; `sync_offset_ns` shifts those musical boundaries.
+Without `selector`, `cycling` retains the sequential/shuffle behavior above.
+`cycling_active` reports whether Rust owns one of these automatic selection
+policies.
+
+An optional `sequence` on Dynamic `cycling` schedules saved animation choices
+against the Rust beat clock:
+
+```json
+{"id":"night-drive","repeat":true,"steps":[{"animation":"pulse","duration_bars":2},{"animation":"comet","duration_bars":1}]}
+```
+
+The sequence requires `selector`; its steps must name entries from `choices`.
+It accepts 1–32 steps, each lasting 1, 2, 4, or 8 estimated 4/4 bars. Rust
+waits for a confident clock and the next bar boundary before starting, applies
+`sync_offset_ns` to boundaries, and pauses progress while clock confidence is
+low. A non-repeating sequence returns control to the Dynamic selector when its
+last step completes. Python mirrors Rust's selection and sequence state for API
+compatibility and fallback. A timestamped section edge may rescue a missed bar
+transition only after the configured bar duration is exhausted, and only while
+the edge plus `sync_offset_ns` is within the normal late-transition grace. The
+offset applies to the section timestamp; an early section edge never shortens a
+step. Python continues classifying music structure and sends that state with
+each output. Rust owns effect cooldowns, beat subdivision
+scheduling, category/capacity checks, candidate selection, active-effect
+lifetimes, and drop accents for Dynamic scenes.
+
+An optional `cycling.effect_scheduler` configures this Rust-owned policy. It
+contains beat and onset thresholds, rhythmic and accent cooldowns, the active
+effect limit, overlay strength, beat subdivisions, clock confidence threshold,
+seed, sync offset, dynamic response, and available effect choices with saved
+settings. It requires a Dynamic `selector`. The output's optional
+`music_structure` object carries the phase, confidence, buildup progress, and
+legacy one-update `drop_event` edge. Python sends new one-shot drop and section
+edges in `audio.structure_events`; Rust also accepts the legacy output field
+for compatibility. Explicit `output.effects` remain available for clients that
+schedule effects themselves.
+
+`scheduler.max_fps` must be between 1 and 240. The actual frame period is the
+slower of this cap and the fastest animation-specific frame period in the
+submitted scene. The scheduler uses monotonic absolute deadlines, advances from
+the prior deadline to avoid sleep drift, and skips elapsed deadlines instead
+of queueing obsolete work. Its pending render shares the bounded latest-wins
+output queue, while a separate thread performs rendering and physical
+transmission. Updates with the scheduler enabled replace the active scene and
+retain the existing schedule phase. Rust translates elapsed time from the
+request's timestamp onto its own monotonic clock; subsequent render timestamps
+and deltas remain in the caller's clock domain. Omitting `scheduler` preserves
+one-shot rendering for existing clients. A binary frame submission cancels an
+active scene schedule.
 
 ```json
 {"protocol_version":2,"request_id":"req-3","command":{"type":"render","data":{"frame":{"sequence":7,"timestamp_ns":1240000000,"delta_ns":16000000,"brightness":0.8,"audio":{"rms":0.4,"bands":[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8],"beat":true,"beat_strength":0.9},"power":{"enabled":true,"budget_watts":80.0},"outputs":[{"animation":"rainbow","settings":{"palette":"neon"},"effects":[{"name":"hard_beat","settings":{},"intensity":0.75}],"base_intensity":0.8,"max_overlay_strength":0.65,"zone_count":2,"zone_pattern":"alternate","transition":{"started_at_ns":1200000000,"duration_ns":250000000,"mode":"crossfade"},"color_correction":[240,255,224],"voltage_v":5.0,"full_white_current_a":0.06,"power_limit_watts":45.0}]}}}}
@@ -87,7 +290,7 @@ composition and zone expansion, estimates power from corrected RGB and alpha,
 chooses the minimum global/per-output scale, and applies that scale to alpha
 before output. Per-output power limits are ignored while global power limiting
 is disabled, matching the Python output path.
-Unsupported animation names/settings and invalid frame-level values reject the
+Unsupported animation names/settings, invalid selection choices, and invalid frame-level values reject the
 render request before it is queued. The output worker validates effect names
 and settings before it renders; a bad effect rejects the frame, increments
 failed-frame health, and does not transmit it. `sequence`, `timestamp_ns`, and
@@ -100,6 +303,9 @@ applies color correction and power limiting before writing to the configured
 output set. Continuous layouts use the shared scene slice fields, and
 differently sized mirrored layouts use scene resampling. The web runtime routes
 supported Static, Cycling, Dynamic, and Solid scenes through this command.
+Rust owns Cycling and Dynamic base-animation selection, including saved
+sequences and activity policies supported by the protocol; unsupported scene
+policies continue through the Python fallback.
 The binary frame-set protocol remains available for older clients and
 unsupported custom scene requests.
 

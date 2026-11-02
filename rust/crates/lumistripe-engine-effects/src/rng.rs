@@ -1,13 +1,13 @@
 //! Python-compatible MT19937 draws for effects with seeded random state.
 
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct PythonRandom {
+pub struct PythonRandom {
     state: [u32; 624],
     index: usize,
 }
 
 impl PythonRandom {
-    pub(super) fn new(seed: u32) -> Self {
+    pub fn new(seed: u32) -> Self {
         let mut value = Self {
             state: [0; 624],
             index: 624,
@@ -16,7 +16,22 @@ impl PythonRandom {
         value
     }
 
-    pub(super) fn seed(&mut self, seed: u32) {
+    pub fn from_u64(seed: u64) -> Self {
+        let low = seed as u32;
+        let high = (seed >> 32) as u32;
+        let mut value = Self {
+            state: [0; 624],
+            index: 624,
+        };
+        if high == 0 {
+            value.seed_words(&[low]);
+        } else {
+            value.seed_words(&[low, high]);
+        }
+        value
+    }
+
+    fn seed_words(&mut self, words: &[u32]) {
         self.state[0] = 19_650_218;
         for index in 1..624 {
             self.state[index] = 1_812_433_253u32
@@ -26,11 +41,11 @@ impl PythonRandom {
 
         let mut i = 1;
         let mut j = 0;
-        let mut remaining = 624.max(1);
+        let mut remaining = 624.max(words.len());
         while remaining > 0 {
             self.state[i] = (self.state[i]
                 ^ (self.state[i - 1] ^ (self.state[i - 1] >> 30)).wrapping_mul(1_664_525))
-            .wrapping_add(seed)
+            .wrapping_add(words[j])
             .wrapping_add(j as u32);
             i += 1;
             j += 1;
@@ -38,7 +53,7 @@ impl PythonRandom {
                 self.state[0] = self.state[623];
                 i = 1;
             }
-            if j >= 1 {
+            if j >= words.len() {
                 j = 0;
             }
             remaining -= 1;
@@ -57,6 +72,10 @@ impl PythonRandom {
         }
         self.state[0] = 0x8000_0000;
         self.index = 624;
+    }
+
+    pub(super) fn seed(&mut self, seed: u32) {
+        self.seed_words(&[seed]);
     }
 
     fn next_u32(&mut self) -> u32 {
@@ -95,7 +114,7 @@ impl PythonRandom {
         ((high << 26) + low) as f64 / 9_007_199_254_740_992.0
     }
 
-    pub(super) fn randbelow(&mut self, upper: usize) -> usize {
+    pub fn randbelow(&mut self, upper: usize) -> usize {
         if upper <= 1 {
             return 0;
         }
@@ -112,7 +131,7 @@ impl PythonRandom {
         low + self.randbelow((high - low + 1) as usize) as i32
     }
 
-    pub(super) fn uniform(&mut self, low: f64, high: f64) -> f64 {
+    pub fn uniform(&mut self, low: f64, high: f64) -> f64 {
         low + (high - low) * self.random()
     }
 }

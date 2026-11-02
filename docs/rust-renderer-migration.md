@@ -34,15 +34,20 @@ requests before queuing them. A newer queued render replaces an older one. The
 compact binary pixel-frame protocol and v1 client remain available.
 
 `RustEngineProcess.render_frame()` exposes this direct request to Python. The
-web runtime routes Static, Cycling, and Dynamic animation scenes to Rust for
-independent outputs, Continuous layouts, and mirrored outputs of different
+web runtime uses a bounded FIFO of monotonically revised `scene_update`
+commands for reliable scene changes, with a separate latest-wins `audio_update`
+mailbox for replaceable audio snapshots. Beat and structure edges stay in the
+audio updates until health acknowledges their sequences. `render_frame()` and
+the latest-wins `render` command remain available for compatibility callers.
+The web runtime routes Static, Cycling, and Dynamic animation scenes to Rust
+for independent outputs, Continuous layouts, and mirrored outputs of different
 logical lengths.
-Dynamic playback policy and effect scheduling advance in Python without
-rasterizing pixels; active effect names, settings, intensities, and trigger
-beats are sent with each scene request for Rust to render. Dynamic off and
-animation idle scenes also use Rust. Solid playback and solid Dynamic idle
-scenes use the same Rust finalization path for brightness, correction, and
-power limiting.
+The Rust scheduler owns Dynamic selection, activity gating, and effect
+triggering, cooldowns, active effect timing, and drop accents. Python continues
+classifying music structure and sends structure and audio features to Rust.
+Dynamic off and animation idle scenes also use Rust. Solid playback and solid
+Dynamic idle scenes use the same Rust finalization path for brightness,
+correction, and power limiting. Python retains the fallback policy path.
 
 Continuous requests carry the shared canvas length and each output's scene
 offset. Rust renders that canvas and maps the assigned slice through the
@@ -67,7 +72,7 @@ measures the worker-owned renderer and finalization path.
 | --- | --- | --- |
 | `animation/catalog.py`: names, settings, defaults, frame periods, and the 19 effect definitions | Generated animation-definition catalog and validated `AnimationInstance` settings | `export_rust_animation_catalog.py --check`; Rust catalog validation tests |
 | `render/kernels.py` and `render/native_*.c`: Python/NumPy fallback and optimized C kernels | Rust animation and effect renderers; the Python/C implementation stays available for rollback | Four-frame Python/native-C golden cases for all 54 animations and all 19 effects; renderer benchmark compares Python, C, Rust release, and scalar Rust |
-| `effects/layers.py`: active effect selection, trigger beats, intensity, and overlay budget | Python keeps scheduler policy; Rust owns effect pixel state, reusable scratch frames, and composition | Seeded effect golden fixtures, trigger-beat tests, and layer-retention tests |
+| `effects/layers.py`: active effect selection, trigger beats, intensity, and overlay budget | Rust owns Dynamic scheduler policy and effect pixel state; Python keeps the fallback path | Seeded effect golden fixtures, Rust scheduler checks, Python adapter checks, and layer-retention tests |
 | `controller.py`: logical zones, uneven physical segments, repeat/alternate orientation, and topology layout | Rust zone maps, shared scene slicing, and mirrored scene resampling | Python-generated layout goldens compare independent, continuous, and mirrored multi-output frames with uneven lengths, zones, and audio inputs |
 | `PlaybackEngine` and `AnimationPlayer`: transition start time, duration, and mode | Timestamped Rust crossfade, fade-through-black, and wipe compositor | Controlled transition golden frames and runtime scene-revision tests |
 | `AudioSnapshot` render frame: RMS, eight bands, beat, and beat strength | Typed protocol-v2 `AudioInput`; Rust animation/effect instances consume timestamped values | Animation and effect goldens include beat and non-beat inputs; Rust reactive-input tests compare Python band/drive rules |
@@ -116,6 +121,19 @@ the Rust runtime checks each output frame with explicit RGB and alpha
 tolerances.
 
 ## Renderer benchmarks
+
+For statistical microbenchmarks of representative Rust animation renderers,
+run the Criterion harness. It reuses one animation instance and frame buffer per
+case, so each sample excludes setup allocations:
+
+```bash
+cargo bench --locked --manifest-path rust/Cargo.toml \
+  -p lumistripe-engine-animation-state --bench animation_render
+```
+
+The harness samples four representative animations at 150, 300, and 600 pixels.
+Use the runtime matrix for scheduler, IPC, CPU, and physical-output
+measurements; these microbenchmarks isolate animation rendering.
 
 `scripts/benchmark_rust_renderers.py` measures the Python fallback, available
 native-C kernel, and one or more Rust release binaries for the same animation,
@@ -327,8 +345,8 @@ cannot silently leave stale Rust catalogs or golden frames behind.
 ## Remaining work
 
 Runtime scene routing now covers Static, Cycling, Dynamic, and Solid scenes
-across all three topology layouts. The Dynamic scheduler remains Python policy
-code; Rust owns animation and effect pixel rendering. Multi-strip benchmarks
+across all three topology layouts. Rust owns Dynamic scheduler policy while
+Python continues music-structure classification and fallback behavior. Multi-strip benchmarks
 cover renderer throughput but not the complete runtime or output transfer
 timing.
 

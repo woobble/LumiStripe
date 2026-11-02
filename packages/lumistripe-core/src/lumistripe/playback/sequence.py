@@ -123,6 +123,7 @@ class AnimationSequenceCoordinator:
         "_last_boundary_at_s",
         "_last_now_s",
         "_next_transition_at_s",
+        "_pending_section_change_at_s",
         "_remaining_bars",
         "_session_active",
         "_state",
@@ -163,6 +164,7 @@ class AnimationSequenceCoordinator:
         self._target_bar_index: int | None = None
         self._last_boundary_at_s: float | None = None
         self._next_transition_at_s: float | None = None
+        self._pending_section_change_at_s: float | None = None
         self._last_now_s: float | None = None
 
     @property
@@ -197,8 +199,21 @@ class AnimationSequenceCoordinator:
         self._target_bar_index = None
         self._last_boundary_at_s = None
         self._next_transition_at_s = None
+        self._pending_section_change_at_s = None
         self._last_now_s = None
         self._refresh_state(waiting_for_clock=False)
+
+    def adopt_renderer_state(self, state: SequencePlaybackState) -> bool:
+        """Mirror a Rust-owned state while leaving Python progress reset for fallback."""
+
+        if not isinstance(state, SequencePlaybackState):
+            raise TypeError("state must be a SequencePlaybackState")
+        expected_id = None if self.sequence is None else self.sequence.id
+        if state.sequence_id != expected_id:
+            return False
+        self.reset_session()
+        self._state = state
+        return True
 
     def update(
         self,
@@ -207,6 +222,7 @@ class AnimationSequenceCoordinator:
         now_s: float,
         sync_offset_s: float,
         music_active: bool,
+        section_change_at_s: float | None = None,
     ) -> str | None:
         """Return an animation name only when its sequence boundary is due."""
 
@@ -227,6 +243,7 @@ class AnimationSequenceCoordinator:
         ):
             self._clock_valid = False
             self._next_transition_at_s = None
+            self._pending_section_change_at_s = None
             self._last_now_s = now_s if math.isfinite(now_s) else None
             self._refresh_state(waiting_for_clock=True)
             return None
@@ -299,6 +316,27 @@ class AnimationSequenceCoordinator:
         boundary_at = _boundary_at_bar(timeline, target)
         due_at = boundary_at + sync_offset_s
         self._next_transition_at_s = due_at
+        if (
+            section_change_at_s is not None
+            and math.isfinite(section_change_at_s)
+            and self._remaining_bars == 0
+            and bar_index >= target
+        ):
+            self._pending_section_change_at_s = section_change_at_s
+        pending_section_change_at = self._pending_section_change_at_s
+        if pending_section_change_at is not None:
+            section_due_at = pending_section_change_at + sync_offset_s
+            if now_s >= section_due_at:
+                if now_s - section_due_at <= self._maximum_lateness_s(timeline.bpm):
+                    animation_name = self._advance_step(
+                        bar_index, pending_section_change_at
+                    )
+                    self._last_now_s = now_s
+                    self._refresh_state(waiting_for_clock=False)
+                    return animation_name
+                self._pending_section_change_at_s = None
+            else:
+                self._next_transition_at_s = min(due_at, section_due_at)
         if now_s >= due_at:
             if now_s - due_at <= self._maximum_lateness_s(timeline.bpm):
                 animation_name = self._advance_step(target, boundary_at)
@@ -318,6 +356,10 @@ class AnimationSequenceCoordinator:
             )
             self._remaining_bars = self._target_bar_index - bar_index
             self._next_transition_at_s = next_boundary + sync_offset_s
+        if self._pending_section_change_at_s is not None:
+            section_due_at = self._pending_section_change_at_s + sync_offset_s
+            assert self._next_transition_at_s is not None
+            self._next_transition_at_s = min(self._next_transition_at_s, section_due_at)
         self._last_now_s = now_s
         self._refresh_state(waiting_for_clock=False)
         return None
@@ -328,6 +370,7 @@ class AnimationSequenceCoordinator:
         now_s: float,
         sync_offset_s: float,
     ) -> None:
+        self._pending_section_change_at_s = None
         bar_index = timeline.bar_index
         assert bar_index is not None
         self._last_bar_index = bar_index
@@ -366,6 +409,7 @@ class AnimationSequenceCoordinator:
 
     def _start_step(self, bar_index: int, boundary_at_s: float) -> None:
         assert self.sequence is not None
+        self._pending_section_change_at_s = None
         self._current_step_index = 0
         self._remaining_bars = self.sequence.steps[0].duration_bars
         self._last_bar_index = bar_index
@@ -375,6 +419,7 @@ class AnimationSequenceCoordinator:
     def _advance_step(self, boundary_bar_index: int, boundary_at_s: float) -> str | None:
         assert self.sequence is not None
         assert self._current_step_index is not None
+        self._pending_section_change_at_s = None
         next_index = self._current_step_index + 1
         if next_index >= len(self.sequence.steps):
             if not self.sequence.repeat:

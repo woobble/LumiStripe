@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 mod renderers;
 mod rng;
 
-use rng::PythonRandom;
+pub use rng::PythonRandom;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct BurstState {

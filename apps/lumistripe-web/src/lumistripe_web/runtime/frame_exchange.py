@@ -46,7 +46,12 @@ class LatestFrameExchange:
     per-frame path uses ``numpy.copyto`` and reuses the same slot objects.
     """
 
-    def __init__(self, output_lengths: tuple[int, ...] | list[int]) -> None:
+    def __init__(
+        self,
+        output_lengths: tuple[int, ...] | list[int],
+        *,
+        ready_event: threading.Event | None = None,
+    ) -> None:
         if not output_lengths or any(length <= 0 for length in output_lengths):
             raise ValueError("at least one output with a positive length is required")
         self._slots = tuple(
@@ -59,6 +64,7 @@ class LatestFrameExchange:
             for _ in range(2)
         )
         self._condition = threading.Condition()
+        self._ready_event = ready_event
         self._ready_slot: _FrameSlot | None = None
         self._inflight_slot: _FrameSlot | None = None
         self._next_sequence = 0
@@ -110,6 +116,8 @@ class LatestFrameExchange:
             self._ready_slot = slot
             self._submitted_count += 1
             self._condition.notify()
+            if self._ready_event is not None:
+                self._ready_event.set()
             return True
 
     def take(self, timeout: float | None = None) -> _FrameSlot | None:
@@ -152,6 +160,8 @@ class LatestFrameExchange:
                 self._ready_slot = None
                 self._dropped_count += 1
             self._condition.notify_all()
+            if self._ready_event is not None:
+                self._ready_event.set()
 
     def stats(self) -> FrameExchangeStats:
         """Return a small immutable snapshot for low-rate diagnostics."""

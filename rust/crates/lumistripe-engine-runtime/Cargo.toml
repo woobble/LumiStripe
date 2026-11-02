@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 libc.workspace = true
 lumistripe-engine-config.workspace = true
+lumistripe-engine-animation-definitions.workspace = true
 lumistripe-engine-compositing.workspace = true
 lumistripe-engine-animation-state.workspace = true
 lumistripe-engine-effects.workspace = true
@@ -17,5 +18,9 @@ lumistripe-engine-render-primitives.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
+[features]
+loom-tests = []
+
 [dev-dependencies]
+loom.workspace = true
 serde_json.workspace = true

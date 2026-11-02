@@ -7,14 +7,23 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
+from collections import deque
 from pathlib import Path
+from types import SimpleNamespace
 
+import lumistripe_web.runtime.rust_engine as rust_engine_module
 import numpy as np
 import pytest
 from lumistripe import Stripe
+from lumistripe.animation import AnimationPlayer
+from lumistripe.animation.catalog import animation_catalog
+from lumistripe.audio.beat import BeatClockTracker
+from lumistripe.audio.types import AudioFrame, AudioSnapshot, BeatEvent, MusicFeatures
 from lumistripe.gpio.spi import _FrameEncoder, encode_legacy_frame
-from lumistripe.playback import PlaybackMode
+from lumistripe.playback import PlaybackMode, SwitchQuantization
+from lumistripe.selector import DynamicSelector, DynamicSelectorConfig
 from lumistripe_web.app import build_parser
 from lumistripe_web.runtime import RuntimeSettings
 from lumistripe_web.runtime.rust_engine import (
@@ -22,9 +31,19 @@ from lumistripe_web.runtime.rust_engine import (
     RustEngineOutputThread,
     RustEngineProcess,
     RustOutputSpec,
+    RustRenderAck,
+    RustRenderAnimationSequence,
+    RustRenderAnimationSequenceStep,
     RustRenderAudioInput,
+    RustRenderBeatEvent,
+    RustRenderCycling,
+    RustRenderDynamicIdle,
+    RustRenderDynamicSelector,
     RustRenderEffect,
+    RustRenderMusicActivityConfig,
     RustRenderOutput,
+    RustRenderSelectorFeatures,
+    RustRenderStructureEvent,
     RustRenderTransition,
     _decode_response,
     _encode_request,
@@ -32,6 +51,7 @@ from lumistripe_web.runtime.rust_engine import (
 from lumistripe_web.runtime.worker import RuntimeWorker
 from lumistripe_web.settings import (
     CalibrationSettingsStore,
+    StartupPlaybackSettings,
     StripeOutputSettings,
     StripeTopologySettings,
 )
@@ -343,6 +363,71 @@ def test_rust_process_renders_typed_scene_inputs_without_pixel_frames() -> None:
         process.close()
 
 
+def test_rust_process_reports_sequence_state_waiting_for_a_confident_clock() -> None:
+    process = RustEngineProcess(binary_path=_engine_binary())
+    try:
+        process.configure((_mock_spec("main", 3),))
+        process.render_frame(
+            sequence=1,
+            timestamp_ns=time.monotonic_ns(),
+            delta_ns=16_000_000,
+            brightness=1.0,
+            outputs=(
+                RustRenderOutput(
+                    "pulse",
+                    {},
+                    cycling=RustRenderCycling(
+                        order="sequential",
+                        timing="fixed",
+                        interval_ns=1,
+                        seed=7,
+                        choices=(("pulse", {}), ("comet", {})),
+                        transition_duration_ns=100_000_000,
+                        transition_mode="crossfade",
+                        selector=RustRenderDynamicSelector(
+                            min_duration_ns=0,
+                            max_duration_ns=1_000_000_000,
+                            switch_cooldown_ns=0,
+                            drop_cooldown_ns=0,
+                            randomness=0.0,
+                            history_size=0,
+                            seed=7,
+                            switch_margin=0.0,
+                        ),
+                        sequence=RustRenderAnimationSequence(
+                            id="night-drive",
+                            repeat=True,
+                            steps=(RustRenderAnimationSequenceStep("pulse", 1),),
+                        ),
+                    ),
+                ),
+            ),
+            audio=RustRenderAudioInput(
+                rms=0.0,
+                bands=(0.0,) * 8,
+                beat=False,
+                beat_strength=0.0,
+                feature_sequence=1,
+                fallback_bpm=120.0,
+            ),
+            scheduler_fps=60,
+        )
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            health = process.health()
+            if health.sequence_playback:
+                break
+            time.sleep(0.005)
+        assert len(health.sequence_playback) == 1
+        state = health.sequence_playback[0]
+        assert state.sequence_id == "night-drive"
+        assert state.waiting_for_clock is True
+        assert state.active is False
+        assert state.current_step_index is None
+    finally:
+        process.close()
+
+
 def test_rust_render_audio_input_requires_finite_eight_band_values() -> None:
     with pytest.raises(ValueError, match="eight bands"):
         RustRenderAudioInput(0.0, (0.0,) * 7, False, 0.0).to_wire()  # type: ignore[arg-type]
@@ -353,6 +438,176 @@ def test_rust_render_audio_input_requires_finite_eight_band_values() -> None:
             False,
             0.0,
         ).to_wire()
+
+
+def test_rust_render_audio_input_serializes_monotonic_beat_events() -> None:
+    audio = RustRenderAudioInput(
+        rms=0.2,
+        bands=(0.1,) * 8,
+        beat=False,
+        beat_strength=0.0,
+        feature_timestamp_ns=1_200_000_000,
+        feature_sequence=43,
+        fallback_bpm=128.0,
+        beat_events=(RustRenderBeatEvent(42, 1_234_000_000),),
+    )
+
+    assert audio.to_wire() == {
+        "rms": 0.2,
+        "bands": [0.1] * 8,
+        "beat": False,
+        "beat_strength": 0.0,
+        "feature_timestamp_ns": 1_200_000_000,
+        "feature_sequence": 43,
+        "fallback_bpm": 128.0,
+        "beat_events": [
+            {"sequence": 42, "timestamp_ns": 1_234_000_000, "strength": 0.0}
+        ],
+    }
+
+
+def test_rust_audio_input_preserves_capture_timestamp() -> None:
+    snapshot = AudioSnapshot(frame=AudioFrame(timestamp=12.5))
+
+    audio = RuntimeWorker._rust_audio_input(snapshot)
+
+    assert audio is not None
+    assert audio.feature_timestamp_ns == 12_500_000_000
+
+
+def test_rust_render_audio_input_serializes_structure_event_edges() -> None:
+    event = RustRenderStructureEvent(
+        output_index=1,
+        sequence=3,
+        timestamp_ns=2_500_000_000,
+        phase="drop",
+        confidence=0.9,
+        buildup_progress=0.7,
+        drop_event=True,
+        section_change=True,
+    )
+    audio = RustRenderAudioInput(
+        rms=0.2,
+        bands=(0.1,) * 8,
+        beat=False,
+        beat_strength=0.0,
+        structure_events=(event,),
+    )
+
+    assert audio.to_wire()["structure_events"] == [
+        {
+            "output_index": 1,
+            "sequence": 3,
+            "timestamp_ns": 2_500_000_000,
+            "phase": "drop",
+            "confidence": 0.9,
+            "buildup_progress": 0.7,
+            "drop_event": True,
+            "section_change": True,
+        }
+    ]
+    with pytest.raises(ValueError, match="one-shot edge"):
+        RustRenderStructureEvent(
+            output_index=0,
+            sequence=1,
+            timestamp_ns=0,
+            phase="groove",
+            confidence=0.0,
+            buildup_progress=0.0,
+        ).to_wire()
+
+
+def test_worker_replays_beat_events_until_rust_acknowledges_them() -> None:
+    worker = RuntimeWorker.__new__(RuntimeWorker)
+    worker._rust_pending_beat_events = deque()
+    worker._rust_dropped_beat_events = 0
+    worker._rust_pending_structure_events = {}
+    worker._rust_last_audio_update_retry_at_s = 1.0
+    snapshot = AudioSnapshot.from_parts(
+        AudioFrame(),
+        MusicFeatures(),
+        beat_events=(BeatEvent(7, 1.7, 0.8), BeatEvent(5, 1.2, 0.7)),
+    )
+
+    worker._remember_rust_beat_events(snapshot)
+    worker._remember_rust_beat_events(snapshot)
+    replay = tuple(worker._rust_pending_beat_events)
+    audio = RuntimeWorker._rust_audio_input(
+        snapshot,
+        feature_sequence=3,
+        beat_events=replay,
+    )
+
+    assert audio is not None
+    assert [event.sequence for event in audio.beat_events] == [5, 7]
+    assert [event.sequence for event in replay] == [5, 7]
+    worker._acknowledge_rust_beat_events(5)
+    assert [event.sequence for event in worker._rust_pending_beat_events] == [7]
+    worker._acknowledge_rust_beat_events(7)
+    assert not worker._rust_pending_beat_events
+    assert worker._rust_last_audio_update_retry_at_s is None
+
+
+def test_worker_replays_structure_edges_per_dynamic_output_until_acknowledged() -> None:
+    worker = RuntimeWorker.__new__(RuntimeWorker)
+    worker._rust_pending_beat_events = deque()
+    worker._rust_pending_structure_events = {}
+    worker._rust_structure_source_sequences = {}
+    worker._rust_structure_event_sequences = {}
+    worker._rust_last_audio_update_retry_at_s = 1.0
+    structure = SimpleNamespace(
+        phase=SimpleNamespace(value="drop"),
+        confidence=0.9,
+        buildup_progress=0.7,
+        drop_event=True,
+    )
+    outputs = (
+        StripeOutputSettings(id="left", name="Left", pixels=8),
+        StripeOutputSettings(id="right", name="Right", pixels=8),
+    )
+    engines = (
+        SimpleNamespace(mode=PlaybackMode.STATIC),
+        SimpleNamespace(mode=PlaybackMode.DYNAMIC, music_structure_state=structure),
+    )
+    snapshot = AudioSnapshot.from_parts(
+        AudioFrame(sequence=10, timestamp=2.5, fresh=True),
+        MusicFeatures(section_change=True),
+    )
+
+    first = worker._remember_rust_structure_events(snapshot, outputs, engines)
+    duplicate = worker._remember_rust_structure_events(snapshot, outputs, engines)
+
+    assert first is not None
+    assert duplicate == first
+    assert len(first) == 1
+    assert first[0].output_index == 1
+    assert first[0].sequence == 1
+    assert first[0].drop_event is True
+    assert first[0].section_change is True
+
+    worker._acknowledge_rust_structure_events("right", 1)
+    assert not worker._rust_pending_structure_events["right"]
+    assert worker._remember_rust_structure_events(snapshot, outputs, engines) == ()
+
+
+def test_worker_bounds_unacknowledged_beat_replay_and_counts_drops() -> None:
+    worker = RuntimeWorker.__new__(RuntimeWorker)
+    worker._rust_pending_beat_events = deque()
+    worker._rust_dropped_beat_events = 0
+    worker._rust_last_audio_update_retry_at_s = None
+    events = tuple(
+        BeatEvent(sequence, float(sequence), 0.5)
+        for sequence in range(1, 260)
+    )
+    snapshot = AudioSnapshot.from_parts(
+        AudioFrame(), MusicFeatures(), beat_events=events
+    )
+
+    worker._remember_rust_beat_events(snapshot)
+
+    assert len(worker._rust_pending_beat_events) == 256
+    assert worker._rust_pending_beat_events[0].sequence == 4
+    assert worker._rust_dropped_beat_events == 3
 
 
 def test_rust_render_output_validates_and_encodes_effect_layers() -> None:
@@ -405,6 +660,93 @@ def test_rust_render_output_validates_and_encodes_effect_layers() -> None:
         },
         "blackout": True,
     }
+    cycling = RustRenderOutput(
+        "rainbow",
+        {},
+        cycling=RustRenderCycling(
+            order="sequential",
+            timing="per_animation",
+            interval_ns=30_000_000_000,
+            seed=7,
+            choices=(("rainbow", {}), ("rainbow_cycle", {"speed": 2})),
+            transition_duration_ns=200_000_000,
+            transition_mode="wipe",
+        ),
+    )
+    assert cycling.to_wire()["cycling"] == {
+        "order": "sequential",
+        "timing": "per_animation",
+        "interval_ns": 30_000_000_000,
+        "seed": 7,
+        "choices": [
+            {"animation": "rainbow", "settings": {}},
+            {"animation": "rainbow_cycle", "settings": {"speed": 2}},
+        ],
+        "transition_duration_ns": 200_000_000,
+        "transition_mode": "wipe",
+    }
+    sequence = RustRenderCycling(
+        order="sequential",
+        timing="fixed",
+        interval_ns=1,
+        seed=7,
+        choices=(("pulse", {}), ("comet", {})),
+        transition_duration_ns=100_000_000,
+        transition_mode="fade_black",
+        selector=RustRenderDynamicSelector(
+            min_duration_ns=0,
+            max_duration_ns=1_000_000_000,
+            switch_cooldown_ns=0,
+            drop_cooldown_ns=0,
+            randomness=0.0,
+            history_size=0,
+            seed=7,
+            switch_margin=0.0,
+        ),
+        sequence=RustRenderAnimationSequence(
+            id="night-drive",
+            repeat=True,
+            steps=(
+                RustRenderAnimationSequenceStep("pulse", 2),
+                RustRenderAnimationSequenceStep("comet", 1),
+            ),
+        ),
+    )
+    assert sequence.to_wire() == {
+        "order": "sequential",
+        "timing": "fixed",
+        "interval_ns": 1,
+        "seed": 7,
+        "choices": [
+            {"animation": "pulse", "settings": {}},
+            {"animation": "comet", "settings": {}},
+        ],
+        "transition_duration_ns": 100_000_000,
+        "transition_mode": "fade_black",
+        "selector": {
+            "min_duration_ns": 0,
+            "max_duration_ns": 1_000_000_000,
+            "switch_cooldown_ns": 0,
+            "drop_cooldown_ns": 0,
+            "randomness": 0.0,
+            "history_size": 0,
+            "seed": 7,
+            "switch_margin": 0.0,
+            "switch_quantization": "off",
+            "bars_per_phrase": 8,
+            "clock_confidence_threshold": 0.65,
+            "subdivisions_per_beat": 1,
+            "sync_offset_ns": 0,
+        },
+        "sequence": {
+            "id": "night-drive",
+            "repeat": True,
+            "steps": [
+                {"animation": "pulse", "duration_bars": 2},
+                {"animation": "comet", "duration_bars": 1},
+            ],
+        },
+    }
     calibrated = RustRenderOutput(
         "rainbow",
         {},
@@ -438,6 +780,64 @@ def test_rust_render_output_validates_and_encodes_effect_layers() -> None:
         "settings": {},
         "scene_pixel_count": 5,
         "scene_offset": 2,
+    }
+    activity = RustRenderMusicActivityConfig(
+        idle_enter_frames=60,
+        activation_delay_ns=0,
+        feature_attack=0.28,
+        feature_release=0.08,
+        energy_threshold=0.03,
+        onset_threshold=0.025,
+        beat_density_threshold=0.05,
+        brightness_threshold=0.08,
+        spectral_balance_ratio=0.35,
+        activation_hysteresis_ratio=1.35,
+        beat_density_window_ns=2_000_000_000,
+    )
+    idle = RustRenderDynamicIdle("off", None, {}, (1, 2, 3), 0.5)
+    dynamic_scene = RustRenderOutput(
+        "rainbow",
+        {},
+        audio_enabled=False,
+        cycling=RustRenderCycling(
+            order="sequential",
+            timing="fixed",
+            interval_ns=1,
+            seed=7,
+            choices=(("rainbow", {}),),
+            transition_duration_ns=0,
+            transition_mode="crossfade",
+            selector=RustRenderDynamicSelector(
+                min_duration_ns=0,
+                max_duration_ns=1_000_000_000,
+                switch_cooldown_ns=0,
+                drop_cooldown_ns=0,
+                randomness=0.0,
+                history_size=0,
+                seed=7,
+                switch_margin=0.0,
+                switch_quantization="phrase",
+                bars_per_phrase=16,
+                clock_confidence_threshold=0.72,
+                subdivisions_per_beat=4,
+                sync_offset_ns=-125_000_000,
+                activity=activity,
+            ),
+            dynamic_idle=idle,
+        ),
+    ).to_wire()
+    assert dynamic_scene["audio_enabled"] is False
+    assert dynamic_scene["cycling"]["selector"]["switch_quantization"] == "phrase"
+    assert dynamic_scene["cycling"]["selector"]["bars_per_phrase"] == 16
+    assert dynamic_scene["cycling"]["selector"]["clock_confidence_threshold"] == 0.72
+    assert dynamic_scene["cycling"]["selector"]["subdivisions_per_beat"] == 4
+    assert dynamic_scene["cycling"]["selector"]["sync_offset_ns"] == -125_000_000
+    assert dynamic_scene["cycling"]["dynamic_idle"] == {
+        "mode": "off",
+        "animation": None,
+        "settings": {},
+        "color": [1, 2, 3],
+        "brightness": 0.5,
     }
     resampled_scene = RustRenderOutput(
         "rainbow", {}, scene_pixel_count=5, scene_resample=True
@@ -589,6 +989,567 @@ def test_rust_output_thread_exposes_direct_render_and_power_telemetry() -> None:
         output.stop()
 
 
+def test_rust_output_thread_schedules_repeated_frames_without_new_scene_requests() -> None:
+    output = RustEngineOutputThread(
+        (16,),
+        (_mock_spec("main", 16),),
+        binary_path=_engine_binary(),
+    )
+    output.start()
+    try:
+        output.submit_render_frame(
+            sequence=1,
+            timestamp_ns=time.monotonic_ns(),
+            delta_ns=16_000_000,
+            brightness=1.0,
+            outputs=(RustRenderOutput("rainbow", {}),),
+            scheduler_fps=100,
+        )
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            stats = output.stats()
+            if stats.transmitted_frames >= 3:
+                break
+            time.sleep(0.01)
+        assert stats.transmitted_frames >= 3
+        assert stats.scheduler_missed_deadlines >= 0
+    finally:
+        output.stop()
+
+
+def test_rust_output_thread_orders_scene_controls_and_coalesces_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(rust_engine_module, "_MAX_PENDING_SCENE_UPDATES", 2)
+    output = RustEngineOutputThread(
+        (8,),
+        (_mock_spec("main", 8),),
+        binary_path=_engine_binary(),
+    )
+    output.start()
+    process = output._process
+    assert process is not None
+    original_update_scene = process.update_scene
+    original_update_audio = process.update_audio
+    first_scene_started = threading.Event()
+    allow_first_scene = threading.Event()
+    scene_revisions: list[int] = []
+    audio_sequences: list[int] = []
+
+    def delayed_scene(**kwargs: object) -> bool:
+        revision = int(kwargs["revision"])
+        scene_revisions.append(revision)
+        if revision == 1:
+            first_scene_started.set()
+            assert allow_first_scene.wait(1.0)
+        return original_update_scene(**kwargs)  # type: ignore[arg-type]
+
+    def record_audio(**kwargs: object) -> bool:
+        audio_sequences.append(int(kwargs["sequence"]))
+        return original_update_audio(**kwargs)  # type: ignore[arg-type]
+
+    process.update_scene = delayed_scene  # type: ignore[method-assign]
+    process.update_audio = record_audio  # type: ignore[method-assign]
+    try:
+        first_timestamp_ns = time.monotonic_ns()
+        output.submit_scene_update(
+            revision=1,
+            timestamp_ns=first_timestamp_ns,
+            brightness=1.0,
+            outputs=(RustRenderOutput("rainbow", {}),),
+            power_limiting_enabled=False,
+            power_budget_watts=None,
+            scheduler_fps=100,
+        )
+        assert first_scene_started.wait(1.0)
+        for revision in (2, 3):
+            output.submit_scene_update(
+                revision=revision,
+                timestamp_ns=time.monotonic_ns(),
+                brightness=1.0,
+                outputs=(RustRenderOutput("rainbow", {}),),
+                power_limiting_enabled=False,
+                power_budget_watts=None,
+                scheduler_fps=100,
+            )
+        with pytest.raises(RustEngineError, match="control queue is full"):
+            output.submit_scene_update(
+                revision=4,
+                timestamp_ns=time.monotonic_ns(),
+                brightness=1.0,
+                outputs=(RustRenderOutput("rainbow", {}),),
+                power_limiting_enabled=False,
+                power_budget_watts=None,
+                scheduler_fps=100,
+            )
+        for sequence in (1, 2, 3):
+            output.submit_audio_update(
+                sequence=sequence,
+                timestamp_ns=time.monotonic_ns(),
+                audio=None,
+            )
+        pending = output.stats()
+        assert pending.pending_scene_updates == 2
+        assert pending.pending_audio_update is True
+        assert pending.audio_updates_replaced == 2
+
+        allow_first_scene.set()
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline:
+            stats = output.stats()
+            if (
+                stats.scene_control_revision == 3
+                and stats.audio_update_sequence == 3
+            ):
+                break
+            time.sleep(0.01)
+        assert scene_revisions == [1, 2, 3]
+        assert audio_sequences == [3]
+        assert stats.scene_control_revision == 3
+        assert stats.audio_update_sequence == 3
+        assert stats.pending_scene_updates == 0
+        assert stats.pending_audio_update is False
+    finally:
+        allow_first_scene.set()
+        output.stop()
+
+
+def test_rust_output_thread_reports_rust_owned_cycling_selection() -> None:
+    output = RustEngineOutputThread(
+        (8,),
+        (_mock_spec("main", 8),),
+        binary_path=_engine_binary(),
+    )
+    output.start()
+    try:
+        timestamp_ns = time.monotonic_ns()
+        beat_start_ns = timestamp_ns - 3_000_000_000
+        audio = RustRenderAudioInput(
+            rms=0.5,
+            bands=(0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1),
+            beat=True,
+            beat_strength=0.9,
+            fallback_bpm=120.0,
+            beat_events=tuple(
+                RustRenderBeatEvent(
+                    sequence=index + 1,
+                    timestamp_ns=beat_start_ns + index * 500_000_000,
+                )
+                for index in range(7)
+            ),
+        )
+        output.submit_render_frame(
+            sequence=1,
+            timestamp_ns=timestamp_ns,
+            delta_ns=16_000_000,
+            brightness=1.0,
+            outputs=(
+                RustRenderOutput(
+                    "rainbow",
+                    {},
+                    cycling=RustRenderCycling(
+                        order="sequential",
+                        timing="fixed",
+                        interval_ns=200_000_000,
+                        seed=7,
+                        choices=(("rainbow", {}), ("rainbow_cycle", {})),
+                        transition_duration_ns=50_000_000,
+                        transition_mode="wipe",
+                    ),
+                ),
+            ),
+            audio=audio,
+            scheduler_fps=100,
+        )
+        deadline = time.monotonic() + 4.0
+        while time.monotonic() < deadline:
+            stats = output.stats()
+            if (
+                stats.selected_animations == ("rainbow_cycle",)
+                and stats.beat_clocks
+            ):
+                break
+            time.sleep(0.005)
+        assert stats.selected_animations == ("rainbow_cycle",)
+        assert stats.scene_revisions == (1,)
+        assert stats.cycling_active == (True,)
+        assert len(stats.beat_clocks) == 1
+        assert stats.beat_clocks[0].bpm == pytest.approx(120.0, abs=0.1)
+        assert stats.beat_clocks[0].beat_index >= 7
+    finally:
+        output.stop()
+
+
+def test_rust_dynamic_initial_selection_matches_python_selector() -> None:
+    config = DynamicSelectorConfig(
+        min_duration_s=0.0,
+        max_duration_s=45.0,
+        switch_cooldown_s=0.0,
+        randomness=0.15,
+        history_size=5,
+        seed=7,
+        switch_margin=0.12,
+    )
+    player = AnimationPlayer.from_catalog(animation_catalog())
+    features = MusicFeatures(
+        bpm=130.0,
+        energy=0.8,
+        volume=0.8,
+        energy_level=0.8,
+        bass=0.9,
+        bass_energy=0.9,
+        mid_energy=0.3,
+        treble_energy=0.6,
+        beat_confidence=0.9,
+        beat=True,
+        beat_strength=0.9,
+        drop_detected=True,
+    )
+    python_selector = DynamicSelector(config)
+    expected = python_selector.propose(player, features, now_s=10.0)
+    current = player.name_at(player.current_index())
+    assert current is not None
+    choices = tuple(
+        (
+            name,
+            player.animation_settings(name) or {},
+        )
+        for index in player.automatic_indices()
+        if (name := player.name_at(index)) is not None
+    )
+
+    output = RustEngineOutputThread(
+        (8,),
+        (_mock_spec("main", 8),),
+        binary_path=_engine_binary(),
+    )
+    output.start()
+    try:
+        output.submit_render_frame(
+            sequence=1,
+            timestamp_ns=time.monotonic_ns(),
+            delta_ns=16_000_000,
+            brightness=1.0,
+            outputs=(
+                RustRenderOutput(
+                    current,
+                    player.animation_settings(current) or {},
+                    cycling=RustRenderCycling(
+                        order="sequential",
+                        timing="fixed",
+                        interval_ns=1,
+                        seed=7,
+                        choices=choices,
+                        transition_duration_ns=100_000_000,
+                        transition_mode="crossfade",
+                        selector=RustRenderDynamicSelector(
+                            min_duration_ns=0,
+                            max_duration_ns=45_000_000_000,
+                            switch_cooldown_ns=0,
+                            drop_cooldown_ns=15_000_000_000,
+                            randomness=config.randomness,
+                            history_size=config.history_size,
+                            seed=7,
+                            switch_margin=config.switch_margin,
+                            activity=RustRenderMusicActivityConfig(
+                                idle_enter_frames=60,
+                                activation_delay_ns=0,
+                                feature_attack=0.28,
+                                feature_release=0.08,
+                                energy_threshold=0.03,
+                                onset_threshold=0.025,
+                                beat_density_threshold=0.05,
+                                brightness_threshold=0.08,
+                                spectral_balance_ratio=0.35,
+                                activation_hysteresis_ratio=1.35,
+                                beat_density_window_ns=2_000_000_000,
+                            ),
+                        ),
+                        dynamic_idle=RustRenderDynamicIdle(
+                            "off", None, {}, (0, 0, 0), 1.0
+                        ),
+                    ),
+                ),
+            ),
+            audio=RustRenderAudioInput(
+                rms=0.7,
+                bands=(0.9, 0.8, 0.6, 0.4, 0.3, 0.2, 0.1, 0.1),
+                beat=True,
+                beat_strength=features.beat_strength,
+                fallback_bpm=features.bpm,
+                selector_features=RustRenderSelectorFeatures(
+                    energy_level=features.energy_level,
+                    energy=features.energy,
+                    volume=features.volume,
+                    brightness=features.brightness,
+                    onset_strength=features.onset_strength,
+                    bass_energy=features.bass_energy,
+                    bass=features.bass,
+                    mid_energy=features.mid_energy,
+                    treble_energy=features.treble_energy,
+                    beat_confidence=features.beat_confidence,
+                    bpm=features.bpm,
+                    beat=features.beat,
+                    silence=features.silence,
+                    drop_detected=features.drop_detected,
+                    section_change=features.section_change,
+                ),
+            ),
+            scheduler_fps=100,
+        )
+
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            stats = output.stats()
+            if stats.selected_animations == (expected.selected_name,):
+                break
+            time.sleep(0.005)
+        assert stats.selected_animations == (expected.selected_name,)
+        assert stats.cycling_active == (True,)
+        assert stats.dynamic_gate_states == ("music",)
+    finally:
+        output.stop()
+
+
+def test_rust_scheduled_dynamic_playback_matches_python_clock_for_three_minute_beat_history() -> None:
+    output = RustEngineOutputThread(
+        (8,),
+        (_mock_spec("main", 8),),
+        binary_path=_engine_binary(),
+    )
+    output.start()
+    choices = (("pulse", {}), ("comet", {}))
+    cycling = RustRenderCycling(
+        order="sequential",
+        timing="fixed",
+        interval_ns=1,
+        seed=7,
+        choices=choices,
+        transition_duration_ns=100_000_000,
+        transition_mode="crossfade",
+        selector=RustRenderDynamicSelector(
+            min_duration_ns=0,
+            max_duration_ns=45_000_000_000,
+            switch_cooldown_ns=0,
+            drop_cooldown_ns=15_000_000_000,
+            randomness=0.15,
+            history_size=5,
+            seed=7,
+            switch_margin=0.12,
+            activity=RustRenderMusicActivityConfig(
+                idle_enter_frames=60,
+                activation_delay_ns=0,
+                feature_attack=0.28,
+                feature_release=0.08,
+                energy_threshold=0.03,
+                onset_threshold=0.025,
+                beat_density_threshold=0.05,
+                brightness_threshold=0.08,
+                spectral_balance_ratio=0.35,
+                activation_hysteresis_ratio=1.35,
+                beat_density_window_ns=2_000_000_000,
+            ),
+        ),
+        dynamic_idle=RustRenderDynamicIdle("off", None, {}, (0, 0, 0), 1.0),
+    )
+    try:
+        timestamp_ns = time.monotonic_ns()
+        period_ns = round(60.0 / 128.0 * 1_000_000_000)
+        beat_count = 384
+        first_event_ns = timestamp_ns - (beat_count - 1) * period_ns
+        beat_events_list: list[RustRenderBeatEvent] = []
+        for index in range(beat_count):
+            if index > 0 and index % 97 == 41:
+                # Simulate a dropped audio event while preserving its sequence gap.
+                continue
+            jitter_ns = ((index % 7) - 3) * 500_000
+            event = RustRenderBeatEvent(
+                sequence=index + 1,
+                timestamp_ns=first_event_ns + index * period_ns + jitter_ns,
+            )
+            if index == 190:
+                # A delayed, higher-sequence event must not move the clock backward.
+                event = RustRenderBeatEvent(
+                    sequence=event.sequence,
+                    timestamp_ns=first_event_ns + 150 * period_ns,
+                )
+            beat_events_list.append(event)
+            if index > 0 and index % 113 == 17:
+                # Duplicate delivery is expected to be idempotent.
+                beat_events_list.append(event)
+        beat_events = tuple(beat_events_list)
+        python_tracker = BeatClockTracker()
+        python_tracker.update(
+            tuple(
+                BeatEvent(
+                    event.sequence,
+                    event.timestamp_ns / 1_000_000_000,
+                    0.9,
+                )
+                for event in beat_events
+            ),
+            now_s=timestamp_ns / 1_000_000_000,
+            fallback_bpm=120.0,
+        )
+        output.submit_render_frame(
+            sequence=1,
+            timestamp_ns=timestamp_ns,
+            delta_ns=16_000_000,
+            brightness=1.0,
+            outputs=(RustRenderOutput("pulse", {}, cycling=cycling),),
+            audio=RustRenderAudioInput(
+                rms=0.5,
+                bands=(0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1),
+                beat=True,
+                beat_strength=0.9,
+                feature_timestamp_ns=timestamp_ns,
+                feature_sequence=beat_count,
+                fallback_bpm=120.0,
+                beat_events=beat_events,
+                selector_features=RustRenderSelectorFeatures(
+                    energy_level=0.8,
+                    energy=0.8,
+                    volume=0.8,
+                    brightness=0.8,
+                    onset_strength=0.8,
+                    bass_energy=0.9,
+                    bass=0.9,
+                    mid_energy=0.6,
+                    treble_energy=0.5,
+                    beat_confidence=0.9,
+                    bpm=128.0,
+                    beat=True,
+                    silence=False,
+                    drop_detected=True,
+                    section_change=False,
+                ),
+            ),
+            scheduler_fps=100,
+        )
+
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            stats = output.stats()
+            if (
+                stats.beat_clocks
+                and stats.dynamic_gate_states == ("music",)
+                and stats.transmitted_frames > 0
+                and stats.audio_feature_to_led_latency_ms is not None
+            ):
+                break
+            time.sleep(0.005)
+        assert len(stats.beat_clocks) == 1
+        actual = stats.beat_clocks[0]
+        expected = python_tracker.state(actual.sampled_at_ns / 1_000_000_000)
+        assert actual.bpm == pytest.approx(expected.bpm, abs=0.01)
+        assert actual.beat_index == expected.beat_index
+        assert actual.last_event_sequence == max(
+            event.sequence for event in beat_events
+        )
+        assert actual.phase == pytest.approx(expected.phase, abs=0.03)
+        assert actual.confidence == pytest.approx(expected.confidence, abs=0.03)
+        assert actual.next_beat_at_ns == pytest.approx(
+            expected.next_beat_at * 1_000_000_000,
+            abs=25_000_000,
+        )
+        assert stats.dynamic_gate_states == ("music",)
+        assert stats.cycling_active == (True,)
+        assert stats.selected_animations[0] in {name for name, _ in choices}
+        assert stats.audio_feature_to_led_latency_ms is not None
+        assert stats.audio_feature_to_led_p50_ms is not None
+        assert stats.audio_feature_to_led_p95_ms is not None
+        assert stats.audio_feature_to_led_p99_ms is not None
+    finally:
+        output.stop()
+
+
+def test_rust_output_thread_coalesces_render_ipc_off_the_caller_thread() -> None:
+    output = RustEngineOutputThread(
+        (64,),
+        (_mock_spec("main", 64),),
+        binary_path=_engine_binary(),
+    )
+    output.start()
+    process = output._process
+    assert process is not None
+    original_render = process.render_frame
+    render_started = threading.Event()
+    allow_render = threading.Event()
+
+    def delayed_render(**kwargs: object) -> RustRenderAck:
+        render_started.set()
+        assert allow_render.wait(1.0)
+        return original_render(**kwargs)  # type: ignore[arg-type]
+
+    process.render_frame = delayed_render  # type: ignore[method-assign]
+    try:
+        first = output.submit_render_frame(
+            sequence=1,
+            timestamp_ns=time.monotonic_ns(),
+            delta_ns=16_000_000,
+            brightness=1.0,
+            outputs=(RustRenderOutput("rainbow", {}),),
+        )
+        assert first.replaced is False
+        assert render_started.wait(1.0)
+
+        second = output.submit_render_frame(
+            sequence=2,
+            timestamp_ns=time.monotonic_ns(),
+            delta_ns=16_000_000,
+            brightness=1.0,
+            outputs=(RustRenderOutput("rainbow", {}),),
+        )
+        third = output.submit_render_frame(
+            sequence=3,
+            timestamp_ns=time.monotonic_ns(),
+            delta_ns=16_000_000,
+            brightness=1.0,
+            outputs=(RustRenderOutput("rainbow", {}),),
+        )
+        assert second.replaced is False
+        assert third.replaced is True
+        assert output.stats().dropped_frames >= 1
+        allow_render.set()
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline:
+            health = process.health()
+            if health.last_sequence == 3:
+                break
+            time.sleep(0.01)
+        assert health.last_sequence == 3
+    finally:
+        allow_render.set()
+        output.stop()
+
+
+def test_rust_output_thread_exposes_asynchronous_render_rejections() -> None:
+    output = RustEngineOutputThread(
+        (8,),
+        (_mock_spec("main", 8),),
+        binary_path=_engine_binary(),
+    )
+    output.start()
+    try:
+        output.submit_render_frame(
+            sequence=1,
+            timestamp_ns=time.monotonic_ns(),
+            delta_ns=16_000_000,
+            brightness=1.0,
+            outputs=(RustRenderOutput("not_a_catalog_animation", {}),),
+        )
+        deadline = time.monotonic() + 1.0
+        render_error = None
+        while time.monotonic() < deadline and render_error is None:
+            render_error = output.take_render_error()
+            if render_error is None:
+                time.sleep(0.01)
+        assert render_error is not None
+        assert "invalid_render" in render_error
+    finally:
+        output.stop()
+
+
 def test_runtime_worker_uses_rust_process_for_simulated_output(tmp_path: Path) -> None:
     worker = RuntimeWorker(
         RuntimeSettings(
@@ -618,13 +1579,32 @@ def test_runtime_worker_uses_rust_process_for_simulated_output(tmp_path: Path) -
         assert worker._output_thread.exchange.stats().submitted_count == 0
         assert worker.snapshot().running is True
         previous_sequence = worker._rust_render_sequence
+        worker.set_sequencer_settings(SwitchQuantization.BEAT, 8).result(timeout=1.0)
         worker.set_mode(PlaybackMode.DYNAMIC).result(timeout=1.0)
-        deadline = time.monotonic() + 1.0
-        while worker._rust_render_sequence <= previous_sequence:
-            assert time.monotonic() < deadline, "Dynamic scene was not sent to Rust"
+        deadline = time.monotonic() + 5.0
+        while (
+            worker._rust_render_sequence <= previous_sequence
+            or worker._output_thread.stats().cycling_active != (True,)
+            or worker._output_thread.stats().dynamic_gate_states != ("music",)
+            or worker._output_thread.stats().selected_animations
+            != (worker.playback.player.name_at(worker.playback.player.current_index()),)
+        ):
+            assert time.monotonic() < deadline, (
+                "Rust did not own the active Dynamic selection"
+            )
             time.sleep(0.01)
+        assert worker.playback.dynamic_selector.current_name is None
         assert worker._rust_scene_render_error is None
         assert worker._output_thread.exchange.stats().submitted_count == 0
+        rust_clock = worker._output_thread.stats().beat_clocks[0]
+        assert worker.playback.beat_clock_state.beat_index == rust_clock.beat_index
+        assert worker.playback.beat_clock_state.bpm == pytest.approx(rust_clock.bpm)
+
+        python_frame = worker.player.frame
+        transmitted_frames = worker._output_thread.stats().transmitted_frames
+        time.sleep(0.12)
+        assert worker.player.frame == python_frame
+        assert worker._output_thread.stats().transmitted_frames > transmitted_frames
 
         previous_sequence = worker._rust_render_sequence
         worker.set_mode(PlaybackMode.SOLID, solid_color="#804020").result(timeout=1.0)
@@ -637,9 +1617,47 @@ def test_runtime_worker_uses_rust_process_for_simulated_output(tmp_path: Path) -
             assert time.monotonic() < deadline, "solid scene was not rendered by Rust"
             time.sleep(0.01)
         assert worker._output_thread.exchange.stats().submitted_count == 0
+        scene_sequence = worker._rust_render_sequence
+        transmitted_frames = worker._output_thread.stats().transmitted_frames
+        time.sleep(0.12)
+        assert worker._rust_render_sequence == scene_sequence
+        assert worker._output_thread.stats().transmitted_frames > transmitted_frames
     finally:
         worker.stop(timeout=5.0)
     assert worker._output_thread is None
+
+
+def test_audio_free_static_rust_playback_does_not_advance_python_animation_state(
+    tmp_path: Path,
+) -> None:
+    worker = RuntimeWorker(
+        RuntimeSettings(
+            pixels=3,
+            engine_backend="rust",
+            engine_binary=_engine_binary(),
+            audio_source="off",
+            settings_file=tmp_path / "settings.json",
+        )
+    )
+    worker.start(timeout=3.0)
+    try:
+        assert isinstance(worker._output_thread, RustEngineOutputThread)
+        output = worker._output_thread
+        deadline = time.monotonic() + 1.0
+        while output.stats().transmitted_frames < 3:
+            assert time.monotonic() < deadline, "Rust scheduler did not render the scene"
+            time.sleep(0.01)
+        python_frame = worker.player.frame
+        scene_sequence = worker._rust_render_sequence
+        transmitted_frames = output.stats().transmitted_frames
+        time.sleep(0.12)
+        assert worker.player.frame == python_frame
+        assert worker._rust_render_sequence == scene_sequence
+        assert output.stats().transmitted_frames > transmitted_frames
+        assert output.exchange is not None
+        assert output.exchange.stats().submitted_count == 0
+    finally:
+        worker.stop()
 
 
 def test_runtime_worker_renders_continuous_outputs_in_rust(tmp_path: Path) -> None:
@@ -796,3 +1814,83 @@ time.sleep(30)
             owner.stdout.close()
         if owner.stderr is not None:
             owner.stderr.close()
+
+
+def test_rust_runtime_restores_saved_startup_playback_before_render(
+    tmp_path: Path,
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    CalibrationSettingsStore(settings_file).save_startup(
+        True,
+        StartupPlaybackSettings(
+            mode=PlaybackMode.STATIC,
+            animation="comet",
+            brightness=0.37,
+        ),
+    )
+    worker = RuntimeWorker(
+        RuntimeSettings(
+            pixels=8,
+            engine_backend="rust",
+            engine_binary=_engine_binary(),
+            audio_source="off",
+            settings_file=settings_file,
+        )
+    )
+    worker.start(timeout=3.0)
+    try:
+        assert isinstance(worker._output_thread, RustEngineOutputThread)
+        output = worker._output_thread
+        deadline = time.monotonic() + 1.0
+        stats = output.stats()
+        while (
+            stats.transmitted_frames == 0
+            or stats.selected_animations != ("comet",)
+        ):
+            assert time.monotonic() < deadline, (
+                "Rust did not render the restored startup scene"
+            )
+            time.sleep(0.01)
+            stats = output.stats()
+
+        assert worker.playback.mode is PlaybackMode.STATIC
+        assert worker.player.name_at(worker.player.current_index()) == "comet"
+        assert worker.player.brightness == pytest.approx(0.37)
+    finally:
+        worker.stop(timeout=5.0)
+
+
+def test_rust_engine_crash_requests_runtime_recovery(tmp_path: Path) -> None:
+    exits: list[int] = []
+    worker = RuntimeWorker(
+        RuntimeSettings(
+            pixels=8,
+            engine_backend="rust",
+            engine_binary=_engine_binary(),
+            audio_source="off",
+            settings_file=tmp_path / "settings.json",
+        ),
+        fatal_exit=exits.append,
+    )
+    worker.start(timeout=3.0)
+    try:
+        assert isinstance(worker._output_thread, RustEngineOutputThread)
+        output = worker._output_thread
+        deadline = time.monotonic() + 1.0
+        while output.stats().transmitted_frames == 0:
+            assert time.monotonic() < deadline, "Rust engine did not start rendering"
+            time.sleep(0.01)
+
+        process = output._process
+        assert process is not None and process._process is not None
+        process._process.kill()
+        process._process.wait(timeout=2.0)
+
+        deadline = time.monotonic() + 3.0
+        while not exits and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert exits == [1]
+        assert worker.snapshot().error == "the LED output thread stopped making progress"
+    finally:
+        worker.stop(timeout=5.0)
+    assert worker._output_thread is None

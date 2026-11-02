@@ -328,18 +328,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install ARM64 Rust toolchain
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
-          components: rustfmt
-
       - name: Verify ARM64 Rust toolchain
         run: |
+          command -v cargo
+          command -v rustc
           test "$(uname -m)" = "aarch64"
           rustc -vV | tee "$RUNNER_TEMP/rustc-version.txt"
           test "$(sed -n 's/^host: //p' "$RUNNER_TEMP/rustc-version.txt")" = "aarch64-unknown-linux-gnu"
-          rustup show active-toolchain
           cargo --version
 
       - name: Test Rust workspace on ARM64
@@ -375,7 +370,15 @@ jobs:
           fi
           command -v cc
           command -v make
+          command -v cargo
+          command -v rustc
           cc --version
+          rustc -vV | tee "$RUNNER_TEMP/rustc-version.txt"
+          rust_host="$(sed -n 's/^host: //p' "$RUNNER_TEMP/rustc-version.txt")"
+          test "$rust_host" = "aarch64-unknown-linux-gnu"
+          cargo --version
+          test -s /etc/ssl/certs/ca-certificates.crt
+          test -f /usr/include/alsa/asoundlib.h
           git submodule status --recursive
 
       - name: Install uv
@@ -389,43 +392,6 @@ jobs:
         run: |
           set -eu
           uv --version
-
-      - name: Install Raspberry Pi toolchain and audio prerequisites
-        run: |
-          set -eu
-          packages=()
-          if ! command -v curl >/dev/null 2>&1; then
-            packages+=(curl)
-          fi
-          if ! test -s /etc/ssl/certs/ca-certificates.crt; then
-            packages+=(ca-certificates)
-          fi
-          if ! test -f /usr/include/alsa/asoundlib.h; then
-            packages+=(libasound2-dev)
-          fi
-          if test "${#packages[@]}" -gt 0; then
-            if test "$(id -u)" -eq 0; then
-              apt-get update
-              apt-get install --yes --no-install-recommends "${packages[@]}"
-            elif command -v sudo >/dev/null 2>&1; then
-              sudo apt-get update
-              sudo apt-get install --yes --no-install-recommends "${packages[@]}"
-            else
-              echo "missing prerequisites ${packages[*]}; runner needs root or sudo" >&2
-              exit 1
-            fi
-          fi
-          command -v curl
-          test -s /etc/ssl/certs/ca-certificates.crt
-          test -f /usr/include/alsa/asoundlib.h
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
-
-      - name: Verify Rust toolchain
-        run: rustc -vV && cargo --version
 
       - name: Install Raspberry Pi native profile
         env:
@@ -495,6 +461,11 @@ jobs:
           print(f"verified {len(native)} native extensions and KISS FFT sources")
           PY
 
+      - name: Build Rust playback engine on Raspberry Pi
+        run: >-
+          cargo build --release --locked --manifest-path rust/Cargo.toml
+          --package lumistripe-engine --bin lumistripe-engine
+
       - name: Build native and scalar Rust renderer benchmarks
         run: |
           set -eu
@@ -507,6 +478,41 @@ jobs:
             RUSTFLAGS="-C target-cpu=native -C no-vectorize-loops -C no-vectorize-slp" \
             cargo build --release --locked --manifest-path rust/Cargo.toml \
               -p lumistripe-engine-animation-state --example benchmark_render
+
+      - name: Benchmark Python and Rust playback on Raspberry Pi with virtual output
+        env:
+          LUMISTRIPE_BUILD_EXTENSIONS: all
+          UV_CACHE_DIR: ${{ runner.temp }}/uv-cache
+        run: |
+          set -eu
+          benchmark_dir="$RUNNER_TEMP/lumistripe-rust-renderer-benchmarks"
+          mkdir -p "$benchmark_dir"
+          uv run --locked python scripts/benchmark_runtime_pipeline.py \
+            --led-counts 300 --output-counts 1 --layouts mirrored \
+            --zone-counts 1 --modes static,dynamic --power-limits off,on \
+            --engine-backends python,rust \
+            --engine-binary rust/target/release/lumistripe-engine \
+            --audio-source demo --warmup 1 --duration 5 \
+            --output "$benchmark_dir/runtime-pi5-virtual-smoke.json"
+          uv run --locked python - "$benchmark_dir/runtime-pi5-virtual-smoke.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          if report["case_count"] != 8:
+              raise SystemExit(f"expected 8 runtime cases, got {report['case_count']}")
+          for case in report["results"]:
+              if case["effective_fps"] <= 0:
+                  raise SystemExit(f"runtime case produced no frames: {case}")
+              if (
+                  case["engine_backend"] == "rust"
+                  and case["output_effective_fps"] <= 0
+              ):
+                  raise SystemExit(f"Rust output produced no frames: {case}")
+              if case["output_failure_count"] or case["output_error"] is not None:
+                  raise SystemExit(f"runtime output failed: {case}")
+          PY
 
       - name: Benchmark scalar C and Rust renderer profiles on Raspberry Pi 5
         env:

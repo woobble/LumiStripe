@@ -12,6 +12,7 @@ from concurrent.futures import Future, InvalidStateError
 from dataclasses import dataclass, replace
 from datetime import datetime
 from importlib import metadata
+from math import isfinite
 from pathlib import Path
 from typing import Literal, NoReturn, TypedDict, cast
 from uuid import uuid4
@@ -47,19 +48,23 @@ from lumistripe.audio.types import (
     AudioInputHealth,
     AudioSnapshot,
     BandTuple,
+    BeatClockState,
     BeatEvent,
     MusicFeatures,
 )
+from lumistripe.effects import ACCENT_EFFECTS, RHYTHMIC_EFFECTS
 from lumistripe.gpio import GPIOStripe
 from lumistripe.gpio.spi import SPIConfig, SPIStripe
 from lumistripe.playback import (
     AnimationSequence,
     AudioSource,
     MusicActivityDetector,
+    MusicGateState,
     PlaybackConfig,
     PlaybackEngine,
     PlaybackMode,
     QuantizedSwitchDiagnostics,
+    SequencePlaybackState,
     SwitchQuantization,
     TransitionEffect,
     demo_snapshot,
@@ -124,6 +129,7 @@ from ..settings import (
     CalibrationSettingsStore,
     MusicIdleSettings,
     StartupPlaybackSettings,
+    StripeOutputSettings,
     StripeTopologySettings,
     TransitionSettings,
 )
@@ -166,7 +172,11 @@ from .commands import (
     _TransitionSettingsCommand,
 )
 from .frame_exchange import LatestFrameExchange
-from .output_thread import LedOutputThread
+from .output_thread import (
+    LedOutputThread,
+    RustBeatClockStats,
+    RustEffectSchedulerStats,
+)
 from .outputs import (
     OutputGateController,
     _OutputFrameBuffers,
@@ -177,11 +187,25 @@ from .outputs import (
 )
 from .playback_service import PlaybackPolicy, PlaybackPolicyError
 from .rust_engine import (
+    RustEngineError,
     RustEngineOutputThread,
     RustOutputSpec,
+    RustRenderAnimationSequence,
+    RustRenderAnimationSequenceStep,
     RustRenderAudioInput,
+    RustRenderBeatEvent,
+    RustRenderCycling,
+    RustRenderDynamicIdle,
+    RustRenderDynamicSelector,
     RustRenderEffect,
+    RustRenderEffectChoice,
+    RustRenderEffectFeatures,
+    RustRenderEffectScheduler,
+    RustRenderMusicActivityConfig,
+    RustRenderMusicStructure,
     RustRenderOutput,
+    RustRenderSelectorFeatures,
+    RustRenderStructureEvent,
     RustRenderTransition,
 )
 from .state import (
@@ -220,6 +244,10 @@ def _default_controller_factory(settings: RuntimeSettings) -> Controller:
     )
 
 MIN_FRAME_SECONDS = 0.016
+MAX_RUST_UNACKNOWLEDGED_BEAT_EVENTS = 256
+MAX_RUST_UNACKNOWLEDGED_STRUCTURE_EVENTS = 256
+RUST_RENDER_SCHEDULER_FPS = 60
+RUST_STATIC_POLICY_POLL_SECONDS = 0.05
 FPS_SAMPLE_SECONDS = 1.0
 AUDIO_ROUTE_POLL_SECONDS = 1.0
 AUDIO_CALLBACK_STALE_SECONDS = 0.5
@@ -484,8 +512,23 @@ class RuntimeWorker:
         self._revision = 0
         self._preview_sequence = 0
         self._preview_outputs: tuple[bytes, ...] = ()
+        # Kept as an aggregate diagnostic sequence for callers that monitor
+        # worker submissions; Rust uses independent scene and audio counters.
         self._rust_render_sequence = 0
+        self._rust_control_revision = 0
+        self._rust_audio_update_sequence = 0
+        self._rust_dynamic_feature_sequence = 0
+        self._rust_pending_beat_events: deque[RustRenderBeatEvent] = deque()
+        self._rust_dropped_beat_events = 0
+        self._rust_last_audio_update_retry_at_s: float | None = None
+        self._rust_pending_structure_events: dict[
+            str, deque[RustRenderStructureEvent]
+        ] = {}
+        self._rust_structure_source_sequences: dict[str, int] = {}
+        self._rust_structure_event_sequences: dict[str, int] = {}
         self._rust_last_render_timestamp_ns: int | None = None
+        self._rust_last_control_signature: tuple[object, ...] | None = None
+        self._rust_last_audio_signature: RustRenderAudioInput | None = None
         self._rust_scene_generations: dict[str, tuple[object, int, int]] = {}
         self._rust_scene_rendering_disabled = False
         self._rust_scene_render_error: str | None = None
@@ -2354,6 +2397,13 @@ class RuntimeWorker:
             self._playbacks.clear()
         self._topology = topology
         self._power_budget_state = _power_budget_state_for(topology)
+        self._rust_last_render_timestamp_ns = None
+        self._rust_last_control_signature = None
+        self._rust_last_audio_signature = None
+        self._rust_last_audio_update_retry_at_s = None
+        self._rust_pending_structure_events.clear()
+        self._rust_structure_source_sequences.clear()
+        self._rust_structure_event_sequences.clear()
         self._pending_preview_frames = None
         self._install_topology(built)
 
@@ -3882,6 +3932,9 @@ profile.audio_config(microphone=True),
     def _step(self) -> float:
         assert self._controller is not None
         self._last_scheduler_time_ms = None
+        self._rust_dynamic_feature_sequence = min(
+            self._rust_dynamic_feature_sequence + 1, 0xFFFFFFFFFFFFFFFF
+        )
         self._maintain_audio_monitor()
         self._apply_sync_offset_for_route()
         if (
@@ -4004,6 +4057,15 @@ profile.audio_config(microphone=True),
             or not outputs
         ):
             return None
+        render_error = output_thread.take_render_error()
+        if render_error is not None:
+            self._rust_scene_rendering_disabled = True
+            self._rust_scene_render_error = render_error[:256]
+            self._rust_last_render_timestamp_ns = None
+            self._rust_last_control_signature = None
+            self._rust_last_audio_signature = None
+            self._rust_last_audio_update_retry_at_s = None
+            return None
 
         if self._topology.layout == "independent":
             entries = tuple(self._playbacks[output.id] for output in outputs)
@@ -4036,21 +4098,6 @@ profile.audio_config(microphone=True),
         if len({engine.music_recognition_enabled for engine in playback_engines}) > 1:
             return None
 
-        delays = tuple(
-            engine.step(
-                target,
-                snapshot=snapshot,
-                now_s=now_s,
-                flush=False,
-                render=False,
-            )
-            for engine, target in zip(playback_engines, targets, strict=True)
-        )
-        scheduler_time_ns = sum(
-            int(engine.last_scheduling_time_ms * 1_000_000)
-            for engine in playback_engines
-        )
-        self._last_scheduler_time_ms = scheduler_time_ns / 1_000_000.0
         per_output_engines = (
             playback_engines
             if self._topology.layout == "independent"
@@ -4058,9 +4105,226 @@ profile.audio_config(microphone=True),
         )
         if len(per_output_engines) != len(outputs):
             return None
+        dynamic_owner = any(
+            engine.mode is PlaybackMode.DYNAMIC for engine in per_output_engines
+        )
+        if dynamic_owner:
+            pending_structure_count = sum(
+                len(self._rust_pending_structure_events.get(output.id, ()))
+                for output, engine in zip(outputs, per_output_engines, strict=True)
+                if engine.mode is PlaybackMode.DYNAMIC
+            )
+            if pending_structure_count >= MAX_RUST_UNACKNOWLEDGED_STRUCTURE_EVENTS:
+                self._rust_scene_rendering_disabled = True
+                self._rust_scene_render_error = (
+                    "Rust structure event replay queue reached its capacity"
+                )
+                self._rust_last_render_timestamp_ns = None
+                self._rust_last_control_signature = None
+                self._rust_last_audio_signature = None
+                self._rust_last_audio_update_retry_at_s = None
+                return None
+            self._remember_rust_beat_events(snapshot)
+        else:
+            self._rust_pending_beat_events.clear()
+            self._rust_last_audio_update_retry_at_s = None
+            for pending_events in self._rust_pending_structure_events.values():
+                pending_events.clear()
+        output_stats = output_thread.stats()
+        if dynamic_owner and len(output_stats.beat_clocks) == len(outputs):
+            clock_pairs: tuple[tuple[PlaybackEngine, RustBeatClockStats], ...]
+            if self._topology.layout == "independent":
+                clock_pairs = tuple(
+                    zip(
+                        playback_engines,
+                        output_stats.beat_clocks,
+                        strict=True,
+                    )
+                )
+            else:
+                clock_pairs = ((playback_engines[0], output_stats.beat_clocks[0]),)
+            for engine, clock in clock_pairs:
+                if engine.mode is PlaybackMode.DYNAMIC:
+                    engine.adopt_renderer_beat_clock_state(
+                        BeatClockState(
+                            bpm=clock.bpm,
+                            phase=clock.phase,
+                            confidence=clock.confidence,
+                            beat_index=clock.beat_index,
+                            next_beat_at=(
+                                None
+                                if clock.next_beat_at_ns is None
+                                else clock.next_beat_at_ns / 1_000_000_000.0
+                            ),
+                            last_beat_at=(
+                                None
+                                if clock.last_beat_at_ns is None
+                                else clock.last_beat_at_ns / 1_000_000_000.0
+                            ),
+                        )
+                    )
+        acknowledged_sequence = (
+            min(clock.last_event_sequence for clock in output_stats.beat_clocks)
+            if dynamic_owner and len(output_stats.beat_clocks) == len(outputs)
+            else None
+        )
+        self._acknowledge_rust_beat_events(acknowledged_sequence)
+        if len(output_stats.structure_event_sequences) == len(outputs):
+            for output, sequence in zip(
+                outputs, output_stats.structure_event_sequences, strict=True
+            ):
+                self._acknowledge_rust_structure_events(output.id, sequence)
+        selected_animations = output_stats.selected_animations
+        scene_revisions = output_stats.scene_revisions
+        cycling_active = output_stats.cycling_active
+        dynamic_gate_states = output_stats.dynamic_gate_states
+        if len(dynamic_gate_states) == len(per_output_engines):
+            for engine, gate_state in zip(
+                per_output_engines, dynamic_gate_states, strict=True
+            ):
+                if (
+                    engine.mode is PlaybackMode.DYNAMIC
+                    and gate_state in {"idle", "candidate", "music"}
+                ):
+                    engine.adopt_renderer_activity_state(MusicGateState(gate_state))
+        sequence_playback = output_stats.sequence_playback
+        if len(sequence_playback) == len(per_output_engines):
+            for engine, sequence_state in zip(
+                per_output_engines, sequence_playback, strict=True
+            ):
+                if (
+                    engine.mode is PlaybackMode.DYNAMIC
+                    and engine.config.animation_sequence is not None
+                ):
+                    engine.adopt_renderer_sequence_state(
+                        SequencePlaybackState(
+                            sequence_id=sequence_state.sequence_id,
+                            active=sequence_state.active,
+                            waiting_for_clock=sequence_state.waiting_for_clock,
+                            current_step_index=sequence_state.current_step_index,
+                            animation_name=sequence_state.animation,
+                            remaining_bars=sequence_state.remaining_bars,
+                            next_transition_at_s=(
+                                None
+                                if sequence_state.next_transition_at_ns is None
+                                else sequence_state.next_transition_at_ns / 1_000_000_000.0
+                            ),
+                        )
+                    )
+        if (
+            len(selected_animations) == len(per_output_engines)
+            and len(scene_revisions) == len(per_output_engines)
+            and len(cycling_active) == len(per_output_engines)
+        ):
+            for output, engine, selected_animation, scene_revision, rust_cycles in zip(
+                outputs,
+                per_output_engines,
+                selected_animations,
+                scene_revisions,
+                cycling_active,
+                strict=True,
+            ):
+                if (
+                    engine.mode in (PlaybackMode.CYCLING, PlaybackMode.DYNAMIC)
+                    and rust_cycles
+                    and engine.adopt_renderer_selection(
+                        selected_animation,
+                        now_s=now_s,
+                    )
+                ):
+                    self._rust_scene_generations[output.id] = (
+                        engine.player,
+                        engine.player.scene_revision,
+                        scene_revision,
+                    )
 
+        delay_values: list[float] = []
+        for engine, target in zip(playback_engines, targets, strict=True):
+            if (
+                engine.mode is PlaybackMode.STATIC
+                and snapshot is None
+                and engine.last_render_audio_snapshot is None
+            ):
+                # Rust owns animation advancement and render deadlines for an
+                # unchanged, audio-free static scene.
+                engine.last_scheduling_time_ms = 0.0
+                delay = RUST_STATIC_POLICY_POLL_SECONDS
+            elif engine.mode is PlaybackMode.CYCLING:
+                # Rust owns cycle deadlines and selection; this poll only
+                # refreshes the API mirror and processes queued control work.
+                engine.last_scheduling_time_ms = 0.0
+                delay = RUST_STATIC_POLICY_POLL_SECONDS
+            elif (
+                engine.mode is PlaybackMode.DYNAMIC
+            ):
+                # Rust owns Dynamic activity, idle behavior, selection,
+                # saved-sequence progress, and beat/bar/phrase switch timing.
+                # Python continues the compatible structure/effect policy work.
+                delay = engine.step(
+                    target,
+                    snapshot=snapshot,
+                    now_s=now_s,
+                    flush=False,
+                    render=False,
+                    rust_dynamic_selection=True,
+                    rust_dynamic_activity=True,
+                    rust_sequence_playback=(
+                        engine.config.animation_sequence is not None
+                    ),
+                    rust_effect_scheduling=True,
+                    rust_frame_scheduling=True,
+                    rust_beat_clock=True,
+                )
+            else:
+                if engine.mode is PlaybackMode.DYNAMIC:
+                    engine.clear_renderer_activity_state()
+                delay = engine.step(
+                    target,
+                    snapshot=snapshot,
+                    now_s=now_s,
+                    flush=False,
+                    render=False,
+                    rust_frame_scheduling=engine.mode is PlaybackMode.STATIC,
+                )
+            delay_values.append(delay)
+        delays = tuple(delay_values)
+        structure_events = self._remember_rust_structure_events(
+            snapshot, outputs, per_output_engines
+        )
+        if structure_events is None:
+            self._rust_scene_rendering_disabled = True
+            self._rust_scene_render_error = (
+                "Rust structure event replay queue reached its capacity"
+            )
+            self._rust_last_render_timestamp_ns = None
+            self._rust_last_control_signature = None
+            self._rust_last_audio_signature = None
+            self._rust_last_audio_update_retry_at_s = None
+            return None
+        scheduler_time_ns = sum(
+            int(engine.last_scheduling_time_ms * 1_000_000)
+            for engine in playback_engines
+        )
+        self._last_scheduler_time_ms = scheduler_time_ns / 1_000_000.0
         audio_inputs = tuple(
-            self._rust_audio_input(engine.last_render_audio_snapshot)
+            self._rust_audio_input(
+                (
+                    snapshot or AudioSnapshot.silence()
+                    if engine.mode is PlaybackMode.DYNAMIC
+                    else engine.last_render_audio_snapshot
+                ),
+                feature_sequence=(
+                    self._rust_dynamic_feature_sequence
+                    if engine.mode is PlaybackMode.DYNAMIC
+                    else None
+                ),
+                beat_events=(
+                    tuple(self._rust_pending_beat_events)
+                    if engine.mode is PlaybackMode.DYNAMIC
+                    else None
+                ),
+                structure_events=structure_events,
+            )
             for engine in per_output_engines
         )
         if any(audio != audio_inputs[0] for audio in audio_inputs[1:]):
@@ -4094,8 +4358,13 @@ profile.audio_config(microphone=True),
         for index, (output, engine) in enumerate(
             zip(outputs, per_output_engines, strict=True)
         ):
+            rust_dynamic_owner = (
+                engine.mode is PlaybackMode.DYNAMIC
+            )
             is_dynamic_idle = (
-                engine.mode is PlaybackMode.DYNAMIC and not engine.music_active
+                not rust_dynamic_owner
+                and engine.mode is PlaybackMode.DYNAMIC
+                and not engine.music_active
             )
             idle_off = is_dynamic_idle and engine.idle_mode == "off"
             player = engine.idle_player if (
@@ -4108,6 +4377,7 @@ profile.audio_config(microphone=True),
                 return min(delays, default=MIN_FRAME_SECONDS)
             base_intensity = 1.0
             effects: tuple[RustRenderEffect, ...] = ()
+            music_structure = None
             solid_color: tuple[int, int, int] | None = None
             brightness = player.brightness
             if engine.mode is PlaybackMode.SOLID:
@@ -4117,27 +4387,13 @@ profile.audio_config(microphone=True),
                 color = engine.idle_color.as_rgba_array()
                 solid_color = (int(color[0]), int(color[1]), int(color[2]))
                 brightness = engine.idle_brightness
-            if engine.mode is PlaybackMode.DYNAMIC and engine.music_active:
-                active_audio = engine.last_render_audio_snapshot or AudioSnapshot.silence()
-                schedule_inputs_started_ns = time.perf_counter_ns()
-                base_intensity, active_effects = engine.layered_renderer.render_inputs(
-                    player,
-                    active_audio,
-                    engine.music_structure_state,
-                )
-                scheduler_time_ns += (
-                    time.perf_counter_ns() - schedule_inputs_started_ns
-                )
-                self._last_scheduler_time_ms = scheduler_time_ns / 1_000_000.0
-                effects = tuple(
-                    RustRenderEffect(
-                        name=effect.name,
-                        settings=effect.settings,
-                        intensity=effect.intensity,
-                        trigger_beat=effect.trigger_beat_strength is not None,
-                        trigger_beat_strength=effect.trigger_beat_strength or 0.0,
-                    )
-                    for effect in active_effects
+            if rust_dynamic_owner:
+                structure = engine.music_structure_state
+                music_structure = RustRenderMusicStructure(
+                    phase=structure.phase.value,
+                    confidence=structure.confidence,
+                    buildup_progress=structure.buildup_progress,
+                    drop_event=structure.drop_event,
                 )
             correction = (
                 self._correction_controllers[index].correction
@@ -4157,6 +4413,199 @@ profile.audio_config(microphone=True),
                     duration_ns=duration_ms * 1_000_000,
                     mode=effect.value,
                 )
+            cycling = None
+            if engine.mode is PlaybackMode.CYCLING:
+                cycle_config = engine.config.cycling
+                choices = tuple(
+                    (
+                        choice_name,
+                        player.animation_settings(choice_name) or {},
+                    )
+                    for choice_index in player.automatic_indices()
+                    if (choice_name := player.name_at(choice_index)) is not None
+                )
+                if cycle_config.seed is None:
+                    startup_seed = (
+                        int(self._started_at_s * 1_000_000_000)
+                        if self._started_at_s is not None
+                        else int(now_s * 1_000_000_000)
+                    )
+                    seed = (
+                        startup_seed + index
+                        if self._topology.layout == "independent"
+                        else startup_seed
+                    ) & 0xFFFFFFFFFFFFFFFF
+                else:
+                    seed = abs(int(cycle_config.seed)) & 0xFFFFFFFFFFFFFFFF
+                cycling = RustRenderCycling(
+                    order=cycle_config.order.value,
+                    timing=cycle_config.timing.value.replace("-", "_"),
+                    interval_ns=max(1, int(cycle_config.interval_s * 1_000_000_000)),
+                    seed=seed,
+                    choices=choices,
+                    transition_duration_ns=max(
+                        0,
+                        int(engine.config.transition_duration_s * 1_000_000_000),
+                    ),
+                    transition_mode=engine.config.transition_effect.value,
+                )
+            elif (
+                engine.mode is PlaybackMode.DYNAMIC
+                and rust_dynamic_owner
+            ):
+                cycle_config = engine.config.cycling
+                selector_config = engine.config.dynamic
+                choices = tuple(
+                    (
+                        choice_name,
+                        player.animation_settings(choice_name) or {},
+                    )
+                    for choice_index in player.automatic_indices()
+                    if (choice_name := player.name_at(choice_index)) is not None
+                )
+                selector_seed = (
+                    None
+                    if selector_config.seed is None
+                    else abs(int(selector_config.seed)) & 0xFFFFFFFFFFFFFFFF
+                )
+                dynamic_selector = RustRenderDynamicSelector(
+                    min_duration_ns=max(
+                        0, int(selector_config.min_duration_s * 1_000_000_000)
+                    ),
+                    max_duration_ns=max(
+                        0, int(selector_config.max_duration_s * 1_000_000_000)
+                    ),
+                    switch_cooldown_ns=max(
+                        0, int(selector_config.switch_cooldown_s * 1_000_000_000)
+                    ),
+                    drop_cooldown_ns=max(
+                        0, int(selector_config.drop_cooldown_s * 1_000_000_000)
+                    ),
+                    randomness=selector_config.randomness,
+                    history_size=selector_config.history_size,
+                    seed=selector_seed,
+                    switch_margin=selector_config.switch_margin,
+                    switch_quantization=engine.config.switch_quantization.value,
+                    bars_per_phrase=self._bars_per_phrase,
+                    clock_confidence_threshold=engine.layered_renderer.scheduler.config.clock_confidence_threshold,
+                    subdivisions_per_beat=engine.layered_renderer.scheduler.config.subdivisions_per_beat,
+                    sync_offset_ns=round(engine.sync_offset_s * 1_000_000_000),
+                    activity=RustRenderMusicActivityConfig(
+                        idle_enter_frames=engine.activity_detector.config.idle_enter_frames,
+                        activation_delay_ns=round(
+                            engine.activity_detector.config.activation_delay_s
+                            * 1_000_000_000
+                        ),
+                        feature_attack=engine.activity_detector.config.feature_attack,
+                        feature_release=engine.activity_detector.config.feature_release,
+                        energy_threshold=engine.activity_detector.config.energy_threshold,
+                        onset_threshold=engine.activity_detector.config.onset_threshold,
+                        beat_density_threshold=engine.activity_detector.config.beat_density_threshold,
+                        brightness_threshold=engine.activity_detector.config.brightness_threshold,
+                        spectral_balance_ratio=engine.activity_detector.config.spectral_balance_ratio,
+                        activation_hysteresis_ratio=engine.activity_detector.config.activation_hysteresis_ratio,
+                        beat_density_window_ns=round(
+                            engine.activity_detector.config.beat_density_window_s
+                            * 1_000_000_000
+                        ),
+                    ),
+                )
+                idle_animation = (
+                    engine.idle_player.name_at(engine.idle_player.current_index())
+                    if engine.idle_mode == "animation"
+                    else None
+                )
+                idle_settings = (
+                    engine.idle_player.animation_settings(idle_animation) or {}
+                    if idle_animation is not None
+                    else {}
+                )
+                idle_rgb = engine.idle_color.as_rgba_array()
+                animation_sequence = engine.config.animation_sequence
+                rust_sequence = (
+                    None
+                    if animation_sequence is None
+                    else RustRenderAnimationSequence(
+                        id=animation_sequence.id,
+                        repeat=animation_sequence.repeat,
+                        steps=tuple(
+                            RustRenderAnimationSequenceStep(
+                                animation=step.animation_name,
+                                duration_bars=step.duration_bars,
+                            )
+                            for step in animation_sequence.steps
+                        ),
+                    )
+                )
+                effect_config = engine.layered_renderer.scheduler.config
+                effect_seed = (
+                    abs(int(effect_config.seed)) & 0xFFFFFFFFFFFFFFFF
+                    if effect_config.seed is not None
+                    else (
+                        (
+                            int(self._started_at_s * 1_000_000_000)
+                            if self._started_at_s is not None
+                            else int(now_s * 1_000_000_000)
+                        )
+                        + (index if self._topology.layout == "independent" else 0)
+                    )
+                    & 0xFFFFFFFFFFFFFFFF
+                )
+                effect_choices = tuple(
+                    RustRenderEffectChoice(
+                        name=definition.name,
+                        settings=player.animation_settings(definition.name) or {},
+                    )
+                    for definition in (*RHYTHMIC_EFFECTS, *ACCENT_EFFECTS)
+                    if player.index_of(definition.name) is not None
+                )
+                cycling = RustRenderCycling(
+                    order="sequential",
+                    timing="fixed",
+                    interval_ns=1,
+                    seed=selector_seed,
+                    choices=choices,
+                    transition_duration_ns=max(
+                        0,
+                        int(engine.config.transition_duration_s * 1_000_000_000),
+                    ),
+                    transition_mode=engine.config.transition_effect.value,
+                    selector=dynamic_selector,
+                    dynamic_idle=RustRenderDynamicIdle(
+                        mode=engine.idle_mode,
+                        animation=idle_animation,
+                        settings=idle_settings,
+                        color=(int(idle_rgb[0]), int(idle_rgb[1]), int(idle_rgb[2])),
+                        brightness=engine.idle_brightness,
+                    ),
+                    sequence=rust_sequence,
+                    effect_scheduler=RustRenderEffectScheduler(
+                        beat_confidence_threshold=(
+                            effect_config.beat_confidence_threshold
+                        ),
+                        onset_threshold=effect_config.onset_threshold,
+                        rhythmic_cooldown_ns=max(
+                            0, round(effect_config.rhythmic_cooldown_s * 1_000_000_000)
+                        ),
+                        accent_cooldown_ns=max(
+                            0, round(effect_config.accent_cooldown_s * 1_000_000_000)
+                        ),
+                        max_active_effects=effect_config.max_active_effects,
+                        max_overlay_strength=effect_config.max_overlay_strength,
+                        subdivisions_per_beat=effect_config.subdivisions_per_beat,
+                        clock_confidence_threshold=(
+                            effect_config.clock_confidence_threshold
+                        ),
+                        seed=effect_seed,
+                        sync_offset_ns=round(
+                            engine.sync_offset_s * 1_000_000_000
+                        ),
+                        dynamic_response=engine.config.dynamic_response,
+                        choices=effect_choices,
+                    )
+                    if effect_choices
+                    else None,
+                )
             render_outputs.append(
                 RustRenderOutput(
                     animation=animation,
@@ -4168,6 +4617,8 @@ profile.audio_config(microphone=True),
                     zone_count=output.zone_count,
                     zone_pattern=output.zone_pattern,
                     transition=transition,
+                    cycling=cycling,
+                    music_structure=music_structure,
                     blackout=shared_blackout or gate_blackout or idle_off,
                     reversed=output.reversed,
                     color_correction=(correction.red, correction.green, correction.blue),
@@ -4191,32 +4642,187 @@ profile.audio_config(microphone=True),
                     output.pixels + output.zone_count - 1
                 ) // output.zone_count
 
-        timestamp_ns = time.monotonic_ns()
-        delta_ns = (
-            max(0, timestamp_ns - self._rust_last_render_timestamp_ns)
-            if self._rust_last_render_timestamp_ns is not None
-            else int(MIN_FRAME_SECONDS * 1_000_000_000)
+        control_signature: tuple[object, ...] = (
+            tuple(render_outputs),
+            self._topology.power_limiting_enabled,
+            self._topology.effective_power_budget_watts,
         )
-        self._rust_render_sequence += 1
+        audio_signature = audio_inputs[0]
+        pending_audio_events = bool(
+            self._rust_pending_beat_events or structure_events
+        )
+        retry_audio_events = pending_audio_events and (
+            self._rust_last_audio_update_retry_at_s is None
+            or now_s - self._rust_last_audio_update_retry_at_s >= 0.1
+        )
+        control_changed = control_signature != self._rust_last_control_signature
+        audio_changed = audio_signature != self._rust_last_audio_signature
+        if not control_changed and not audio_changed and not retry_audio_events:
+            self._pending_preview_frames = None
+            return min(delays, default=MIN_FRAME_SECONDS)
+
+        timestamp_ns = time.monotonic_ns()
         try:
-            output_thread.submit_render_frame(
-                sequence=self._rust_render_sequence,
-                timestamp_ns=timestamp_ns,
-                delta_ns=delta_ns,
-                brightness=1.0,
-                outputs=tuple(render_outputs),
-                audio=audio_inputs[0],
-                power_limiting_enabled=self._topology.power_limiting_enabled,
-                power_budget_watts=self._topology.effective_power_budget_watts,
-            )
+            if control_changed:
+                next_revision = self._rust_control_revision + 1
+                if next_revision > 0xFFFFFFFFFFFFFFFF:
+                    raise RustEngineError("Rust scene revision counter is exhausted")
+                acknowledgement = output_thread.submit_scene_update(
+                    revision=next_revision,
+                    timestamp_ns=timestamp_ns,
+                    brightness=1.0,
+                    outputs=tuple(render_outputs),
+                    power_limiting_enabled=self._topology.power_limiting_enabled,
+                    power_budget_watts=self._topology.effective_power_budget_watts,
+                    scheduler_fps=RUST_RENDER_SCHEDULER_FPS,
+                )
+                self._rust_control_revision = acknowledgement.revision
+                self._rust_last_control_signature = control_signature
+            if audio_changed or retry_audio_events:
+                next_sequence = self._rust_audio_update_sequence + 1
+                if next_sequence > 0xFFFFFFFFFFFFFFFF:
+                    raise RustEngineError("Rust audio sequence counter is exhausted")
+                output_thread.submit_audio_update(
+                    sequence=next_sequence,
+                    timestamp_ns=timestamp_ns,
+                    audio=audio_signature,
+                )
+                self._rust_audio_update_sequence = next_sequence
+                self._rust_last_audio_signature = audio_signature
+                self._rust_last_audio_update_retry_at_s = (
+                    now_s if pending_audio_events else None
+                )
         except Exception as exc:  # noqa: BLE001 - unsupported scenes use Python fallback
             self._rust_scene_rendering_disabled = True
             self._rust_scene_render_error = f"{type(exc).__name__}: {exc}"[:256]
             self._rust_last_render_timestamp_ns = None
+            self._rust_last_control_signature = None
+            self._rust_last_audio_signature = None
+            self._rust_last_audio_update_retry_at_s = None
             return min(delays, default=MIN_FRAME_SECONDS)
+        self._rust_render_sequence += 1
         self._rust_last_render_timestamp_ns = timestamp_ns
         self._pending_preview_frames = None
         return min(delays, default=MIN_FRAME_SECONDS)
+
+    def _remember_rust_beat_events(self, snapshot: AudioSnapshot | None) -> None:
+        if snapshot is None or not snapshot.beat_events:
+            return
+        events_by_sequence = {
+            event.sequence: event for event in self._rust_pending_beat_events
+        }
+        for event in snapshot.beat_events:
+            events_by_sequence.setdefault(
+                event.sequence,
+                RustRenderBeatEvent(
+                    sequence=event.sequence,
+                    timestamp_ns=round(event.timestamp * 1_000_000_000),
+                    strength=event.strength,
+                ),
+            )
+        ordered = [events_by_sequence[key] for key in sorted(events_by_sequence)]
+        overflow = max(0, len(ordered) - MAX_RUST_UNACKNOWLEDGED_BEAT_EVENTS)
+        if overflow:
+            self._rust_dropped_beat_events += overflow
+            ordered = ordered[overflow:]
+        self._rust_pending_beat_events = deque(ordered)
+
+    def _acknowledge_rust_beat_events(self, sequence: int | None) -> None:
+        if sequence is None:
+            return
+        while (
+            self._rust_pending_beat_events
+            and self._rust_pending_beat_events[0].sequence <= sequence
+        ):
+            self._rust_pending_beat_events.popleft()
+        if not self._rust_pending_beat_events and not any(
+            self._rust_pending_structure_events.values()
+        ):
+            self._rust_last_audio_update_retry_at_s = None
+
+    def _remember_rust_structure_events(
+        self,
+        snapshot: AudioSnapshot | None,
+        outputs: tuple[StripeOutputSettings, ...],
+        engines: tuple[PlaybackEngine, ...],
+    ) -> tuple[RustRenderStructureEvent, ...] | None:
+        if snapshot is not None and snapshot.fresh:
+            source_sequence = snapshot.sequence
+            for output_index, (output, engine) in enumerate(
+                zip(outputs, engines, strict=True)
+            ):
+                pending = self._rust_pending_structure_events.setdefault(
+                    output.id, deque()
+                )
+                if engine.mode is not PlaybackMode.DYNAMIC:
+                    pending.clear()
+                    continue
+                previous_source_sequence = self._rust_structure_source_sequences.get(
+                    output.id
+                )
+                if (
+                    previous_source_sequence is not None
+                    and source_sequence <= previous_source_sequence
+                ):
+                    continue
+                self._rust_structure_source_sequences[output.id] = source_sequence
+                structure = engine.music_structure_state
+                section_change = snapshot.features.section_change
+                if not section_change and not structure.drop_event:
+                    continue
+                if sum(
+                    len(events)
+                    for events in self._rust_pending_structure_events.values()
+                ) >= MAX_RUST_UNACKNOWLEDGED_STRUCTURE_EVENTS:
+                    return None
+                sequence = self._rust_structure_event_sequences.get(output.id, 0) + 1
+                if sequence > 0xFFFFFFFFFFFFFFFF:
+                    return None
+                self._rust_structure_event_sequences[output.id] = sequence
+                pending.append(
+                    RustRenderStructureEvent(
+                        output_index=output_index,
+                        sequence=sequence,
+                        timestamp_ns=max(
+                            0, round(snapshot.timestamp * 1_000_000_000)
+                        ),
+                        phase=structure.phase.value,
+                        confidence=structure.confidence,
+                        buildup_progress=structure.buildup_progress,
+                        drop_event=structure.drop_event,
+                        section_change=section_change,
+                    )
+                )
+
+        events = tuple(
+            sorted(
+                (
+                    event
+                    for output, engine in zip(outputs, engines, strict=True)
+                    if engine.mode is PlaybackMode.DYNAMIC
+                    for event in self._rust_pending_structure_events.get(
+                        output.id, ()
+                    )
+                ),
+                key=lambda event: (event.output_index, event.sequence),
+            )
+        )
+        if len(events) > MAX_RUST_UNACKNOWLEDGED_STRUCTURE_EVENTS:
+            return None
+        return events
+
+    def _acknowledge_rust_structure_events(
+        self, output_id: str, sequence: int
+    ) -> None:
+        pending = self._rust_pending_structure_events.get(output_id)
+        if pending is None:
+            return
+        while pending and pending[0].sequence <= sequence:
+            pending.popleft()
+        if not self._rust_pending_beat_events and not any(
+            self._rust_pending_structure_events.values()
+        ):
+            self._rust_last_audio_update_retry_at_s = None
 
     def _rust_scene_revision(self, output_id: str, player: AnimationPlayer) -> int:
         previous = self._rust_scene_generations.get(output_id)
@@ -4233,15 +4839,63 @@ profile.audio_config(microphone=True),
     @staticmethod
     def _rust_audio_input(
         snapshot: AudioSnapshot | None,
+        *,
+        feature_sequence: int | None = None,
+        beat_events: tuple[RustRenderBeatEvent, ...] | None = None,
+        structure_events: tuple[RustRenderStructureEvent, ...] = (),
     ) -> RustRenderAudioInput | None:
         if snapshot is None:
             return None
         frame = snapshot.frame
+        feature_timestamp_ns = (
+            round(frame.timestamp * 1_000_000_000)
+            if isfinite(frame.timestamp)
+            and 0.0 < frame.timestamp <= 0xFFFFFFFFFFFFFFFF / 1_000_000_000
+            else None
+        )
         return RustRenderAudioInput(
             rms=frame.rms,
             bands=frame.bands,
             beat=frame.beat,
             beat_strength=frame.beat_strength,
+            feature_timestamp_ns=feature_timestamp_ns,
+            feature_sequence=feature_sequence,
+            fallback_bpm=snapshot.features.bpm,
+            beat_events=(
+                beat_events
+                if beat_events is not None
+                else tuple(
+                    RustRenderBeatEvent(
+                        sequence=event.sequence,
+                        timestamp_ns=round(event.timestamp * 1_000_000_000),
+                        strength=event.strength,
+                    )
+                    for event in snapshot.beat_events
+                )
+            ),
+            structure_events=structure_events,
+            selector_features=RustRenderSelectorFeatures(
+                energy_level=snapshot.features.energy_level,
+                energy=snapshot.features.energy,
+                volume=snapshot.features.volume,
+                brightness=snapshot.features.brightness,
+                onset_strength=snapshot.features.onset_strength,
+                bass_energy=snapshot.features.bass_energy,
+                bass=snapshot.features.bass,
+                mid_energy=snapshot.features.mid_energy,
+                treble_energy=snapshot.features.treble_energy,
+                beat_confidence=snapshot.features.beat_confidence,
+                bpm=snapshot.features.bpm,
+                beat=snapshot.features.beat,
+                silence=snapshot.features.silence,
+                drop_detected=snapshot.features.drop_detected,
+                section_change=snapshot.features.section_change,
+            ),
+            effect_features=RustRenderEffectFeatures(
+                beat_strength=snapshot.features.beat_strength,
+                musical_impact=snapshot.musical_impact,
+            ),
+            beat_event_stream=snapshot.beat_event_stream,
         )
 
     def _flush_power_limited_outputs(self) -> None:
@@ -4339,7 +4993,6 @@ profile.audio_config(microphone=True),
         if ordered_noise:
             noise_floor = ordered_noise[int((len(ordered_noise) - 1) * 0.2)]
         processor = self._audio_health.processor
-        clock = self.playback.beat_clock_state
         dynamic_playbacks = tuple(
             playback
             for _, playback in self._target_playbacks(None)
@@ -4349,7 +5002,9 @@ profile.audio_config(microphone=True),
             (playback for playback in dynamic_playbacks if playback.music_active),
             dynamic_playbacks[0] if dynamic_playbacks else self.playback,
         )
+        clock = structure_engine.beat_clock_state
         scheduler_diagnostics = structure_engine.layered_renderer.diagnostics()
+        rust_effect_scheduler = self._rust_effect_scheduler_state()
         structure_state = structure_engine.music_structure_state
         drop_accent = scheduler_diagnostics.drop_accent
         calibration_output_diagnostics = (
@@ -4394,16 +5049,24 @@ profile.audio_config(microphone=True),
             beat_event_sequence=(
                 self._last_beat_event.sequence if self._last_beat_event is not None else 0
             ),
-            dropped_beat_events=self._audio_health.dropped_beat_events,
+            dropped_beat_events=(
+                self._audio_health.dropped_beat_events + self._rust_dropped_beat_events
+            ),
             pending_beat_events=self._audio_health.pending_beat_events,
             beat_scheduler_late_ticks_dropped=(
-                scheduler_diagnostics.late_ticks_dropped
+                rust_effect_scheduler.late_ticks_dropped
+                if rust_effect_scheduler is not None
+                else scheduler_diagnostics.late_ticks_dropped
             ),
             beat_scheduler_late_ticks_coalesced=(
-                scheduler_diagnostics.late_ticks_coalesced
+                rust_effect_scheduler.late_ticks_coalesced
+                if rust_effect_scheduler is not None
+                else scheduler_diagnostics.late_ticks_coalesced
             ),
             beat_scheduler_lateness_p95_ms=(
-                scheduler_diagnostics.beat_lateness_p95_ms
+                rust_effect_scheduler.beat_lateness_p95_ns / 1_000_000.0
+                if rust_effect_scheduler is not None
+                else scheduler_diagnostics.beat_lateness_p95_ms
             ),
             calibration_output_callback_count=(
                 calibration_output_diagnostics.callback_count
@@ -4495,13 +5158,39 @@ profile.audio_config(microphone=True),
                 and structure_engine.music_active
                 and self._audio_frame.fresh
             ),
-            drop_accent_status=drop_accent.status.value,
-            drop_accent_reason=drop_accent.reason,
+            drop_accent_status=(
+                cast(
+                    Literal["idle", "pending", "activated", "skipped"],
+                    rust_effect_scheduler.drop_accent_status,
+                )
+                if rust_effect_scheduler is not None
+                else drop_accent.status.value
+            ),
+            drop_accent_reason=(
+                rust_effect_scheduler.drop_accent_reason
+                if rust_effect_scheduler is not None
+                else drop_accent.reason
+            ),
             health=self._audio_health_status(self._uptime_seconds()),
         )
         with self._snapshot_lock:
             self._audio_telemetry = telemetry
         self._last_audio_telemetry_publication_at_s = time.monotonic()
+
+    def _rust_effect_scheduler_state(self) -> RustEffectSchedulerStats | None:
+        output_thread = self._output_thread
+        if not isinstance(output_thread, RustEngineOutputThread):
+            return None
+        stats = output_thread.stats()
+        if not stats.effect_schedulers:
+            return None
+        if len(stats.effect_schedulers) == len(stats.dynamic_gate_states):
+            for gate_state, scheduler_state in zip(
+                stats.dynamic_gate_states, stats.effect_schedulers, strict=True
+            ):
+                if gate_state == "music":
+                    return scheduler_state
+        return stats.effect_schedulers[0]
 
     def _worker_heartbeat_age(self) -> float | None:
         with self._worker_state_lock:
@@ -4549,6 +5238,15 @@ profile.audio_config(microphone=True),
         output_stats = (
             self._output_thread.stats() if self._output_thread is not None else None
         )
+        active_effects = self.playback.active_effect_names
+        if output_stats is not None and output_stats.effect_schedulers:
+            active_effects = tuple(
+                dict.fromkeys(
+                    effect.name
+                    for scheduler in output_stats.effect_schedulers
+                    for effect in scheduler.active
+                )
+            )
         power_budget_state = self._power_budget_state
         if (
             output_stats is not None
@@ -4595,7 +5293,7 @@ profile.audio_config(microphone=True),
             configured_audio_source=self._audio_source_setting,
             active_audio_source=self._monitor_audio_source.value,
             audio_monitoring=self._audio_input is not None,
-            active_effects=self.playback.active_effect_names,
+            active_effects=active_effects,
             uptime_seconds=uptime_seconds,
             frame_rate=self._frame_rate,
             render_time_ms=(

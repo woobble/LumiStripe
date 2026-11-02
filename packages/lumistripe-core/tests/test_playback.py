@@ -14,6 +14,7 @@ from lumistripe import (
     MusicActivityConfig,
     MusicActivityDetector,
     MusicFeatures,
+    MusicGateState,
     PlaybackConfig,
     PlaybackEngine,
     PlaybackMode,
@@ -423,6 +424,128 @@ def test_fixed_shuffle_never_repeats_current_animation() -> None:
     engine.step(stripe, now_s=1.1)
 
     assert player.current_index() != before
+
+
+def test_rust_animation_selection_updates_python_mirror_without_new_revision() -> None:
+    player = AnimationPlayer.party()
+    engine = PlaybackEngine(
+        player,
+        PlaybackConfig(mode=PlaybackMode.CYCLING),
+    )
+    selected = player.name_at(1)
+    assert selected is not None
+    original_revision = player.scene_revision
+
+    assert engine.adopt_renderer_selection(selected, now_s=1.0)
+
+    assert player.name_at(player.current_index()) == selected
+    assert player.frame == 0
+    assert player.scene_revision == original_revision
+
+
+def test_rust_dynamic_activity_mirror_skips_python_gate_and_idle_animation_steps() -> None:
+    player = AnimationPlayer.party()
+    engine = PlaybackEngine(
+        player,
+        PlaybackConfig(mode=PlaybackMode.DYNAMIC),
+    )
+    engine.set_idle("animation", Rgb(0, 0, 0), "rainbow")
+    stripe = Stripe(8)
+
+    engine.adopt_renderer_activity_state(MusicGateState.CANDIDATE)
+    engine.step(
+        stripe,
+        snapshot=AudioSnapshot.silence(),
+        now_s=0.0,
+        render=False,
+        rust_dynamic_selection=True,
+        rust_dynamic_activity=True,
+        rust_frame_scheduling=True,
+    )
+
+    assert engine.music_gate_state is MusicGateState.CANDIDATE
+    assert engine.music_active is False
+    assert engine.activity_detector.state is MusicGateState.IDLE
+    assert engine.idle_player.frame == 0
+
+    engine.adopt_renderer_activity_state(MusicGateState.MUSIC)
+    engine.step(
+        stripe,
+        snapshot=_active_snapshot(),
+        now_s=1.0,
+        render=False,
+        rust_dynamic_selection=True,
+        rust_dynamic_activity=True,
+        rust_frame_scheduling=True,
+    )
+
+    assert engine.music_gate_state is MusicGateState.MUSIC
+    assert engine.music_active is True
+    assert engine.activity_detector.state is MusicGateState.IDLE
+    assert player.frame == 0
+
+
+def test_rust_frame_scheduler_does_not_advance_static_audio_animation_mirror() -> None:
+    player = AnimationPlayer.party()
+    engine = PlaybackEngine(player, PlaybackConfig(mode=PlaybackMode.STATIC))
+    stripe = Stripe(8)
+
+    engine.step(
+        stripe,
+        snapshot=_active_snapshot(),
+        now_s=0.0,
+        render=False,
+        rust_frame_scheduling=True,
+    )
+    engine.step(
+        stripe,
+        snapshot=_active_snapshot(),
+        now_s=2.0,
+        render=False,
+        rust_frame_scheduling=True,
+    )
+
+    assert player.frame == 0
+    assert engine.last_render_audio_snapshot is not None
+
+
+def test_rust_dynamic_beat_clock_is_mirrored_without_python_tracking() -> None:
+    from lumistripe.audio.types import BeatClockState, BeatEvent
+
+    engine = PlaybackEngine(
+        AnimationPlayer.party(),
+        PlaybackConfig(mode=PlaybackMode.DYNAMIC),
+    )
+    stripe = Stripe(8)
+    rust_clock = BeatClockState(
+        bpm=128.0,
+        phase=0.25,
+        confidence=0.9,
+        beat_index=42,
+        next_beat_at=10.25,
+        last_beat_at=9.78125,
+    )
+    engine.adopt_renderer_beat_clock_state(rust_clock)
+    snapshot = AudioSnapshot(
+        frame=AudioFrame(fresh=True, timestamp=10.0),
+        features=MusicFeatures(bpm=90.0),
+        beat_events=(BeatEvent(sequence=1, timestamp=10.0, strength=1.0),),
+    )
+
+    engine.step(
+        stripe,
+        snapshot=snapshot,
+        now_s=10.0,
+        render=False,
+        rust_dynamic_selection=True,
+        rust_dynamic_activity=True,
+        rust_effect_scheduling=True,
+        rust_frame_scheduling=True,
+        rust_beat_clock=True,
+    )
+
+    assert engine.beat_clock_state == rust_clock
+    assert engine.musical_timeline_state.bpm == rust_clock.bpm
 
 
 def test_dynamic_quiet_state_latches_complete_blackout() -> None:

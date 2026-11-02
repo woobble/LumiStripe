@@ -22,7 +22,7 @@ from collections.abc import Callable, Iterable
 from itertools import pairwise
 from math import ceil
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 from lumistripe.playback import PlaybackMode
 from lumistripe.render import kernels as render_kernels
@@ -34,6 +34,7 @@ from lumistripe_web.settings import (
 )
 
 _LAYOUTS = ("mirrored", "continuous", "independent")
+_ENGINE_BACKENDS = ("python", "rust")
 _STAGES = (
     "_step",
     "_flush_power_limited_outputs",
@@ -60,6 +61,12 @@ def summarize(values: Iterable[float]) -> dict[str, float]:
         "p95": percentile(values, 0.95),
         "p99": percentile(values, 0.99),
     }
+
+
+def _counter_delta(after: int | None, before: int | None) -> int | None:
+    if after is None:
+        return None
+    return max(0, after - (before or 0))
 
 
 def parse_csv_ints(value: str, *, argument: str) -> tuple[int, ...]:
@@ -95,6 +102,75 @@ def _rss_mb() -> float | None:
     return int(match.group(1)) / 1024.0 if match else None
 
 
+def _process_rss_mb(pid: int) -> float | None:
+    """Return a Linux process's resident memory, when /proc exposes it."""
+
+    try:
+        status = Path(f"/proc/{pid}/status").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = re.search(r"^VmRSS:\s+(\d+)\s+kB$", status, re.MULTILINE)
+    return int(match.group(1)) / 1024.0 if match else None
+
+
+def _thread_cpu_snapshot(pid: int) -> dict[int, tuple[str, float]] | None:
+    """Return per-thread CPU seconds from Linux procfs, or None if unavailable."""
+
+    try:
+        task_dirs = tuple(Path(f"/proc/{pid}/task").iterdir())
+        ticks_per_second = float(os.sysconf("SC_CLK_TCK"))
+    except (OSError, ValueError):
+        return None
+    if ticks_per_second <= 0.0:
+        return None
+
+    snapshot: dict[int, tuple[str, float]] = {}
+    for task_dir in task_dirs:
+        try:
+            stat = (task_dir / "stat").read_text(encoding="utf-8")
+            name = (task_dir / "comm").read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        close_paren = stat.rfind(")")
+        if close_paren < 0:
+            continue
+        fields = stat[close_paren + 1 :].split()
+        if len(fields) <= 12:
+            continue
+        try:
+            tid = int(task_dir.name)
+            cpu_ticks = int(fields[11]) + int(fields[12])
+        except ValueError:
+            continue
+        snapshot[tid] = (name, cpu_ticks / ticks_per_second)
+    return snapshot
+
+
+def _thread_cpu_utilization(
+    before: dict[int, tuple[str, float]] | None,
+    after: dict[int, tuple[str, float]] | None,
+    elapsed_s: float,
+) -> dict[str, float] | None:
+    if before is None or after is None:
+        return None
+    utilization: dict[str, float] = {}
+    for tid in sorted(before.keys() | after.keys()):
+        name, after_cpu = after.get(tid, before.get(tid, ("unknown", 0.0)))
+        before_cpu = before.get(tid, (name, after_cpu))[1]
+        utilization[f"{tid}:{name}"] = (
+            max(0.0, after_cpu - before_cpu) / max(elapsed_s, 1e-9) * 100.0
+        )
+    return utilization
+
+
+def _rust_engine_pid(runtime: LumiStripeRuntime) -> int | None:
+    output_thread = getattr(runtime, "_output_thread", None)
+    engine_process = getattr(output_thread, "_process", None)
+    child_process = getattr(engine_process, "_process", None)
+    pid = getattr(child_process, "pid", None)
+    return pid if isinstance(pid, int) else None
+
+
 def _topology(
     led_count: int,
     layout: str,
@@ -105,9 +181,16 @@ def _topology(
     spi_devices: tuple[str, ...],
     spi_speed_hz: int,
     power_budget_watts: float,
+    output_count: int = 2,
 ) -> StripeTopologySettings:
-    first, remainder = divmod(led_count, 2)
-    pixels = (first + remainder, first)
+    pixels: tuple[int, ...]
+    if output_count == 1:
+        pixels = (led_count,)
+    elif output_count == 2:
+        first, remainder = divmod(led_count, 2)
+        pixels = (first + remainder, first)
+    else:
+        raise ValueError("output_count must be one or two")
     outputs = tuple(
         StripeOutputSettings(
             id=f"output-{index + 1}",
@@ -163,9 +246,12 @@ def _install_timers(
 def _run_case(
     *,
     led_count: int,
+    output_count: int,
     layout: str,
     zones: int,
     mode: str,
+    engine_backend: Literal["python", "rust"],
+    engine_binary: Path | None,
     power_limit: bool,
     warmup_s: float,
     duration_s: float,
@@ -195,16 +281,19 @@ def _run_case(
                     spi_devices=spi_devices,
                     spi_speed_hz=spi_speed_hz,
                     power_budget_watts=power_budget_watts,
+                    output_count=output_count,
                 )
             )
             runtime = LumiStripeRuntime(
                 RuntimeSettings(
                     pixels=led_count,
                     hardware=hardware,
+                    engine_backend=engine_backend,
+                    engine_binary=engine_binary,
                     spi_device=spi_devices[0],
-                    spi_device_2=spi_devices[1],
+                    spi_device_2=(spi_devices[1] if output_count == 2 else None),
                     spi_speed_hz=spi_speed_hz,
-                    spi_speed_hz_2=spi_speed_hz,
+                    spi_speed_hz_2=(spi_speed_hz if output_count == 2 else None),
                     audio_source=audio_source
                     or ("demo" if mode == "dynamic" else "off"),
                     settings_file=settings_file,
@@ -234,13 +323,35 @@ def _run_case(
                 tracemalloc.clear_traces()
                 tracemalloc.reset_peak()
 
+            rust_engine_pid = (
+                _rust_engine_pid(runtime) if engine_backend == "rust" else None
+            )
+            python_threads_before = _thread_cpu_snapshot(os.getpid())
+            rust_threads_before = (
+                _thread_cpu_snapshot(rust_engine_pid)
+                if rust_engine_pid is not None
+                else None
+            )
+            rust_engine_rss_start = (
+                _process_rss_mb(rust_engine_pid)
+                if rust_engine_pid is not None
+                else None
+            )
             cpu_before = time.process_time()
             started = time.monotonic()
             rss_samples: list[float] = []
+            rust_engine_rss_samples: list[float] = []
             if duration_s >= 10.0:
                 initial_sample = _rss_mb()
                 if initial_sample is not None:
                     rss_samples.append(initial_sample)
+                rust_initial_sample = (
+                    _process_rss_mb(rust_engine_pid)
+                    if rust_engine_pid is not None
+                    else None
+                )
+                if rust_initial_sample is not None:
+                    rust_engine_rss_samples.append(rust_initial_sample)
                 deadline = started + duration_s
                 while True:
                     remaining = deadline - time.monotonic()
@@ -250,10 +361,44 @@ def _run_case(
                     sample = _rss_mb()
                     if sample is not None:
                         rss_samples.append(sample)
+                    rust_sample = (
+                        _process_rss_mb(rust_engine_pid)
+                        if rust_engine_pid is not None
+                        else None
+                    )
+                    if rust_sample is not None:
+                        rust_engine_rss_samples.append(rust_sample)
             else:
                 time.sleep(duration_s)
             elapsed = time.monotonic() - started
             cpu_seconds = time.process_time() - cpu_before
+            python_threads_after = _thread_cpu_snapshot(os.getpid())
+            rust_threads_after = (
+                _thread_cpu_snapshot(rust_engine_pid)
+                if rust_engine_pid is not None
+                else None
+            )
+            rust_engine_cpu_seconds = (
+                max(
+                    0.0,
+                    sum(cpu for _, cpu in rust_threads_after.values())
+                    - sum(cpu for _, cpu in rust_threads_before.values()),
+                )
+                if rust_threads_before is not None and rust_threads_after is not None
+                else None
+            )
+            if rust_engine_pid is None:
+                combined_cpu_utilization = (
+                    cpu_seconds / max(elapsed, 1e-9) * 100.0
+                )
+            elif rust_engine_cpu_seconds is not None:
+                combined_cpu_utilization = (
+                    (cpu_seconds + rust_engine_cpu_seconds)
+                    / max(elapsed, 1e-9)
+                    * 100.0
+                )
+            else:
+                combined_cpu_utilization = None
             with runtime._worker_state_lock:
                 missed_after = runtime._missed_frame_count
                 expected_interval_s = runtime._last_step_expected_delay_s
@@ -271,9 +416,11 @@ def _run_case(
             preview = runtime.preview_frame()
             metrics: dict[str, object] = {
                 "led_count": led_count,
+                "output_count": output_count,
                 "layout": layout,
                 "zones_per_output": zones,
                 "mode": mode,
+                "engine_backend": engine_backend,
                 "power_limit_enabled": power_limit,
                 "power_budget_watts": power_budget_watts if power_limit else None,
                 "hardware_output_enabled": hardware,
@@ -295,8 +442,84 @@ def _run_case(
                 "output_frame_latency_p95_ms": (
                     output_stats.frame_latency_p95_ms if output_stats else None
                 ),
+                "output_frame_latency_p50_ms": (
+                    output_stats.frame_latency_p50_ms if output_stats else None
+                ),
+                "output_frame_latency_p99_ms": (
+                    output_stats.frame_latency_p99_ms if output_stats else None
+                ),
+                "output_queue_latency_ms": (
+                    output_stats.queue_latency_ms if output_stats else None
+                ),
+                "output_transmission_ms": (
+                    output_stats.transmission_ms if output_stats else None
+                ),
+                "output_render_time_ms": (
+                    output_stats.render_time_ms if output_stats else None
+                ),
+                "output_ipc_latency_ms": (
+                    output_stats.ipc_latency_ms if output_stats else None
+                ),
+                "output_audio_feature_to_led_latency_ms": (
+                    output_stats.audio_feature_to_led_latency_ms
+                    if output_stats
+                    else None
+                ),
+                "output_audio_feature_to_led_p50_ms": (
+                    output_stats.audio_feature_to_led_p50_ms if output_stats else None
+                ),
+                "output_audio_feature_to_led_p95_ms": (
+                    output_stats.audio_feature_to_led_p95_ms if output_stats else None
+                ),
+                "output_audio_feature_to_led_p99_ms": (
+                    output_stats.audio_feature_to_led_p99_ms if output_stats else None
+                ),
+                "output_audio_feature_to_led_jitter_p99_minus_p50_ms": (
+                    output_stats.audio_feature_to_led_p99_ms
+                    - output_stats.audio_feature_to_led_p50_ms
+                    if output_stats is not None
+                    and output_stats.audio_feature_to_led_p99_ms is not None
+                    and output_stats.audio_feature_to_led_p50_ms is not None
+                    else None
+                ),
                 "output_frame_latency_sample_count": (
                     output_stats.frame_latency_sample_count if output_stats else 0
+                ),
+                "output_scheduler_missed_deadlines": _counter_delta(
+                    output_stats.scheduler_missed_deadlines,
+                    output_stats_before.scheduler_missed_deadlines
+                    if output_stats_before
+                    else None,
+                ),
+                "output_control_update_count": _counter_delta(
+                    output_stats.scene_control_revision,
+                    output_stats_before.scene_control_revision
+                    if output_stats_before
+                    else None,
+                ),
+                "output_audio_update_count": _counter_delta(
+                    output_stats.audio_update_sequence,
+                    output_stats_before.audio_update_sequence
+                    if output_stats_before
+                    else None,
+                ),
+                "output_control_updates_replaced": (
+                    output_stats.scene_updates_replaced
+                    - output_stats_before.scene_updates_replaced
+                    if output_stats is not None and output_stats_before is not None
+                    else 0
+                ),
+                "output_audio_updates_replaced": (
+                    output_stats.audio_updates_replaced
+                    - output_stats_before.audio_updates_replaced
+                    if output_stats is not None and output_stats_before is not None
+                    else 0
+                ),
+                "output_pending_control_updates": (
+                    output_stats.pending_scene_updates if output_stats else None
+                ),
+                "output_audio_update_pending": (
+                    output_stats.pending_audio_update if output_stats else None
                 ),
                 "output_transmitted_frame_sets": (
                     output_stats.transmitted_frames - output_stats_before.transmitted_frames
@@ -333,9 +556,33 @@ def _run_case(
                 ),
                 "output_error": output_stats.last_error if output_stats else None,
                 "cpu_utilization_percent": cpu_seconds / max(elapsed, 1e-9) * 100.0,
+                "python_process_cpu_utilization_percent": cpu_seconds
+                / max(elapsed, 1e-9)
+                * 100.0,
+                "rust_engine_process_cpu_utilization_percent": (
+                    rust_engine_cpu_seconds / max(elapsed, 1e-9) * 100.0
+                    if rust_engine_cpu_seconds is not None
+                    else None
+                ),
+                "combined_process_cpu_utilization_percent": combined_cpu_utilization,
+                "thread_cpu_utilization_percent": {
+                    "python": _thread_cpu_utilization(
+                        python_threads_before, python_threads_after, elapsed
+                    ),
+                    "rust_engine": _thread_cpu_utilization(
+                        rust_threads_before, rust_threads_after, elapsed
+                    ),
+                },
                 "rss_start_mb": start_rss,
                 "rss_end_mb": _rss_mb(),
                 "rss_samples_mb": rss_samples,
+                "rust_engine_rss_start_mb": rust_engine_rss_start,
+                "rust_engine_rss_end_mb": (
+                    _process_rss_mb(rust_engine_pid)
+                    if rust_engine_pid is not None
+                    else None
+                ),
+                "rust_engine_rss_samples_mb": rust_engine_rss_samples,
                 "preview_sequence": preview.sequence,
                 "applied_power_scale": runtime._power_budget_state.applied_scale,
                 "stage_sample_counts": {
@@ -373,6 +620,7 @@ def _run_case(
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--led-counts", default="150,300,600")
+    parser.add_argument("--output-counts", default="2")
     parser.add_argument("--layouts", default=",".join(_LAYOUTS))
     parser.add_argument("--zone-counts", default="1,4")
     parser.add_argument("--modes", default="static,dynamic")
@@ -393,6 +641,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--spi-devices", default="/dev/spidev0.0,/dev/spidev0.1")
     parser.add_argument("--spi-speed-hz", type=int, default=1_000_000)
     parser.add_argument("--power-budget-watts", type=float, default=15.0)
+    parser.add_argument("--engine-backends", default="python")
+    parser.add_argument("--engine-binary", type=Path)
     parser.add_argument(
         "--audio-source",
         choices=("auto", "off", "demo", "mic", "bluetooth", "spotify"),
@@ -401,10 +651,18 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, help="write JSON to this path instead of stdout")
     args = parser.parse_args()
     args.led_counts = parse_csv_ints(args.led_counts, argument="--led-counts")
+    args.output_counts = parse_csv_ints(
+        args.output_counts, argument="--output-counts"
+    )
+    if any(count not in (1, 2) for count in args.output_counts):
+        parser.error("--output-counts values must be 1 or 2")
     args.zone_counts = parse_csv_ints(args.zone_counts, argument="--zone-counts")
     args.layouts = tuple(part.strip() for part in args.layouts.split(","))
     args.modes = tuple(part.strip() for part in args.modes.split(","))
     args.power_limits = tuple(part.strip() for part in args.power_limits.split(","))
+    args.engine_backends = tuple(
+        part.strip() for part in args.engine_backends.split(",")
+    )
     args.spi_devices = tuple(part.strip() for part in args.spi_devices.split(","))
     if not args.layouts or any(layout not in _LAYOUTS for layout in args.layouts):
         parser.error(f"--layouts values must be drawn from {', '.join(_LAYOUTS)}")
@@ -414,6 +672,23 @@ def _parse_args() -> argparse.Namespace:
         value not in {"off", "on"} for value in args.power_limits
     ):
         parser.error("--power-limits values must be off or on")
+    if not args.engine_backends or any(
+        backend not in _ENGINE_BACKENDS for backend in args.engine_backends
+    ):
+        parser.error("--engine-backends values must be python or rust")
+    if len(set(args.engine_backends)) != len(args.engine_backends):
+        parser.error("--engine-backends values must be unique")
+    if "rust" in args.engine_backends:
+        if args.engine_binary is None:
+            args.engine_binary = (
+                Path(__file__).resolve().parents[1]
+                / "rust"
+                / "target"
+                / "release"
+                / "lumistripe-engine"
+            )
+        if not args.engine_binary.is_file():
+            parser.error(f"Rust engine binary does not exist: {args.engine_binary}")
     if args.warmup < 0.0 or args.duration <= 0.0:
         parser.error("--warmup must be nonnegative and --duration must be positive")
     if args.spi_speed_hz <= 0:
@@ -422,8 +697,13 @@ def _parse_args() -> argparse.Namespace:
         parser.error("--power-budget-watts must be positive")
     if len(args.spi_devices) != 2 or any(not device for device in args.spi_devices):
         parser.error("--spi-devices must contain two comma-separated paths")
-    if any(zones > led_count // 2 for zones in args.zone_counts for led_count in args.led_counts):
-        parser.error("zone counts must not exceed half the smallest LED count")
+    if any(
+        zones > (led_count if output_count == 1 else led_count // 2)
+        for zones in args.zone_counts
+        for led_count in args.led_counts
+        for output_count in args.output_counts
+    ):
+        parser.error("zone counts must not exceed the smallest output pixel count")
     return args
 
 
@@ -434,9 +714,12 @@ def main() -> int:
     cases = [
         _run_case(
             led_count=led_count,
+            output_count=output_count,
             layout=layout,
             zones=zones,
             mode=mode,
+            engine_backend=cast(Literal["python", "rust"], engine_backend),
+            engine_binary=args.engine_binary if engine_backend == "rust" else None,
             power_limit=power_limit == "on",
             warmup_s=args.warmup,
             duration_s=args.duration,
@@ -448,10 +731,12 @@ def main() -> int:
             audio_source=args.audio_source,
         )
         for led_count in args.led_counts
+        for output_count in args.output_counts
         for layout in args.layouts
         for zones in args.zone_counts
         for mode in args.modes
         for power_limit in args.power_limits
+        for engine_backend in args.engine_backends
     ]
     result = {
         "environment": {
@@ -464,6 +749,8 @@ def main() -> int:
                 "physical SPI output" if args.hardware else "simulated virtual pixel buffers"
             ),
             "hardware_output_enabled": args.hardware,
+            "engine_backends": args.engine_backends,
+            "output_counts": args.output_counts,
             "audio_type": args.audio_source
             or "off for static and synthetic demo for dynamic cases",
             "render_native_enabled": render_kernels._native_module is not None,

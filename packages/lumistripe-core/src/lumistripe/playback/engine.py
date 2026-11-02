@@ -73,6 +73,7 @@ class PlaybackEngine:
     last_playback_decision: PlaybackDecision | None = field(init=False, default=None)
     _cycle_started_at_s: float | None = field(init=False, default=None)
     _music_active: bool = field(init=False, default=False)
+    _renderer_music_gate_state: MusicGateState | None = field(init=False, default=None)
     _idle_rendered: bool = field(init=False, default=False)
     _rng: Random = field(init=False)
     solid_color: Color = field(init=False)
@@ -146,7 +147,7 @@ class PlaybackEngine:
 
     @property
     def music_gate_state(self) -> MusicGateState:
-        return self.activity_detector.state
+        return self._renderer_music_gate_state or self.activity_detector.state
 
     @property
     def active_effect_names(self) -> tuple[str, ...]:
@@ -186,6 +187,12 @@ class PlaybackEngine:
     def beat_clock_state(self) -> BeatClockState:
         return self._beat_clock_state
 
+    def adopt_renderer_beat_clock_state(self, state: BeatClockState) -> None:
+        """Mirror Rust's beat clock for telemetry without advancing it in Python."""
+
+        self._beat_clock_state = state
+        self._musical_timeline_state = self.musical_timeline_tracker.update(state)
+
     @property
     def musical_timeline_state(self) -> MusicalTimelineState:
         return self._musical_timeline_state
@@ -207,6 +214,11 @@ class PlaybackEngine:
         self._quantized_switcher.reset()
         self._sequence_coordinator.set_sequence(sequence)
         self.config = replace(self.config, animation_sequence=sequence)
+
+    def adopt_renderer_sequence_state(self, state: SequencePlaybackState) -> bool:
+        """Mirror Rust sequence progress for the API without advancing it in Python."""
+
+        return self._sequence_coordinator.adopt_renderer_state(state)
 
     def validate_animation_sequence(
         self, sequence: AnimationSequence | None
@@ -286,6 +298,7 @@ class PlaybackEngine:
         self.last_decision = None
         self.last_playback_decision = None
         self._music_active = False
+        self._renderer_music_gate_state = None
         self._idle_rendered = False
         self.activity_detector.reset()
         self._structure_tracker.reset()
@@ -329,6 +342,7 @@ class PlaybackEngine:
         self.activity_detector.config = config
         self.activity_detector.reset()
         self._music_active = False
+        self._renderer_music_gate_state = None
         self._structure_tracker.reset()
         self._music_structure_state = MusicStructureState()
         self._confirmed_drop_count = 0
@@ -342,6 +356,7 @@ class PlaybackEngine:
 
     def set_music_recognition_enabled(self, enabled: bool) -> None:
         self.music_recognition_enabled = bool(enabled)
+        self._renderer_music_gate_state = None
         if not enabled:
             self.activity_detector.reset()
             self._music_active = False
@@ -350,6 +365,33 @@ class PlaybackEngine:
             self._confirmed_drop_count = 0
             self._quantized_switcher.reset()
             self._sequence_coordinator.reset_session()
+
+    def adopt_renderer_activity_state(self, state: MusicGateState) -> None:
+        """Mirror the Rust Dynamic activity state without advancing it in Python."""
+        previous_active = self._music_active
+        active = state is MusicGateState.MUSIC
+        self._renderer_music_gate_state = state
+        self._music_active = active
+        if previous_active == active:
+            return
+        self._quantized_switcher.reset()
+        self._sequence_coordinator.reset_session()
+        self._structure_tracker.reset()
+        self._music_structure_state = MusicStructureState()
+        self._confirmed_drop_count = 0
+        self.layered_renderer.reset()
+        self.reactive_smoother.reset()
+        if not active:
+            self.player.cancel_transition()
+            self.player.audio_enabled = False
+
+    def clear_renderer_activity_state(self) -> None:
+        """Return activity ownership to the Python fallback after Rust is disabled."""
+        if self._renderer_music_gate_state is None:
+            return
+        self._renderer_music_gate_state = None
+        self.activity_detector.reset()
+        self._music_active = False
 
     def select_animation(self, name: str, *, now_s: float | None = None) -> None:
         index = self.player.index_of(name)
@@ -373,6 +415,29 @@ class PlaybackEngine:
         previous = len(self.player.animations) - 1 if current == 0 else current - 1
         self.set_mode(PlaybackMode.STATIC, now_s=now)
         self._set_animation_index(previous, now_s=now)
+
+    def adopt_renderer_selection(self, name: str, *, now_s: float | None = None) -> bool:
+        """Mirror an animation already selected by the Rust playback owner.
+
+        This updates Python's API and fallback state without advancing cycling
+        policy or creating another renderer scene revision.
+        """
+        index = self.player.index_of(name)
+        if index is None or index not in self.player.automatic_indices():
+            return False
+        if index == self.player.current_index():
+            return True
+        now = time.monotonic() if now_s is None else now_s
+        self.player.set_index(index, transition_ms=0, restart=False, now_s=now)
+        self.player.animations[index].restart()
+        self._cycle_started_at_s = now
+        if self.mode is PlaybackMode.DYNAMIC:
+            # Rust owns Dynamic candidate timing while the native scheduler is
+            # active. A Python fallback starts from the mirrored selection.
+            self.dynamic_selector.reset()
+        self.last_decision = None
+        self.last_playback_decision = None
+        return True
 
     @property
     def transition_active(self) -> bool:
@@ -420,23 +485,30 @@ class PlaybackEngine:
         now_s: float | None = None,
         flush: bool = True,
         render: bool = True,
+        rust_dynamic_selection: bool = False,
+        rust_dynamic_activity: bool = False,
+        rust_sequence_playback: bool = False,
+        rust_effect_scheduling: bool = False,
+        rust_frame_scheduling: bool = False,
+        rust_beat_clock: bool = False,
     ) -> float:
         scheduling_started_ns = time.perf_counter_ns()
         self.last_scheduling_time_ms = 0.0
         now = time.monotonic() if now_s is None else now_s
         self._last_render_audio_snapshot = None
-        if snapshot is not None:
-            self._beat_clock_state = self.beat_clock_tracker.update(
-                snapshot.beat_events,
-                now_s=now,
-                fallback_bpm=snapshot.features.bpm,
+        if not rust_beat_clock:
+            if snapshot is not None:
+                self._beat_clock_state = self.beat_clock_tracker.update(
+                    snapshot.beat_events,
+                    now_s=now,
+                    fallback_bpm=snapshot.features.bpm,
+                )
+                snapshot = replace(snapshot, beat_clock=self._beat_clock_state)
+            else:
+                self._beat_clock_state = self.beat_clock_tracker.state(now)
+            self._musical_timeline_state = self.musical_timeline_tracker.update(
+                self._beat_clock_state
             )
-            snapshot = replace(snapshot, beat_clock=self._beat_clock_state)
-        else:
-            self._beat_clock_state = self.beat_clock_tracker.state(now)
-        self._musical_timeline_state = self.musical_timeline_tracker.update(
-            self._beat_clock_state
-        )
         if self._cycle_started_at_s is None:
             self._cycle_started_at_s = now
 
@@ -469,7 +541,13 @@ class PlaybackEngine:
         if self.mode is PlaybackMode.DYNAMIC:
             features = snapshot.features if snapshot is not None else MusicFeatures(silence=True)
             was_active = self._music_active
-            self._music_active = self.activity_detector.update(features, now_s=now)
+            if rust_dynamic_activity:
+                self._music_active = (
+                    self._renderer_music_gate_state is MusicGateState.MUSIC
+                )
+            else:
+                self._renderer_music_gate_state = None
+                self._music_active = self.activity_detector.update(features, now_s=now)
             if not self._music_active:
                 self._quantized_switcher.reset()
                 self._sequence_coordinator.reset_session()
@@ -500,7 +578,9 @@ class PlaybackEngine:
                 ) / 1_000_000.0
                 if self.idle_mode == "animation":
                     self._idle_player.set_brightness(self.idle_brightness)
-                    if render:
+                    if rust_dynamic_activity:
+                        delay = 0.05
+                    elif render:
                         delay = self._idle_player.step(
                             controller, flush=flush, now_s=now
                         )
@@ -548,12 +628,19 @@ class PlaybackEngine:
             self._idle_rendered = False
             switched_this_step = False
             sequence_controls_playback = False
-            if self.config.animation_sequence is not None:
+            if self.config.animation_sequence is not None and not rust_sequence_playback:
                 sequence_animation = self._sequence_coordinator.update(
                     self._musical_timeline_state,
                     now_s=now,
                     sync_offset_s=self.sync_offset_s,
                     music_active=True,
+                    section_change_at_s=(
+                        snapshot.timestamp
+                        if snapshot is not None
+                        and snapshot.fresh
+                        and snapshot.features.section_change
+                        else None
+                    ),
                 )
                 if sequence_animation is not None:
                     target_index = self.player.index_of(sequence_animation)
@@ -576,8 +663,18 @@ class PlaybackEngine:
                         should_switch=switched_this_step,
                         reason="sequence",
                     )
+            elif rust_sequence_playback and self.config.animation_sequence is not None:
+                sequence_controls_playback = True
+                current = self.player.name_at(self.player.current_index())
+                self.last_decision = SelectorDecision(
+                    selected_name=current,
+                    selected_score=0.0,
+                    current_name=current,
+                    should_switch=False,
+                    reason="sequence",
+                )
 
-            if not sequence_controls_playback:
+            if not sequence_controls_playback and not rust_dynamic_selection:
                 if not was_active:
                     # Keep activation responsive when automatic Dynamic mode
                     # starts without a configured custom sequence.
@@ -646,6 +743,7 @@ class PlaybackEngine:
                 not was_active
                 and not sequence_controls_playback
                 and not switched_this_step
+                and not rust_dynamic_selection
             ):
                 self.player.set_index(
                     self.player.current_index(),
@@ -686,6 +784,12 @@ class PlaybackEngine:
                     self.layered_renderer.last_schedule_update_ms
                 )
                 self._remember_rendered_frame(controller)
+            elif rust_frame_scheduling:
+                # Rust owns this scene's animation clock, so this policy poll
+                # must not advance the Python AnimationPlayer mirror.
+                delay = 0.05
+            elif rust_effect_scheduling:
+                delay = self.player.advance(now_s=now, finish_transition=False)
             else:
                 delay = self.layered_renderer.advance(
                     self.player,
@@ -726,6 +830,10 @@ class PlaybackEngine:
                 now_s=now,
             )
             self._remember_rendered_frame(controller)
+        elif rust_frame_scheduling:
+            # Rust owns this scene's animation clock. Keep the Python mirror
+            # available for API state and fallback without advancing it.
+            delay = 0.05
         else:
             advance_started_ns = time.perf_counter_ns()
             delay = self.player.advance(now_s=now)

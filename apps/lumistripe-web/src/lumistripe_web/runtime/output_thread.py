@@ -25,6 +25,53 @@ OUTPUT_LATENCY_SAMPLE_COUNT = 128
 
 
 @dataclass(frozen=True, slots=True)
+class RustBeatClockStats:
+    sampled_at_ns: int
+    bpm: float
+    phase: float
+    confidence: float
+    beat_index: int
+    next_beat_at_ns: int | None
+    last_beat_at_ns: int | None
+    last_event_sequence: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class RustSequencePlaybackStats:
+    sequence_id: str | None
+    active: bool
+    waiting_for_clock: bool
+    current_step_index: int | None
+    animation: str | None
+    remaining_bars: int | None
+    next_transition_at_ns: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class RustEffectPlaybackStats:
+    name: str
+    category: str
+    strength: float
+    elapsed_ns: int
+    remaining_ns: int
+    progress: float
+
+
+@dataclass(frozen=True, slots=True)
+class RustEffectSchedulerStats:
+    active: tuple[RustEffectPlaybackStats, ...]
+    rhythmic_cooldown_remaining_ns: int
+    accent_cooldown_remaining_ns: int
+    rhythmic_result: str
+    accent_result: str
+    drop_accent_status: str
+    drop_accent_reason: str | None
+    late_ticks_dropped: int
+    late_ticks_coalesced: int
+    beat_lateness_p95_ns: int
+
+
+@dataclass(frozen=True, slots=True)
 class OutputThreadStats:
     """Low-rate output diagnostics independent of the render heartbeat."""
 
@@ -46,12 +93,31 @@ class OutputThreadStats:
     ipc_latency_ms: float | None
     sequential_skew_ms: float | None
     frame_latency_sample_count: int
+    audio_feature_to_led_latency_ms: float | None = None
+    audio_feature_to_led_p50_ms: float | None = None
+    audio_feature_to_led_p95_ms: float | None = None
+    audio_feature_to_led_p99_ms: float | None = None
     render_time_ms: float | None = None
     estimated_power_watts: float | None = None
     applied_power_scale: float | None = None
     output_power_watts: tuple[float, ...] | None = None
     limiting_output_index: int | None = None
     preview_outputs: tuple[bytes, ...] | None = None
+    scheduler_missed_deadlines: int = 0
+    selected_animations: tuple[str, ...] = ()
+    scene_revisions: tuple[int, ...] = ()
+    structure_event_sequences: tuple[int, ...] = ()
+    cycling_active: tuple[bool, ...] = ()
+    dynamic_gate_states: tuple[str, ...] = ()
+    beat_clocks: tuple[RustBeatClockStats, ...] = ()
+    sequence_playback: tuple[RustSequencePlaybackStats, ...] = ()
+    effect_schedulers: tuple[RustEffectSchedulerStats, ...] = ()
+    scene_control_revision: int | None = None
+    audio_update_sequence: int | None = None
+    pending_scene_updates: int = 0
+    pending_audio_update: bool = False
+    scene_updates_replaced: int = 0
+    audio_updates_replaced: int = 0
 
 
 @dataclass(slots=True)

@@ -372,6 +372,96 @@ def test_stalled_frame_does_not_catch_up_missed_sequence_bars() -> None:
     assert coordinator.state.next_transition_at_s == pytest.approx(12.0)
 
 
+def test_section_change_rescues_a_missed_boundary_only_after_step_duration() -> None:
+    coordinator = _coordinator(
+        AnimationSequence(
+            "section",
+            "Section",
+            (AnimationSequenceStep("pulse", 2), AnimationSequenceStep("comet", 1)),
+            True,
+        )
+    )
+    coordinator.update(
+        _timeline(1, next_bar_at=2.0),
+        now_s=0.0,
+        sync_offset_s=0.0,
+        music_active=True,
+    )
+    assert coordinator.update(
+        _timeline(2, next_bar_at=4.0),
+        now_s=2.0,
+        sync_offset_s=0.0,
+        music_active=True,
+    ) == "pulse"
+
+    assert coordinator.update(
+        _timeline(3, next_bar_at=6.0),
+        now_s=4.0,
+        sync_offset_s=0.0,
+        music_active=True,
+        section_change_at_s=4.0,
+    ) is None
+    assert coordinator.state.remaining_bars == 1
+
+    assert coordinator.update(
+        _timeline(4, next_bar_at=8.0),
+        now_s=6.1,
+        sync_offset_s=0.0,
+        music_active=True,
+        section_change_at_s=6.1,
+    ) == "comet"
+
+
+def test_section_change_honors_positive_sync_offset_after_missed_boundary() -> None:
+    coordinator = _coordinator(
+        AnimationSequence(
+            "section-offset",
+            "Section offset",
+            (AnimationSequenceStep("pulse", 2), AnimationSequenceStep("comet", 1)),
+            True,
+        )
+    )
+    coordinator.update(
+        _timeline(1, next_bar_at=2.0),
+        now_s=0.0,
+        sync_offset_s=0.1,
+        music_active=True,
+    )
+    assert coordinator.update(
+        _timeline(2, next_bar_at=4.0),
+        now_s=2.1,
+        sync_offset_s=0.1,
+        music_active=True,
+    ) == "pulse"
+    assert coordinator.update(
+        _timeline(3, next_bar_at=6.0),
+        now_s=4.1,
+        sync_offset_s=0.1,
+        music_active=True,
+    ) is None
+
+    assert coordinator.update(
+        _timeline(4, next_bar_at=8.0),
+        now_s=6.16,
+        sync_offset_s=0.1,
+        music_active=True,
+        section_change_at_s=6.16,
+    ) is None
+    assert coordinator.state.next_transition_at_s == pytest.approx(6.26)
+    assert coordinator.update(
+        _timeline(4, next_bar_at=8.0),
+        now_s=6.2,
+        sync_offset_s=0.1,
+        music_active=True,
+    ) is None
+    assert coordinator.update(
+        _timeline(4, next_bar_at=8.0),
+        now_s=6.26,
+        sync_offset_s=0.1,
+        music_active=True,
+    ) == "comet"
+
+
 def _active_snapshot(sequence: int, timestamp: float) -> AudioSnapshot:
     frame = AudioFrame(
         rms=0.8,

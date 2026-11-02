@@ -1,5 +1,22 @@
 //! Single-process output ownership, bounded frame queue, IPC, and lifecycle.
 
+mod activity_gate;
+mod beat_clock;
+mod effect_scheduler;
+mod latest_slot;
+mod quantized_switch;
+mod sequence;
+
+#[cfg(all(test, feature = "loom-tests"))]
+mod loom_tests;
+
+use activity_gate::{MusicActivityTracker, MusicGateState};
+use beat_clock::BeatClockTracker;
+use effect_scheduler::EffectScheduleCoordinator;
+use latest_slot::LatestSlot;
+#[cfg(all(test, feature = "loom-tests"))]
+use loom::sync::{Condvar as QueueCondvar, Mutex as QueueMutex};
+use lumistripe_engine_animation_definitions::catalog;
 use lumistripe_engine_animation_state::{
     AnimationInstance, RenderingInput, supported_animations, supports_animation,
 };
@@ -7,17 +24,23 @@ use lumistripe_engine_compositing::{TransitionMode, apply_transition, screen_com
 use lumistripe_engine_config::{
     EngineConfig, MAX_OUTPUT_COUNT, MAX_PIXEL_COUNT, OutputBackend, OutputConfig,
 };
-use lumistripe_engine_effects::EffectStack;
+use lumistripe_engine_effects::{EffectStack, PythonRandom};
 use lumistripe_engine_output::{OutputError, OutputSet};
 use lumistripe_engine_protocol::{
     EngineErrorCode, EngineStatus, FRAME_ACK_BYTES, FRAME_HEADER_BYTES, FrameAck, FrameAckStatus,
     LEGACY_PROTOCOL_VERSION, LegacyErrorCode, LegacyRequest, LegacyRequestCommand, LegacyResponse,
     LegacyResponseResult, MAX_CONTROL_MESSAGE_BYTES, MAX_FRAME_BYTES, PROTOCOL_VERSION,
-    RenderEffect, RenderFrameRequest, RenderOutput, RenderPowerConfig, RenderTransition, Request,
-    RequestCommand, Response, ResponseResult, decode_frame_header, decode_legacy_request,
+    RenderAnimationChoice, RenderAudioInput, RenderAudioUpdate, RenderBeatClockState,
+    RenderCycleOrder, RenderCycleTiming, RenderCycling, RenderDynamicIdleMode,
+    RenderDynamicSelector, RenderEffect, RenderEffectSchedulerState, RenderFrameRequest,
+    RenderOutput, RenderPowerConfig, RenderSceneUpdate, RenderSchedulerConfig,
+    RenderSelectorFeatures, RenderSequencePlaybackState, RenderStructureEvent, RenderTransition,
+    Request, RequestCommand, Response, ResponseResult, decode_frame_header, decode_legacy_request,
     decode_request, encode_frame_ack, encode_legacy_response, encode_response,
 };
 use lumistripe_engine_render_primitives::{AudioInput, FrameBuffer, Rgba, ZoneMapping, alpha_byte};
+use quantized_switch::QuantizedSwitchState;
+use sequence::SequenceCoordinator;
 use serde::Deserialize;
 use std::collections::VecDeque;
 use std::fs;
@@ -27,7 +50,9 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, SyncSender};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
+#[cfg(not(all(test, feature = "loom-tests")))]
+use std::sync::{Condvar as QueueCondvar, Mutex as QueueMutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -483,9 +508,9 @@ fn dispatch(request: Request, server: &EngineServer) -> (Response, bool) {
                 }
             }
         }
-        RequestCommand::Render { frame } => {
+        RequestCommand::Render { frame, scheduler } => {
             let sequence = frame.sequence;
-            match server.output.submit_render(frame) {
+            match server.output.submit_render(frame, scheduler) {
                 Ok(replaced) => (
                     Response::new(
                         request_id,
@@ -515,6 +540,44 @@ fn dispatch(request: Request, server: &EngineServer) -> (Response, bool) {
                 }
             }
         }
+        RequestCommand::SceneUpdate { update } => {
+            let revision = update.revision;
+            match server.output.submit_scene_update(update) {
+                Ok(replaced) => (
+                    Response::new(
+                        request_id,
+                        ResponseResult::SceneUpdated { revision, replaced },
+                    ),
+                    false,
+                ),
+                Err(status) => {
+                    let (code, message) = render_error(status);
+                    (
+                        Response::new(request_id, ResponseResult::Error { code, message }),
+                        false,
+                    )
+                }
+            }
+        }
+        RequestCommand::AudioUpdate { update } => {
+            let sequence = update.sequence;
+            match server.output.submit_audio_update(update) {
+                Ok(accepted) => (
+                    Response::new(
+                        request_id,
+                        ResponseResult::AudioUpdated { sequence, accepted },
+                    ),
+                    false,
+                ),
+                Err(status) => {
+                    let (code, message) = render_error(status);
+                    (
+                        Response::new(request_id, ResponseResult::Error { code, message }),
+                        false,
+                    )
+                }
+            }
+        }
         RequestCommand::Shutdown => match server.output.shutdown() {
             Ok(()) => (Response::new(request_id, ResponseResult::Shutdown), true),
             Err(message) => (
@@ -528,6 +591,23 @@ fn dispatch(request: Request, server: &EngineServer) -> (Response, bool) {
                 true,
             ),
         },
+    }
+}
+
+fn render_error(status: FrameAckStatus) -> (EngineErrorCode, String) {
+    match status {
+        FrameAckStatus::NotConfigured => (
+            EngineErrorCode::NotConfigured,
+            "Rust engine has no configured outputs".to_owned(),
+        ),
+        FrameAckStatus::ShuttingDown => (
+            EngineErrorCode::ShuttingDown,
+            "Rust engine is shutting down".to_owned(),
+        ),
+        FrameAckStatus::InvalidFrame | FrameAckStatus::Accepted => (
+            EngineErrorCode::InvalidRender,
+            "Rust engine rejected an invalid render update".to_owned(),
+        ),
     }
 }
 
@@ -724,8 +804,25 @@ fn dispatch_legacy(request: LegacyRequest, server: &EngineServer) -> (LegacyResp
     }
 }
 
+#[cfg(all(test, not(feature = "loom-tests")))]
 fn render_frame_request(
     request: &RenderFrameRequest,
+    frame: &mut FrameSet,
+    renderers: &mut [Option<RenderOutputState>],
+) -> Result<RenderPowerSummary, String> {
+    render_frame_request_at(
+        request,
+        request.timestamp_ns,
+        request.delta_ns,
+        frame,
+        renderers,
+    )
+}
+
+fn render_frame_request_at(
+    request: &RenderFrameRequest,
+    timestamp_ns: u64,
+    delta_ns: u64,
     frame: &mut FrameSet,
     renderers: &mut [Option<RenderOutputState>],
 ) -> Result<RenderPowerSummary, String> {
@@ -736,10 +833,10 @@ fn render_frame_request(
         return Err("render power configuration is invalid".to_owned());
     }
     let input = RenderingInput {
-        timestamp_ns: request.timestamp_ns,
-        delta_ns: request.delta_ns,
+        timestamp_ns,
+        delta_ns,
         brightness: request.brightness,
-        audio: request.audio.map(|audio| AudioInput {
+        audio: request.audio.as_ref().map(|audio| AudioInput {
             rms: audio.rms,
             bands: audio.bands,
             beat: audio.beat,
@@ -817,6 +914,7 @@ fn render_frame_request(
         let mut output = FrameBuffer::from_bytes(bytes).map_err(|error| error.to_string())?;
         let output_input = RenderingInput {
             brightness: render.brightness.unwrap_or(input.brightness),
+            audio: render.audio_enabled.then_some(input.audio).flatten(),
             ..input
         };
         let rendered = renderer.render(
@@ -986,6 +1084,9 @@ fn valid_render_output_parameters(output: &RenderOutput) -> bool {
             .brightness
             .is_none_or(|brightness| brightness.is_finite() && (0.0..=1.0).contains(&brightness))
         && output.effects.len() <= 2
+        && output
+            .music_structure
+            .is_none_or(|structure| structure.is_valid())
         && output.scene_pixel_count.is_none_or(|pixel_count| {
             pixel_count > 0 && pixel_count <= MAX_PIXEL_COUNT * MAX_OUTPUT_COUNT
         })
@@ -1018,6 +1119,55 @@ fn valid_render_output_parameters(output: &RenderOutput) -> bool {
         && output
             .power_limit_watts
             .is_none_or(|limit| limit.is_finite() && limit > 0.0)
+}
+
+fn valid_structure_events(events: &[RenderStructureEvent], output_count: usize) -> bool {
+    if events.len() > lumistripe_engine_protocol::MAX_RENDER_STRUCTURE_EVENTS
+        || output_count > MAX_OUTPUT_COUNT
+    {
+        return false;
+    }
+    let mut last_sequences = [None; MAX_OUTPUT_COUNT];
+    for event in events {
+        if event.output_index >= output_count || !event.is_valid() {
+            return false;
+        }
+        let last = &mut last_sequences[event.output_index];
+        if last.is_some_and(|sequence| event.sequence <= sequence) {
+            return false;
+        }
+        *last = Some(event.sequence);
+    }
+    true
+}
+
+fn valid_audio_input(audio: &RenderAudioInput, output_count: usize) -> bool {
+    audio.rms.is_finite()
+        && audio.beat_strength.is_finite()
+        && audio.bands.iter().all(|band| band.is_finite())
+        && audio.fallback_bpm.is_none_or(f64::is_finite)
+        && audio
+            .beat_events
+            .iter()
+            .all(|event| event.strength.is_finite() && (0.0..=1.0).contains(&event.strength))
+        && audio
+            .selector_features
+            .is_none_or(RenderSelectorFeatures::is_valid)
+        && audio
+            .effect_features
+            .is_none_or(lumistripe_engine_protocol::RenderEffectFeatures::is_valid)
+        && valid_structure_events(&audio.structure_events, output_count)
+}
+
+fn audio_feature_to_led_latency_ms(
+    output_timestamp_ns: u64,
+    feature_timestamp_ns: u64,
+    output_elapsed: Duration,
+) -> Option<f64> {
+    (feature_timestamp_ns <= output_timestamp_ns).then(|| {
+        output_timestamp_ns.saturating_sub(feature_timestamp_ns) as f64 / 1_000_000.0
+            + output_elapsed.as_secs_f64() * 1000.0
+    })
 }
 
 #[derive(Debug)]
@@ -1462,14 +1612,111 @@ struct WorkQueue {
     commands: VecDeque<WorkCommand>,
     frame_buffers: [Option<FrameSet>; 2],
     pending_frame: Option<usize>,
-    pending_render: Option<PendingRender>,
+    pending_render: LatestSlot<PendingRender>,
+    scheduled_render: Option<ScheduledRender>,
+    last_render_request_sequence: Option<u64>,
+    last_render_request_timestamp_ns: Option<u64>,
+    last_scene_timestamp_ns: Option<u64>,
+    last_render_timestamp_ns: Option<u64>,
     command_pending: bool,
     closed: bool,
 }
 
 struct PendingRender {
-    request: RenderFrameRequest,
+    request: Arc<RenderFrameRequest>,
+    timestamp_ns: u64,
+    delta_ns: u64,
     queued_at: Instant,
+}
+
+struct ScheduledRender {
+    request: Arc<RenderFrameRequest>,
+    period: Duration,
+    max_fps: u16,
+    next_deadline: Instant,
+    clock_origin: Instant,
+    clock_origin_ns: u64,
+    last_timestamp_ns: u64,
+    cycle_states: Vec<CycleRuntimeState>,
+    selector_states: Vec<SelectorRuntimeState>,
+    beat_clocks: Vec<BeatClockTracker>,
+    sequence_states: Vec<SequenceCoordinator>,
+    effect_states: Vec<EffectScheduleCoordinator>,
+    structure_event_sequences: Vec<u64>,
+    last_audio_update_sequence: Option<u64>,
+    last_audio_timestamp_ns: Option<u64>,
+}
+
+#[derive(Clone)]
+struct CycleRuntimeState {
+    started_at: Instant,
+    random_state: PythonRandom,
+}
+
+impl CycleRuntimeState {
+    fn new(cycling: Option<&RenderCycling>, now: Instant, entropy_seed: u64) -> Self {
+        let seed = cycling
+            .and_then(|configuration| configuration.seed)
+            .unwrap_or(entropy_seed);
+        Self {
+            started_at: now,
+            random_state: PythonRandom::from_u64(seed),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct SelectorRuntimeState {
+    initialized: bool,
+    last_switch_at: Instant,
+    last_feature_sequence: Option<u64>,
+    last_activity_sequence: Option<u64>,
+    recent_names: VecDeque<String>,
+    random_state: PythonRandom,
+    quantized_switch: QuantizedSwitchState,
+    activity_tracker: Option<MusicActivityTracker>,
+    gate_state: MusicGateState,
+    displayed_gate_state: Option<MusicGateState>,
+    active_choice: Option<RenderAnimationChoice>,
+    active_template: Option<RenderOutput>,
+    base_scene_changed: bool,
+}
+
+impl SelectorRuntimeState {
+    fn new(
+        selector: Option<RenderDynamicSelector>,
+        output: &RenderOutput,
+        now: Instant,
+        entropy_seed: u64,
+    ) -> Self {
+        let seed = selector
+            .and_then(|configuration| configuration.seed)
+            .unwrap_or(entropy_seed);
+        let history_size = selector.map_or(0, |configuration| configuration.history_size);
+        let activity_config = selector.and_then(|configuration| configuration.activity);
+        Self {
+            initialized: false,
+            last_switch_at: now,
+            last_feature_sequence: None,
+            last_activity_sequence: None,
+            recent_names: VecDeque::with_capacity(history_size.min(256)),
+            random_state: PythonRandom::from_u64(seed),
+            quantized_switch: QuantizedSwitchState::default(),
+            activity_tracker: activity_config.map(MusicActivityTracker::new),
+            gate_state: if activity_config.is_some() {
+                MusicGateState::Idle
+            } else {
+                MusicGateState::Music
+            },
+            displayed_gate_state: None,
+            active_choice: selector.map(|_| RenderAnimationChoice {
+                animation: output.animation.clone(),
+                settings: output.settings.clone(),
+            }),
+            active_template: selector.map(|_| output.clone()),
+            base_scene_changed: false,
+        }
+    }
 }
 
 impl WorkQueue {
@@ -1500,42 +1747,57 @@ impl WorkQueue {
         Ok(pending.is_some())
     }
 
-    fn enqueue_latest_render(&mut self, request: RenderFrameRequest) -> Result<bool, ()> {
+    fn enqueue_latest_render(&mut self, request: PendingRender) -> Result<bool, ()> {
         if self.closed {
             return Err(());
         }
         if self
             .pending_render
             .as_ref()
-            .is_some_and(|pending| pending.request.sequence >= request.sequence)
+            .is_some_and(|pending| pending.request.sequence >= request.request.sequence)
         {
             return Err(());
         }
-        let replaced = self.pending_render.is_some();
-        self.pending_render = Some(PendingRender {
-            request,
-            queued_at: Instant::now(),
-        });
+        let replaced = self.pending_render.replace(request).is_some();
+        Ok(replaced)
+    }
+
+    fn enqueue_scheduled_render(&mut self, request: PendingRender) -> Result<bool, ()> {
+        if self.closed {
+            return Err(());
+        }
+        let replaced = self.pending_render.replace(request).is_some();
         Ok(replaced)
     }
 }
 
 struct OutputWorkerShared {
-    queue: Mutex<WorkQueue>,
-    ready: Condvar,
+    queue: QueueMutex<WorkQueue>,
+    scheduler_ready: QueueCondvar,
+    output_ready: QueueCondvar,
     health: Mutex<RuntimeHealth>,
+}
+
+impl OutputWorkerShared {
+    fn notify_queue_changed(&self) {
+        self.scheduler_ready.notify_one();
+        self.output_ready.notify_one();
+    }
 }
 
 struct OutputWorker {
     shared: Arc<OutputWorkerShared>,
+    command_order: Mutex<()>,
     thread: Mutex<Option<JoinHandle<()>>>,
+    scheduler_thread: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl OutputWorker {
     fn new() -> Self {
         let shared = Arc::new(OutputWorkerShared {
-            queue: Mutex::new(WorkQueue::default()),
-            ready: Condvar::new(),
+            queue: QueueMutex::new(WorkQueue::default()),
+            scheduler_ready: QueueCondvar::new(),
+            output_ready: QueueCondvar::new(),
             health: Mutex::new(RuntimeHealth::new()),
         });
         let worker_shared = Arc::clone(&shared);
@@ -1543,13 +1805,24 @@ impl OutputWorker {
             .name("lumistripe-rust-output".into())
             .spawn(move || output_worker_loop(worker_shared))
             .expect("Rust output worker thread could not be created");
+        let scheduler_shared = Arc::clone(&shared);
+        let scheduler_thread = thread::Builder::new()
+            .name("lumistripe-rust-frame-scheduler".into())
+            .spawn(move || frame_scheduler_loop(scheduler_shared))
+            .expect("Rust frame scheduler thread could not be created");
         Self {
             shared,
+            command_order: Mutex::new(()),
             thread: Mutex::new(Some(thread)),
+            scheduler_thread: Mutex::new(Some(scheduler_thread)),
         }
     }
 
     fn configure(&self, config: EngineConfig) -> Result<(usize, usize), String> {
+        let _command_order = self
+            .command_order
+            .lock()
+            .expect("output command-order lock poisoned");
         config.validate().map_err(|error| error.to_string())?;
         let pixel_counts = config.pixel_counts();
         let frame_buffers = std::array::from_fn(|_| FrameSet::new(&pixel_counts));
@@ -1564,14 +1837,32 @@ impl OutputWorker {
             if queue.pending_render.take().is_some() {
                 health.dropped_frames = health.dropped_frames.saturating_add(1);
             }
+            queue.scheduled_render = None;
+            queue.last_render_request_sequence = None;
+            queue.last_render_request_timestamp_ns = None;
+            queue.last_scene_timestamp_ns = None;
+            queue.last_render_timestamp_ns = None;
             health.configured = false;
+            health.scheduler_missed_deadlines = 0;
+            health.scene_control_revision = None;
+            health.audio_update_sequence = None;
+            health.selected_animations.clear();
+            health.scene_revisions.clear();
+            health.structure_event_sequences.clear();
+            health.cycling_active.clear();
+            health.dynamic_gate_states.clear();
+            health.beat_clocks.clear();
+            health.sequence_playback.clear();
+            health.effect_schedulers.clear();
             health.pixel_counts.clear();
             health.last_sequence = None;
             health.frame_latency_ms = None;
             health.queue_latency_ms = None;
             health.transmission_ms = None;
+            health.audio_feature_to_led_latency_ms = None;
             health.sequential_skew_ms = None;
             health.frame_latency_samples_ms.clear();
+            health.audio_feature_to_led_samples_ms.clear();
             health.output_rate = 0.0;
             health.render_time_ms = None;
             health.estimated_power_watts = None;
@@ -1590,7 +1881,7 @@ impl OutputWorker {
                 response: send,
             });
         }
-        self.shared.ready.notify_one();
+        self.shared.notify_queue_changed();
         receive
             .recv_timeout(CONFIGURE_TIMEOUT)
             .map_err(|error| format!("output configuration did not finish: {error}"))?
@@ -1605,6 +1896,18 @@ impl OutputWorker {
         if !health.configured {
             return Err(FrameAckStatus::NotConfigured);
         }
+        queue.scheduled_render = None;
+        health.selected_animations.clear();
+        health.scene_revisions.clear();
+        health.structure_event_sequences.clear();
+        health.cycling_active.clear();
+        health.dynamic_gate_states.clear();
+        health.beat_clocks.clear();
+        health.sequence_playback.clear();
+        health.effect_schedulers.clear();
+        if queue.pending_render.take().is_some() {
+            health.dropped_frames = health.dropped_frames.saturating_add(1);
+        }
         let expected_bytes: usize = health.pixel_counts.iter().map(|pixels| pixels * 4).sum();
         if payload.len() != expected_bytes {
             return Err(FrameAckStatus::InvalidFrame);
@@ -1617,11 +1920,76 @@ impl OutputWorker {
         }
         drop(health);
         drop(queue);
-        self.shared.ready.notify_one();
+        self.shared.notify_queue_changed();
         Ok(())
     }
 
-    fn submit_render(&self, request: RenderFrameRequest) -> Result<bool, FrameAckStatus> {
+    fn submit_render(
+        &self,
+        request: RenderFrameRequest,
+        scheduler_config: Option<RenderSchedulerConfig>,
+    ) -> Result<bool, FrameAckStatus> {
+        let _command_order = self
+            .command_order
+            .lock()
+            .expect("output command-order lock poisoned");
+        self.submit_render_ordered(request, scheduler_config, true)
+    }
+
+    fn submit_scene_update(&self, update: RenderSceneUpdate) -> Result<bool, FrameAckStatus> {
+        let _command_order = self
+            .command_order
+            .lock()
+            .expect("output command-order lock poisoned");
+        {
+            let health = self.shared.health.lock().expect("output health poisoned");
+            if health
+                .scene_control_revision
+                .is_some_and(|revision| update.revision <= revision)
+            {
+                return Err(FrameAckStatus::InvalidFrame);
+            }
+        }
+        {
+            let queue = self.shared.queue.lock().expect("output queue poisoned");
+            if queue
+                .last_scene_timestamp_ns
+                .is_some_and(|timestamp| update.timestamp_ns < timestamp)
+            {
+                return Err(FrameAckStatus::InvalidFrame);
+            }
+        }
+        let audio = {
+            let queue = self.shared.queue.lock().expect("output queue poisoned");
+            queue
+                .scheduled_render
+                .as_ref()
+                .and_then(|scheduled| scheduled.request.audio.clone())
+        };
+        let frame = RenderFrameRequest {
+            sequence: update.revision,
+            timestamp_ns: update.timestamp_ns,
+            delta_ns: 0,
+            brightness: update.brightness,
+            audio,
+            power: update.power,
+            outputs: update.outputs,
+        };
+        let replaced = self.submit_render_ordered(frame, Some(update.scheduler), false)?;
+        {
+            let mut queue = self.shared.queue.lock().expect("output queue poisoned");
+            queue.last_scene_timestamp_ns = Some(update.timestamp_ns);
+        }
+        let mut health = self.shared.health.lock().expect("output health poisoned");
+        health.scene_control_revision = Some(update.revision);
+        Ok(replaced)
+    }
+
+    fn submit_audio_update(&self, update: RenderAudioUpdate) -> Result<bool, FrameAckStatus> {
+        let _command_order = self
+            .command_order
+            .lock()
+            .expect("output command-order lock poisoned");
         let mut queue = self.shared.queue.lock().expect("output queue poisoned");
         if queue.closed {
             return Err(FrameAckStatus::ShuttingDown);
@@ -1630,18 +1998,78 @@ impl OutputWorker {
         if !health.configured {
             return Err(FrameAckStatus::NotConfigured);
         }
-        let valid_audio = request.audio.is_none_or(|audio| {
-            audio.rms.is_finite()
-                && audio.beat_strength.is_finite()
-                && audio.bands.iter().all(|band| band.is_finite())
-        });
+        let latest_request = {
+            let Some(scheduled) = queue.scheduled_render.as_mut() else {
+                return Err(FrameAckStatus::InvalidFrame);
+            };
+            if update
+                .audio
+                .as_ref()
+                .is_some_and(|audio| !valid_audio_input(audio, scheduled.request.outputs.len()))
+            {
+                return Err(FrameAckStatus::InvalidFrame);
+            }
+            if scheduled
+                .last_audio_update_sequence
+                .is_some_and(|sequence| update.sequence <= sequence)
+            {
+                return Ok(false);
+            }
+            if scheduled
+                .last_audio_timestamp_ns
+                .is_some_and(|timestamp| update.timestamp_ns < timestamp)
+            {
+                return Ok(false);
+            }
+            scheduled.last_audio_update_sequence = Some(update.sequence);
+            health.audio_update_sequence = Some(update.sequence);
+            scheduled.last_audio_timestamp_ns = Some(update.timestamp_ns);
+            Arc::make_mut(&mut scheduled.request).audio = update.audio;
+            Arc::clone(&scheduled.request)
+        };
+        if let Some(pending) = queue.pending_render.as_mut() {
+            pending.request = latest_request;
+        }
+        drop(health);
+        drop(queue);
+        self.shared.notify_queue_changed();
+        Ok(true)
+    }
+
+    fn submit_render_ordered(
+        &self,
+        request: RenderFrameRequest,
+        scheduler_config: Option<RenderSchedulerConfig>,
+        validate_request_order: bool,
+    ) -> Result<bool, FrameAckStatus> {
+        let mut queue = self.shared.queue.lock().expect("output queue poisoned");
+        if queue.closed {
+            return Err(FrameAckStatus::ShuttingDown);
+        }
+        let mut health = self.shared.health.lock().expect("output health poisoned");
+        if !health.configured {
+            return Err(FrameAckStatus::NotConfigured);
+        }
+        let valid_audio = request
+            .audio
+            .as_ref()
+            .is_none_or(|audio| valid_audio_input(audio, request.outputs.len()));
+        let latest_sequence = queue
+            .last_render_request_sequence
+            .into_iter()
+            .chain(health.last_sequence)
+            .max();
         if request.outputs.len() != health.pixel_counts.len()
             || !request.brightness.is_finite()
             || !(0.0..=1.0).contains(&request.brightness)
             || !valid_audio
-            || health
-                .last_sequence
-                .is_some_and(|last_sequence| request.sequence <= last_sequence)
+            || (validate_request_order
+                && latest_sequence.is_some_and(|last_sequence| request.sequence <= last_sequence))
+            || (validate_request_order
+                && queue
+                    .last_render_request_timestamp_ns
+                    .is_some_and(|timestamp| request.timestamp_ns < timestamp))
+            || scheduler_config.is_some_and(|scheduler| !scheduler.is_valid())
             || request
                 .outputs
                 .iter()
@@ -1651,19 +2079,320 @@ impl OutputWorker {
                 !supports_animation(&output.animation)
                     || AnimationInstance::validate(&output.animation, &output.settings).is_err()
                     || !valid_render_output_parameters(output)
+                    || output
+                        .cycling
+                        .as_ref()
+                        .is_some_and(|cycling| !valid_render_cycling(cycling))
             })
         {
             return Err(FrameAckStatus::InvalidFrame);
         }
-        let replaced = queue
-            .enqueue_latest_render(request)
-            .map_err(|()| FrameAckStatus::InvalidFrame)?;
-        if replaced {
-            health.dropped_frames = health.dropped_frames.saturating_add(1);
+        let sequence = request.sequence;
+        let timestamp_ns = request.timestamp_ns;
+        let previous_output_timestamp_ns = queue.last_render_timestamp_ns;
+        let entropy_seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+        health.selected_animations = request
+            .outputs
+            .iter()
+            .map(|output| output.animation.clone())
+            .collect();
+        health.scene_revisions = request
+            .outputs
+            .iter()
+            .map(|output| output.scene_revision)
+            .collect();
+        health.cycling_active = request
+            .outputs
+            .iter()
+            .map(|output| output.cycling.is_some())
+            .collect();
+        if scheduler_config.is_none() {
+            health.beat_clocks.clear();
+            health.structure_event_sequences.clear();
+            health.sequence_playback.clear();
+            health.effect_schedulers.clear();
         }
+        if validate_request_order {
+            queue.last_render_request_sequence = Some(sequence);
+            queue.last_render_request_timestamp_ns = Some(timestamp_ns);
+        }
+        let mut request = Arc::new(request);
+        let replaced = if let Some(scheduler_config) = scheduler_config {
+            let now = Instant::now();
+            let period = render_period(&request, scheduler_config);
+            let previous = queue.scheduled_render.take();
+            if let Some(previous_schedule) = previous.as_ref() {
+                let incoming = Arc::make_mut(&mut request);
+                for (index, output) in incoming.outputs.iter_mut().enumerate() {
+                    let old_output = &previous_schedule.request.outputs[index];
+                    let old_config = old_output
+                        .cycling
+                        .as_ref()
+                        .and_then(|cycling| cycling.effect_scheduler.as_ref());
+                    let new_config = output
+                        .cycling
+                        .as_ref()
+                        .and_then(|cycling| cycling.effect_scheduler.as_ref());
+                    if old_config == new_config && new_config.is_some() {
+                        output.effects.clone_from(&old_output.effects);
+                        output.base_intensity = old_output.base_intensity;
+                        output.max_overlay_strength = old_output.max_overlay_strength;
+                    }
+                }
+            }
+            let replaced = previous.is_some();
+            if queue.pending_render.take().is_some() {
+                health.dropped_frames = health.dropped_frames.saturating_add(1);
+            }
+            let (
+                next_deadline,
+                last_timestamp_ns,
+                cycle_states,
+                selector_states,
+                beat_clocks,
+                sequence_states,
+                effect_states,
+                structure_event_sequences,
+                last_audio_update_sequence,
+                last_audio_timestamp_ns,
+            ) = previous.map_or_else(
+                || {
+                    (
+                        now,
+                        previous_output_timestamp_ns
+                            .unwrap_or_else(|| timestamp_ns.saturating_sub(request.delta_ns)),
+                        request
+                            .outputs
+                            .iter()
+                            .enumerate()
+                            .map(|(_, output)| {
+                                CycleRuntimeState::new(output.cycling.as_ref(), now, entropy_seed)
+                            })
+                            .collect(),
+                        request
+                            .outputs
+                            .iter()
+                            .map(|output| {
+                                SelectorRuntimeState::new(
+                                    output.cycling.as_ref().and_then(|cycling| cycling.selector),
+                                    output,
+                                    now,
+                                    entropy_seed,
+                                )
+                            })
+                            .collect(),
+                        vec![BeatClockTracker::default(); request.outputs.len()],
+                        vec![SequenceCoordinator::default(); request.outputs.len()],
+                        vec![EffectScheduleCoordinator::default(); request.outputs.len()],
+                        vec![0; request.outputs.len()],
+                        None,
+                        None,
+                    )
+                },
+                |previous| {
+                    let cycle_states = request
+                        .outputs
+                        .iter()
+                        .enumerate()
+                        .map(|(index, output)| {
+                            let old_output = &previous.request.outputs[index];
+                            if old_output.animation == output.animation
+                                && old_output.cycling == output.cycling
+                            {
+                                previous.cycle_states[index].clone()
+                            } else {
+                                CycleRuntimeState::new(output.cycling.as_ref(), now, entropy_seed)
+                            }
+                        })
+                        .collect();
+                    let selector_states = request
+                        .outputs
+                        .iter()
+                        .enumerate()
+                        .map(|(index, output)| {
+                            let old_selector = previous.request.outputs[index]
+                                .cycling
+                                .as_ref()
+                                .and_then(|cycling| cycling.selector);
+                            let new_selector =
+                                output.cycling.as_ref().and_then(|cycling| cycling.selector);
+                            let old_sequence = previous.request.outputs[index]
+                                .cycling
+                                .as_ref()
+                                .and_then(|cycling| cycling.sequence.as_ref());
+                            let new_sequence = output
+                                .cycling
+                                .as_ref()
+                                .and_then(|cycling| cycling.sequence.as_ref());
+                            if old_selector == new_selector && new_selector.is_some() {
+                                let mut state = previous.selector_states[index].clone();
+                                if old_sequence != new_sequence {
+                                    state.initialized = false;
+                                    state.last_feature_sequence = None;
+                                    state.last_switch_at = now;
+                                    state.recent_names.clear();
+                                    state.quantized_switch.reset();
+                                }
+                                let base_changed = state.active_template.as_ref().is_some_and(
+                                    |previous_template| {
+                                        previous_template.animation != output.animation
+                                            || previous_template.settings != output.settings
+                                            || previous_template.scene_revision
+                                                != output.scene_revision
+                                    },
+                                );
+                                if base_changed {
+                                    let playback_choice_changed = state
+                                        .active_template
+                                        .as_ref()
+                                        .is_some_and(|previous_template| {
+                                            previous_template.animation != output.animation
+                                                || previous_template.settings != output.settings
+                                        });
+                                    state.active_choice = Some(RenderAnimationChoice {
+                                        animation: output.animation.clone(),
+                                        settings: output.settings.clone(),
+                                    });
+                                    if playback_choice_changed {
+                                        state.initialized = false;
+                                        state.quantized_switch.reset();
+                                    }
+                                    state.base_scene_changed = true;
+                                }
+                                state.active_template = Some(output.clone());
+                                state
+                            } else {
+                                SelectorRuntimeState::new(new_selector, output, now, entropy_seed)
+                            }
+                        })
+                        .collect();
+                    let beat_clocks = if previous.beat_clocks.len() == request.outputs.len() {
+                        previous.beat_clocks
+                    } else {
+                        vec![BeatClockTracker::default(); request.outputs.len()]
+                    };
+                    let sequence_states = request
+                        .outputs
+                        .iter()
+                        .enumerate()
+                        .map(|(index, output)| {
+                            let old_sequence = previous.request.outputs[index]
+                                .cycling
+                                .as_ref()
+                                .and_then(|cycling| cycling.sequence.as_ref());
+                            let new_sequence = output
+                                .cycling
+                                .as_ref()
+                                .and_then(|cycling| cycling.sequence.as_ref());
+                            if old_sequence == new_sequence
+                                && previous.sequence_states.len() == request.outputs.len()
+                            {
+                                previous.sequence_states[index].clone()
+                            } else {
+                                SequenceCoordinator::default()
+                            }
+                        })
+                        .collect();
+                    let effect_states = request
+                        .outputs
+                        .iter()
+                        .enumerate()
+                        .map(|(index, output)| {
+                            let old_config = previous.request.outputs[index]
+                                .cycling
+                                .as_ref()
+                                .and_then(|cycling| cycling.effect_scheduler.as_ref());
+                            let new_config = output
+                                .cycling
+                                .as_ref()
+                                .and_then(|cycling| cycling.effect_scheduler.as_ref());
+                            if old_config == new_config
+                                && new_config.is_some()
+                                && previous.effect_states.len() == request.outputs.len()
+                            {
+                                previous.effect_states[index].clone()
+                            } else {
+                                EffectScheduleCoordinator::default()
+                            }
+                        })
+                        .collect();
+                    let structure_event_sequences =
+                        if previous.structure_event_sequences.len() == request.outputs.len() {
+                            previous.structure_event_sequences
+                        } else {
+                            vec![0; request.outputs.len()]
+                        };
+                    let last_audio_update_sequence = previous.last_audio_update_sequence;
+                    let last_audio_timestamp_ns = previous.last_audio_timestamp_ns;
+                    (
+                        previous.next_deadline,
+                        previous.last_timestamp_ns,
+                        cycle_states,
+                        selector_states,
+                        beat_clocks,
+                        sequence_states,
+                        effect_states,
+                        structure_event_sequences,
+                        last_audio_update_sequence,
+                        last_audio_timestamp_ns,
+                    )
+                },
+            );
+            queue.scheduled_render = Some(ScheduledRender {
+                request: Arc::clone(&request),
+                period,
+                max_fps: scheduler_config.max_fps,
+                next_deadline,
+                clock_origin: now,
+                clock_origin_ns: timestamp_ns
+                    .max(previous_output_timestamp_ns.unwrap_or(last_timestamp_ns)),
+                last_timestamp_ns,
+                cycle_states,
+                selector_states,
+                beat_clocks,
+                sequence_states,
+                effect_states,
+                structure_event_sequences,
+                last_audio_update_sequence,
+                last_audio_timestamp_ns,
+            });
+            replaced
+        } else {
+            let had_schedule = queue.scheduled_render.take().is_some();
+            let previous_timestamp_ns = queue.last_render_timestamp_ns;
+            let timestamp_ns = timestamp_ns.max(previous_timestamp_ns.unwrap_or(0));
+            let delta_ns = if timestamp_ns == request.timestamp_ns {
+                request.delta_ns
+            } else {
+                previous_timestamp_ns
+                    .map(|previous| timestamp_ns.saturating_sub(previous))
+                    .unwrap_or(request.delta_ns)
+            };
+            queue.last_render_timestamp_ns = Some(timestamp_ns);
+            let pending = PendingRender {
+                request: Arc::clone(&request),
+                timestamp_ns,
+                delta_ns,
+                queued_at: Instant::now(),
+            };
+            let replaced = queue
+                .enqueue_latest_render(pending)
+                .map_err(|()| FrameAckStatus::InvalidFrame)?;
+            if replaced {
+                health.dropped_frames = health.dropped_frames.saturating_add(1);
+            }
+            if had_schedule && !replaced {
+                true
+            } else {
+                replaced
+            }
+        };
         drop(health);
         drop(queue);
-        self.shared.ready.notify_one();
+        self.shared.notify_queue_changed();
         Ok(replaced)
     }
 
@@ -1692,6 +2421,15 @@ impl OutputWorker {
             last_sequence: health.last_sequence,
             dropped_frames: health.dropped_frames,
             failed_frames: health.failed_frames,
+            scheduler_missed_deadlines: health.scheduler_missed_deadlines,
+            selected_animations: health.selected_animations.clone(),
+            scene_revisions: health.scene_revisions.clone(),
+            cycling_active: health.cycling_active.clone(),
+            dynamic_gate_states: health.dynamic_gate_states.clone(),
+            beat_clocks: health.beat_clocks.clone(),
+            structure_event_sequences: health.structure_event_sequences.clone(),
+            sequence_playback: health.sequence_playback.clone(),
+            effect_schedulers: health.effect_schedulers.clone(),
             last_error: health.last_error.clone(),
             output_rate: health.output_rate,
             frame_latency_ms: health.frame_latency_ms,
@@ -1700,9 +2438,15 @@ impl OutputWorker {
             frame_latency_p50_ms: health.frame_latency_percentile_ms(0.50),
             frame_latency_p95_ms: health.frame_latency_p95_ms(),
             frame_latency_p99_ms: health.frame_latency_percentile_ms(0.99),
+            audio_feature_to_led_latency_ms: health.audio_feature_to_led_latency_ms,
+            audio_feature_to_led_p50_ms: health.audio_feature_to_led_percentile_ms(0.50),
+            audio_feature_to_led_p95_ms: health.audio_feature_to_led_percentile_ms(0.95),
+            audio_feature_to_led_p99_ms: health.audio_feature_to_led_percentile_ms(0.99),
             sequential_skew_ms: health.sequential_skew_ms,
             last_successful_update_epoch_ms: health.last_successful_update_epoch_ms,
             render_time_ms: health.render_time_ms,
+            scene_control_revision: health.scene_control_revision,
+            audio_update_sequence: health.audio_update_sequence,
             estimated_power_watts: health.estimated_power_watts,
             applied_power_scale: health.applied_power_scale,
             output_power_watts: health
@@ -1725,7 +2469,12 @@ impl OutputWorker {
                 return Ok(());
             }
             queue.closed = true;
+            queue.scheduled_render = None;
             if queue.pending_frame.take().is_some() {
+                let mut health = self.shared.health.lock().expect("output health poisoned");
+                health.dropped_frames = health.dropped_frames.saturating_add(1);
+            }
+            if queue.pending_render.take().is_some() {
                 let mut health = self.shared.health.lock().expect("output health poisoned");
                 health.dropped_frames = health.dropped_frames.saturating_add(1);
             }
@@ -1733,7 +2482,17 @@ impl OutputWorker {
                 .commands
                 .push_back(WorkCommand::Shutdown { response: send });
         }
-        self.shared.ready.notify_one();
+        self.shared.notify_queue_changed();
+        if let Some(scheduler_thread) = self
+            .scheduler_thread
+            .lock()
+            .expect("scheduler thread handle poisoned")
+            .take()
+        {
+            scheduler_thread
+                .join()
+                .map_err(|error| format!("Rust frame scheduler panicked: {error:?}"))?;
+        }
         let thread = self.thread.lock().expect("worker handle poisoned").take();
         match receive.recv_timeout(Duration::from_secs(5)) {
             Ok(result) => {
@@ -1769,6 +2528,17 @@ struct RuntimeHealth {
     last_sequence: Option<u64>,
     dropped_frames: u64,
     failed_frames: u64,
+    scheduler_missed_deadlines: u64,
+    scene_control_revision: Option<u64>,
+    audio_update_sequence: Option<u64>,
+    selected_animations: Vec<String>,
+    scene_revisions: Vec<u64>,
+    structure_event_sequences: Vec<u64>,
+    cycling_active: Vec<bool>,
+    dynamic_gate_states: Vec<String>,
+    beat_clocks: Vec<RenderBeatClockState>,
+    sequence_playback: Vec<RenderSequencePlaybackState>,
+    effect_schedulers: Vec<RenderEffectSchedulerState>,
     last_error: Option<String>,
     output_rate: f64,
     rate_started_at: Instant,
@@ -1777,6 +2547,8 @@ struct RuntimeHealth {
     queue_latency_ms: Option<f64>,
     transmission_ms: Option<f64>,
     frame_latency_samples_ms: VecDeque<f64>,
+    audio_feature_to_led_latency_ms: Option<f64>,
+    audio_feature_to_led_samples_ms: VecDeque<f64>,
     sequential_skew_ms: Option<f64>,
     last_successful_update_epoch_ms: Option<u64>,
     render_time_ms: Option<f64>,
@@ -1798,6 +2570,17 @@ impl RuntimeHealth {
             last_sequence: None,
             dropped_frames: 0,
             failed_frames: 0,
+            scheduler_missed_deadlines: 0,
+            scene_control_revision: None,
+            audio_update_sequence: None,
+            selected_animations: Vec::new(),
+            scene_revisions: Vec::new(),
+            structure_event_sequences: Vec::new(),
+            cycling_active: Vec::new(),
+            dynamic_gate_states: Vec::new(),
+            beat_clocks: Vec::new(),
+            sequence_playback: Vec::new(),
+            effect_schedulers: Vec::new(),
             last_error: None,
             output_rate: 0.0,
             rate_started_at: Instant::now(),
@@ -1806,6 +2589,8 @@ impl RuntimeHealth {
             queue_latency_ms: None,
             transmission_ms: None,
             frame_latency_samples_ms: VecDeque::with_capacity(FRAME_LATENCY_SAMPLE_COUNT),
+            audio_feature_to_led_latency_ms: None,
+            audio_feature_to_led_samples_ms: VecDeque::with_capacity(FRAME_LATENCY_SAMPLE_COUNT),
             sequential_skew_ms: None,
             last_successful_update_epoch_ms: None,
             render_time_ms: None,
@@ -1839,6 +2624,34 @@ impl RuntimeHealth {
         Some(samples[index])
     }
 
+    fn audio_feature_to_led_percentile_ms(&self, quantile: f64) -> Option<f64> {
+        if self.audio_feature_to_led_samples_ms.is_empty() {
+            return None;
+        }
+        let mut samples = self
+            .audio_feature_to_led_samples_ms
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        samples.sort_by(f64::total_cmp);
+        let index = ((samples.len() as f64 * quantile).ceil() as usize)
+            .saturating_sub(1)
+            .min(samples.len() - 1);
+        Some(samples[index])
+    }
+
+    fn record_audio_feature_to_led_latency(&mut self, latency_ms: Option<f64>) {
+        self.audio_feature_to_led_latency_ms = latency_ms;
+        if let Some(latency_ms) = latency_ms {
+            if self.audio_feature_to_led_samples_ms.len() == FRAME_LATENCY_SAMPLE_COUNT {
+                self.audio_feature_to_led_samples_ms.pop_front();
+            }
+            self.audio_feature_to_led_samples_ms.push_back(latency_ms);
+        } else {
+            self.audio_feature_to_led_samples_ms.clear();
+        }
+    }
+
     fn record_frame(
         &mut self,
         sequence: u64,
@@ -1846,6 +2659,7 @@ impl RuntimeHealth {
         queue_latency_ms: f64,
         transmission_ms: Option<f64>,
         sequential_skew_ms: Option<f64>,
+        audio_feature_to_led_latency_ms: Option<f64>,
     ) {
         let frame_latency_ms = queued_at.elapsed().as_secs_f64() * 1000.0;
         self.frames_rendered = self.frames_rendered.saturating_add(1);
@@ -1854,6 +2668,7 @@ impl RuntimeHealth {
         self.queue_latency_ms = Some(queue_latency_ms);
         self.transmission_ms = transmission_ms;
         self.sequential_skew_ms = sequential_skew_ms;
+        self.record_audio_feature_to_led_latency(audio_feature_to_led_latency_ms);
         if self.frame_latency_samples_ms.len() == FRAME_LATENCY_SAMPLE_COUNT {
             self.frame_latency_samples_ms.pop_front();
         }
@@ -1907,6 +2722,897 @@ enum WorkItem {
     Stop,
 }
 
+fn render_period(request: &RenderFrameRequest, scheduler: RenderSchedulerConfig) -> Duration {
+    let animation_period_ms = request
+        .outputs
+        .iter()
+        .filter_map(|output| catalog().animation(&output.animation))
+        .map(|definition| u64::from(definition.frame_ms))
+        .min()
+        .unwrap_or(50);
+    let animation_period = Duration::from_millis(animation_period_ms);
+    let fps_period = Duration::from_nanos(1_000_000_000 / u64::from(scheduler.max_fps));
+    animation_period.max(fps_period)
+}
+
+fn valid_render_cycling(cycling: &RenderCycling) -> bool {
+    if cycling.interval_ns == 0
+        || !matches!(
+            cycling.transition_mode.as_str(),
+            "crossfade" | "fade_black" | "wipe"
+        )
+        || cycling.choices.len() > catalog().animations.len()
+    {
+        return false;
+    }
+    let mut names = std::collections::BTreeSet::new();
+    cycling.choices.iter().all(|choice| {
+        !choice.animation.is_empty()
+            && names.insert(choice.animation.as_str())
+            && supports_animation(&choice.animation)
+            && catalog()
+                .animation(&choice.animation)
+                .is_some_and(|definition| definition.automatic)
+            && AnimationInstance::validate(&choice.animation, &choice.settings).is_ok()
+    }) && cycling.selector.is_none_or(RenderDynamicSelector::is_valid)
+        && (cycling.dynamic_idle.is_none() || cycling.selector.is_some())
+        && cycling.sequence.as_ref().is_none_or(|sequence| {
+            sequence.is_valid()
+                && cycling.selector.is_some()
+                && sequence
+                    .steps
+                    .iter()
+                    .all(|step| names.contains(step.animation.as_str()))
+        })
+        && cycling.effect_scheduler.as_ref().is_none_or(|scheduler| {
+            scheduler.is_valid()
+                && cycling.selector.is_some()
+                && scheduler.choices.iter().all(|choice| {
+                    catalog().effect(&choice.name).is_some()
+                        && catalog().animation(&choice.name).is_some_and(|definition| {
+                            definition.validate_settings(&choice.settings, true).is_ok()
+                        })
+                })
+        })
+        && cycling.dynamic_idle.as_ref().is_none_or(|idle| {
+            idle.is_valid()
+                && (idle.mode != RenderDynamicIdleMode::Animation
+                    || idle.animation.as_ref().is_some_and(|animation| {
+                        supports_animation(animation)
+                            && AnimationInstance::validate(animation, &idle.settings).is_ok()
+                    }))
+        })
+}
+
+fn next_cycling_choice<'a>(
+    cycling: &'a RenderCycling,
+    current: &str,
+    random_state: &mut PythonRandom,
+) -> Option<&'a RenderAnimationChoice> {
+    if cycling.choices.is_empty() {
+        return None;
+    }
+    let current_index = cycling
+        .choices
+        .iter()
+        .position(|choice| choice.animation == current);
+    let index = match cycling.order {
+        RenderCycleOrder::Sequential => current_index
+            .map(|index| (index + 1) % cycling.choices.len())
+            .unwrap_or(0),
+        RenderCycleOrder::Shuffle if cycling.choices.len() > 1 => {
+            let available = cycling.choices.len() - usize::from(current_index.is_some());
+            let selected = random_state.randbelow(available);
+            cycling
+                .choices
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| Some(*index) != current_index)
+                .nth(selected)
+                .map(|(index, _)| index)?
+        }
+        RenderCycleOrder::Shuffle => current_index.unwrap_or(0),
+    };
+    cycling.choices.get(index)
+}
+
+fn select_dynamic_choice<'a>(
+    cycling: &'a RenderCycling,
+    current: &str,
+    features: &RenderSelectorFeatures,
+    selector: RenderDynamicSelector,
+    feature_sequence: u64,
+    structure_event: bool,
+    state: &mut SelectorRuntimeState,
+    now: Instant,
+) -> Option<&'a RenderAnimationChoice> {
+    if state
+        .last_feature_sequence
+        .is_some_and(|last_sequence| feature_sequence <= last_sequence)
+        && !structure_event
+    {
+        return None;
+    }
+    if state
+        .last_feature_sequence
+        .is_none_or(|last_sequence| feature_sequence > last_sequence)
+    {
+        state.last_feature_sequence = Some(feature_sequence);
+    }
+
+    let mut best_choice = None;
+    let mut best_score = f64::NEG_INFINITY;
+    let mut current_score = None;
+    for choice in &cycling.choices {
+        let score = score_dynamic_choice(
+            choice,
+            features,
+            current,
+            &state.recent_names,
+            selector.randomness,
+            &mut state.random_state,
+        );
+        if choice.animation == current {
+            current_score = Some(score);
+        }
+        if score > best_score {
+            best_choice = Some(choice);
+            best_score = score;
+        }
+    }
+    let Some(best_choice) = best_choice else {
+        state.initialized = true;
+        return None;
+    };
+
+    let selected = if !state.initialized {
+        state.initialized = true;
+        Some(best_choice)
+    } else if best_choice.animation == current {
+        None
+    } else {
+        let elapsed_ns = now
+            .saturating_duration_since(state.last_switch_at)
+            .as_nanos();
+        let cooldown_ready = elapsed_ns >= u128::from(selector.switch_cooldown_ns);
+        let min_ready = elapsed_ns >= u128::from(selector.min_duration_ns);
+        let max_due = elapsed_ns >= u128::from(selector.max_duration_ns);
+        let score_gap = best_score - current_score.unwrap_or(0.0);
+        let switch = if features.drop_detected {
+            false
+        } else if features.section_change
+            && min_ready
+            && cooldown_ready
+            && score_gap >= selector.switch_margin * 0.5
+        {
+            true
+        } else if max_due && cooldown_ready {
+            true
+        } else {
+            min_ready && cooldown_ready && score_gap >= selector.switch_margin
+        };
+        switch.then_some(best_choice)
+    };
+
+    selected
+}
+
+fn score_dynamic_choice(
+    choice: &RenderAnimationChoice,
+    features: &RenderSelectorFeatures,
+    current: &str,
+    recent_names: &VecDeque<String>,
+    randomness: f64,
+    random_state: &mut PythonRandom,
+) -> f64 {
+    let Some(definition) = catalog().animation(&choice.animation) else {
+        return f64::NEG_INFINITY;
+    };
+    let metadata = &definition.dynamic_metadata;
+    let energy = first_nonzero_clamped(&[features.energy_level, features.energy, features.volume]);
+    let bass = first_nonzero_clamped(&[features.bass_energy, features.bass]);
+    let mid = clamp_unit(features.mid_energy);
+    let treble = clamp_unit(features.treble_energy);
+    let beat_confidence = clamp_unit(features.beat_confidence);
+    let bpm = features.bpm.max(0.0);
+
+    let mut score = metadata_number(metadata, "weight", 1.0);
+    let energy_fit = range_fit(
+        energy,
+        metadata_number(metadata, "energy_min", 0.0),
+        metadata_number(metadata, "energy_max", 1.0),
+        0.25,
+    );
+    score += energy_fit * 0.85;
+    let bpm_fit = range_fit(
+        bpm,
+        metadata_number(metadata, "bpm_min", 0.0),
+        metadata_number(metadata, "bpm_max", 260.0),
+        60.0,
+    );
+    score += bpm_fit * 0.35;
+    let prefers_bass = metadata_number(metadata, "prefers_bass", 0.0);
+    let prefers_mid = metadata_number(metadata, "prefers_mid", 0.0);
+    let prefers_treble = metadata_number(metadata, "prefers_treble", 0.0);
+    let spectrum_fit = (1.0 - (prefers_bass - bass).abs()) * prefers_bass
+        + (1.0 - (prefers_mid - mid).abs()) * prefers_mid
+        + (1.0 - (prefers_treble - treble).abs()) * prefers_treble;
+    score += spectrum_fit * 0.55;
+
+    if metadata_boolean(metadata, "supports_beats", true) {
+        score += beat_confidence * 0.28;
+    } else if beat_confidence > 0.35 {
+        score -= beat_confidence * 0.25;
+    }
+    if features.drop_detected {
+        if metadata_boolean(metadata, "supports_drops", false) {
+            score += 1.1;
+        } else {
+            score -= 0.18;
+        }
+    }
+    if features.silence {
+        if metadata_boolean(metadata, "supports_silence", false) {
+            score += 0.9;
+        } else {
+            score -= 0.65;
+        }
+    }
+    score += (1.0 - (metadata_number(metadata, "intensity", 0.5) - energy).abs()).max(0.0) * 0.28;
+    if choice.animation == current {
+        score += 0.18;
+    }
+    if let Some(distance) = recent_names
+        .iter()
+        .position(|name| name == &choice.animation)
+        .map(|index| recent_names.len() - index)
+    {
+        score -= 0.18 + 0.12 * distance as f64;
+    }
+    if randomness > 0.0 {
+        score += random_state.uniform(-randomness, randomness);
+    }
+    score
+}
+
+fn remember_dynamic_name(history: &mut VecDeque<String>, name: &str, limit: usize) {
+    if limit == 0 || name.is_empty() {
+        history.clear();
+        return;
+    }
+    history.retain(|previous| previous != name);
+    if history.len() == limit {
+        history.pop_front();
+    }
+    if history.len() < limit {
+        history.push_back(name.to_owned());
+    }
+}
+
+fn first_nonzero_clamped(values: &[f64]) -> f64 {
+    values
+        .iter()
+        .copied()
+        .find(|value| *value != 0.0)
+        .map_or(0.0, clamp_unit)
+}
+
+fn clamp_unit(value: f64) -> f64 {
+    value.clamp(0.0, 1.0)
+}
+
+fn range_fit(value: f64, low: f64, high: f64, scale: f64) -> f64 {
+    if (low..=high).contains(&value) {
+        return 1.0;
+    }
+    let distance = if value < low {
+        low - value
+    } else {
+        value - high
+    };
+    (1.0 - distance / scale.max(1e-6)).clamp(0.0, 1.0)
+}
+
+fn metadata_number(metadata: &serde_json::Value, name: &str, fallback: f64) -> f64 {
+    metadata
+        .get(name)
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(fallback)
+}
+
+fn metadata_boolean(metadata: &serde_json::Value, name: &str, fallback: bool) -> bool {
+    metadata
+        .get(name)
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(fallback)
+}
+
+fn update_dynamic_output(
+    cycling: &RenderCycling,
+    selector: RenderDynamicSelector,
+    current_output: &RenderOutput,
+    features: &RenderSelectorFeatures,
+    feature_sequence: u64,
+    structure_event: bool,
+    section_change_at_ns: Option<u64>,
+    now: Instant,
+    timestamp_ns: u64,
+    beat_clock: RenderBeatClockState,
+    state: &mut SelectorRuntimeState,
+    sequence_state: &mut SequenceCoordinator,
+) -> (RenderOutput, String, String) {
+    let Some(mut active_output) = state.active_template.clone() else {
+        return (
+            current_output.clone(),
+            "disabled".to_owned(),
+            current_output.animation.clone(),
+        );
+    };
+
+    if let Some(tracker) = state.activity_tracker.as_mut()
+        && state
+            .last_activity_sequence
+            .is_none_or(|last_sequence| feature_sequence > last_sequence)
+    {
+        state.last_activity_sequence = Some(feature_sequence);
+        let update = tracker.update(*features, now);
+        state.gate_state = update.state;
+        if update.activated {
+            state.initialized = false;
+        }
+    }
+
+    if let Some(active_choice) = state.active_choice.as_ref() {
+        active_output.animation = active_choice.animation.clone();
+        active_output.settings = active_choice.settings.clone();
+    }
+    let sequence_step = sequence_state.update(
+        cycling.sequence.as_ref(),
+        beat_clock,
+        timestamp_ns,
+        selector.sync_offset_ns,
+        selector.clock_confidence_threshold,
+        selector.subdivisions_per_beat,
+        state.gate_state == MusicGateState::Music,
+        section_change_at_ns,
+    );
+    let sequence_controls_playback = sequence_state.controls_playback();
+    if let (Some(sequence), Some(step_index)) = (cycling.sequence.as_ref(), sequence_step)
+        && let Some(step) = sequence.steps.get(step_index)
+        && let Some(choice) = cycling
+            .choices
+            .iter()
+            .find(|choice| choice.animation == step.animation)
+    {
+        state.active_choice = Some(choice.clone());
+        state.last_switch_at = now;
+        state.quantized_switch.reset();
+        active_output.animation.clone_from(&choice.animation);
+        active_output.settings.clone_from(&choice.settings);
+    }
+    let new_features = state
+        .last_feature_sequence
+        .is_none_or(|last_sequence| feature_sequence > last_sequence)
+        || structure_event;
+    let was_initialized = state.initialized;
+    let candidate =
+        if state.gate_state == MusicGateState::Music && new_features && !sequence_controls_playback
+        {
+            select_dynamic_choice(
+                cycling,
+                &active_output.animation,
+                features,
+                selector,
+                feature_sequence,
+                structure_event,
+                state,
+                now,
+            )
+            .cloned()
+        } else {
+            None
+        };
+    if state.gate_state == MusicGateState::Music && !sequence_controls_playback {
+        let intent = new_features.then_some(candidate.clone());
+        let due_choice = if !was_initialized && candidate.is_some() {
+            state.quantized_switch.reset();
+            candidate
+        } else {
+            let transition_active = current_output
+                .transition
+                .as_ref()
+                .is_some_and(|transition| {
+                    timestamp_ns
+                        < transition
+                            .started_at_ns
+                            .saturating_add(transition.duration_ns)
+                });
+            state.quantized_switch.update(
+                intent,
+                selector,
+                beat_clock,
+                timestamp_ns,
+                transition_active,
+            )
+        };
+        if let Some(choice) = due_choice {
+            if choice.animation != active_output.animation {
+                remember_dynamic_name(
+                    &mut state.recent_names,
+                    &active_output.animation,
+                    selector.history_size,
+                );
+                state.last_switch_at = now;
+            }
+            state.active_choice = Some(choice.clone());
+            active_output.animation = choice.animation;
+            active_output.settings = choice.settings;
+        }
+    } else {
+        state.quantized_switch.reset();
+    }
+
+    let selected_animation = active_output.animation.clone();
+    if state.gate_state != MusicGateState::Music
+        && let Some(idle) = cycling.dynamic_idle.as_ref()
+    {
+        match idle.mode {
+            RenderDynamicIdleMode::Off => {
+                active_output.blackout = true;
+                active_output.audio_enabled = false;
+                active_output.solid_color = None;
+                active_output.effects.clear();
+            }
+            RenderDynamicIdleMode::Solid => {
+                active_output.audio_enabled = false;
+                active_output.solid_color = Some(idle.color);
+                active_output.brightness = Some(idle.brightness);
+                active_output.base_intensity = 1.0;
+                active_output.effects.clear();
+            }
+            RenderDynamicIdleMode::Animation => {
+                if let Some(animation) = idle.animation.as_ref() {
+                    active_output.animation.clone_from(animation);
+                }
+                active_output.settings.clone_from(&idle.settings);
+                active_output.audio_enabled = false;
+                active_output.solid_color = None;
+                active_output.brightness = Some(idle.brightness);
+                active_output.base_intensity = 1.0;
+                active_output.effects.clear();
+            }
+        }
+    } else {
+        active_output.audio_enabled = true;
+    }
+
+    let display_changed = current_output.animation != active_output.animation
+        || current_output.settings != active_output.settings
+        || current_output.blackout != active_output.blackout
+        || current_output.solid_color != active_output.solid_color
+        || current_output.brightness != active_output.brightness
+        || current_output.audio_enabled != active_output.audio_enabled
+        || current_output.effects != active_output.effects
+        || current_output.base_intensity != active_output.base_intensity
+        || state.displayed_gate_state != Some(state.gate_state)
+        || state.base_scene_changed;
+    if display_changed {
+        active_output.scene_revision = current_output.scene_revision.wrapping_add(1);
+        active_output.transition = (cycling.transition_duration_ns > 0).then(|| RenderTransition {
+            started_at_ns: timestamp_ns,
+            duration_ns: cycling.transition_duration_ns,
+            mode: cycling.transition_mode.clone(),
+        });
+    } else {
+        active_output.scene_revision = current_output.scene_revision;
+        active_output.transition = current_output.transition.clone();
+    }
+    state.displayed_gate_state = Some(state.gate_state);
+    state.base_scene_changed = false;
+    (
+        active_output,
+        state.gate_state.as_str().to_owned(),
+        selected_animation,
+    )
+}
+
+fn advance_cycle_after_render(
+    shared: &OutputWorkerShared,
+    request: &Arc<RenderFrameRequest>,
+    renderers: &[Option<RenderOutputState>],
+    timestamp_ns: u64,
+) {
+    let now = Instant::now();
+    let mut queue = shared.queue.lock().expect("output queue poisoned");
+    let Some((
+        selected_animations,
+        scene_revisions,
+        structure_event_sequences,
+        cycling_active,
+        dynamic_gate_states,
+        beat_clocks,
+        sequence_playback,
+        effect_schedulers,
+        changed,
+    )) = (|| {
+        let scheduled = queue.scheduled_render.as_mut()?;
+        if !Arc::ptr_eq(&scheduled.request, request) {
+            return None;
+        }
+
+        let audio = request.audio.as_ref();
+        let beat_events = audio.map_or(&[][..], |audio| audio.beat_events.as_slice());
+        let fallback_bpm = audio.and_then(|audio| audio.fallback_bpm);
+        for tracker in &mut scheduled.beat_clocks {
+            tracker.update(beat_events, timestamp_ns, fallback_bpm);
+        }
+        let beat_clocks = scheduled
+            .beat_clocks
+            .iter()
+            .map(|tracker| tracker.state(timestamp_ns))
+            .collect::<Vec<_>>();
+
+        let output_count = scheduled.request.outputs.len();
+        if scheduled.structure_event_sequences.len() != output_count {
+            scheduled.structure_event_sequences = vec![0; output_count];
+        }
+        let mut section_change_events = vec![false; output_count];
+        let mut section_change_timestamps_ns = vec![None; output_count];
+        let mut drop_events = vec![false; output_count];
+        let mut blocked_structure_events = vec![false; output_count];
+        if let Some(audio) = audio {
+            for event in &audio.structure_events {
+                if blocked_structure_events[event.output_index] {
+                    continue;
+                }
+                let Some(last_sequence) = scheduled
+                    .structure_event_sequences
+                    .get_mut(event.output_index)
+                else {
+                    continue;
+                };
+                if event.sequence <= *last_sequence || event.timestamp_ns > timestamp_ns {
+                    if event.timestamp_ns > timestamp_ns {
+                        blocked_structure_events[event.output_index] = true;
+                    }
+                    continue;
+                }
+                *last_sequence = event.sequence;
+                section_change_events[event.output_index] |= event.section_change;
+                if event.section_change {
+                    section_change_timestamps_ns[event.output_index] = Some(event.timestamp_ns);
+                }
+                drop_events[event.output_index] |= event.drop_event;
+            }
+        }
+
+        let mut changed = false;
+        let mut selected_animations = scheduled
+            .request
+            .outputs
+            .iter()
+            .map(|output| output.animation.clone())
+            .collect::<Vec<_>>();
+        let mut dynamic_gate_states = vec!["disabled".to_owned(); scheduled.request.outputs.len()];
+        for (index, renderer) in renderers.iter().enumerate() {
+            let output = scheduled.request.outputs[index].clone();
+            let Some(cycling) = output.cycling.clone() else {
+                continue;
+            };
+            if cycling.choices.is_empty() {
+                continue;
+            }
+            if let Some(selector) = cycling.selector {
+                let mut features = audio
+                    .and_then(|audio| audio.selector_features)
+                    .unwrap_or_default();
+                features.section_change |= section_change_events[index];
+                features.drop_detected |= drop_events[index];
+                let structure_event = section_change_events[index] || drop_events[index];
+                let feature_sequence = audio
+                    .and_then(|audio| audio.feature_sequence)
+                    .unwrap_or(scheduled.request.sequence);
+                let (dynamic_output, gate_state, selected_animation) = update_dynamic_output(
+                    &cycling,
+                    selector,
+                    &output,
+                    &features,
+                    feature_sequence,
+                    structure_event,
+                    section_change_timestamps_ns[index],
+                    now,
+                    timestamp_ns,
+                    beat_clocks[index],
+                    &mut scheduled.selector_states[index],
+                    &mut scheduled.sequence_states[index],
+                );
+                selected_animations[index] = selected_animation;
+                dynamic_gate_states[index] = gate_state;
+                if dynamic_output != output {
+                    Arc::make_mut(&mut scheduled.request).outputs[index] = dynamic_output;
+                    changed = true;
+                }
+                continue;
+            }
+            let Some(animation) = renderer.as_ref().and_then(|state| state.animation.as_ref())
+            else {
+                continue;
+            };
+            let due = match cycling.timing {
+                RenderCycleTiming::Fixed => {
+                    now.saturating_duration_since(scheduled.cycle_states[index].started_at)
+                        >= Duration::from_nanos(cycling.interval_ns)
+                }
+                RenderCycleTiming::PerAnimation => catalog()
+                    .animation(animation.name())
+                    .is_some_and(|definition| {
+                        animation.frame_index() >= u64::from(definition.frames_per_cycle)
+                    }),
+            };
+            if !due {
+                continue;
+            }
+            let current = output.animation.clone();
+            let Some(choice) = next_cycling_choice(
+                &cycling,
+                &current,
+                &mut scheduled.cycle_states[index].random_state,
+            )
+            .cloned() else {
+                continue;
+            };
+            let output = &mut Arc::make_mut(&mut scheduled.request).outputs[index];
+            output.animation = choice.animation;
+            output.settings = choice.settings;
+            output.scene_revision = output.scene_revision.wrapping_add(1);
+            output.transition = (cycling.transition_duration_ns > 0).then(|| RenderTransition {
+                started_at_ns: timestamp_ns,
+                duration_ns: cycling.transition_duration_ns,
+                mode: cycling.transition_mode,
+            });
+            scheduled.cycle_states[index].started_at = now;
+            changed = true;
+        }
+        if scheduled.effect_states.len() != scheduled.request.outputs.len() {
+            scheduled.effect_states.resize_with(
+                scheduled.request.outputs.len(),
+                EffectScheduleCoordinator::default,
+            );
+        }
+        let mut effect_schedulers =
+            vec![RenderEffectSchedulerState::default(); scheduled.request.outputs.len()];
+        let mut has_effect_scheduler = false;
+        for index in 0..scheduled.request.outputs.len() {
+            let output = scheduled.request.outputs[index].clone();
+            let Some(config) = output
+                .cycling
+                .as_ref()
+                .and_then(|cycling| cycling.effect_scheduler.as_ref())
+            else {
+                scheduled.effect_states[index].reset();
+                continue;
+            };
+            has_effect_scheduler = true;
+            let transition_active = output.transition.is_some_and(|transition| {
+                transition
+                    .started_at_ns
+                    .saturating_add(transition.duration_ns)
+                    > timestamp_ns
+            });
+            let mut structure = output.music_structure;
+            if drop_events[index] {
+                if let Some(structure) = structure.as_mut() {
+                    structure.drop_event = true;
+                }
+            }
+            let (base_intensity, max_overlay_strength, effects, state) =
+                scheduled.effect_states[index].update(
+                    Some(config),
+                    audio,
+                    structure,
+                    beat_clocks[index],
+                    timestamp_ns,
+                    dynamic_gate_states[index] == "music",
+                    transition_active,
+                );
+            let active_output = &mut Arc::make_mut(&mut scheduled.request).outputs[index];
+            if active_output.effects != effects
+                || active_output.base_intensity != base_intensity
+                || active_output.max_overlay_strength != max_overlay_strength
+            {
+                active_output.effects = effects;
+                active_output.base_intensity = base_intensity;
+                active_output.max_overlay_strength = max_overlay_strength;
+                changed = true;
+            }
+            effect_schedulers[index] = state;
+        }
+        if !has_effect_scheduler {
+            effect_schedulers.clear();
+        }
+        if changed {
+            scheduled.period = render_period(
+                &scheduled.request,
+                RenderSchedulerConfig {
+                    max_fps: scheduled.max_fps,
+                },
+            );
+            scheduled.next_deadline = now.checked_add(scheduled.period).unwrap_or(now);
+        }
+        let has_sequences = scheduled.request.outputs.iter().any(|output| {
+            output
+                .cycling
+                .as_ref()
+                .is_some_and(|cycling| cycling.sequence.is_some())
+        });
+        let sequence_playback = if has_sequences {
+            scheduled
+                .request
+                .outputs
+                .iter()
+                .enumerate()
+                .map(|(index, output)| {
+                    scheduled.sequence_states[index].playback_state(
+                        output
+                            .cycling
+                            .as_ref()
+                            .and_then(|cycling| cycling.sequence.as_ref()),
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Some((
+            scheduled
+                .request
+                .outputs
+                .iter()
+                .enumerate()
+                .map(|(index, output)| {
+                    if output
+                        .cycling
+                        .as_ref()
+                        .is_some_and(|cycling| cycling.selector.is_some())
+                    {
+                        selected_animations[index].clone()
+                    } else {
+                        output.animation.clone()
+                    }
+                })
+                .collect::<Vec<_>>(),
+            scheduled
+                .request
+                .outputs
+                .iter()
+                .map(|output| output.scene_revision)
+                .collect::<Vec<_>>(),
+            scheduled.structure_event_sequences.clone(),
+            scheduled
+                .request
+                .outputs
+                .iter()
+                .map(|output| output.cycling.is_some())
+                .collect::<Vec<_>>(),
+            dynamic_gate_states,
+            beat_clocks,
+            sequence_playback,
+            effect_schedulers,
+            changed,
+        ))
+    })()
+    else {
+        return;
+    };
+
+    let dropped_stale_render = changed
+        && queue
+            .pending_render
+            .as_ref()
+            .is_some_and(|pending| Arc::ptr_eq(&pending.request, request));
+    if dropped_stale_render {
+        queue.pending_render.clear();
+    }
+    {
+        let mut health = shared.health.lock().expect("output health poisoned");
+        health.selected_animations = selected_animations;
+        health.scene_revisions = scene_revisions;
+        health.structure_event_sequences = structure_event_sequences;
+        health.cycling_active = cycling_active;
+        health.dynamic_gate_states = dynamic_gate_states;
+        health.beat_clocks = beat_clocks;
+        health.sequence_playback = sequence_playback;
+        health.effect_schedulers = effect_schedulers;
+        if dropped_stale_render {
+            health.dropped_frames = health.dropped_frames.saturating_add(1);
+        }
+    }
+    if changed {
+        shared.scheduler_ready.notify_one();
+    }
+}
+
+fn advance_frame_deadline(candidate: Instant, now: Instant, period: Duration) -> (Instant, u64) {
+    if candidate > now {
+        return (candidate, 0);
+    }
+    let period_ns = period.as_nanos().max(1);
+    let skipped = now.saturating_duration_since(candidate).as_nanos() / period_ns + 1;
+    let advance_ns = period_ns.saturating_mul(skipped);
+    let seconds = (advance_ns / 1_000_000_000).min(u64::MAX as u128) as u64;
+    let advance = Duration::new(seconds, (advance_ns % 1_000_000_000) as u32);
+    let next = candidate
+        .checked_add(advance)
+        .or_else(|| now.checked_add(period))
+        .unwrap_or(now);
+    (next, skipped.min(u64::MAX as u128) as u64)
+}
+
+fn frame_scheduler_loop(shared: Arc<OutputWorkerShared>) {
+    loop {
+        let mut queue = shared.queue.lock().expect("output queue poisoned");
+        loop {
+            if queue.closed {
+                return;
+            }
+            let Some(scheduled) = queue.scheduled_render.as_ref() else {
+                queue = shared
+                    .scheduler_ready
+                    .wait(queue)
+                    .expect("output queue poisoned");
+                continue;
+            };
+            let now = Instant::now();
+            if now < scheduled.next_deadline {
+                let timeout = scheduled.next_deadline - now;
+                let (updated_queue, _) = shared
+                    .scheduler_ready
+                    .wait_timeout(queue, timeout)
+                    .expect("output queue poisoned");
+                queue = updated_queue;
+                continue;
+            }
+
+            let scheduled = queue
+                .scheduled_render
+                .as_mut()
+                .expect("scheduled render was checked above");
+            let timestamp_ns = scheduled.clock_origin_ns.saturating_add(
+                now.saturating_duration_since(scheduled.clock_origin)
+                    .as_nanos()
+                    .min(u64::MAX as u128) as u64,
+            );
+            let delta_ns = timestamp_ns.saturating_sub(scheduled.last_timestamp_ns);
+            scheduled.last_timestamp_ns = timestamp_ns;
+            let candidate = scheduled
+                .next_deadline
+                .checked_add(scheduled.period)
+                .unwrap_or(now);
+            let (next_deadline, missed) = advance_frame_deadline(candidate, now, scheduled.period);
+            scheduled.next_deadline = next_deadline;
+            let pending = PendingRender {
+                request: Arc::clone(&scheduled.request),
+                timestamp_ns,
+                delta_ns,
+                queued_at: now,
+            };
+            queue.last_render_timestamp_ns = Some(timestamp_ns);
+            let replaced = queue
+                .enqueue_scheduled_render(pending)
+                .expect("open scheduler cannot enqueue after queue closure");
+            let mut health = shared.health.lock().expect("output health poisoned");
+            if replaced {
+                health.dropped_frames = health.dropped_frames.saturating_add(1);
+            }
+            health.scheduler_missed_deadlines =
+                health.scheduler_missed_deadlines.saturating_add(missed);
+            drop(health);
+            shared.output_ready.notify_one();
+            break;
+        }
+    }
+}
+
 fn output_worker_loop(shared: Arc<OutputWorkerShared>) {
     let mut outputs: Option<OutputSet> = None;
     let mut renderers: Vec<Option<RenderOutputState>> = Vec::new();
@@ -1918,7 +3624,10 @@ fn output_worker_loop(shared: Arc<OutputWorkerShared>) {
                 && queue.pending_render.is_none()
                 && !queue.closed
             {
-                queue = shared.ready.wait(queue).expect("output queue poisoned");
+                queue = shared
+                    .output_ready
+                    .wait(queue)
+                    .expect("output queue poisoned");
             }
             if let Some(command) = queue.commands.pop_front() {
                 WorkItem::Command(command)
@@ -2087,6 +3796,7 @@ fn output_worker_loop(shared: Arc<OutputWorkerShared>) {
                             queue_latency_ms,
                             transmission_ms,
                             sequential_skew_ms,
+                            None,
                         );
                     }
                     Err(error) => health.record_error(error.to_string()),
@@ -2098,14 +3808,21 @@ fn output_worker_loop(shared: Arc<OutputWorkerShared>) {
             WorkItem::Render(index, mut frame, request) => {
                 frame.sequence = request.request.sequence;
                 frame.queued_at = request.queued_at;
+                let scheduled_request = Arc::clone(&request.request);
                 let render_started_at = Instant::now();
-                let rendered = render_frame_request(&request.request, &mut frame, &mut renderers)
-                    .map(|power_summary| {
-                        (
-                            power_summary,
-                            render_started_at.elapsed().as_secs_f64() * 1000.0,
-                        )
-                    });
+                let rendered = render_frame_request_at(
+                    &request.request,
+                    request.timestamp_ns,
+                    request.delta_ns,
+                    &mut frame,
+                    &mut renderers,
+                )
+                .map(|power_summary| {
+                    (
+                        power_summary,
+                        render_started_at.elapsed().as_secs_f64() * 1000.0,
+                    )
+                });
                 let result = rendered.and_then(|(power_summary, render_time_ms)| {
                     outputs
                         .as_mut()
@@ -2124,6 +3841,26 @@ fn output_worker_loop(shared: Arc<OutputWorkerShared>) {
                         })
                 });
                 let queue_latency_ms = frame.queued_at.elapsed().as_secs_f64() * 1000.0;
+                let feature_to_led_latency_ms = request
+                    .request
+                    .audio
+                    .as_ref()
+                    .and_then(|audio| audio.feature_timestamp_ns)
+                    .and_then(|timestamp_ns| {
+                        audio_feature_to_led_latency_ms(
+                            request.timestamp_ns,
+                            timestamp_ns,
+                            frame.queued_at.elapsed(),
+                        )
+                    });
+                if result.is_ok() {
+                    advance_cycle_after_render(
+                        &shared,
+                        &scheduled_request,
+                        &renderers,
+                        request.timestamp_ns,
+                    );
+                }
                 let mut health = shared.health.lock().expect("output health poisoned");
                 match result {
                     Ok((power_summary, render_time_ms, transmission_ms, sequential_skew_ms)) => {
@@ -2134,6 +3871,7 @@ fn output_worker_loop(shared: Arc<OutputWorkerShared>) {
                             queue_latency_ms,
                             transmission_ms,
                             sequential_skew_ms,
+                            feature_to_led_latency_ms,
                         );
                     }
                     Err(error) => health.record_error(error),
@@ -2194,21 +3932,29 @@ impl Drop for SocketPathGuard {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "loom-tests")))]
 mod tests {
+    use super::SequenceCoordinator;
     use super::{
-        AnimationInstance, EngineServer, FrameSet, MAX_RENDER_PREVIEW_PIXELS, RenderingInput,
-        RuntimeHealth, TransitionMode, WorkQueue, apply_transition, finalize_render_frames,
-        remove_stale_socket, render_frame_request, serve,
+        AnimationInstance, BeatClockTracker, EngineServer, FrameSet, MAX_RENDER_PREVIEW_PIXELS,
+        PythonRandom, RenderingInput, RuntimeHealth, SelectorRuntimeState, TransitionMode,
+        WorkQueue, advance_frame_deadline, apply_transition, audio_feature_to_led_latency_ms,
+        finalize_render_frames, next_cycling_choice, remove_stale_socket, render_frame_request,
+        render_frame_request_at, select_dynamic_choice, serve, update_dynamic_output,
     };
     use lumistripe_engine_config::{EngineConfig, OutputBackend, OutputConfig};
     use lumistripe_engine_protocol::{
         FRAME_ACK_BYTES, FRAME_HEADER_BYTES, FrameAck, FrameAckStatus, FrameHeader, LegacyConfig,
         LegacyRequest, LegacyRequestCommand, LegacyResponseResult, PROTOCOL_VERSION,
-        RenderAudioInput, RenderEffect, RenderFrameRequest, RenderOutput, RenderPowerConfig,
-        RenderTransition, Request, RequestCommand, Response, ResponseResult, decode_frame_ack,
-        decode_legacy_response, decode_response, encode_frame_header, encode_legacy_request,
-        encode_request,
+        RenderAnimationChoice, RenderAnimationSequence, RenderAnimationSequenceStep,
+        RenderAudioInput, RenderAudioUpdate, RenderBeatClockState, RenderBeatEvent,
+        RenderCycleOrder, RenderCycleTiming, RenderCycling, RenderDynamicIdle,
+        RenderDynamicIdleMode, RenderDynamicSelector, RenderEffect, RenderFrameRequest,
+        RenderMusicActivityConfig, RenderMusicStructurePhase, RenderOutput, RenderPowerConfig,
+        RenderSceneUpdate, RenderSchedulerConfig, RenderSelectorFeatures, RenderStructureEvent,
+        RenderSwitchQuantization, RenderTransition, Request, RequestCommand, Response,
+        ResponseResult, decode_frame_ack, decode_legacy_response, decode_response,
+        encode_frame_header, encode_legacy_request, encode_request,
     };
     use std::fs;
     use std::io::{Read, Write};
@@ -2392,6 +4138,14 @@ mod tests {
                     bands: [0.8, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.1],
                     beat: true,
                     beat_strength: 0.9,
+                    feature_timestamp_ns: None,
+                    feature_sequence: None,
+                    fallback_bpm: Some(120.0),
+                    beat_events: Vec::new(),
+                    structure_events: Vec::new(),
+                    selector_features: None,
+                    effect_features: None,
+                    beat_event_stream: false,
                 }),
                 power: Default::default(),
                 outputs: vec![
@@ -2421,6 +4175,7 @@ mod tests {
                     },
                 ],
             },
+            scheduler: None,
         });
         assert!(matches!(
             response.result,
@@ -2440,6 +4195,1066 @@ mod tests {
             thread::sleep(Duration::from_millis(5));
         }
         server.shutdown();
+    }
+
+    #[test]
+    fn scheduled_scene_renders_again_without_another_ipc_request() {
+        let server = ServerThread::start();
+        let configured = server.request(RequestCommand::Configure {
+            config: mock_config(&[8]),
+        });
+        assert!(matches!(
+            configured.result,
+            ResponseResult::Configured {
+                output_count: 1,
+                ..
+            }
+        ));
+
+        let queued = server.request(RequestCommand::Render {
+            frame: RenderFrameRequest {
+                sequence: 1,
+                timestamp_ns: 1_000_000_000,
+                delta_ns: 16_000_000,
+                brightness: 1.0,
+                audio: None,
+                power: RenderPowerConfig::default(),
+                outputs: vec![RenderOutput {
+                    animation: "rainbow".into(),
+                    ..RenderOutput::default()
+                }],
+            },
+            scheduler: Some(RenderSchedulerConfig { max_fps: 100 }),
+        });
+        assert!(matches!(queued.result, ResponseResult::RenderQueued { .. }));
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let ResponseResult::Health {
+                frames_rendered, ..
+            } = server.request(RequestCommand::Health).result
+            else {
+                panic!("expected health response");
+            };
+            if frames_rendered >= 3 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "scheduled frames were not rendered"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        server.shutdown();
+    }
+
+    #[test]
+    fn scheduled_scene_controls_are_ordered_and_audio_updates_are_replaceable() {
+        let server = ServerThread::start();
+        assert!(matches!(
+            server
+                .request(RequestCommand::Configure {
+                    config: mock_config(&[8]),
+                })
+                .result,
+            ResponseResult::Configured { .. }
+        ));
+
+        let scene = |revision, timestamp_ns| RenderSceneUpdate {
+            revision,
+            timestamp_ns,
+            brightness: 1.0,
+            power: RenderPowerConfig::default(),
+            outputs: vec![RenderOutput {
+                animation: "rainbow".into(),
+                ..RenderOutput::default()
+            }],
+            scheduler: RenderSchedulerConfig { max_fps: 100 },
+        };
+        assert!(matches!(
+            server
+                .request(RequestCommand::SceneUpdate {
+                    update: scene(1, 1_000_000_000),
+                })
+                .result,
+            ResponseResult::SceneUpdated {
+                revision: 1,
+                replaced: false
+            }
+        ));
+
+        // Legacy render sequence values and scheduled scene revisions are
+        // independent counters; a high render sequence must not reject a
+        // later, correctly ordered scene revision.
+        assert!(matches!(
+            server
+                .request(RequestCommand::Render {
+                    frame: RenderFrameRequest {
+                        sequence: 50,
+                        timestamp_ns: 1_010_000_000,
+                        delta_ns: 10_000_000,
+                        brightness: 1.0,
+                        audio: None,
+                        power: RenderPowerConfig::default(),
+                        outputs: vec![RenderOutput {
+                            animation: "rainbow".into(),
+                            ..RenderOutput::default()
+                        }],
+                    },
+                    scheduler: None,
+                })
+                .result,
+            ResponseResult::RenderQueued { sequence: 50, .. }
+        ));
+        assert!(matches!(
+            server
+                .request(RequestCommand::SceneUpdate {
+                    update: scene(2, 1_020_000_000),
+                })
+                .result,
+            ResponseResult::SceneUpdated { revision: 2, .. }
+        ));
+
+        let audio = RenderAudioInput {
+            rms: 0.4,
+            bands: [0.1; 8],
+            beat: false,
+            beat_strength: 0.0,
+            feature_timestamp_ns: None,
+            feature_sequence: Some(1),
+            fallback_bpm: None,
+            beat_events: Vec::new(),
+            structure_events: Vec::new(),
+            selector_features: None,
+            effect_features: None,
+            beat_event_stream: false,
+        };
+        assert!(matches!(
+            server
+                .request(RequestCommand::AudioUpdate {
+                    update: RenderAudioUpdate {
+                        sequence: 1,
+                        timestamp_ns: 1_030_000_000,
+                        audio: Some(audio.clone()),
+                    },
+                })
+                .result,
+            ResponseResult::AudioUpdated {
+                sequence: 1,
+                accepted: true
+            }
+        ));
+        assert!(matches!(
+            server
+                .request(RequestCommand::AudioUpdate {
+                    update: RenderAudioUpdate {
+                        sequence: 1,
+                        timestamp_ns: 1_040_000_000,
+                        audio: Some(audio.clone()),
+                    },
+                })
+                .result,
+            ResponseResult::AudioUpdated {
+                sequence: 1,
+                accepted: false
+            }
+        ));
+        assert!(matches!(
+            server
+                .request(RequestCommand::AudioUpdate {
+                    update: RenderAudioUpdate {
+                        sequence: 2,
+                        timestamp_ns: 1_025_000_000,
+                        audio: Some(audio),
+                    },
+                })
+                .result,
+            ResponseResult::AudioUpdated {
+                sequence: 2,
+                accepted: false
+            }
+        ));
+
+        let ResponseResult::Health {
+            scene_control_revision,
+            audio_update_sequence,
+            ..
+        } = server.request(RequestCommand::Health).result
+        else {
+            panic!("expected health response");
+        };
+        assert_eq!(scene_control_revision, Some(2));
+        assert_eq!(audio_update_sequence, Some(1));
+        server.shutdown();
+    }
+
+    #[test]
+    fn scheduled_beat_clock_consumes_events_and_reports_per_output_state() {
+        let server = ServerThread::start();
+        let configured = server.request(RequestCommand::Configure {
+            config: mock_config(&[8]),
+        });
+        assert!(matches!(
+            configured.result,
+            ResponseResult::Configured {
+                output_count: 1,
+                ..
+            }
+        ));
+
+        let beat_events = (0..7)
+            .map(|index| RenderBeatEvent {
+                sequence: index + 1,
+                timestamp_ns: 1_000_000_000 + index * 500_000_000,
+                strength: 0.9,
+            })
+            .collect();
+        let queued = server.request(RequestCommand::Render {
+            frame: RenderFrameRequest {
+                sequence: 1,
+                timestamp_ns: 5_000_000_000,
+                delta_ns: 16_000_000,
+                brightness: 1.0,
+                audio: Some(RenderAudioInput {
+                    rms: 0.5,
+                    bands: [0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1],
+                    beat: true,
+                    beat_strength: 0.9,
+                    feature_timestamp_ns: None,
+                    feature_sequence: None,
+                    fallback_bpm: Some(120.0),
+                    beat_events,
+                    structure_events: Vec::new(),
+                    selector_features: None,
+                    effect_features: None,
+                    beat_event_stream: false,
+                }),
+                power: RenderPowerConfig::default(),
+                outputs: vec![RenderOutput {
+                    animation: "rainbow".into(),
+                    ..RenderOutput::default()
+                }],
+            },
+            scheduler: Some(RenderSchedulerConfig { max_fps: 100 }),
+        });
+        assert!(matches!(queued.result, ResponseResult::RenderQueued { .. }));
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let ResponseResult::Health { beat_clocks, .. } =
+                server.request(RequestCommand::Health).result
+            else {
+                panic!("expected health response");
+            };
+            if beat_clocks.len() == 1 && beat_clocks[0].beat_index >= 7 {
+                assert!((beat_clocks[0].bpm - 120.0).abs() < 0.1);
+                assert!(beat_clocks[0].confidence > 0.8);
+                assert!(beat_clocks[0].next_beat_at_ns.unwrap() > 5_000_000_000);
+                break;
+            }
+            assert!(Instant::now() < deadline, "Rust beat clock was not updated");
+            thread::sleep(Duration::from_millis(2));
+        }
+
+        let stopped = server.request(RequestCommand::Render {
+            frame: RenderFrameRequest {
+                sequence: 2,
+                timestamp_ns: 5_016_000_000,
+                delta_ns: 16_000_000,
+                brightness: 1.0,
+                audio: None,
+                power: RenderPowerConfig::default(),
+                outputs: vec![RenderOutput {
+                    animation: "rainbow".into(),
+                    ..RenderOutput::default()
+                }],
+            },
+            scheduler: None,
+        });
+        assert!(matches!(
+            stopped.result,
+            ResponseResult::RenderQueued { .. }
+        ));
+        let ResponseResult::Health { beat_clocks, .. } =
+            server.request(RequestCommand::Health).result
+        else {
+            panic!("expected health response");
+        };
+        assert!(beat_clocks.is_empty());
+        server.shutdown();
+    }
+
+    #[test]
+    fn cycling_scene_selects_the_next_animation_inside_the_rust_engine() {
+        let server = ServerThread::start();
+        let configured = server.request(RequestCommand::Configure {
+            config: mock_config(&[8]),
+        });
+        assert!(matches!(
+            configured.result,
+            ResponseResult::Configured {
+                output_count: 1,
+                ..
+            }
+        ));
+        let cycling = RenderCycling {
+            order: RenderCycleOrder::Sequential,
+            timing: RenderCycleTiming::Fixed,
+            interval_ns: 200_000_000,
+            seed: Some(7),
+            choices: vec![
+                RenderAnimationChoice {
+                    animation: "rainbow".into(),
+                    settings: serde_json::Map::new(),
+                },
+                RenderAnimationChoice {
+                    animation: "rainbow_cycle".into(),
+                    settings: serde_json::Map::new(),
+                },
+            ],
+            transition_duration_ns: 50_000_000,
+            transition_mode: "wipe".into(),
+            selector: None,
+            dynamic_idle: None,
+            sequence: None,
+            effect_scheduler: None,
+        };
+        let queued = server.request(RequestCommand::Render {
+            frame: RenderFrameRequest {
+                sequence: 1,
+                timestamp_ns: 1_000_000_000,
+                delta_ns: 16_000_000,
+                brightness: 1.0,
+                audio: None,
+                power: RenderPowerConfig::default(),
+                outputs: vec![RenderOutput {
+                    animation: "rainbow".into(),
+                    cycling: Some(cycling),
+                    ..RenderOutput::default()
+                }],
+            },
+            scheduler: Some(RenderSchedulerConfig { max_fps: 100 }),
+        });
+        assert!(matches!(queued.result, ResponseResult::RenderQueued { .. }));
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let ResponseResult::Health {
+                selected_animations,
+                scene_revisions,
+                ..
+            } = server.request(RequestCommand::Health).result
+            else {
+                panic!("expected health response");
+            };
+            if selected_animations == ["rainbow_cycle"] {
+                assert_eq!(scene_revisions, [1]);
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Rust cycling policy did not select the next animation"
+            );
+            thread::sleep(Duration::from_millis(2));
+        }
+        server.shutdown();
+    }
+
+    #[test]
+    fn scheduled_dynamic_selector_chooses_a_drop_animation_inside_rust() {
+        let server = ServerThread::start();
+        let configured = server.request(RequestCommand::Configure {
+            config: mock_config(&[8]),
+        });
+        assert!(matches!(
+            configured.result,
+            ResponseResult::Configured {
+                output_count: 1,
+                ..
+            }
+        ));
+        let selector = RenderDynamicSelector {
+            min_duration_ns: 0,
+            max_duration_ns: 45_000_000_000,
+            switch_cooldown_ns: 0,
+            drop_cooldown_ns: 15_000_000_000,
+            randomness: 0.0,
+            history_size: 5,
+            seed: Some(7),
+            switch_margin: 0.12,
+            switch_quantization: RenderSwitchQuantization::Off,
+            bars_per_phrase: 8,
+            clock_confidence_threshold: 0.65,
+            subdivisions_per_beat: 1,
+            sync_offset_ns: 0,
+            activity: None,
+        };
+        let dynamic = RenderCycling {
+            order: RenderCycleOrder::Sequential,
+            timing: RenderCycleTiming::Fixed,
+            interval_ns: 1,
+            seed: Some(7),
+            choices: ["rainbow", "shockwave"]
+                .into_iter()
+                .map(|animation| RenderAnimationChoice {
+                    animation: animation.into(),
+                    settings: serde_json::Map::new(),
+                })
+                .collect(),
+            transition_duration_ns: 50_000_000,
+            transition_mode: "crossfade".into(),
+            selector: Some(selector),
+            dynamic_idle: None,
+            sequence: None,
+            effect_scheduler: None,
+        };
+        let queued = server.request(RequestCommand::Render {
+            frame: RenderFrameRequest {
+                sequence: 1,
+                timestamp_ns: 1_000_000_000,
+                delta_ns: 16_000_000,
+                brightness: 1.0,
+                audio: Some(RenderAudioInput {
+                    rms: 0.7,
+                    bands: [0.9, 0.8, 0.6, 0.4, 0.3, 0.2, 0.1, 0.1],
+                    beat: true,
+                    beat_strength: 0.9,
+                    feature_timestamp_ns: None,
+                    feature_sequence: Some(1),
+                    fallback_bpm: Some(130.0),
+                    beat_events: Vec::new(),
+                    structure_events: vec![RenderStructureEvent {
+                        output_index: 0,
+                        sequence: 19,
+                        timestamp_ns: 900_000_000,
+                        phase: RenderMusicStructurePhase::Drop,
+                        confidence: 0.9,
+                        buildup_progress: 0.7,
+                        drop_event: true,
+                        section_change: true,
+                    }],
+                    selector_features: Some(RenderSelectorFeatures {
+                        energy_level: 0.8,
+                        energy: 0.8,
+                        volume: 0.8,
+                        brightness: 0.6,
+                        onset_strength: 0.7,
+                        bass_energy: 0.9,
+                        bass: 0.9,
+                        mid_energy: 0.3,
+                        treble_energy: 0.6,
+                        beat_confidence: 0.9,
+                        bpm: 130.0,
+                        beat: true,
+                        silence: false,
+                        drop_detected: false,
+                        section_change: false,
+                    }),
+                    effect_features: None,
+                    beat_event_stream: false,
+                }),
+                power: RenderPowerConfig::default(),
+                outputs: vec![RenderOutput {
+                    animation: "rainbow".into(),
+                    cycling: Some(dynamic),
+                    ..RenderOutput::default()
+                }],
+            },
+            scheduler: Some(RenderSchedulerConfig { max_fps: 100 }),
+        });
+        assert!(matches!(queued.result, ResponseResult::RenderQueued { .. }));
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let ResponseResult::Health {
+                selected_animations,
+                scene_revisions,
+                cycling_active,
+                structure_event_sequences,
+                ..
+            } = server.request(RequestCommand::Health).result
+            else {
+                panic!("expected health response");
+            };
+            if selected_animations == ["shockwave"] {
+                assert_eq!(scene_revisions, [1]);
+                assert_eq!(cycling_active, [true]);
+                assert_eq!(structure_event_sequences, [19]);
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Rust Dynamic selector did not choose the drop animation"
+            );
+            thread::sleep(Duration::from_millis(2));
+        }
+        server.shutdown();
+    }
+
+    #[test]
+    fn scheduled_dynamic_activity_gate_owns_idle_blackout_and_activation() {
+        let server = ServerThread::start();
+        let configured = server.request(RequestCommand::Configure {
+            config: mock_config(&[8]),
+        });
+        assert!(matches!(
+            configured.result,
+            ResponseResult::Configured {
+                output_count: 1,
+                ..
+            }
+        ));
+        let selector = RenderDynamicSelector {
+            min_duration_ns: 0,
+            max_duration_ns: 45_000_000_000,
+            switch_cooldown_ns: 0,
+            drop_cooldown_ns: 15_000_000_000,
+            randomness: 0.0,
+            history_size: 5,
+            seed: Some(7),
+            switch_margin: 0.12,
+            switch_quantization: RenderSwitchQuantization::Off,
+            bars_per_phrase: 8,
+            clock_confidence_threshold: 0.65,
+            subdivisions_per_beat: 1,
+            sync_offset_ns: 0,
+            activity: Some(RenderMusicActivityConfig {
+                activation_delay_ns: 0,
+                idle_enter_frames: 2,
+                ..RenderMusicActivityConfig::default()
+            }),
+        };
+        let dynamic = RenderCycling {
+            order: RenderCycleOrder::Sequential,
+            timing: RenderCycleTiming::Fixed,
+            interval_ns: 1,
+            seed: Some(7),
+            choices: ["rainbow", "shockwave"]
+                .into_iter()
+                .map(|animation| RenderAnimationChoice {
+                    animation: animation.into(),
+                    settings: serde_json::Map::new(),
+                })
+                .collect(),
+            transition_duration_ns: 0,
+            transition_mode: "crossfade".into(),
+            selector: Some(selector),
+            dynamic_idle: Some(RenderDynamicIdle {
+                mode: RenderDynamicIdleMode::Off,
+                animation: None,
+                settings: serde_json::Map::new(),
+                color: [0, 0, 0],
+                brightness: 1.0,
+            }),
+            sequence: None,
+            effect_scheduler: None,
+        };
+        let request = |sequence: u64, features: RenderSelectorFeatures| RequestCommand::Render {
+            frame: RenderFrameRequest {
+                sequence,
+                timestamp_ns: 1_000_000_000 + sequence * 16_000_000,
+                delta_ns: 16_000_000,
+                brightness: 1.0,
+                audio: Some(RenderAudioInput {
+                    rms: features.energy,
+                    bands: [0.8; 8],
+                    beat: features.beat,
+                    beat_strength: 0.9,
+                    feature_timestamp_ns: None,
+                    feature_sequence: Some(sequence),
+                    fallback_bpm: Some(120.0),
+                    beat_events: Vec::new(),
+                    structure_events: Vec::new(),
+                    selector_features: Some(features),
+                    effect_features: None,
+                    beat_event_stream: false,
+                }),
+                power: RenderPowerConfig::default(),
+                outputs: vec![RenderOutput {
+                    animation: "rainbow".into(),
+                    cycling: Some(dynamic.clone()),
+                    ..RenderOutput::default()
+                }],
+            },
+            scheduler: Some(RenderSchedulerConfig { max_fps: 100 }),
+        };
+
+        let queued = server.request(request(1, RenderSelectorFeatures::default()));
+        assert!(matches!(queued.result, ResponseResult::RenderQueued { .. }));
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let ResponseResult::Health {
+                frames_rendered,
+                dynamic_gate_states,
+                preview_outputs,
+                ..
+            } = server.request(RequestCommand::Health).result
+            else {
+                panic!("expected health response");
+            };
+            if frames_rendered >= 2 && dynamic_gate_states == ["idle"] {
+                assert!(
+                    preview_outputs.as_ref().is_some_and(|outputs| {
+                        outputs.len() == 1 && outputs[0].iter().all(|channel| *channel == 0)
+                    }),
+                    "idle preview was not black: {preview_outputs:?}"
+                );
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Dynamic idle gate was not reported"
+            );
+            thread::sleep(Duration::from_millis(2));
+        }
+
+        let music = RenderSelectorFeatures {
+            energy_level: 0.8,
+            energy: 0.8,
+            volume: 0.8,
+            brightness: 0.6,
+            onset_strength: 0.7,
+            bass_energy: 0.9,
+            bass: 0.9,
+            mid_energy: 0.3,
+            treble_energy: 0.6,
+            beat_confidence: 0.9,
+            bpm: 120.0,
+            beat: true,
+            silence: false,
+            drop_detected: true,
+            section_change: false,
+        };
+        let idle_frames_rendered = match server.request(RequestCommand::Health).result {
+            ResponseResult::Health {
+                frames_rendered, ..
+            } => frames_rendered,
+            _ => panic!("expected health response"),
+        };
+        let queued = server.request(request(2, music));
+        assert!(matches!(queued.result, ResponseResult::RenderQueued { .. }));
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let ResponseResult::Health {
+                frames_rendered,
+                dynamic_gate_states,
+                selected_animations,
+                preview_outputs,
+                ..
+            } = server.request(RequestCommand::Health).result
+            else {
+                panic!("expected health response");
+            };
+            if frames_rendered >= idle_frames_rendered + 2 && dynamic_gate_states == ["music"] {
+                assert_eq!(selected_animations, ["shockwave"]);
+                assert!(preview_outputs.is_some_and(|outputs| {
+                    outputs.len() == 1 && outputs[0].iter().any(|channel| *channel != 0)
+                }));
+                break;
+            }
+            assert!(Instant::now() < deadline, "Dynamic gate did not activate");
+            thread::sleep(Duration::from_millis(2));
+        }
+        server.shutdown();
+    }
+
+    #[test]
+    fn dynamic_selector_consumes_each_audio_feature_sequence_once() {
+        let selector = RenderDynamicSelector {
+            min_duration_ns: 0,
+            max_duration_ns: 0,
+            switch_cooldown_ns: 0,
+            drop_cooldown_ns: 0,
+            randomness: 0.15,
+            history_size: 5,
+            seed: Some(7),
+            switch_margin: 0.12,
+            switch_quantization: RenderSwitchQuantization::Off,
+            bars_per_phrase: 8,
+            clock_confidence_threshold: 0.65,
+            subdivisions_per_beat: 1,
+            sync_offset_ns: 0,
+            activity: None,
+        };
+        let cycling = RenderCycling {
+            order: RenderCycleOrder::Sequential,
+            timing: RenderCycleTiming::Fixed,
+            interval_ns: 1,
+            seed: Some(7),
+            choices: ["rainbow", "rainbow_cycle", "shockwave"]
+                .into_iter()
+                .map(|animation| RenderAnimationChoice {
+                    animation: animation.into(),
+                    settings: serde_json::Map::new(),
+                })
+                .collect(),
+            transition_duration_ns: 0,
+            transition_mode: "crossfade".into(),
+            selector: Some(selector),
+            dynamic_idle: None,
+            sequence: None,
+            effect_scheduler: None,
+        };
+        let features = RenderSelectorFeatures::default();
+        let now = Instant::now();
+        let initial_output = RenderOutput {
+            animation: "rainbow".into(),
+            ..RenderOutput::default()
+        };
+        let mut state = SelectorRuntimeState::new(Some(selector), &initial_output, now, 7);
+
+        assert!(
+            select_dynamic_choice(
+                &cycling, "rainbow", &features, selector, 42, false, &mut state, now,
+            )
+            .is_some()
+        );
+        let random_state_after_first_update = state.random_state.clone();
+
+        assert!(
+            select_dynamic_choice(
+                &cycling,
+                "rainbow",
+                &features,
+                selector,
+                42,
+                false,
+                &mut state,
+                now + Duration::from_secs(1),
+            )
+            .is_none()
+        );
+        assert_eq!(state.random_state, random_state_after_first_update);
+        assert!(
+            select_dynamic_choice(
+                &cycling,
+                "rainbow",
+                &features,
+                selector,
+                41,
+                false,
+                &mut state,
+                now + Duration::from_secs(2),
+            )
+            .is_none()
+        );
+        assert_eq!(state.random_state, random_state_after_first_update);
+        let random_state_before_structure_event = state.random_state.clone();
+        let _ = select_dynamic_choice(
+            &cycling,
+            "rainbow",
+            &features,
+            selector,
+            41,
+            true,
+            &mut state,
+            now + Duration::from_secs(3),
+        );
+        assert_ne!(state.random_state, random_state_before_structure_event);
+        assert_eq!(state.last_feature_sequence, Some(42));
+    }
+
+    #[test]
+    fn rust_dynamic_sequence_owns_selection_and_advances_for_three_simulated_minutes() {
+        let selector = RenderDynamicSelector {
+            min_duration_ns: 0,
+            max_duration_ns: 0,
+            switch_cooldown_ns: 0,
+            drop_cooldown_ns: 0,
+            randomness: 0.0,
+            history_size: 5,
+            seed: Some(7),
+            switch_margin: 0.0,
+            switch_quantization: RenderSwitchQuantization::Off,
+            bars_per_phrase: 8,
+            clock_confidence_threshold: 0.65,
+            subdivisions_per_beat: 1,
+            sync_offset_ns: 0,
+            activity: None,
+        };
+        let cycling = RenderCycling {
+            order: RenderCycleOrder::Sequential,
+            timing: RenderCycleTiming::Fixed,
+            interval_ns: 1,
+            seed: Some(7),
+            choices: ["rainbow", "shockwave"]
+                .into_iter()
+                .map(|animation| RenderAnimationChoice {
+                    animation: animation.into(),
+                    settings: serde_json::Map::new(),
+                })
+                .collect(),
+            transition_duration_ns: 100_000_000,
+            transition_mode: "crossfade".into(),
+            selector: Some(selector),
+            dynamic_idle: None,
+            sequence: Some(RenderAnimationSequence {
+                id: "night-drive".into(),
+                repeat: true,
+                steps: vec![
+                    RenderAnimationSequenceStep {
+                        animation: "shockwave".into(),
+                        duration_bars: 1,
+                    },
+                    RenderAnimationSequenceStep {
+                        animation: "rainbow".into(),
+                        duration_bars: 2,
+                    },
+                ],
+            }),
+            effect_scheduler: None,
+        };
+        let initial_output = RenderOutput {
+            animation: "rainbow".into(),
+            cycling: Some(cycling.clone()),
+            ..RenderOutput::default()
+        };
+        let simulation_origin = Instant::now();
+        let mut selector_state =
+            SelectorRuntimeState::new(Some(selector), &initial_output, simulation_origin, 7);
+        let mut sequence_state = SequenceCoordinator::default();
+        let features = RenderSelectorFeatures::default();
+        let before_bar = RenderBeatClockState {
+            sampled_at_ns: 0,
+            bpm: 120.0,
+            phase: 0.0,
+            confidence: 0.9,
+            beat_index: 1,
+            next_beat_at_ns: Some(500_000_000),
+            last_beat_at_ns: Some(0),
+            last_event_sequence: 0,
+        };
+        let (output, _, _) = update_dynamic_output(
+            &cycling,
+            selector,
+            &initial_output,
+            &features,
+            1,
+            false,
+            None,
+            simulation_origin,
+            0,
+            before_bar,
+            &mut selector_state,
+            &mut sequence_state,
+        );
+        assert_eq!(output.animation, "rainbow");
+        assert!(sequence_state.controls_playback());
+
+        let at_bar = RenderBeatClockState {
+            sampled_at_ns: 2_000_000_000,
+            bpm: 120.0,
+            phase: 0.0,
+            confidence: 0.9,
+            beat_index: 5,
+            next_beat_at_ns: Some(2_500_000_000),
+            last_beat_at_ns: Some(2_000_000_000),
+            last_event_sequence: 0,
+        };
+        let (output, _, selected) = update_dynamic_output(
+            &cycling,
+            selector,
+            &output,
+            &features,
+            2,
+            false,
+            None,
+            simulation_origin + Duration::from_secs(2),
+            2_000_000_000,
+            at_bar,
+            &mut selector_state,
+            &mut sequence_state,
+        );
+        assert_eq!(selected, "shockwave");
+        assert_eq!(output.animation, "shockwave");
+        let state = sequence_state.playback_state(cycling.sequence.as_ref());
+        assert_eq!(state.sequence_id.as_deref(), Some("night-drive"));
+        assert!(state.active);
+        assert_eq!(state.current_step_index, Some(0));
+        assert_eq!(state.animation.as_deref(), Some("shockwave"));
+        assert_eq!(state.remaining_bars, Some(1));
+
+        let mut beat_tracker = BeatClockTracker::default();
+        let mut next_beat_index = 0_u64;
+        let mut beat_events = Vec::with_capacity(2);
+        let mut simulated_output = output;
+        let mut frame_set = FrameSet::new(&[8]);
+        let mut renderers = vec![None];
+        let mut render_request = RenderFrameRequest {
+            sequence: 0,
+            timestamp_ns: 0,
+            delta_ns: 0,
+            brightness: 0.8,
+            audio: None,
+            power: RenderPowerConfig::default(),
+            outputs: vec![simulated_output.clone()],
+        };
+        let mut last_step = Some(0);
+        let mut step_changes = 0;
+        let mut animation_changes = 0;
+        let mut lit_frames = 0;
+        let frame_period_ns = 1_000_000_000_u64 / 30;
+        let beat_period_ns = 500_000_000_u64;
+        let simulated_duration_ns = 180 * 1_000_000_000_u64;
+        let simulated_frames = simulated_duration_ns / frame_period_ns;
+
+        for frame in 0..=simulated_frames {
+            let now_ns = 2_000_000_000 + frame * frame_period_ns;
+            beat_events.clear();
+            while next_beat_index * beat_period_ns <= now_ns {
+                let beat_index = next_beat_index;
+                next_beat_index += 1;
+                if beat_index > 0 && beat_index % 97 == 41 {
+                    continue;
+                }
+                let nominal_timestamp_ns = beat_index * beat_period_ns;
+                let jitter_ns = (beat_index % 5) as i64 * 1_000_000 - 2_000_000;
+                let timestamp_ns = if beat_index == 0 {
+                    0
+                } else if beat_index == 190 {
+                    150 * beat_period_ns
+                } else {
+                    nominal_timestamp_ns.saturating_add_signed(jitter_ns)
+                };
+                let event = RenderBeatEvent {
+                    sequence: beat_index + 1,
+                    timestamp_ns,
+                    strength: 0.9,
+                };
+                beat_events.push(event);
+                if beat_index > 0 && beat_index % 113 == 17 {
+                    beat_events.push(event);
+                }
+            }
+            let beat_clock = beat_tracker.update(&beat_events, now_ns, Some(120.0));
+            let previous_animation = simulated_output.animation.clone();
+            let (next_output, gate_state, selected) = update_dynamic_output(
+                &cycling,
+                selector,
+                &simulated_output,
+                &features,
+                frame + 3,
+                false,
+                None,
+                simulation_origin + Duration::from_nanos(now_ns),
+                now_ns,
+                beat_clock,
+                &mut selector_state,
+                &mut sequence_state,
+            );
+            assert_eq!(gate_state, "music");
+            assert_eq!(selected, next_output.animation);
+            animation_changes += usize::from(next_output.animation != previous_animation);
+            simulated_output = next_output;
+
+            render_request.sequence = frame + 1;
+            render_request.timestamp_ns = now_ns;
+            render_request.delta_ns = frame_period_ns;
+            render_request.audio = Some(RenderAudioInput {
+                rms: 0.55,
+                bands: [0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1],
+                beat: beat_clock.phase < 0.05,
+                beat_strength: if beat_clock.phase < 0.05 { 0.9 } else { 0.0 },
+                feature_timestamp_ns: Some(now_ns),
+                feature_sequence: Some(frame + 3),
+                fallback_bpm: Some(120.0),
+                beat_events: beat_events.clone(),
+                structure_events: Vec::new(),
+                selector_features: Some(features),
+                effect_features: None,
+                beat_event_stream: true,
+            });
+            render_request.outputs[0] = simulated_output.clone();
+            let power = render_frame_request_at(
+                &render_request,
+                now_ns,
+                frame_period_ns,
+                &mut frame_set,
+                &mut renderers,
+            )
+            .expect("simulated Dynamic frame renders");
+            assert_eq!(power.output_count, 1);
+            lit_frames += usize::from(
+                frame_set.frames[0]
+                    .chunks_exact(4)
+                    .any(|pixel| pixel[..3].iter().any(|channel| *channel > 0)),
+            );
+
+            let state = sequence_state.playback_state(cycling.sequence.as_ref());
+            assert!(state.active);
+            assert!(!state.waiting_for_clock);
+            assert_eq!(
+                state.animation.as_deref(),
+                Some(simulated_output.animation.as_str())
+            );
+            if state.current_step_index != last_step {
+                step_changes += 1;
+                last_step = state.current_step_index;
+            }
+        }
+
+        assert!(step_changes > 40, "only {step_changes} sequence steps ran");
+        assert!(
+            animation_changes > 40,
+            "only {animation_changes} scenes selected"
+        );
+        assert!(lit_frames > 0, "Rust rendered no lit frames");
+        assert!(beat_tracker.state(182_000_000_000).confidence > 0.8);
+        let state = sequence_state.playback_state(cycling.sequence.as_ref());
+        assert_eq!(
+            state.animation.as_deref(),
+            Some(simulated_output.animation.as_str())
+        );
+        assert!(state.remaining_bars.is_some_and(|bars| bars <= 2));
+    }
+
+    #[test]
+    fn seeded_shuffle_is_repeatable_and_skips_the_current_animation() {
+        let cycling = RenderCycling {
+            order: RenderCycleOrder::Shuffle,
+            timing: RenderCycleTiming::Fixed,
+            interval_ns: 1,
+            seed: Some(43),
+            choices: ["a", "b", "c", "d"]
+                .into_iter()
+                .map(|animation| RenderAnimationChoice {
+                    animation: animation.into(),
+                    settings: serde_json::Map::new(),
+                })
+                .collect(),
+            transition_duration_ns: 0,
+            transition_mode: "crossfade".into(),
+            selector: None,
+            dynamic_idle: None,
+            sequence: None,
+            effect_scheduler: None,
+        };
+        let mut left_state = PythonRandom::from_u64(43);
+        let mut right_state = PythonRandom::from_u64(43);
+        let left = (0..16)
+            .map(|_| {
+                next_cycling_choice(&cycling, "b", &mut left_state)
+                    .unwrap()
+                    .animation
+                    .clone()
+            })
+            .collect::<Vec<_>>();
+        let right = (0..16)
+            .map(|_| {
+                next_cycling_choice(&cycling, "b", &mut right_state)
+                    .unwrap()
+                    .animation
+                    .clone()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(left, right);
+        assert_eq!(
+            left,
+            [
+                "a", "c", "d", "a", "c", "c", "d", "d", "a", "c", "d", "c", "d", "a", "d", "c",
+            ]
+        );
+        assert!(left.iter().all(|animation| animation != "b"));
     }
 
     #[test]
@@ -2758,6 +5573,14 @@ mod tests {
                 bands: [0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1],
                 beat: true,
                 beat_strength: 1.0,
+                feature_timestamp_ns: None,
+                feature_sequence: None,
+                fallback_bpm: None,
+                beat_events: Vec::new(),
+                structure_events: Vec::new(),
+                selector_features: None,
+                effect_features: None,
+                beat_event_stream: false,
             }),
             power: Default::default(),
             outputs: vec![RenderOutput {
@@ -3105,6 +5928,14 @@ mod tests {
                         beat_strength: expected["audio"]["beat_strength"]
                             .as_f64()
                             .expect("beat strength"),
+                        feature_timestamp_ns: expected["audio"]["feature_timestamp_ns"].as_u64(),
+                        feature_sequence: None,
+                        fallback_bpm: None,
+                        beat_events: Vec::new(),
+                        structure_events: Vec::new(),
+                        selector_features: None,
+                        effect_features: None,
+                        beat_event_stream: false,
                     })
                 };
                 let request = RenderFrameRequest {
@@ -3187,6 +6018,14 @@ mod tests {
                 bands: [0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1],
                 beat: true,
                 beat_strength: 1.0,
+                feature_timestamp_ns: None,
+                feature_sequence: None,
+                fallback_bpm: None,
+                beat_events: Vec::new(),
+                structure_events: Vec::new(),
+                selector_features: None,
+                effect_features: None,
+                beat_event_stream: false,
             }),
             power: Default::default(),
             outputs: vec![RenderOutput {
@@ -3621,14 +6460,60 @@ mod tests {
     }
 
     #[test]
+    fn frame_scheduler_advances_from_deadlines_and_skips_elapsed_ticks() {
+        let origin = Instant::now();
+        let period = Duration::from_millis(10);
+        let (on_time, on_time_skipped) =
+            advance_frame_deadline(origin + period, origin + Duration::from_millis(5), period);
+        assert_eq!(on_time, origin + period);
+        assert_eq!(on_time_skipped, 0);
+
+        let (after_stall, skipped) =
+            advance_frame_deadline(origin + period, origin + Duration::from_millis(35), period);
+        assert_eq!(after_stall, origin + Duration::from_millis(40));
+        assert_eq!(skipped, 3);
+    }
+
+    #[test]
     fn health_keeps_queue_wait_transmission_and_skew_separate() {
         let mut health = RuntimeHealth::new();
-        health.record_frame(9, Instant::now(), 1.25, Some(2.5), Some(0.75));
+        health.record_frame(9, Instant::now(), 1.25, Some(2.5), Some(0.75), None);
 
         assert!(health.frame_latency_ms.is_some());
         assert_eq!(health.queue_latency_ms, Some(1.25));
         assert_eq!(health.transmission_ms, Some(2.5));
         assert_eq!(health.sequential_skew_ms, Some(0.75));
+    }
+
+    #[test]
+    fn audio_feature_latency_includes_capture_to_render_and_output_time() {
+        assert_eq!(
+            audio_feature_to_led_latency_ms(
+                1_050_000_000,
+                1_000_000_000,
+                Duration::from_millis(15),
+            ),
+            Some(65.0)
+        );
+        assert_eq!(
+            audio_feature_to_led_latency_ms(
+                1_000_000_000,
+                1_000_000_001,
+                Duration::from_millis(15),
+            ),
+            None
+        );
+
+        let mut health = RuntimeHealth::new();
+        health.record_audio_feature_to_led_latency(Some(3.0));
+        health.record_audio_feature_to_led_latency(Some(4.0));
+        health.record_audio_feature_to_led_latency(Some(30.0));
+        assert_eq!(health.audio_feature_to_led_latency_ms, Some(30.0));
+        assert_eq!(health.audio_feature_to_led_percentile_ms(0.50), Some(4.0));
+        assert_eq!(health.audio_feature_to_led_percentile_ms(0.95), Some(30.0));
+        assert_eq!(health.audio_feature_to_led_percentile_ms(0.99), Some(30.0));
+        health.record_audio_feature_to_led_latency(None);
+        assert_eq!(health.audio_feature_to_led_percentile_ms(0.50), None);
     }
 
     #[test]

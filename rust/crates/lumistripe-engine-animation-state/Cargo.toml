@@ -12,7 +12,12 @@ lumistripe-engine-render-primitives.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 serde.workspace = true
+
+[[bench]]
+name = "animation_render"
+harness = false
 
 [lib]
 name = "lumistripe_engine_animation_state"
