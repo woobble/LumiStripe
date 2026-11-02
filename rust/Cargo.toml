@@ -1,7 +1,9 @@
 [workspace]
 members = [
     "apps/lumistripe-engine",
+    "apps/lumistripe-web",
     "crates/lumistripe-engine-config",
+    "crates/lumistripe-engine-client",
     "crates/lumistripe-engine-output",
     "crates/lumistripe-engine-protocol",
     "crates/lumistripe-engine-runtime",
@@ -21,14 +23,33 @@ license = "MIT"
 rust-version = "1.85"
 
 [workspace.dependencies]
+axum = { version = "0.8", features = ["ws"] }
+base64 = "0.23"
+clap = { version = "4.5", features = ["derive", "env"] }
+futures-util = "0.3"
+http-body-util = "0.1"
+libc = "0.2"
+rand = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+subtle = "2.6"
+tempfile = "3.20"
+thiserror = "2"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tokio-tungstenite = "0.29"
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.7", features = ["fs", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+url = "2.5"
+uuid = { version = "1.17", features = ["v4"] }
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
 loom = "0.7.2"
 spidev = "0.7.1"
 gpio-cdev = "0.6"
-libc = "0.2"
 lumistripe-engine-config = { path = "crates/lumistripe-engine-config" }
+lumistripe-engine-client = { path = "crates/lumistripe-engine-client" }
 lumistripe-engine-output = { path = "crates/lumistripe-engine-output" }
 lumistripe-engine-protocol = { path = "crates/lumistripe-engine-protocol" }
 lumistripe-engine-runtime = { path = "crates/lumistripe-engine-runtime" }

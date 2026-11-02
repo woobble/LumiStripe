@@ -1,0 +1,20 @@
+use clap::Parser;
+use lumistripe_web::{CliOptions, WebApplication};
+use tracing_subscriber::EnvFilter;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .with_target(false)
+        .init();
+
+    let options = CliOptions::parse();
+    let pairing_code = options.pairing_code.clone();
+    let (config, engine_binary, host, port) = options.into_config()?;
+    let app = WebApplication::start(config, engine_binary, pairing_code).await?;
+    app.serve(&host, port).await?;
+    Ok(())
+}

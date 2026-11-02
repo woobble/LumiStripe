@@ -1,0 +1,39 @@
+[package]
+name = "lumistripe-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "lumistripe-web"
+path = "src/main.rs"
+
+[dependencies]
+axum.workspace = true
+base64.workspace = true
+clap.workspace = true
+futures-util.workspace = true
+libc.workspace = true
+lumistripe-engine-audio.workspace = true
+lumistripe-engine-animation-definitions.workspace = true
+lumistripe-engine-client.workspace = true
+lumistripe-engine-config.workspace = true
+lumistripe-engine-protocol.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+subtle.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+http-body-util.workspace = true
+tokio-tungstenite.workspace = true
+tower.workspace = true
