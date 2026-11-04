@@ -1,4 +1,7 @@
 use crate::audio;
+use crate::bluetooth::BluetoothService;
+use crate::bluetooth::SPOTIFY_MONITOR_SOURCE;
+use crate::bluetooth_process::BluetoothError;
 use crate::config::EngineOutputOptions;
 use crate::error::ApiError;
 use crate::settings::{
@@ -6,6 +9,7 @@ use crate::settings::{
     MusicIdleSettings, PersistedPlaybackMode, SavedAnimationSequence, SettingsStore,
     StripeTopologySettings, SwitchQuantization, TransitionSettings,
 };
+use crate::spotify::SpotifyProvider;
 use crate::state::{
     AUDIO_CALIBRATION_TIMEOUT, ActiveAudioCalibration, ActiveColorCalibration,
     AudioCalibrationResult, COLOR_CALIBRATION_TIMEOUT, ControlModel, EngineDesiredState,
@@ -15,8 +19,11 @@ use lumistripe_engine_audio::InputAudioDevice;
 use lumistripe_engine_client::{EngineClient, EngineClientError};
 use lumistripe_engine_protocol::{EngineAudioStatus, RequestCommand, ResponseResult};
 use serde_json::{Map, Value, json};
+use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, interval, timeout_at};
@@ -24,7 +31,74 @@ use tokio_util::sync::CancellationToken;
 
 const COMMAND_CAPACITY: usize = 64;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
+const IDENTITY_COMMAND_TIMEOUT: Duration = Duration::from_secs(35);
 const TOPOLOGY_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+const AUTOMATIC_SPOTIFY_RETRY: Duration = Duration::from_secs(5);
+
+#[derive(Clone, Debug)]
+struct SpotifyDeviceNameHelper {
+    sudo_path: PathBuf,
+    helper_path: PathBuf,
+    timeout: Duration,
+}
+
+impl Default for SpotifyDeviceNameHelper {
+    fn default() -> Self {
+        Self {
+            sudo_path: PathBuf::from("/usr/bin/sudo"),
+            helper_path: PathBuf::from("/usr/local/sbin/lumistripe-spotify-device-name"),
+            timeout: Duration::from_secs(30),
+        }
+    }
+}
+
+impl SpotifyDeviceNameHelper {
+    async fn apply(&self, spotify_device_name: &str) -> Result<bool, ApiError> {
+        if !self.helper_path.is_file() {
+            return Ok(false);
+        }
+
+        let mut command = Command::new(&self.sudo_path);
+        command
+            .arg("-n")
+            .arg(&self.helper_path)
+            .arg(spotify_device_name)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let status = tokio::time::timeout(self.timeout, command.status())
+            .await
+            .map_err(|_| {
+                ApiError::new(
+                    axum::http::StatusCode::CONFLICT,
+                    "Could not apply Spotify player name: helper timed out",
+                )
+            })?
+            .map_err(|error| {
+                ApiError::new(
+                    axum::http::StatusCode::CONFLICT,
+                    format!("Could not apply Spotify player name: {error}"),
+                )
+            })?;
+        if !status.success() {
+            return Err(ApiError::new(
+                axum::http::StatusCode::CONFLICT,
+                format!("Could not apply Spotify player name: helper exited with {status}"),
+            ));
+        }
+        Ok(true)
+    }
+}
+
+#[derive(Default)]
+struct AudioSourceRouting {
+    original_default_source: Option<Option<String>>,
+    selected_pipewire_source: Option<String>,
+    bluetooth_address: Option<String>,
+    spotify_active: Option<bool>,
+    spotify_retry_at: Option<Instant>,
+}
 
 #[derive(Clone)]
 struct ApplicationSettingsSnapshot {
@@ -32,6 +106,7 @@ struct ApplicationSettingsSnapshot {
     output_ids: Vec<String>,
     audio_status: Option<lumistripe_engine_protocol::EngineAudioStatus>,
     audio_source: String,
+    active_audio_source: String,
     audio_calibration: Option<ActiveAudioCalibration>,
 }
 
@@ -164,6 +239,8 @@ impl ControlPlane {
         client: EngineClient,
         mut health: watch::Receiver<Option<Result<Arc<ResponseResult>, String>>>,
         mut audio: watch::Receiver<Option<Result<EngineAudioStatus, String>>>,
+        bluetooth: Option<BluetoothService>,
+        spotify: Option<Arc<dyn SpotifyProvider>>,
         cancellation: CancellationToken,
     ) -> (Self, JoinHandle<()>) {
         let (sender, mut receiver) = mpsc::channel::<Envelope>(COMMAND_CAPACITY);
@@ -173,9 +250,11 @@ impl ControlPlane {
         let (application_settings_sender, application_settings) =
             watch::channel(Arc::new(application_settings_snapshot(&model)));
         let control_client = client.clone();
+        let spotify_device_name_helper = SpotifyDeviceNameHelper::default();
         let task = tokio::spawn(async move {
             // The worker is the sole owner of persisted application settings.
             let mut settings_store = settings_store;
+            let mut audio_routing = AudioSourceRouting::default();
             let mut state_tick = interval(Duration::from_secs(1));
             loop {
                 tokio::select! {
@@ -201,11 +280,16 @@ impl ControlPlane {
                                 | ControlCommand::BeginAudioCalibrationMusic { .. }
                                 | ControlCommand::FinishAudioCalibration { .. }
                         );
+                        let identity_update = matches!(&command, ControlCommand::SetIdentity { .. });
                         let apply = apply_command(
                                 &mut model,
                                 &mut settings_store,
                                 &desired_state,
                                 &client,
+                                &mut audio_routing,
+                                bluetooth.as_ref(),
+                                spotify.as_deref(),
+                                &spotify_device_name_helper,
                                 command,
                             );
                         let result = if finish_transaction {
@@ -234,7 +318,14 @@ impl ControlPlane {
                                 let _ = state_sender.send(Arc::new(snapshot.clone()));
                                 startup_sender.send_replace(Arc::new(startup_settings_snapshot(&model)));
                                 application_settings_sender.send_replace(Arc::new(application_settings_snapshot(&model)));
-                                Ok(snapshot)
+                                if identity_update {
+                                    Ok(identity_settings_value(
+                                        &model,
+                                        model.spotify_restart_requested,
+                                    ))
+                                } else {
+                                    Ok(snapshot)
+                                }
                             }
                             Err(error) => {
                                 let snapshot = model.snapshot(
@@ -275,6 +366,18 @@ impl ControlPlane {
                         }
                     }
                     _ = state_tick.tick() => {
+                        if model.config.runtime_kind == "hardware"
+                            && matches!(model.audio_source.as_str(), "auto" | "bluetooth" | "spotify")
+                        {
+                            let _ = maintain_configured_audio_source(
+                                &mut model,
+                                &desired_state,
+                                &client,
+                                &mut audio_routing,
+                                bluetooth.as_ref(),
+                                spotify.as_deref(),
+                            ).await;
+                        }
                         expire_color_calibration(&mut model, &client, &desired_state).await;
                         if let Some(snapshot) = health.borrow().as_ref() {
                             model.set_engine_health(snapshot.as_ref().map(|value| (**value).clone()).map_err(|error| error.clone()));
@@ -297,6 +400,14 @@ impl ControlPlane {
                         application_settings_sender.send_replace(Arc::new(application_settings_snapshot(&model)));
                     }
                 }
+            }
+            if let (Some(bluetooth), Some(Some(previous_source))) = (
+                bluetooth.as_ref(),
+                audio_routing.original_default_source.take(),
+            ) {
+                bluetooth
+                    .restore_default_source(Some(previous_source))
+                    .await;
             }
         });
         (
@@ -342,6 +453,7 @@ impl ControlPlane {
         Ok(audio::response(
             &snapshot.settings,
             &snapshot.audio_source,
+            &snapshot.active_audio_source,
             snapshot.audio_status.as_ref(),
             &devices,
             enumeration_error.as_deref(),
@@ -353,6 +465,7 @@ impl ControlPlane {
         audio::stream_context(
             &snapshot.settings,
             &snapshot.audio_source,
+            &snapshot.active_audio_source,
             snapshot.audio_status.as_ref(),
         )
     }
@@ -474,12 +587,14 @@ impl ControlPlane {
         application_name: String,
         spotify_device_name: String,
     ) -> Result<Value, ApiError> {
-        self.execute(ControlCommand::SetIdentity {
-            application_name,
-            spotify_device_name,
-        })
-        .await?;
-        Ok(self.identity_settings())
+        self.execute_with_timeout(
+            ControlCommand::SetIdentity {
+                application_name,
+                spotify_device_name,
+            },
+            IDENTITY_COMMAND_TIMEOUT,
+        )
+        .await
     }
 
     pub fn animation_settings(
@@ -785,6 +900,10 @@ async fn apply_command(
     settings_store: &mut SettingsStore,
     desired_state: &watch::Sender<EngineDesiredState>,
     client: &EngineClient,
+    audio_routing: &mut AudioSourceRouting,
+    bluetooth: Option<&BluetoothService>,
+    spotify: Option<&dyn SpotifyProvider>,
+    spotify_device_name_helper: &SpotifyDeviceNameHelper,
     command: ControlCommand,
 ) -> Result<(), ApiError> {
     if model.audio_calibration.is_some()
@@ -819,8 +938,16 @@ async fn apply_command(
                     "finish or cancel color calibration before changing the lights",
                 ));
             }
-            return select_audio_device(model, settings_store, desired_state, client, &device)
-                .await;
+            return select_audio_device(
+                model,
+                settings_store,
+                desired_state,
+                client,
+                audio_routing,
+                bluetooth,
+                &device,
+            )
+            .await;
         }
         ControlCommand::ApplyAudioSettings { device, profile } => {
             if model.calibration.is_some() {
@@ -846,7 +973,17 @@ async fn apply_command(
                     "finish or cancel color calibration before changing the lights",
                 ));
             }
-            return set_audio_source(model, settings_store, desired_state, client, &source).await;
+            return set_audio_source(
+                model,
+                settings_store,
+                desired_state,
+                client,
+                audio_routing,
+                bluetooth,
+                spotify,
+                &source,
+            )
+            .await;
         }
         ControlCommand::StartAudioCalibration {
             session_id,
@@ -908,7 +1045,9 @@ async fn apply_command(
                 settings_store,
                 &application_name,
                 &spotify_device_name,
-            );
+                spotify_device_name_helper,
+            )
+            .await;
         }
         command => command,
     };
@@ -956,8 +1095,52 @@ async fn apply_command(
                 }
             }
             if mode == PlaybackMode::Dynamic {
-                ensure_audio_active(model, client).await?;
-                candidate.audio_started = true;
+                if !model
+                    .audio_status
+                    .as_ref()
+                    .is_some_and(|status| status.active)
+                {
+                    match model.audio_source.as_str() {
+                        "auto" | "bluetooth" | "spotify" => {
+                            maintain_configured_audio_source(
+                                model,
+                                desired_state,
+                                client,
+                                audio_routing,
+                                bluetooth,
+                                spotify,
+                            )
+                            .await?;
+                        }
+                        "demo" => {
+                            set_audio_source(
+                                model,
+                                settings_store,
+                                desired_state,
+                                client,
+                                audio_routing,
+                                bluetooth,
+                                spotify,
+                                "demo",
+                            )
+                            .await?;
+                        }
+                        _ => ensure_audio_active(model, client).await?,
+                    }
+                }
+                if !model
+                    .audio_status
+                    .as_ref()
+                    .is_some_and(|status| status.active)
+                {
+                    return Err(ApiError::new(
+                        axum::http::StatusCode::CONFLICT,
+                        "dynamic mode requires an active audio source",
+                    ));
+                }
+                candidate.audio_started = model.audio_started;
+                candidate.audio_status = model.audio_status.clone();
+                candidate.active_audio_source = model.active_audio_source.clone();
             }
             remember_shared_playback = stripe_id.is_none();
         }
@@ -1306,7 +1489,7 @@ async fn apply_command(
             }
             let route = audio::sync_route(
                 model.audio_status.as_ref(),
-                &model.audio_source,
+                &model.active_audio_source,
                 &model.settings,
             );
             candidate
@@ -2026,6 +2209,7 @@ fn application_settings_snapshot(model: &ControlModel) -> ApplicationSettingsSna
             .collect(),
         audio_status: model.audio_status.clone(),
         audio_source: model.audio_source.clone(),
+        active_audio_source: model.active_audio_source.clone(),
         audio_calibration: model.audio_calibration.clone(),
     }
 }
@@ -2533,22 +2717,35 @@ fn encode_audio_profiles(settings: &DashboardSettings) -> Result<Value, ApiError
     })
 }
 
-fn set_identity_settings(
+async fn set_identity_settings(
     model: &mut ControlModel,
     settings_store: &mut SettingsStore,
     application_name: &str,
     spotify_device_name: &str,
+    spotify_device_name_helper: &SpotifyDeviceNameHelper,
 ) -> Result<(), ApiError> {
-    let application_name = application_name.trim();
-    let spotify_device_name = spotify_device_name.trim();
     for (field, value) in [
         ("application_name", application_name),
         ("spotify_device_name", spotify_device_name),
     ] {
-        if value.is_empty() || value.chars().count() > 64 {
+        let length = value.chars().count();
+        if length == 0 || length > 64 {
             return Err(ApiError::new(
                 axum::http::StatusCode::UNPROCESSABLE_ENTITY,
                 format!("{field} must contain 1 to 64 characters"),
+            ));
+        }
+    }
+    let application_name = application_name.trim();
+    let spotify_device_name = spotify_device_name.trim();
+    for (label, value) in [
+        ("application name", application_name),
+        ("Spotify player name", spotify_device_name),
+    ] {
+        if value.is_empty() || value.chars().any(char::is_control) {
+            return Err(ApiError::new(
+                axum::http::StatusCode::CONFLICT,
+                format!("{label} must be 1 to 64 printable characters"),
             ));
         }
     }
@@ -2573,6 +2770,15 @@ fn set_identity_settings(
                 error.to_string(),
             )
         })?;
+    let spotify_restart_requested = if model.config.runtime_kind == "hardware"
+        && model.settings.spotify_device_name != candidate.spotify_device_name
+    {
+        spotify_device_name_helper
+            .apply(&candidate.spotify_device_name)
+            .await?
+    } else {
+        false
+    };
     settings_store
         .replace_categories(categories)
         .map_err(|error| {
@@ -2582,7 +2788,16 @@ fn set_identity_settings(
             )
         })?;
     model.settings = candidate;
+    model.spotify_restart_requested = spotify_restart_requested;
     Ok(())
+}
+
+fn identity_settings_value(model: &ControlModel, spotify_restart_requested: bool) -> Value {
+    json!({
+        "application_name": model.settings.application_name,
+        "spotify_device_name": model.settings.spotify_device_name,
+        "spotify_restart_requested": spotify_restart_requested,
+    })
 }
 
 async fn select_audio_device(
@@ -2590,6 +2805,8 @@ async fn select_audio_device(
     settings_store: &mut SettingsStore,
     desired_state: &watch::Sender<EngineDesiredState>,
     client: &EngineClient,
+    audio_routing: &mut AudioSourceRouting,
+    bluetooth: Option<&BluetoothService>,
     requested_device: &str,
 ) -> Result<(), ApiError> {
     let devices = audio_devices(client).await?;
@@ -2614,6 +2831,7 @@ async fn select_audio_device(
     candidate.settings.selected_audio_device = Some(device.name.clone());
     candidate.config.audio_device = Some(device.selector.clone());
     candidate.audio_started = true;
+    candidate.active_audio_source = "mic".to_owned();
     let selected = json!(device.name);
     let profiles = encode_audio_profiles(&candidate.settings)?;
     settings_store
@@ -2627,6 +2845,8 @@ async fn select_audio_device(
                 error.to_string(),
             )
         })?;
+
+    restore_audio_source(audio_routing, bluetooth).await;
 
     match client
         .request(RequestCommand::AudioStart {
@@ -2877,40 +3097,33 @@ async fn set_audio_source(
     settings_store: &mut SettingsStore,
     desired_state: &watch::Sender<EngineDesiredState>,
     client: &EngineClient,
+    audio_routing: &mut AudioSourceRouting,
+    bluetooth: Option<&BluetoothService>,
+    spotify: Option<&dyn SpotifyProvider>,
     source: &str,
 ) -> Result<(), ApiError> {
+    if !matches!(
+        source,
+        "auto" | "off" | "demo" | "mic" | "bluetooth" | "spotify"
+    ) {
+        return Err(ApiError::new(
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            format!("invalid audio source: {source}"),
+        ));
+    }
     match source {
         "auto" => {
-            let was_demo = model.audio_source == "demo";
-            if was_demo {
-                stop_audio_engine(model, client).await?;
-            }
-            if model
-                .outputs
-                .iter()
-                .any(|output| output.mode == PlaybackMode::Dynamic)
-                && !model
-                    .audio_status
-                    .as_ref()
-                    .is_some_and(|status| status.active)
-            {
-                ensure_audio_active(model, client).await?;
-                model.audio_started = true;
-            }
             model.audio_source = "auto".to_owned();
-            if was_demo {
-                model.revision = model.revision.saturating_add(1);
-                let scene = model.render_scene(model.revision);
-                desired_state.send_replace(EngineDesiredState::for_model(
-                    model,
-                    model.config.engine_config(),
-                    scene,
-                ));
-            } else {
-                let audio = model.desired_audio();
-                desired_state.send_modify(|desired| desired.audio = audio);
-            }
-            Ok(())
+            audio_routing.spotify_retry_at = None;
+            maintain_configured_audio_source(
+                model,
+                desired_state,
+                client,
+                audio_routing,
+                bluetooth,
+                spotify,
+            )
+            .await
         }
         "off" => {
             if model
@@ -2923,29 +3136,31 @@ async fn set_audio_source(
                     "dynamic mode requires microphone input; turn dynamic mode off first",
                 ));
             }
+            restore_audio_source(audio_routing, bluetooth).await;
             stop_audio_engine(model, client).await?;
             model.audio_source = "off".to_owned();
+            model.active_audio_source = "off".to_owned();
             model.revision = model.revision.saturating_add(1);
-            let scene = model.render_scene(model.revision);
-            desired_state.send_replace(EngineDesiredState::for_model(
-                model,
-                model.config.engine_config(),
-                scene,
-            ));
+            desired_state.send_modify(|desired| desired.audio = model.desired_audio());
             Ok(())
         }
         "mic" => {
+            restore_audio_source(audio_routing, bluetooth).await;
             let selected = model
                 .settings
                 .selected_audio_device
                 .clone()
                 .or_else(|| model.config.audio_device.clone())
                 .or_else(|| {
-                    model
-                        .audio_status
-                        .as_ref()
-                        .and_then(|status| status.device.as_ref())
-                        .map(|device| device.selector.clone())
+                    (model.active_audio_source == "mic")
+                        .then(|| {
+                            model
+                                .audio_status
+                                .as_ref()
+                                .and_then(|status| status.device.as_ref())
+                                .map(|device| device.selector.clone())
+                        })
+                        .flatten()
                 });
             let selected = if let Some(selected) = selected {
                 selected
@@ -2964,11 +3179,24 @@ async fn set_audio_source(
                         )
                     })?
             };
-            select_audio_device(model, settings_store, desired_state, client, &selected).await?;
+            select_audio_device(
+                model,
+                settings_store,
+                desired_state,
+                client,
+                audio_routing,
+                bluetooth,
+                &selected,
+            )
+            .await?;
             model.audio_source = "mic".to_owned();
+            model.active_audio_source = "mic".to_owned();
+            model.revision = model.revision.saturating_add(1);
+            desired_state.send_modify(|desired| desired.audio = model.desired_audio());
             Ok(())
         }
         "demo" => {
+            restore_audio_source(audio_routing, bluetooth).await;
             let profile = model
                 .settings
                 .selected_audio_device
@@ -2976,63 +3204,559 @@ async fn set_audio_source(
                 .and_then(|device| model.settings.audio_profiles.get(device))
                 .cloned()
                 .unwrap_or_default();
-            match client
-                .request(RequestCommand::AudioStart {
-                    selector: Some("demo".to_owned()),
-                    config: audio::engine_config(&profile, false),
-                })
-                .await
+            if let Err(error) = start_audio_capture(
+                model,
+                client,
+                "demo",
+                Some("demo".to_owned()),
+                &profile,
+                false,
+            )
+            .await
             {
-                Ok(ResponseResult::AudioConfigured { active: true }) => {
-                    model.audio_source = "demo".to_owned();
-                    model.audio_started = true;
-                    model.audio_status = match client.audio_status().await {
-                        Ok(ResponseResult::AudioStatus { status }) => Some(status),
-                        Ok(other) => {
-                            return Err(ApiError::new(
-                                axum::http::StatusCode::BAD_GATEWAY,
-                                format!(
-                                    "engine returned an unexpected demo audio status: {other:?}"
-                                ),
-                            ));
-                        }
-                        Err(error) => return Err(engine_api_error(error)),
-                    };
-                    model.revision = model.revision.saturating_add(1);
-                    let scene = model.render_scene(model.revision);
-                    desired_state.send_replace(EngineDesiredState::for_model(
-                        model,
-                        model.config.engine_config(),
-                        scene,
+                if let Err(rollback) = restore_audio_capture(model, client).await {
+                    model.engine_error = Some(format!(
+                        "demo source switch failed; audio capture rollback failed: {rollback}"
                     ));
-                    Ok(())
+                    return Err(ApiError::new(
+                        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                        model.engine_error.clone().unwrap_or_default(),
+                    ));
                 }
-                Ok(ResponseResult::AudioConfigured { active: false }) => Err(ApiError::new(
-                    axum::http::StatusCode::CONFLICT,
-                    "Rust demo audio source did not become active",
-                )),
-                Ok(ResponseResult::Error { code, message }) => {
-                    Err(engine_api_error(EngineClientError::Engine {
-                        code,
-                        message,
-                    }))
+                return Err(error);
+            }
+            commit_audio_source(model, desired_state, "demo".to_owned());
+            Ok(())
+        }
+        "bluetooth" | "spotify" => {
+            let result = activate_monitor_source(
+                model,
+                desired_state,
+                client,
+                audio_routing,
+                bluetooth,
+                spotify,
+                source,
+                source,
+            )
+            .await;
+            if result.is_err() {
+                restore_audio_source(audio_routing, bluetooth).await;
+            }
+            result
+        }
+        _ => unreachable!("source variants were validated above"),
+    }
+}
+
+async fn maintain_configured_audio_source(
+    model: &mut ControlModel,
+    desired_state: &watch::Sender<EngineDesiredState>,
+    client: &EngineClient,
+    audio_routing: &mut AudioSourceRouting,
+    bluetooth: Option<&BluetoothService>,
+    spotify: Option<&dyn SpotifyProvider>,
+) -> Result<(), ApiError> {
+    let automatic = model.audio_source == "auto" && model.config.runtime_kind == "hardware";
+    if automatic {
+        let spotify_status = spotify.map(SpotifyProvider::status);
+        let spotify_ready = spotify_status.as_ref().is_some_and(|status| {
+            status.configured && status.connected && status.logged_in && status.is_active
+        });
+        if !spotify_ready {
+            audio_routing.spotify_retry_at = None;
+        }
+        let spotify_retry_ready =
+            automatic_spotify_retry_ready(Instant::now(), audio_routing.spotify_retry_at);
+        let bluetooth_status = bluetooth.map(BluetoothService::status);
+        let candidates = automatic_audio_source_candidates(
+            spotify_ready,
+            spotify_retry_ready,
+            bluetooth.is_some_and(BluetoothService::enabled)
+                && bluetooth_status
+                    .as_ref()
+                    .is_some_and(|status| status.streaming() && status.input_source.is_some()),
+        );
+        let mut last_error = None;
+        for source in candidates {
+            let result = if source == "mic" {
+                activate_microphone_capture(
+                    model,
+                    desired_state,
+                    client,
+                    audio_routing,
+                    bluetooth,
+                    None,
+                    "auto",
+                )
+                .await
+            } else {
+                activate_monitor_source(
+                    model,
+                    desired_state,
+                    client,
+                    audio_routing,
+                    bluetooth,
+                    spotify,
+                    source,
+                    "auto",
+                )
+                .await
+            };
+            match result {
+                Ok(()) => {
+                    if source == "spotify" {
+                        audio_routing.spotify_retry_at = None;
+                    }
+                    return Ok(());
                 }
-                Ok(other) => Err(ApiError::new(
-                    axum::http::StatusCode::BAD_GATEWAY,
-                    format!("engine returned an unexpected demo audio response: {other:?}"),
-                )),
-                Err(error) => Err(engine_api_error(error)),
+                Err(error) => {
+                    if source == "spotify" {
+                        audio_routing.spotify_retry_at =
+                            Some(Instant::now() + AUTOMATIC_SPOTIFY_RETRY);
+                    }
+                    last_error = Some(error);
+                }
             }
         }
-        "bluetooth" | "spotify" => Err(ApiError::new(
-            axum::http::StatusCode::CONFLICT,
-            format!("audio source {source:?} is not available in the Rust web runtime"),
-        )),
-        _ => Err(ApiError::new(
-            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
-            format!("invalid audio source: {source}"),
-        )),
+        restore_audio_source(audio_routing, bluetooth).await;
+        return Err(last_error.unwrap_or_else(|| {
+            ApiError::new(
+                axum::http::StatusCode::CONFLICT,
+                "no audio source is available",
+            )
+        }));
     }
+
+    match model.audio_source.as_str() {
+        "auto" => {
+            activate_microphone_capture(
+                model,
+                desired_state,
+                client,
+                audio_routing,
+                bluetooth,
+                None,
+                "auto",
+            )
+            .await
+        }
+        "bluetooth" => match bluetooth.map(BluetoothService::status) {
+            Some(status)
+                if bluetooth.is_some_and(BluetoothService::enabled)
+                    && status.streaming()
+                    && status.input_source.is_some() =>
+            {
+                activate_monitor_source(
+                    model,
+                    desired_state,
+                    client,
+                    audio_routing,
+                    bluetooth,
+                    spotify,
+                    "bluetooth",
+                    "bluetooth",
+                )
+                .await
+            }
+            _ => {
+                deactivate_unavailable_source(
+                    model,
+                    desired_state,
+                    client,
+                    audio_routing,
+                    bluetooth,
+                    "bluetooth",
+                    "Bluetooth is connected but its PipeWire input is not ready.",
+                )
+                .await
+            }
+        },
+        "spotify" => {
+            let status = spotify.map(SpotifyProvider::status);
+            if status
+                .as_ref()
+                .is_some_and(|status| status.configured && status.connected && status.logged_in)
+            {
+                activate_monitor_source(
+                    model,
+                    desired_state,
+                    client,
+                    audio_routing,
+                    bluetooth,
+                    spotify,
+                    "spotify",
+                    "spotify",
+                )
+                .await
+            } else {
+                deactivate_unavailable_source(
+                    model,
+                    desired_state,
+                    client,
+                    audio_routing,
+                    bluetooth,
+                    "spotify",
+                    "Spotify Soloist is not connected and paired.",
+                )
+                .await
+            }
+        }
+        _ => Ok(()),
+    }
+}
+
+fn automatic_audio_source_candidates(
+    spotify_ready: bool,
+    spotify_retry_ready: bool,
+    bluetooth_ready: bool,
+) -> Vec<&'static str> {
+    let mut candidates = Vec::with_capacity(3);
+    if spotify_ready && spotify_retry_ready {
+        candidates.push("spotify");
+    }
+    if bluetooth_ready {
+        candidates.push("bluetooth");
+    }
+    candidates.push("mic");
+    candidates
+}
+
+fn automatic_spotify_retry_ready(now: Instant, retry_at: Option<Instant>) -> bool {
+    retry_at.is_none_or(|retry_at| now >= retry_at)
+}
+
+async fn activate_monitor_source(
+    model: &mut ControlModel,
+    desired_state: &watch::Sender<EngineDesiredState>,
+    client: &EngineClient,
+    audio_routing: &mut AudioSourceRouting,
+    bluetooth: Option<&BluetoothService>,
+    spotify: Option<&dyn SpotifyProvider>,
+    source: &str,
+    configured_source: &str,
+) -> Result<(), ApiError> {
+    let connected_bluetooth_address = bluetooth
+        .map(|service| service.status())
+        .and_then(|status| status.connected_device.map(|device| device.address));
+    let spotify_active = spotify.map(|provider| provider.status().is_active);
+    if source == model.active_audio_source
+        && model
+            .audio_status
+            .as_ref()
+            .is_some_and(|status| status.active)
+    {
+        let same_bluetooth = source != "bluetooth"
+            || audio_routing.bluetooth_address.as_deref() == connected_bluetooth_address.as_deref();
+        let same_spotify_activity = source != "spotify"
+            || spotify_active.is_none_or(|active| audio_routing.spotify_active == Some(active));
+        if same_bluetooth && same_spotify_activity {
+            return Ok(());
+        }
+    }
+    let bluetooth = bluetooth.ok_or_else(|| {
+        ApiError::new(
+            axum::http::StatusCode::CONFLICT,
+            "Bluetooth and PipeWire audio routing are unavailable",
+        )
+    })?;
+    if source == "bluetooth" && !bluetooth.enabled() {
+        return Err(ApiError::new(
+            axum::http::StatusCode::CONFLICT,
+            "Bluetooth audio input is only available in hardware mode.",
+        ));
+    }
+    let (selector, pipewire_source) = if source == "bluetooth" {
+        let status = bluetooth.status();
+        let device = status
+            .connected_inputs
+            .first()
+            .or(status.connected_device.as_ref())
+            .filter(|_| status.streaming())
+            .ok_or_else(|| {
+                ApiError::new(
+                    axum::http::StatusCode::CONFLICT,
+                    "Connect a Bluetooth audio source to LumiStripe first.",
+                )
+            })?;
+        let pipewire_source = status.input_source.ok_or_else(|| {
+            ApiError::new(
+                axum::http::StatusCode::CONFLICT,
+                "the connected Bluetooth input has no PipeWire source",
+            )
+        })?;
+        audio_routing.bluetooth_address = Some(device.address.clone());
+        (None, Some(pipewire_source))
+    } else {
+        let spotify_status = spotify.map(SpotifyProvider::status).ok_or_else(|| {
+            ApiError::new(
+                axum::http::StatusCode::CONFLICT,
+                "Spotify Soloist is unavailable",
+            )
+        })?;
+        if !spotify_status.configured || !spotify_status.connected || !spotify_status.logged_in {
+            return Err(ApiError::new(
+                axum::http::StatusCode::CONFLICT,
+                "Spotify Soloist is not connected and paired.",
+            ));
+        }
+        let route_result = if audio_routing
+            .spotify_active
+            .is_some_and(|previous| previous != spotify_status.is_active)
+        {
+            bluetooth.refresh_spotify_route().await
+        } else {
+            bluetooth.ensure_spotify_route().await
+        };
+        route_result.map_err(bluetooth_control_error)?;
+        audio_routing.spotify_active = Some(spotify_status.is_active);
+        let devices = audio_devices(client).await?;
+        let dedicated = devices.iter().find(|device| {
+            let name = device.name.to_ascii_lowercase();
+            name.contains("lumistripe spotify") || name.contains("lumistripe_spotify")
+        });
+        if let Some(device) = dedicated {
+            restore_audio_source(audio_routing, Some(bluetooth)).await;
+            (Some(device.selector.clone()), None)
+        } else {
+            (None, Some(SPOTIFY_MONITOR_SOURCE.to_owned()))
+        }
+    };
+    if let Some(source) = pipewire_source {
+        override_audio_source(audio_routing, bluetooth, &source).await?;
+    }
+    let profile = model
+        .settings
+        .audio_profiles
+        .get(source)
+        .cloned()
+        .unwrap_or_default();
+    let result = start_audio_capture(model, client, source, selector, &profile, false).await;
+    if result.is_ok() {
+        model.audio_started = true;
+        commit_audio_source(model, desired_state, configured_source.to_owned());
+    } else {
+        restore_audio_source(audio_routing, Some(bluetooth)).await;
+        if let Err(error) = restore_audio_capture(model, client).await {
+            model.engine_error = Some(format!(
+                "audio source switch failed; capture rollback failed: {error}"
+            ));
+            return Err(ApiError::new(
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                model.engine_error.clone().unwrap_or_default(),
+            ));
+        }
+    }
+    result
+}
+
+async fn activate_microphone_capture(
+    model: &mut ControlModel,
+    desired_state: &watch::Sender<EngineDesiredState>,
+    client: &EngineClient,
+    audio_routing: &mut AudioSourceRouting,
+    bluetooth: Option<&BluetoothService>,
+    requested_selector: Option<String>,
+    configured_source: &str,
+) -> Result<(), ApiError> {
+    restore_audio_source(audio_routing, bluetooth).await;
+    if model.active_audio_source == "mic"
+        && model
+            .audio_status
+            .as_ref()
+            .is_some_and(|status| status.active)
+        && requested_selector.as_ref().is_none_or(|selector| {
+            model
+                .audio_status
+                .as_ref()
+                .and_then(|status| status.device.as_ref())
+                .is_some_and(|device| device.selector == *selector)
+        })
+    {
+        return Ok(());
+    }
+    let devices = audio_devices(client).await?;
+    let requested = requested_selector
+        .or_else(|| model.settings.selected_audio_device.clone())
+        .or_else(|| model.config.audio_device.clone());
+    let selected = requested
+        .as_deref()
+        .and_then(|selector| find_audio_device(&devices, selector))
+        .or_else(|| {
+            requested
+                .is_none()
+                .then(|| {
+                    devices
+                        .iter()
+                        .find(|device| device.is_default)
+                        .or(devices.first())
+                })
+                .flatten()
+                .cloned()
+        })
+        .ok_or_else(|| {
+            ApiError::new(
+                axum::http::StatusCode::CONFLICT,
+                "no Rust microphone input is available",
+            )
+        })?;
+    let profile = model
+        .settings
+        .audio_profiles
+        .get(&selected.name)
+        .cloned()
+        .unwrap_or_default();
+    if let Err(error) = start_audio_capture(
+        model,
+        client,
+        "mic",
+        Some(selected.selector),
+        &profile,
+        true,
+    )
+    .await
+    {
+        if let Err(rollback) = restore_audio_capture(model, client).await {
+            model.engine_error = Some(format!(
+                "microphone switch failed; capture rollback failed: {rollback}"
+            ));
+            return Err(ApiError::new(
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                model.engine_error.clone().unwrap_or_default(),
+            ));
+        }
+        return Err(error);
+    }
+    model.audio_started = true;
+    commit_audio_source(model, desired_state, configured_source.to_owned());
+    Ok(())
+}
+
+async fn start_audio_capture(
+    model: &mut ControlModel,
+    client: &EngineClient,
+    source: &str,
+    selector: Option<String>,
+    profile: &AudioTuningProfile,
+    microphone: bool,
+) -> Result<(), ApiError> {
+    let config = audio::engine_config(profile, microphone);
+    config
+        .validate()
+        .map_err(|error| ApiError::new(axum::http::StatusCode::UNPROCESSABLE_ENTITY, error))?;
+    match client
+        .request(RequestCommand::AudioStart { selector, config })
+        .await
+    {
+        Ok(ResponseResult::AudioConfigured { active: true }) => {}
+        Ok(ResponseResult::AudioConfigured { active: false }) => {
+            return Err(ApiError::new(
+                axum::http::StatusCode::CONFLICT,
+                format!("Rust {source} audio capture did not become active"),
+            ));
+        }
+        Ok(ResponseResult::Error { code, message }) => {
+            return Err(engine_api_error(EngineClientError::Engine {
+                code,
+                message,
+            }));
+        }
+        Ok(other) => {
+            return Err(ApiError::new(
+                axum::http::StatusCode::BAD_GATEWAY,
+                format!("engine returned an unexpected audio-start acknowledgement: {other:?}"),
+            ));
+        }
+        Err(error) => return Err(engine_api_error(error)),
+    }
+    match client.audio_status().await {
+        Ok(ResponseResult::AudioStatus { status }) if status.active => {
+            model.audio_status = Some(status);
+            model.active_audio_source = source.to_owned();
+            model.audio_started = true;
+            Ok(())
+        }
+        Ok(ResponseResult::AudioStatus { .. }) => Err(ApiError::new(
+            axum::http::StatusCode::CONFLICT,
+            format!("Rust {source} audio capture stopped before activation completed"),
+        )),
+        Ok(other) => Err(ApiError::new(
+            axum::http::StatusCode::BAD_GATEWAY,
+            format!("engine returned an unexpected audio status: {other:?}"),
+        )),
+        Err(error) => Err(engine_api_error(error)),
+    }
+}
+
+fn commit_audio_source(
+    model: &mut ControlModel,
+    desired_state: &watch::Sender<EngineDesiredState>,
+    configured_source: String,
+) {
+    model.audio_source = configured_source;
+    model.revision = model.revision.saturating_add(1);
+    let audio = model.desired_audio();
+    desired_state.send_modify(|desired| desired.audio = audio);
+}
+
+async fn deactivate_unavailable_source(
+    model: &mut ControlModel,
+    desired_state: &watch::Sender<EngineDesiredState>,
+    client: &EngineClient,
+    audio_routing: &mut AudioSourceRouting,
+    bluetooth: Option<&BluetoothService>,
+    source: &str,
+    error: &str,
+) -> Result<(), ApiError> {
+    if model
+        .audio_status
+        .as_ref()
+        .is_some_and(|status| status.active)
+    {
+        stop_audio_engine(model, client).await?;
+    }
+    restore_audio_source(audio_routing, bluetooth).await;
+    model.active_audio_source = source.to_owned();
+    model.audio_started = false;
+    model.set_audio_status(Err(error.to_owned()));
+    desired_state.send_modify(|desired| desired.audio = model.desired_audio());
+    Ok(())
+}
+
+async fn override_audio_source(
+    routing: &mut AudioSourceRouting,
+    bluetooth: &BluetoothService,
+    source: &str,
+) -> Result<(), ApiError> {
+    let captured_source = routing.original_default_source.is_none();
+    if captured_source {
+        routing.original_default_source = Some(bluetooth.default_source().await);
+    }
+    if let Err(error) = bluetooth.set_default_source(source.to_owned()).await {
+        if captured_source {
+            routing.original_default_source = None;
+        }
+        return Err(bluetooth_control_error(error));
+    }
+    routing.selected_pipewire_source = Some(source.to_owned());
+    Ok(())
+}
+
+async fn restore_audio_source(
+    routing: &mut AudioSourceRouting,
+    bluetooth: Option<&BluetoothService>,
+) {
+    if let (Some(bluetooth), Some(previous_source)) =
+        (bluetooth, routing.original_default_source.take())
+    {
+        bluetooth.restore_default_source(previous_source).await;
+    }
+    routing.selected_pipewire_source = None;
+    routing.bluetooth_address = None;
+}
+
+fn bluetooth_control_error(error: BluetoothError) -> ApiError {
+    ApiError::new(axum::http::StatusCode::CONFLICT, error.message)
 }
 
 async fn stop_audio_engine(
@@ -3205,33 +3929,60 @@ async fn restore_scene(
     }
 }
 
-async fn restore_audio_capture(model: &ControlModel, client: &EngineClient) -> Result<(), String> {
-    let Some(previous) = model
+async fn restore_audio_capture(
+    model: &mut ControlModel,
+    client: &EngineClient,
+) -> Result<(), String> {
+    let previous = model
         .audio_status
         .as_ref()
         .filter(|status| status.active)
-        .and_then(|status| status.device.as_ref())
-    else {
+        .and_then(|status| status.device.as_ref());
+    let source = model.active_audio_source.as_str();
+    if source == "off" || (previous.is_none() && !model.audio_started) {
         return match client.request(RequestCommand::AudioStop).await {
-            Ok(ResponseResult::AudioStopped) => Ok(()),
+            Ok(ResponseResult::AudioStopped) => {
+                model.audio_started = false;
+                model.audio_status = Some(EngineAudioStatus::default());
+                Ok(())
+            }
             result => Err(format!("engine did not acknowledge audio stop: {result:?}")),
         };
+    }
+    let profile_name = match source {
+        "bluetooth" | "spotify" => Some(source),
+        _ => previous
+            .map(|device| device.name.as_str())
+            .or(model.settings.selected_audio_device.as_deref()),
     };
-    let profile = model
-        .settings
-        .audio_profiles
-        .get(&previous.name)
+    let profile = profile_name
+        .and_then(|name| model.settings.audio_profiles.get(name))
         .cloned()
         .unwrap_or_default();
-    let config = audio::engine_config(&profile, true);
+    let demo = source == "demo";
+    let microphone = matches!(source, "mic" | "auto");
+    let selector = if demo {
+        Some("demo".to_owned())
+    } else {
+        previous
+            .map(|device| device.selector.clone())
+            .or_else(|| model.config.audio_device.clone())
+    };
+    let config = audio::engine_config(&profile, microphone);
     match client
-        .request(RequestCommand::AudioStart {
-            selector: Some(previous.selector.clone()),
-            config,
-        })
+        .request(RequestCommand::AudioStart { selector, config })
         .await
     {
-        Ok(ResponseResult::AudioConfigured { active: true }) => Ok(()),
+        Ok(ResponseResult::AudioConfigured { active: true }) => match client.audio_status().await {
+            Ok(ResponseResult::AudioStatus { status }) if status.active => {
+                model.audio_status = Some(status);
+                model.audio_started = true;
+                Ok(())
+            }
+            other => Err(format!(
+                "engine did not restore the previous audio status: {other:?}"
+            )),
+        },
         result => Err(format!(
             "engine did not acknowledge previous audio input: {result:?}"
         )),
@@ -3268,7 +4019,10 @@ async fn configure_audio(
     }
 }
 
-async fn ensure_audio_active(model: &ControlModel, client: &EngineClient) -> Result<(), ApiError> {
+async fn ensure_audio_active(
+    model: &mut ControlModel,
+    client: &EngineClient,
+) -> Result<(), ApiError> {
     if model.audio_source == "off" {
         return Err(ApiError::new(
             axum::http::StatusCode::CONFLICT,
@@ -3285,6 +4039,14 @@ async fn ensure_audio_active(model: &ControlModel, client: &EngineClient) -> Res
     }
     if let Ok(ResponseResult::AudioStatus { status }) = client.audio_status().await {
         if status.active {
+            model.audio_status = Some(status);
+            model.active_audio_source = if model.audio_source == "demo" {
+                "demo"
+            } else {
+                "mic"
+            }
+            .to_owned();
+            model.audio_started = true;
             return Ok(());
         }
     }
@@ -3302,7 +4064,18 @@ async fn ensure_audio_active(model: &ControlModel, client: &EngineClient) -> Res
         })
         .await
     {
-        Ok(ResponseResult::AudioConfigured { active: true }) => Ok(()),
+        Ok(ResponseResult::AudioConfigured { active: true }) => match client.audio_status().await {
+            Ok(ResponseResult::AudioStatus { status }) if status.active => {
+                model.audio_status = Some(status);
+                model.active_audio_source = "mic".to_owned();
+                model.audio_started = true;
+                Ok(())
+            }
+            _ => Err(ApiError::new(
+                axum::http::StatusCode::CONFLICT,
+                "Rust microphone audio did not become active",
+            )),
+        },
         Ok(ResponseResult::AudioConfigured { active: false }) => Err(ApiError::new(
             axum::http::StatusCode::CONFLICT,
             "dynamic mode requires an available microphone input",
@@ -3431,25 +4204,626 @@ impl TargetsMut for ControlModel {
 #[cfg(test)]
 mod tests {
     use super::{
-        AudioCalibrationFinish, ControlPlane, advance_audio_calibration, audio_calibration_value,
-        expire_color_calibration, finish_audio_calibration, microphone_calibration_result,
+        AudioCalibrationFinish, AudioSourceRouting, ControlPlane, SpotifyDeviceNameHelper,
+        advance_audio_calibration, audio_calibration_value, automatic_audio_source_candidates,
+        automatic_spotify_retry_ready, expire_color_calibration, finish_audio_calibration,
+        maintain_configured_audio_source, microphone_calibration_result, restore_audio_source,
+        set_audio_source, set_identity_settings,
     };
-    use crate::settings::{ColorCorrection, DashboardSettings, SettingsStore};
+    use crate::bluetooth::BluetoothService;
+    use crate::bluetooth_models::BluetoothDevice;
+    use crate::bluetooth_process::BluetoothError;
+    use crate::bluetooth_providers::{
+        BlueZCommand, BlueZProvider, BlueZSnapshot, PipeWireCommand, PipeWireProvider,
+    };
+    use crate::settings::{AudioTuningProfile, ColorCorrection, DashboardSettings, SettingsStore};
+    use crate::spotify::{
+        SpotifyControlAction, SpotifyError, SpotifyPlaybackStatus, SpotifyProvider, SpotifyRepeat,
+        SpotifyStatus,
+    };
     use crate::state::{
         ActiveAudioCalibration, ActiveColorCalibration, AudioCalibrationResult,
         COLOR_CALIBRATION_TIMEOUT, ControlModel, EngineDesiredState, PlaybackMode,
     };
+    use futures_util::future::BoxFuture;
     use lumistripe_engine_audio::InputAudioDevice;
     use lumistripe_engine_client::EngineClient;
     use lumistripe_engine_protocol::{
         EngineAudioStatus, EngineErrorCode, Request, RequestCommand, Response, ResponseResult,
     };
     use serde_json::{Value, json};
+    use std::fs;
+    use std::future::Future;
+    use std::os::unix::fs::PermissionsExt;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use tempfile::tempdir;
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixListener;
     use tokio::sync::{oneshot, watch};
+    use tokio::time::{Instant, sleep, timeout};
+    use tokio_util::sync::CancellationToken;
+
+    fn spotify_name_helper_fixture(
+        directory: &std::path::Path,
+        script: &str,
+        timeout: Duration,
+    ) -> SpotifyDeviceNameHelper {
+        let sudo_path = directory.join("fake-sudo");
+        fs::write(&sudo_path, format!("#!/bin/sh\n{script}\n")).unwrap();
+        let mut permissions = fs::metadata(&sudo_path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&sudo_path, permissions).unwrap();
+
+        let helper_path = directory.join("installed-helper");
+        fs::write(&helper_path, "#!/bin/sh\nexit 0\n").unwrap();
+        SpotifyDeviceNameHelper {
+            sudo_path,
+            helper_path,
+            timeout,
+        }
+    }
+
+    #[tokio::test]
+    async fn hardware_identity_change_calls_restricted_spotify_name_helper_and_persists() {
+        let directory = tempdir().unwrap();
+        let helper = spotify_name_helper_fixture(
+            directory.path(),
+            "[ \"$1\" = \"-n\" ] || exit 91\n[ -f \"$2\" ] || exit 92\n[ \"$3\" = \"Studio player\" ] || exit 93\nexit 0",
+            Duration::from_secs(1),
+        );
+        let mut config = test_config(directory.path().join("settings.json"));
+        config.runtime_kind = "hardware";
+        let mut settings_store = SettingsStore::open(&config.settings_file).unwrap();
+        let mut model = ControlModel::new(config, DashboardSettings::default());
+
+        set_identity_settings(
+            &mut model,
+            &mut settings_store,
+            "Studio lights",
+            "Studio player",
+            &helper,
+        )
+        .await
+        .unwrap();
+
+        assert!(model.spotify_restart_requested);
+        assert_eq!(model.settings.spotify_device_name, "Studio player");
+        assert_eq!(
+            settings_store.settings().spotify_device_name,
+            "Studio player"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_spotify_name_helper_keeps_identity_settings_unchanged() {
+        let directory = tempdir().unwrap();
+        let helper =
+            spotify_name_helper_fixture(directory.path(), "exit 17", Duration::from_secs(1));
+        let mut config = test_config(directory.path().join("settings.json"));
+        config.runtime_kind = "hardware";
+        let mut settings_store = SettingsStore::open(&config.settings_file).unwrap();
+        let mut model = ControlModel::new(config, DashboardSettings::default());
+
+        let error = set_identity_settings(
+            &mut model,
+            &mut settings_store,
+            "Studio lights",
+            "Studio player",
+            &helper,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.status(), axum::http::StatusCode::CONFLICT);
+        assert_eq!(model.settings.application_name, "LumiStripe");
+        assert_eq!(model.settings.spotify_device_name, "LumiStripe");
+        assert_eq!(settings_store.settings().spotify_device_name, "LumiStripe");
+    }
+
+    #[tokio::test]
+    async fn software_identity_update_skips_spotify_name_helper() {
+        let directory = tempdir().unwrap();
+        let helper =
+            spotify_name_helper_fixture(directory.path(), "exit 17", Duration::from_secs(1));
+        let config = test_config(directory.path().join("settings.json"));
+        let mut settings_store = SettingsStore::open(&config.settings_file).unwrap();
+        let mut model = ControlModel::new(config, DashboardSettings::default());
+
+        set_identity_settings(
+            &mut model,
+            &mut settings_store,
+            "Studio lights",
+            "Studio player",
+            &helper,
+        )
+        .await
+        .unwrap();
+
+        assert!(!model.spotify_restart_requested);
+        assert_eq!(model.settings.spotify_device_name, "Studio player");
+    }
+
+    #[tokio::test]
+    async fn missing_spotify_name_helper_saves_identity_without_restart_request() {
+        let directory = tempdir().unwrap();
+        let helper = SpotifyDeviceNameHelper {
+            sudo_path: directory.path().join("missing-sudo"),
+            helper_path: directory.path().join("missing-helper"),
+            timeout: Duration::from_secs(1),
+        };
+        let mut config = test_config(directory.path().join("settings.json"));
+        config.runtime_kind = "hardware";
+        let mut settings_store = SettingsStore::open(&config.settings_file).unwrap();
+        let mut model = ControlModel::new(config, DashboardSettings::default());
+
+        set_identity_settings(
+            &mut model,
+            &mut settings_store,
+            "Studio lights",
+            "Studio player",
+            &helper,
+        )
+        .await
+        .unwrap();
+
+        assert!(!model.spotify_restart_requested);
+        assert_eq!(model.settings.spotify_device_name, "Studio player");
+    }
+
+    #[tokio::test]
+    async fn unchanged_hardware_spotify_name_does_not_call_the_helper() {
+        let directory = tempdir().unwrap();
+        let helper =
+            spotify_name_helper_fixture(directory.path(), "exit 17", Duration::from_secs(1));
+        let mut config = test_config(directory.path().join("settings.json"));
+        config.runtime_kind = "hardware";
+        let mut settings_store = SettingsStore::open(&config.settings_file).unwrap();
+        let mut model = ControlModel::new(config, DashboardSettings::default());
+
+        set_identity_settings(
+            &mut model,
+            &mut settings_store,
+            "Studio lights",
+            "LumiStripe",
+            &helper,
+        )
+        .await
+        .unwrap();
+
+        assert!(!model.spotify_restart_requested);
+        assert_eq!(model.settings.spotify_device_name, "LumiStripe");
+    }
+
+    struct AudioRouteBlueZ;
+
+    impl BlueZProvider for AudioRouteBlueZ {
+        fn snapshot(&self) -> BoxFuture<'static, Result<BlueZSnapshot, BluetoothError>> {
+            Box::pin(async {
+                Ok(BlueZSnapshot {
+                    powered: true,
+                    alias: Some("LumiStripe".to_owned()),
+                    scanning: false,
+                    devices: vec![BluetoothDevice {
+                        address: "AA:BB:CC:DD:EE:01".to_owned(),
+                        name: "Headset".to_owned(),
+                        paired: true,
+                        connected: true,
+                        roles: vec!["input".to_owned()],
+                    }],
+                })
+            })
+        }
+
+        fn execute(
+            &self,
+            _command: BlueZCommand,
+        ) -> BoxFuture<'static, Result<(), BluetoothError>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    struct HandoffBlueZ {
+        connected: Arc<AtomicBool>,
+    }
+
+    impl BlueZProvider for HandoffBlueZ {
+        fn snapshot(&self) -> BoxFuture<'static, Result<BlueZSnapshot, BluetoothError>> {
+            let connected = self.connected.load(Ordering::Acquire);
+            Box::pin(async move {
+                Ok(BlueZSnapshot {
+                    powered: true,
+                    alias: Some("LumiStripe".to_owned()),
+                    scanning: false,
+                    devices: if connected {
+                        vec![BluetoothDevice {
+                            address: "AA:BB:CC:DD:EE:01".to_owned(),
+                            name: "Headset".to_owned(),
+                            paired: true,
+                            connected: true,
+                            roles: vec!["input".to_owned()],
+                        }]
+                    } else {
+                        Vec::new()
+                    },
+                })
+            })
+        }
+
+        fn execute(
+            &self,
+            _command: BlueZCommand,
+        ) -> BoxFuture<'static, Result<(), BluetoothError>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    struct AudioRoutePipeWire {
+        commands: Arc<Mutex<Vec<String>>>,
+        fail_loopback: Arc<AtomicBool>,
+    }
+
+    impl PipeWireProvider for AudioRoutePipeWire {
+        fn available(&self) -> bool {
+            true
+        }
+
+        fn has_wpctl(&self) -> bool {
+            false
+        }
+
+        fn execute(
+            &self,
+            command: PipeWireCommand,
+        ) -> BoxFuture<'static, Result<String, BluetoothError>> {
+            let commands = self.commands.clone();
+            let fail_loopback = self.fail_loopback.clone();
+            Box::pin(async move {
+                let (name, output) = match command {
+                    PipeWireCommand::Sources => (
+                        "sources",
+                        "3 bluez_input.AA_BB_CC_DD_EE_01.0 PipeWire s16le 2ch 48000Hz RUNNING"
+                            .to_owned(),
+                    ),
+                    PipeWireCommand::Sinks => ("sinks", String::new()),
+                    PipeWireCommand::SinkDetails => ("sink-details", String::new()),
+                    PipeWireCommand::Info => (
+                        "info",
+                        "Default Sink: alsa_output.test\nDefault Source: alsa_input.usb".to_owned(),
+                    ),
+                    PipeWireCommand::StreamStatus => ("stream-status", String::new()),
+                    PipeWireCommand::SetDefaultSource(source) => ("set-source", source),
+                    PipeWireCommand::SinkInputs => ("sink-inputs", String::new()),
+                    PipeWireCommand::Modules => ("modules", String::new()),
+                    PipeWireCommand::SetDefaultSink(_) => ("set-sink", String::new()),
+                    PipeWireCommand::MoveSinkInput { .. } => ("move-input", String::new()),
+                    PipeWireCommand::LoadModule { .. } if fail_loopback.load(Ordering::Acquire) => {
+                        commands
+                            .lock()
+                            .unwrap()
+                            .push("load-module:failed".to_owned());
+                        return Err(BluetoothError::new(
+                            "routing_failed",
+                            "simulated Spotify loopback failure",
+                        ));
+                    }
+                    PipeWireCommand::LoadModule { .. } => ("load-module", "57".to_owned()),
+                    PipeWireCommand::UnloadModule(_) => ("unload-module", String::new()),
+                    PipeWireCommand::SetVolume { .. } => ("set-volume", String::new()),
+                    PipeWireCommand::SetMute { .. } => ("set-mute", String::new()),
+                };
+                commands.lock().unwrap().push(format!("{name}:{output}"));
+                Ok(output)
+            })
+        }
+    }
+
+    async fn mock_bluetooth_capture_engine(listener: UnixListener) {
+        for _ in 0..2 {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read, mut write) = stream.into_split();
+            let mut line = String::new();
+            BufReader::new(read).read_line(&mut line).await.unwrap();
+            let request: Request = serde_json::from_str(line.trim()).unwrap();
+            let result = match request.command {
+                RequestCommand::AudioStart { .. } => {
+                    ResponseResult::AudioConfigured { active: true }
+                }
+                RequestCommand::AudioStatus => ResponseResult::AudioStatus {
+                    status: EngineAudioStatus {
+                        active: true,
+                        device: Some(InputAudioDevice {
+                            selector: "default".to_owned(),
+                            host: "PipeWire".to_owned(),
+                            name: "PipeWire default".to_owned(),
+                            is_default: true,
+                            sample_rate: 48_000,
+                            channels: 2,
+                        }),
+                        ..Default::default()
+                    },
+                },
+                other => panic!("unexpected Bluetooth capture engine request: {other:?}"),
+            };
+            let response = Response {
+                protocol_version: lumistripe_engine_protocol::PROTOCOL_VERSION,
+                request_id: request.request_id,
+                result,
+            };
+            write
+                .write_all(serde_json::to_string(&response).unwrap().as_bytes())
+                .await
+                .unwrap();
+            write.write_all(b"\n").await.unwrap();
+        }
+    }
+
+    async fn mock_automatic_microphone_engine(listener: UnixListener) {
+        let microphone = InputAudioDevice {
+            selector: "alsa:usb:1".to_owned(),
+            host: "ALSA".to_owned(),
+            name: "USB microphone".to_owned(),
+            is_default: true,
+            sample_rate: 48_000,
+            channels: 1,
+        };
+        let mut request_count = 0;
+        loop {
+            let (stream, _) = match timeout(Duration::from_millis(500), listener.accept()).await {
+                Ok(Ok(connection)) => connection,
+                Ok(Err(error)) => panic!("microphone engine listener failed: {error}"),
+                Err(_) => break,
+            };
+            let (read, mut write) = stream.into_split();
+            let mut line = String::new();
+            BufReader::new(read).read_line(&mut line).await.unwrap();
+            let request: Request = serde_json::from_str(line.trim()).unwrap();
+            let result = match request.command {
+                RequestCommand::AudioDevices => ResponseResult::AudioDevices {
+                    devices: vec![microphone.clone()],
+                },
+                RequestCommand::AudioStart { .. } => {
+                    ResponseResult::AudioConfigured { active: true }
+                }
+                RequestCommand::AudioStatus => ResponseResult::AudioStatus {
+                    status: EngineAudioStatus {
+                        active: true,
+                        device: Some(microphone.clone()),
+                        ..Default::default()
+                    },
+                },
+                RequestCommand::SceneUpdate { update } => ResponseResult::SceneUpdated {
+                    revision: update.revision,
+                    replaced: false,
+                },
+                other => panic!("unexpected automatic microphone request: {other:?}"),
+            };
+            let response = Response {
+                protocol_version: lumistripe_engine_protocol::PROTOCOL_VERSION,
+                request_id: request.request_id,
+                result,
+            };
+            write
+                .write_all(serde_json::to_string(&response).unwrap().as_bytes())
+                .await
+                .unwrap();
+            write.write_all(b"\n").await.unwrap();
+            request_count += 1;
+        }
+        assert_eq!(
+            request_count, 3,
+            "unexpected microphone engine request count"
+        );
+    }
+
+    async fn mock_automatic_handoff_engine(
+        listener: UnixListener,
+        captures: Arc<Mutex<Vec<(Option<String>, bool, f32)>>>,
+    ) {
+        let spotify = InputAudioDevice {
+            selector: "pulse:lumistripe_spotify".to_owned(),
+            host: "PulseAudio".to_owned(),
+            name: "LumiStripe Spotify".to_owned(),
+            is_default: false,
+            sample_rate: 48_000,
+            channels: 2,
+        };
+        let bluetooth = InputAudioDevice {
+            selector: "default".to_owned(),
+            host: "PipeWire".to_owned(),
+            name: "PipeWire default".to_owned(),
+            is_default: true,
+            sample_rate: 48_000,
+            channels: 2,
+        };
+        let microphone = InputAudioDevice {
+            selector: "alsa:usb:1".to_owned(),
+            host: "ALSA".to_owned(),
+            name: "USB microphone".to_owned(),
+            is_default: true,
+            sample_rate: 48_000,
+            channels: 1,
+        };
+        let mut active_device = None;
+        for _ in 0..11 {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read, mut write) = stream.into_split();
+            let mut line = String::new();
+            BufReader::new(read).read_line(&mut line).await.unwrap();
+            let request: Request = serde_json::from_str(line.trim()).unwrap();
+            let result = match request.command {
+                RequestCommand::AudioDevices => ResponseResult::AudioDevices {
+                    devices: vec![spotify.clone(), microphone.clone()],
+                },
+                RequestCommand::AudioStart { selector, config } => {
+                    captures.lock().unwrap().push((
+                        selector.clone(),
+                        config.microphone_enabled,
+                        config.noise_floor,
+                    ));
+                    active_device = Some(match selector.as_deref() {
+                        Some("pulse:lumistripe_spotify") => spotify.clone(),
+                        Some("alsa:usb:1") => microphone.clone(),
+                        None => bluetooth.clone(),
+                        Some(other) => panic!("unexpected automatic source selector: {other}"),
+                    });
+                    ResponseResult::AudioConfigured { active: true }
+                }
+                RequestCommand::AudioStatus => ResponseResult::AudioStatus {
+                    status: EngineAudioStatus {
+                        active: active_device.is_some(),
+                        device: active_device.clone(),
+                        ..Default::default()
+                    },
+                },
+                other => panic!("unexpected automatic handoff engine request: {other:?}"),
+            };
+            let response = Response {
+                protocol_version: lumistripe_engine_protocol::PROTOCOL_VERSION,
+                request_id: request.request_id,
+                result,
+            };
+            write
+                .write_all(serde_json::to_string(&response).unwrap().as_bytes())
+                .await
+                .unwrap();
+            write.write_all(b"\n").await.unwrap();
+        }
+    }
+
+    async fn mock_spotify_capture_engine(listener: UnixListener) {
+        for _ in 0..3 {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read, mut write) = stream.into_split();
+            let mut line = String::new();
+            BufReader::new(read).read_line(&mut line).await.unwrap();
+            let request: Request = serde_json::from_str(line.trim()).unwrap();
+            let result = match request.command {
+                RequestCommand::AudioDevices => ResponseResult::AudioDevices {
+                    devices: vec![InputAudioDevice {
+                        selector: "pulse:lumistripe_spotify".to_owned(),
+                        host: "PulseAudio".to_owned(),
+                        name: "LumiStripe Spotify".to_owned(),
+                        is_default: false,
+                        sample_rate: 48_000,
+                        channels: 2,
+                    }],
+                },
+                RequestCommand::AudioStart { .. } => {
+                    ResponseResult::AudioConfigured { active: true }
+                }
+                RequestCommand::AudioStatus => ResponseResult::AudioStatus {
+                    status: EngineAudioStatus {
+                        active: true,
+                        device: Some(InputAudioDevice {
+                            selector: "pulse:lumistripe_spotify".to_owned(),
+                            host: "PulseAudio".to_owned(),
+                            name: "LumiStripe Spotify".to_owned(),
+                            is_default: false,
+                            sample_rate: 48_000,
+                            channels: 2,
+                        }),
+                        ..Default::default()
+                    },
+                },
+                other => panic!("unexpected Spotify capture engine request: {other:?}"),
+            };
+            let response = Response {
+                protocol_version: lumistripe_engine_protocol::PROTOCOL_VERSION,
+                request_id: request.request_id,
+                result,
+            };
+            write
+                .write_all(serde_json::to_string(&response).unwrap().as_bytes())
+                .await
+                .unwrap();
+            write.write_all(b"\n").await.unwrap();
+        }
+    }
+
+    struct ReadySpotify;
+
+    impl SpotifyProvider for ReadySpotify {
+        fn start(&self) {}
+
+        fn stop(&self) {}
+
+        fn status(&self) -> SpotifyStatus {
+            SpotifyStatus {
+                configured: true,
+                connected: true,
+                logged_in: true,
+                is_active: true,
+                device_name: Some("LumiStripe".to_owned()),
+                status: SpotifyPlaybackStatus::Playing,
+                track: None,
+                position_ms: 0,
+                duration_ms: None,
+                volume: 60,
+                shuffle: false,
+                repeat: SpotifyRepeat::Off,
+                error: None,
+            }
+        }
+
+        fn control<'a>(
+            &'a self,
+            _action: SpotifyControlAction,
+            _value: Option<Value>,
+        ) -> Pin<Box<dyn Future<Output = Result<SpotifyStatus, SpotifyError>> + Send + 'a>>
+        {
+            let status = self.status();
+            Box::pin(async move { Ok(status) })
+        }
+    }
+
+    struct MutableSpotify {
+        status: Arc<Mutex<SpotifyStatus>>,
+    }
+
+    impl SpotifyProvider for MutableSpotify {
+        fn start(&self) {}
+
+        fn stop(&self) {}
+
+        fn status(&self) -> SpotifyStatus {
+            self.status.lock().unwrap().clone()
+        }
+
+        fn control<'a>(
+            &'a self,
+            _action: SpotifyControlAction,
+            _value: Option<Value>,
+        ) -> Pin<Box<dyn Future<Output = Result<SpotifyStatus, SpotifyError>> + Send + 'a>>
+        {
+            let status = self.status();
+            Box::pin(async move { Ok(status) })
+        }
+    }
+
+    fn spotify_status_for_handoff(active: bool) -> SpotifyStatus {
+        SpotifyStatus {
+            configured: true,
+            connected: true,
+            logged_in: true,
+            is_active: active,
+            device_name: Some("LumiStripe".to_owned()),
+            status: if active {
+                SpotifyPlaybackStatus::Playing
+            } else {
+                SpotifyPlaybackStatus::Paused
+            },
+            track: None,
+            position_ms: 0,
+            duration_ms: None,
+            volume: 60,
+            shuffle: false,
+            repeat: SpotifyRepeat::Off,
+            error: None,
+        }
+    }
 
     async fn mock_topology_engine(
         listener: UnixListener,
@@ -3527,6 +4901,520 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn bluetooth_audio_selection_routes_pipewire_and_restores_the_previous_source() {
+        let directory = tempdir().unwrap();
+        let socket = directory.path().join("engine.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let engine = tokio::spawn(mock_bluetooth_capture_engine(listener));
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let cancellation = CancellationToken::new();
+        let (bluetooth, poller) = BluetoothService::with_providers(
+            true,
+            false,
+            Arc::new(AudioRouteBlueZ),
+            Arc::new(AudioRoutePipeWire {
+                commands: commands.clone(),
+                fail_loopback: Arc::new(AtomicBool::new(false)),
+            }),
+            cancellation.clone(),
+        );
+        let status = bluetooth.refresh().await;
+        assert!(status.streaming);
+
+        let mut config = test_config(directory.path().join("settings.json"));
+        config.runtime_kind = "hardware";
+        let mut settings_store = SettingsStore::open(&config.settings_file).unwrap();
+        let mut model = ControlModel::new(config.clone(), DashboardSettings::default());
+        let (desired_state, _) = watch::channel(EngineDesiredState {
+            config: config.engine_config(),
+            scene: model.initial_scene(),
+            audio: None,
+        });
+        let client = EngineClient::new(socket, Duration::from_secs(1));
+        let mut routing = AudioSourceRouting::default();
+
+        set_audio_source(
+            &mut model,
+            &mut settings_store,
+            &desired_state,
+            &client,
+            &mut routing,
+            Some(&bluetooth),
+            None,
+            "bluetooth",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(model.audio_source, "bluetooth");
+        assert_eq!(model.active_audio_source, "bluetooth");
+        assert!(model.audio_status.as_ref().unwrap().active);
+        assert!(
+            commands
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|command| command == "set-source:bluez_input.AA_BB_CC_DD_EE_01.0")
+        );
+
+        restore_audio_source(&mut routing, Some(&bluetooth)).await;
+        assert!(
+            commands
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|command| command == "set-source:alsa_input.usb")
+        );
+
+        engine.await.unwrap();
+        cancellation.cancel();
+        tokio::time::timeout(Duration::from_secs(1), poller)
+            .await
+            .expect("Bluetooth poller should stop promptly")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn spotify_audio_selection_uses_the_soloist_capture_and_its_virtual_route() {
+        let directory = tempdir().unwrap();
+        let socket = directory.path().join("engine.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let engine = tokio::spawn(mock_spotify_capture_engine(listener));
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let cancellation = CancellationToken::new();
+        let (bluetooth, poller) = BluetoothService::with_providers(
+            false,
+            true,
+            Arc::new(AudioRouteBlueZ),
+            Arc::new(AudioRoutePipeWire {
+                commands: commands.clone(),
+                fail_loopback: Arc::new(AtomicBool::new(false)),
+            }),
+            cancellation.clone(),
+        );
+        let mut config = test_config(directory.path().join("settings.json"));
+        config.runtime_kind = "hardware";
+        let mut settings_store = SettingsStore::open(&config.settings_file).unwrap();
+        let mut model = ControlModel::new(config.clone(), DashboardSettings::default());
+        let (desired_state, _) = watch::channel(EngineDesiredState {
+            config: config.engine_config(),
+            scene: model.initial_scene(),
+            audio: None,
+        });
+        let client = EngineClient::new(socket, Duration::from_secs(1));
+        let mut routing = AudioSourceRouting::default();
+
+        set_audio_source(
+            &mut model,
+            &mut settings_store,
+            &desired_state,
+            &client,
+            &mut routing,
+            Some(&bluetooth),
+            Some(&ReadySpotify),
+            "spotify",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(model.audio_source, "spotify");
+        assert_eq!(model.active_audio_source, "spotify");
+        assert!(model.audio_status.as_ref().unwrap().active);
+        assert!(
+            commands
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|command| command == "load-module:57")
+        );
+        assert!(
+            !commands
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|command| command.starts_with("set-source:"))
+        );
+
+        engine.await.unwrap();
+        cancellation.cancel();
+        tokio::time::timeout(Duration::from_secs(1), poller)
+            .await
+            .expect("disabled Bluetooth poller should stop promptly")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn automatic_source_falls_back_to_bluetooth_after_spotify_routing_fails() {
+        let directory = tempdir().unwrap();
+        let socket = directory.path().join("engine.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let engine = tokio::spawn(mock_bluetooth_capture_engine(listener));
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let fail_loopback = Arc::new(AtomicBool::new(false));
+        let cancellation = CancellationToken::new();
+        let (bluetooth, poller) = BluetoothService::with_providers(
+            true,
+            true,
+            Arc::new(AudioRouteBlueZ),
+            Arc::new(AudioRoutePipeWire {
+                commands: commands.clone(),
+                fail_loopback: fail_loopback.clone(),
+            }),
+            cancellation.clone(),
+        );
+        assert!(bluetooth.refresh().await.streaming);
+        sleep(Duration::from_millis(50)).await;
+        commands.lock().unwrap().clear();
+        fail_loopback.store(true, Ordering::Release);
+
+        let mut config = test_config(directory.path().join("settings.json"));
+        config.runtime_kind = "hardware";
+        let mut model = ControlModel::new(config.clone(), DashboardSettings::default());
+        assert_eq!(model.audio_source, "auto");
+        let (desired_state, _) = watch::channel(EngineDesiredState {
+            config: config.engine_config(),
+            scene: model.initial_scene(),
+            audio: None,
+        });
+        let client = EngineClient::new(socket, Duration::from_secs(1));
+        let mut routing = AudioSourceRouting::default();
+
+        maintain_configured_audio_source(
+            &mut model,
+            &desired_state,
+            &client,
+            &mut routing,
+            Some(&bluetooth),
+            Some(&ReadySpotify),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(model.audio_source, "auto");
+        assert_eq!(model.active_audio_source, "bluetooth");
+        assert!(
+            model
+                .audio_status
+                .as_ref()
+                .is_some_and(|status| status.active)
+        );
+        assert!(
+            routing
+                .spotify_retry_at
+                .is_some_and(|retry_at| retry_at > Instant::now())
+        );
+        assert!(
+            commands
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|command| command == "load-module:failed")
+        );
+        assert!(
+            commands
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|command| command == "set-source:bluez_input.AA_BB_CC_DD_EE_01.0")
+        );
+
+        let command_count = commands.lock().unwrap().len();
+        maintain_configured_audio_source(
+            &mut model,
+            &desired_state,
+            &client,
+            &mut routing,
+            Some(&bluetooth),
+            Some(&ReadySpotify),
+        )
+        .await
+        .unwrap();
+        assert_eq!(commands.lock().unwrap().len(), command_count);
+
+        engine.await.unwrap();
+        cancellation.cancel();
+        tokio::time::timeout(Duration::from_secs(1), poller)
+            .await
+            .expect("Bluetooth poller should stop promptly")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn automatic_source_selects_microphone_when_spotify_and_bluetooth_are_unavailable() {
+        let directory = tempdir().unwrap();
+        let socket = directory.path().join("engine.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let engine = tokio::spawn(mock_automatic_microphone_engine(listener));
+        let cancellation = CancellationToken::new();
+        let (bluetooth, poller) = BluetoothService::with_providers(
+            false,
+            false,
+            Arc::new(AudioRouteBlueZ),
+            Arc::new(AudioRoutePipeWire {
+                commands: Arc::new(Mutex::new(Vec::new())),
+                fail_loopback: Arc::new(AtomicBool::new(false)),
+            }),
+            cancellation.clone(),
+        );
+        let mut config = test_config(directory.path().join("settings.json"));
+        config.runtime_kind = "hardware";
+        let mut model = ControlModel::new(config.clone(), DashboardSettings::default());
+        let (desired_state, _) = watch::channel(EngineDesiredState {
+            config: config.engine_config(),
+            scene: model.initial_scene(),
+            audio: None,
+        });
+        let client = EngineClient::new(socket, Duration::from_secs(1));
+        let mut routing = AudioSourceRouting::default();
+
+        maintain_configured_audio_source(
+            &mut model,
+            &desired_state,
+            &client,
+            &mut routing,
+            Some(&bluetooth),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(model.audio_source, "auto");
+        assert_eq!(model.active_audio_source, "mic");
+        assert_eq!(
+            model
+                .audio_status
+                .as_ref()
+                .and_then(|status| status.device.as_ref())
+                .map(|device| device.name.as_str()),
+            Some("USB microphone")
+        );
+        assert!(
+            model
+                .audio_status
+                .as_ref()
+                .is_some_and(|status| status.active)
+        );
+
+        timeout(Duration::from_secs(1), engine)
+            .await
+            .expect("microphone engine fixture should finish after audio setup")
+            .unwrap();
+        cancellation.cancel();
+        timeout(Duration::from_secs(1), poller)
+            .await
+            .expect("disabled Bluetooth poller should already be stopped")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn automatic_source_hands_off_spotify_bluetooth_microphone_and_recovers() {
+        let directory = tempdir().unwrap();
+        let socket = directory.path().join("engine.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let captures = Arc::new(Mutex::new(Vec::new()));
+        let engine = tokio::spawn(mock_automatic_handoff_engine(listener, captures.clone()));
+
+        let connected = Arc::new(AtomicBool::new(true));
+        let pipewire_commands = Arc::new(Mutex::new(Vec::new()));
+        let cancellation = CancellationToken::new();
+        let (bluetooth, poller) = BluetoothService::with_providers(
+            true,
+            true,
+            Arc::new(HandoffBlueZ {
+                connected: connected.clone(),
+            }),
+            Arc::new(AudioRoutePipeWire {
+                commands: pipewire_commands.clone(),
+                fail_loopback: Arc::new(AtomicBool::new(false)),
+            }),
+            cancellation.clone(),
+        );
+        assert!(bluetooth.refresh().await.streaming);
+        pipewire_commands.lock().unwrap().clear();
+
+        let spotify_status = Arc::new(Mutex::new(spotify_status_for_handoff(true)));
+        let spotify = MutableSpotify {
+            status: spotify_status.clone(),
+        };
+        let mut config = test_config(directory.path().join("settings.json"));
+        config.runtime_kind = "hardware";
+        let mut model = ControlModel::new(config.clone(), DashboardSettings::default());
+        for (name, noise_floor) in [
+            ("spotify", 0.11),
+            ("bluetooth", 0.22),
+            ("USB microphone", 0.33),
+        ] {
+            model.settings.audio_profiles.insert(
+                name.to_owned(),
+                AudioTuningProfile {
+                    noise_floor,
+                    ..AudioTuningProfile::default()
+                },
+            );
+        }
+        let (desired_state, _) = watch::channel(EngineDesiredState {
+            config: config.engine_config(),
+            scene: model.initial_scene(),
+            audio: None,
+        });
+        let client = EngineClient::new(socket, Duration::from_secs(1));
+        let mut routing = AudioSourceRouting::default();
+
+        maintain_configured_audio_source(
+            &mut model,
+            &desired_state,
+            &client,
+            &mut routing,
+            Some(&bluetooth),
+            Some(&spotify),
+        )
+        .await
+        .unwrap();
+        assert_eq!(model.audio_source, "auto");
+        assert_eq!(model.active_audio_source, "spotify");
+        assert_eq!(
+            model
+                .audio_status
+                .as_ref()
+                .and_then(|status| status.device.as_ref())
+                .map(|device| device.name.as_str()),
+            Some("LumiStripe Spotify")
+        );
+
+        *spotify_status.lock().unwrap() = spotify_status_for_handoff(false);
+        maintain_configured_audio_source(
+            &mut model,
+            &desired_state,
+            &client,
+            &mut routing,
+            Some(&bluetooth),
+            Some(&spotify),
+        )
+        .await
+        .unwrap();
+        assert_eq!(model.active_audio_source, "bluetooth");
+        assert_eq!(
+            model
+                .audio_status
+                .as_ref()
+                .and_then(|status| status.device.as_ref())
+                .map(|device| device.name.as_str()),
+            Some("PipeWire default")
+        );
+
+        connected.store(false, Ordering::Release);
+        assert!(!bluetooth.refresh().await.streaming);
+        maintain_configured_audio_source(
+            &mut model,
+            &desired_state,
+            &client,
+            &mut routing,
+            Some(&bluetooth),
+            Some(&spotify),
+        )
+        .await
+        .unwrap();
+        assert_eq!(model.active_audio_source, "mic");
+        assert_eq!(
+            model
+                .audio_status
+                .as_ref()
+                .and_then(|status| status.device.as_ref())
+                .map(|device| device.name.as_str()),
+            Some("USB microphone")
+        );
+
+        *spotify_status.lock().unwrap() = spotify_status_for_handoff(true);
+        maintain_configured_audio_source(
+            &mut model,
+            &desired_state,
+            &client,
+            &mut routing,
+            Some(&bluetooth),
+            Some(&spotify),
+        )
+        .await
+        .unwrap();
+        assert_eq!(model.active_audio_source, "spotify");
+
+        maintain_configured_audio_source(
+            &mut model,
+            &desired_state,
+            &client,
+            &mut routing,
+            Some(&bluetooth),
+            Some(&spotify),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            *captures.lock().unwrap(),
+            [
+                (Some("pulse:lumistripe_spotify".to_owned()), false, 0.11),
+                (None, false, 0.22),
+                (Some("alsa:usb:1".to_owned()), true, 0.33),
+                (Some("pulse:lumistripe_spotify".to_owned()), false, 0.11),
+            ]
+        );
+        let routing_commands = pipewire_commands.lock().unwrap();
+        assert!(
+            routing_commands
+                .iter()
+                .any(|command| command == "set-source:bluez_input.AA_BB_CC_DD_EE_01.0")
+        );
+        assert!(
+            routing_commands
+                .iter()
+                .any(|command| command == "set-source:alsa_input.usb")
+        );
+        drop(routing_commands);
+
+        engine.await.unwrap();
+        cancellation.cancel();
+        timeout(Duration::from_secs(1), poller)
+            .await
+            .expect("Bluetooth poller should stop promptly")
+            .unwrap();
+    }
+
+    #[test]
+    fn automatic_audio_source_policy_keeps_spotify_then_bluetooth_then_mic_priority() {
+        assert_eq!(
+            automatic_audio_source_candidates(true, true, true),
+            ["spotify", "bluetooth", "mic"]
+        );
+        assert_eq!(
+            automatic_audio_source_candidates(false, true, true),
+            ["bluetooth", "mic"]
+        );
+        assert_eq!(
+            automatic_audio_source_candidates(false, true, false),
+            ["mic"]
+        );
+        assert_eq!(
+            automatic_audio_source_candidates(true, false, true),
+            ["bluetooth", "mic"]
+        );
+        assert_eq!(
+            automatic_audio_source_candidates(true, false, false),
+            ["mic"]
+        );
+    }
+
+    #[test]
+    fn automatic_spotify_retry_waits_five_seconds_after_a_route_failure() {
+        let now = Instant::now();
+        let retry_at = now + super::AUTOMATIC_SPOTIFY_RETRY;
+
+        assert!(automatic_spotify_retry_ready(now, None));
+        assert!(!automatic_spotify_retry_ready(
+            retry_at - Duration::from_millis(1),
+            Some(retry_at),
+        ));
+        assert!(automatic_spotify_retry_ready(retry_at, Some(retry_at)));
+    }
+
     fn active_audio_status() -> EngineAudioStatus {
         EngineAudioStatus {
             active: true,
@@ -3586,6 +5474,10 @@ mod tests {
             output_devices: vec!["simulation".to_owned()],
             spi_speed_hz: None,
             audio_device: None,
+            spotify_ws_uri: "127.0.0.1:9090".to_owned(),
+            spotify_provider_enabled: false,
+            bluetooth_max_inputs: 1,
+            bluetooth_max_outputs: 1,
             secure_cookie: false,
             static_dir: None,
             settings_file,
@@ -3651,6 +5543,10 @@ mod tests {
             output_devices: vec!["simulation".to_owned()],
             spi_speed_hz: None,
             audio_device: None,
+            spotify_ws_uri: "127.0.0.1:9090".to_owned(),
+            spotify_provider_enabled: false,
+            bluetooth_max_inputs: 1,
+            bluetooth_max_outputs: 1,
             secure_cookie: false,
             static_dir: None,
             settings_file: directory.path().join("settings.json"),
@@ -3715,6 +5611,8 @@ mod tests {
             client,
             snapshot,
             audio,
+            None,
+            None,
             tokio_util::sync::CancellationToken::new(),
         );
         let state = plane
@@ -3755,6 +5653,8 @@ mod tests {
             EngineClient::new(socket, Duration::from_secs(1)),
             health,
             audio,
+            None,
+            None,
             cancellation.clone(),
         );
 
@@ -3803,6 +5703,8 @@ mod tests {
             EngineClient::new(socket, Duration::from_secs(1)),
             health,
             audio,
+            None,
+            None,
             cancellation.clone(),
         );
 
@@ -4080,6 +5982,10 @@ mod tests {
             output_devices: vec!["simulation".to_owned()],
             spi_speed_hz: None,
             audio_device: None,
+            spotify_ws_uri: "127.0.0.1:9090".to_owned(),
+            spotify_provider_enabled: false,
+            bluetooth_max_inputs: 1,
+            bluetooth_max_outputs: 1,
             secure_cookie: false,
             static_dir: None,
             settings_file: directory.path().join("settings.json"),
@@ -4107,6 +6013,8 @@ mod tests {
             client,
             health,
             audio,
+            None,
+            None,
             cancellation.clone(),
         );
         let caller = tokio::spawn(async move { plane.set_brightness(0.3, None).await });

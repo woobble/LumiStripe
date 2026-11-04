@@ -491,6 +491,33 @@ fn capture_callback<T>(
     let first_sample = counters
         .sample_position
         .fetch_add(frames as u64, Ordering::Relaxed);
+    queue_captured_frames(
+        input,
+        channels,
+        sample_rate,
+        capture_start_ns,
+        first_sample,
+        producer,
+        counters,
+    );
+    let callback_duration_ns = monotonic_ns().saturating_sub(start_ns);
+    counters.callback_duration_ns[timing_slot].store(callback_duration_ns, Ordering::Relaxed);
+    counters.callback_count.fetch_add(1, Ordering::Relaxed);
+}
+
+fn queue_captured_frames<T>(
+    input: &[T],
+    channels: usize,
+    sample_rate: u32,
+    capture_start_ns: u64,
+    first_sample: u64,
+    producer: &mut Producer<CapturedAudioBatch>,
+    counters: &CaptureCounters,
+) where
+    T: Copy,
+    f32: FromSample<T>,
+{
+    let frames = input.len() / channels;
     let mut offset_frames = 0;
     while offset_frames < frames {
         let batch_frames = (frames - offset_frames).min(MAX_CAPTURE_BATCH_SAMPLES);
@@ -514,9 +541,6 @@ fn capture_callback<T>(
         enqueue_batch(producer, counters, batch);
         offset_frames += batch_frames;
     }
-    let callback_duration_ns = monotonic_ns().saturating_sub(start_ns);
-    counters.callback_duration_ns[timing_slot].store(callback_duration_ns, Ordering::Relaxed);
-    counters.callback_count.fetch_add(1, Ordering::Relaxed);
 }
 
 fn enqueue_batch(
@@ -585,6 +609,7 @@ fn monotonic_ns() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{AudioConfig, AudioProcessor};
 
     #[test]
     fn callback_percentiles_use_nearest_rank_and_ignore_empty_slots() {
@@ -598,6 +623,67 @@ mod tests {
         assert_eq!(stats.callback_duration_p95_ns, 4);
         assert_eq!(stats.callback_duration_p99_ns, 4);
         assert_eq!(stats.capture_latency_p95_ns, 0);
+    }
+
+    #[test]
+    fn captured_stereo_frames_are_downmixed_and_batched_without_sample_loss() {
+        let frame_count = MAX_CAPTURE_BATCH_SAMPLES + 3;
+        let input = (0..frame_count)
+            .flat_map(|frame| {
+                let left = frame as f32 / 10.0;
+                [left, left + 2.0]
+            })
+            .collect::<Vec<_>>();
+        let (mut producer, mut consumer) = RingBuffer::new(2);
+        let counters = CaptureCounters::default();
+        let capture_start_ns = 123_456;
+
+        queue_captured_frames(
+            &input,
+            2,
+            48_000,
+            capture_start_ns,
+            17,
+            &mut producer,
+            &counters,
+        );
+
+        let first = consumer.pop().unwrap();
+        assert_eq!(first.len, MAX_CAPTURE_BATCH_SAMPLES);
+        assert_eq!(first.sample_position, 17);
+        assert_eq!(
+            first.capture_end_ns,
+            capture_start_ns + 2_048 * 1_000_000_000 / 48_000
+        );
+        assert!((first.samples[0] - 1.0).abs() < 1e-6);
+        assert!((first.samples[2_047] - 205.7).abs() < 1e-4);
+        assert_eq!(first.dropped_samples_before, 0);
+
+        let second = consumer.pop().unwrap();
+        assert_eq!(second.len, 3);
+        assert_eq!(
+            second.sample_position,
+            17 + MAX_CAPTURE_BATCH_SAMPLES as u64
+        );
+        assert_eq!(
+            second.capture_end_ns,
+            capture_start_ns + 2_051 * 1_000_000_000 / 48_000
+        );
+        assert!((second.samples[0] - 205.8).abs() < 1e-4);
+        assert!((second.samples[2] - 206.0).abs() < 1e-4);
+        assert_eq!(second.dropped_samples_before, 0);
+        assert!(consumer.pop().is_err());
+
+        let mut processor = AudioProcessor::new(AudioConfig::default(), 48_000.0).unwrap();
+        for batch in [first, second] {
+            processor
+                .feed_samples(
+                    &batch.samples[..batch.len],
+                    batch.capture_end_ns as f64 / 1_000_000_000.0,
+                )
+                .unwrap();
+        }
+        assert_eq!(processor.stats().samples_seen, frame_count as u64);
     }
 
     #[test]

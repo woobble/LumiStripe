@@ -1,0 +1,14 @@
+{
+  "method": "PUT",
+  "path": "/api/audio/output",
+  "body": {
+    "selector": "speaker_main"
+  },
+  "provider": "pipewire",
+  "operation": "set_default_sink",
+  "arguments": [
+    "speaker_main"
+  ],
+  "status": 409,
+  "error": "PipeWire speaker switch was rejected"
+}

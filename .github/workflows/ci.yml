@@ -135,7 +135,9 @@ jobs:
   frontend:
     name: Frontend and package build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
+    env:
+      RUSTUP_TOOLCHAIN: "1.88.0"
     defaults:
       run:
         working-directory: apps/lumistripe-web/frontend
@@ -145,6 +147,19 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+
+      - name: Install Rust 1.88 toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
+
+      - name: Verify Rust toolchain
+        run: |
+          cargo --version
+          rustc --version | grep -Eq '^rustc 1\.88\.0([[:space:]]|$)'
+
+      - name: Install Rust OpenAPI exporter dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install --yes --no-install-recommends
+          pkg-config libasound2-dev libclang-dev libdbus-1-dev libpipewire-0.3-dev libpulse-dev
 
       - name: Install Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -307,22 +322,29 @@ jobs:
           PY
 
   rust-engine:
-    name: Rust engine x86_64
+    name: Rust engine x86_64 (MSRV 1.88)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      RUSTUP_TOOLCHAIN: "1.88.0"
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
+      - name: Install MSRV Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt
+
       - name: Verify Rust toolchain
-        run: cargo --version && rustc --version
+        run: |
+          cargo --version
+          rustc --version | grep -Eq '^rustc 1\.88\.0([[:space:]]|$)'
 
       - name: Install CPAL Linux host dependencies
         run: >-
           sudo apt-get update && sudo apt-get install --yes --no-install-recommends
-          pkg-config libasound2-dev libpipewire-0.3-dev libpulse-dev
+          pkg-config libasound2-dev libclang-dev libdbus-1-dev libpipewire-0.3-dev libpulse-dev
 
       - name: Check Rust formatting
         run: cargo fmt --manifest-path rust/Cargo.toml --all -- --check
@@ -333,24 +355,40 @@ jobs:
       - name: Test Rust workspace
         run: cargo test --locked --manifest-path rust/Cargo.toml --workspace
 
+      - name: Test Rust web with native Bluetooth and PipeWire providers
+        run: >-
+          cargo test --locked --manifest-path rust/Cargo.toml
+          --package lumistripe-web --features bluez,pipewire
+
       - name: Build standalone Rust engine
         run: cargo build --release --locked --manifest-path rust/Cargo.toml --workspace
 
+      - name: Build Rust web with native Bluetooth and PipeWire providers
+        run: >-
+          cargo build --release --locked --manifest-path rust/Cargo.toml
+          --package lumistripe-web --features bluez,pipewire
+
   rust-engine-arm64:
-    name: Rust engine Linux ARM64
+    name: Rust engine Linux ARM64 (MSRV 1.88)
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
+    env:
+      RUSTUP_TOOLCHAIN: "1.88.0"
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
+      - name: Install MSRV Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt
+
       - name: Verify ARM64 Rust toolchain
         run: |
           command -v cargo
           command -v rustc
           test "$(uname -m)" = "aarch64"
+          rustc --version | grep -Eq '^rustc 1\.88\.0([[:space:]]|$)'
           rustc -vV | tee "$RUNNER_TEMP/rustc-version.txt"
           test "$(sed -n 's/^host: //p' "$RUNNER_TEMP/rustc-version.txt")" = "aarch64-unknown-linux-gnu"
           cargo --version
@@ -358,7 +396,7 @@ jobs:
       - name: Install CPAL Linux host dependencies
         run: >-
           sudo apt-get update && sudo apt-get install --yes --no-install-recommends
-          pkg-config libasound2-dev libpipewire-0.3-dev libpulse-dev
+          pkg-config libasound2-dev libclang-dev libdbus-1-dev libpipewire-0.3-dev libpulse-dev
 
       - name: Build Rust engine for web integration tests
         run: cargo build --locked --manifest-path rust/Cargo.toml --package lumistripe-engine --bin lumistripe-engine
@@ -366,10 +404,21 @@ jobs:
       - name: Test Rust workspace on ARM64
         run: cargo test --locked --manifest-path rust/Cargo.toml --workspace
 
+      - name: Test Rust web native Bluetooth and PipeWire providers on ARM64
+        run: >-
+          cargo test --locked --manifest-path rust/Cargo.toml
+          --package lumistripe-web --features bluez,pipewire
+
       - name: Build and verify ARM64 engine
         run: |
           cargo build --release --locked --manifest-path rust/Cargo.toml --workspace
           file rust/target/release/lumistripe-engine | grep -q 'ARM aarch64'
+
+      - name: Build and verify ARM64 Rust web native providers
+        run: |
+          cargo build --release --locked --manifest-path rust/Cargo.toml \
+            --package lumistripe-web --features bluez,pipewire
+          file rust/target/release/lumistripe-web | grep -q 'ARM aarch64'
 
   raspberry-pi:
     name: Raspberry Pi 5 arm64 native smoke
@@ -378,13 +427,18 @@ jobs:
     # to main and explicit manual validation dispatched from main.
     if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     runs-on: [self-hosted, linux, ARM64, rpi5]
-    timeout-minutes: 30
+    timeout-minutes: 45
+    env:
+      RUSTUP_TOOLCHAIN: "1.88.0"
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           submodules: recursive
+
+      - name: Install Rust 1.88 toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
 
       - name: Install Raspberry Pi native build dependencies
         run: |
@@ -394,8 +448,10 @@ jobs:
           command -v make >/dev/null 2>&1 || missing=1
           command -v curl >/dev/null 2>&1 || missing=1
           command -v pkg-config >/dev/null 2>&1 || missing=1
+          command -v pactl >/dev/null 2>&1 || missing=1
           test -s /etc/ssl/certs/ca-certificates.crt || missing=1
           test -f /usr/include/alsa/asoundlib.h || missing=1
+          pkg-config --exists dbus-1 || missing=1
           pkg-config --exists libpipewire-0.3 || missing=1
           pkg-config --exists libpulse || missing=1
           if test "$missing" -eq 1; then
@@ -413,8 +469,9 @@ jobs:
             fi
             "${apt[@]}" update
             "${apt[@]}" install --yes --no-install-recommends \
-              build-essential ca-certificates curl pkg-config libasound2-dev \
-              libpipewire-0.3-dev libpulse-dev
+              build-essential ca-certificates curl pkg-config libasound2-dev libclang-dev \
+              libdbus-1-dev \
+              libpipewire-0.3-dev libpulse-dev pulseaudio-utils
           fi
 
       - name: Verify Raspberry Pi runner
@@ -427,16 +484,20 @@ jobs:
           fi
           command -v cc
           command -v make
+          command -v rustup
           command -v cargo
           command -v rustc
           command -v pkg-config
+          command -v pactl
           cc --version
           rustc -vV | tee "$RUNNER_TEMP/rustc-version.txt"
+          rustc --version | grep -Eq '^rustc 1\.88\.0([[:space:]]|$)'
           rust_host="$(sed -n 's/^host: //p' "$RUNNER_TEMP/rustc-version.txt")"
           test "$rust_host" = "aarch64-unknown-linux-gnu"
           cargo --version
           test -s /etc/ssl/certs/ca-certificates.crt
           test -f /usr/include/alsa/asoundlib.h
+          pkg-config --exists dbus-1
           pkg-config --exists libpipewire-0.3
           pkg-config --exists libpulse
           git submodule status --recursive
@@ -527,6 +588,167 @@ jobs:
         run: >-
           cargo build --release --locked --manifest-path rust/Cargo.toml
           --package lumistripe-engine --bin lumistripe-engine
+
+      - name: Build Rust engine for web integration tests on Raspberry Pi
+        run: >-
+          cargo build --locked --manifest-path rust/Cargo.toml
+          --package lumistripe-engine --bin lumistripe-engine
+
+      - name: Test Rust web with native Bluetooth and PipeWire providers on Raspberry Pi
+        run: >-
+          cargo test --locked --manifest-path rust/Cargo.toml
+          --package lumistripe-web --features bluez,pipewire
+
+      - name: Verify live BlueZ snapshot on Raspberry Pi
+        run: |
+          set -eu
+          if systemctl is-active --quiet bluetooth.service; then
+            cargo test --locked --manifest-path rust/Cargo.toml \
+              --package lumistripe-web --features bluez,pipewire \
+              -- --ignored --exact \
+              bluetooth_bluer::tests::live_bluez_snapshot
+          else
+            printf 'BlueZ live snapshot skipped: bluetooth.service is inactive.\n' \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Verify live PipeWire snapshot on Raspberry Pi
+        run: |
+          set -eu
+          runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+          if test -S "$runtime_dir/pipewire-0"; then
+            XDG_RUNTIME_DIR="$runtime_dir" cargo test --locked \
+              --manifest-path rust/Cargo.toml --package lumistripe-web \
+              --features bluez,pipewire \
+              -- --ignored --exact pipewire_bindings::tests::live_pipewire_registry_snapshot
+          else
+            printf 'PipeWire live snapshot skipped: no user daemon socket at %s/pipewire-0.\n' \
+              "$runtime_dir" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Verify live NetworkManager helper protocol on Raspberry Pi
+        run: |
+          set -eu
+          if systemctl is-active --quiet NetworkManager.service \
+            && command -v nmcli >/dev/null 2>&1 \
+            && command -v iw >/dev/null 2>&1 \
+            && command -v python3 >/dev/null 2>&1; then
+            cargo test --locked --manifest-path rust/Cargo.toml \
+              --package lumistripe-web --features bluez,pipewire \
+              -- --ignored --exact \
+              network::tests::live_networkmanager_status_decodes_read_only_helper_snapshot
+          else
+            printf 'NetworkManager live snapshot skipped: service or helper prerequisites are inactive.\n' \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Verify installed NetworkManager REST boundary on Raspberry Pi
+        run: |
+          set -eu
+          target_dir="${CARGO_TARGET_DIR:-rust/target}"
+          test_name=app::tests::live_networkmanager_status_route_uses_installed_restricted_wrapper
+          if systemctl is-active --quiet NetworkManager.service \
+            && id -u www-data >/dev/null 2>&1 \
+            && test -x /usr/local/sbin/lumistripe-network \
+            && test -f /usr/local/libexec/lumistripe/network/lumistripe_network.py \
+            && sudo -n -l -U www-data 2>/dev/null \
+              | grep -Fq /usr/local/sbin/lumistripe-network; then
+            test_binary=
+            for candidate in "$target_dir"/debug/deps/lumistripe_web-*; do
+              if test -x "$candidate" \
+                && "$candidate" --list 2>/dev/null | grep -Fq "$test_name"; then
+                test_binary="$candidate"
+                break
+              fi
+            done
+            if test -z "$test_binary"; then
+              printf 'NetworkManager REST live test binary was not built.\n' >&2
+              exit 1
+            fi
+            service_home="$(getent passwd www-data | cut -d: -f6)"
+            sudo -u www-data -- env \
+              HOME="$service_home" \
+              PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+              LUMISTRIPE_ENGINE_TEST_BINARY="$target_dir/debug/lumistripe-engine" \
+              "$test_binary" "$test_name" --exact --ignored --test-threads=1
+          else
+            printf 'Installed NetworkManager REST boundary skipped: restricted helper or service prerequisites are unavailable.\n' \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Verify live native audio status through the web API on Raspberry Pi
+        run: |
+          set -eu
+          runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+          if systemctl is-active --quiet bluetooth.service \
+            && test -S "$runtime_dir/pipewire-0" \
+            && XDG_RUNTIME_DIR="$runtime_dir" pactl info >/dev/null 2>&1; then
+            XDG_RUNTIME_DIR="$runtime_dir" cargo test --locked \
+              --manifest-path rust/Cargo.toml --package lumistripe-web \
+              --features bluez,pipewire \
+              -- --ignored --exact \
+              app::tests::live_native_audio_status_uses_system_providers_with_mock_outputs
+          else
+            printf 'Native audio API snapshot skipped: BlueZ, PipeWire, or PipeWire Pulse is inactive.\n' \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Run opt-in live Raspberry Pi system, BlueZ, and Wi-Fi checks
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          set -eu
+          target_dir="${CARGO_TARGET_DIR:-rust/target}"
+          test_binary=
+          for candidate in "$target_dir"/debug/deps/lumistripe_web-*; do
+            if test -x "$candidate" \
+              && "$candidate" --list 2>/dev/null \
+                | grep -Fq bluetooth_bluer::tests::live_bluez_scan_completes_and_releases_discovery \
+              && "$candidate" --list 2>/dev/null \
+                | grep -Fq network::tests::live_networkmanager_scan_uses_the_restricted_wrapper \
+              && "$candidate" --list 2>/dev/null \
+                | grep -Fq system_stats::tests::live_linux_metrics_are_available; then
+              test_binary="$candidate"
+              break
+            fi
+          done
+          if test -z "$test_binary"; then
+            printf 'Live Raspberry Pi test binary was not built.\n' >&2
+            exit 1
+          fi
+
+          "$test_binary" \
+            system_stats::tests::live_linux_metrics_are_available \
+            --exact --ignored --test-threads=1
+
+          bluez_state="$(bluetoothctl show 2>/dev/null || true)"
+          if systemctl is-active --quiet bluetooth.service \
+            && printf '%s\n' "$bluez_state" | grep -Fq 'Powered: yes' \
+            && printf '%s\n' "$bluez_state" | grep -Fq 'Discovering: no'; then
+            "$test_binary" \
+              bluetooth_bluer::tests::live_bluez_scan_completes_and_releases_discovery \
+              --exact --ignored --test-threads=1
+          else
+            printf 'Live BlueZ scan skipped: adapter is inactive, unpowered, or already scanning.\n' \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if systemctl is-active --quiet NetworkManager.service \
+            && test -e /sys/class/net/wlan0 \
+            && test -x /usr/local/sbin/lumistripe-network \
+            && id -u www-data >/dev/null 2>&1 \
+            && sudo -n -l -U www-data 2>/dev/null \
+              | grep -Fq /usr/local/sbin/lumistripe-network; then
+            service_home="$(getent passwd www-data | cut -d: -f6)"
+            sudo -u www-data -- env \
+              HOME="$service_home" \
+              PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+              "$test_binary" \
+              network::tests::live_networkmanager_scan_uses_the_restricted_wrapper \
+              --exact --ignored --test-threads=1
+          else
+            printf 'Live Wi-Fi scan skipped: wlan0, NetworkManager, or the restricted wrapper is unavailable.\n' \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Build native and scalar Rust renderer benchmarks
         run: |

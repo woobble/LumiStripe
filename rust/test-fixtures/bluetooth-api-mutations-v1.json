@@ -1,0 +1,81 @@
+[
+  {
+    "method": "PUT",
+    "path": "/api/audio/bluetooth/power",
+    "body": {"powered": false},
+    "provider": "bluez",
+    "operation": "set_power",
+    "arguments": [false]
+  },
+  {
+    "method": "PUT",
+    "path": "/api/audio/bluetooth/alias",
+    "body": {"alias": "Stage speaker"},
+    "provider": "bluez",
+    "operation": "set_alias",
+    "arguments": ["Stage speaker"]
+  },
+  {
+    "method": "POST",
+    "path": "/api/audio/bluetooth/scan",
+    "provider": "bluez",
+    "operation": "scan",
+    "arguments": []
+  },
+  {
+    "method": "POST",
+    "path": "/api/audio/bluetooth/pair",
+    "body": {"address": "AA:BB:CC:DD:EE:01"},
+    "provider": "bluez",
+    "operation": "pair",
+    "arguments": ["AA:BB:CC:DD:EE:01"]
+  },
+  {
+    "method": "POST",
+    "path": "/api/audio/bluetooth/connect",
+    "body": {"address": "AA:BB:CC:DD:EE:01", "role": "input"},
+    "provider": "bluez",
+    "operation": "connect",
+    "arguments": ["AA:BB:CC:DD:EE:01", "input"]
+  },
+  {
+    "method": "POST",
+    "path": "/api/audio/bluetooth/disconnect",
+    "body": {"address": "AA:BB:CC:DD:EE:01"},
+    "provider": "bluez",
+    "operation": "disconnect",
+    "arguments": ["AA:BB:CC:DD:EE:01"]
+  },
+  {
+    "method": "POST",
+    "path": "/api/audio/bluetooth/forget",
+    "body": {"address": "AA:BB:CC:DD:EE:01"},
+    "provider": "bluez",
+    "operation": "forget",
+    "arguments": ["AA:BB:CC:DD:EE:01"]
+  },
+  {
+    "method": "PUT",
+    "path": "/api/audio/output",
+    "body": {"selector": "speaker_main"},
+    "provider": "pipewire",
+    "operation": "set_default_sink",
+    "arguments": ["speaker_main"]
+  },
+  {
+    "method": "PUT",
+    "path": "/api/audio/output/volume",
+    "body": {"selector": "speaker_main", "volume": 0.42},
+    "provider": "pipewire",
+    "operation": "set_volume",
+    "arguments": ["speaker_main", 0.42]
+  },
+  {
+    "method": "PUT",
+    "path": "/api/audio/output/mute",
+    "body": {"selector": "speaker_main", "muted": true},
+    "provider": "pipewire",
+    "operation": "set_mute",
+    "arguments": ["speaker_main", true]
+  }
+]

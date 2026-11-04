@@ -10,6 +10,7 @@ import sys
 import tarfile
 import urllib.error
 import urllib.request
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Self
 
@@ -349,7 +350,15 @@ def test_soloist_download_and_install_run_through_service_user_boundary(
     tmp_path: Path,
 ) -> None:
     archive = tmp_path / "soloist.tar.gz"
-    _write_soloist_archive(archive)
+    built_at = datetime.now(UTC)
+    epoch = int(built_at.timestamp())
+    payload = (
+        "#!/bin/sh\n"
+        "[ \"$1\" = --version ] || exit 2\n"
+        f"printf '%s\\n' 'soloist 1.3.9.4 build {epoch} ({built_at:%Y%m%d}) "
+        "(gtest) (linux/x86_64)'\n"
+    ).encode()
+    _write_soloist_archive(archive, payload=payload)
     service_home = tmp_path / "service home"
     calls = tmp_path / "service-user-calls"
     script = """
@@ -360,6 +369,8 @@ as_user() {
   if [[ "$1" == /usr/bin/python3 && "$3" == --download ]]; then
     cp -- "$FAKE_ARCHIVE" "$5"
     "$PYTHON_EXECUTABLE" "$2" "$5" "$6"
+  elif [[ "$1" == /usr/bin/env && "$2" == -u ]]; then
+    "$PYTHON_EXECUTABLE" "$5" "${@:6}"
   else
     "$@"
   fi
@@ -384,13 +395,66 @@ install_spotify_soloist "$SERVICE_HOME"
     assert result.returncode == 0, result.stderr
 
     installed = service_home / ".local/bin/soloist"
-    assert installed.read_bytes() == b"trusted soloist payload"
+    assert installed.read_bytes() == payload
     assert stat.S_IMODE(installed.stat().st_mode) == 0o755
     logged_commands = calls.read_text(encoding="utf-8")
     assert "/usr/bin/python3" in logged_commands
     assert "--download https://soloist-builds.spotifycdn.com/soloist_release_x86_64.tar.gz" in logged_commands
     assert "install -m 755" in logged_commands
     assert "install -o root" not in logged_commands
+
+
+def test_soloist_install_keeps_existing_binary_when_download_is_expired(
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "expired-soloist.tar.gz"
+    expired_payload = (
+        b"#!/bin/sh\n"
+        b"[ \"$1\" = --version ] || exit 2\n"
+        b"printf '%s\\n' 'soloist 1.0 build 946684800 (20000101) (gtest) "
+        b"(linux/x86_64)'\n"
+    )
+    _write_soloist_archive(archive, payload=expired_payload)
+    service_home = tmp_path / "service home"
+    installed = service_home / ".local/bin/soloist"
+    installed.parent.mkdir(parents=True)
+    installed.write_bytes(b"existing build")
+    script = """
+set -Eeuo pipefail
+SCRIPT_DIR="${SOLOIST_SCRIPT%/*}"
+as_user() {
+  if [[ "$1" == /usr/bin/python3 && "$3" == --download ]]; then
+    cp -- "$FAKE_ARCHIVE" "$5"
+    "$PYTHON_EXECUTABLE" "$2" "$5" "$6"
+  elif [[ "$1" == /usr/bin/env && "$2" == -u ]]; then
+    "$PYTHON_EXECUTABLE" "$5" "${@:6}"
+  elif [[ "$1" == /usr/bin/python3 ]]; then
+    "$PYTHON_EXECUTABLE" "$2" "${@:3}"
+  else
+    "$@"
+  fi
+}
+source "$SCRIPT_DIR/soloist.sh"
+install_spotify_soloist "$SERVICE_HOME"
+"""
+
+    result = subprocess.run(
+        ["bash", "-c", script],
+        env={
+            **os.environ,
+            "FAKE_ARCHIVE": str(archive),
+            "PYTHON_EXECUTABLE": sys.executable,
+            "SERVICE_HOME": str(service_home),
+            "SOLOIST_SCRIPT": str(SOLOIST_SCRIPT),
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "build expired" in result.stderr
+    assert installed.read_bytes() == b"existing build"
 
 
 def test_update_restarts_spotify_after_installing_new_service_unit(
@@ -430,6 +494,10 @@ def test_root_updater_snapshots_soloist_validation_helpers() -> None:
 
     assert 'source "$SCRIPT_DIR/soloist.sh"' in updater
     assert "soloist.sh extract_soloist.py" in support
+    assert "soloist_diagnostics.py" in support
+    assert "/usr/local/libexec/lumistripe/deploy/soloist_diagnostics.py" in service
+    assert "ExecStartPre=/usr/bin/env -u LUMI_SPOTIFY_API_KEY" in service
+    assert "--binary @LUMI_HOME@/.local/bin/soloist" in service
     assert "exec soloist --device-name" in service
 
 

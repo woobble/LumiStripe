@@ -2,18 +2,32 @@
 
 #![recursion_limit = "256"]
 
+#[allow(dead_code)]
+mod api_schema;
 mod app;
 mod audio;
 mod auth;
+mod bluetooth;
+#[cfg(all(feature = "bluez", target_os = "linux"))]
+mod bluetooth_bluer;
+mod bluetooth_models;
+mod bluetooth_process;
+mod bluetooth_providers;
 mod config;
 mod control;
 mod error;
+mod network;
+#[cfg(all(feature = "pipewire", target_os = "linux"))]
+mod pipewire_bindings;
 mod preview;
 mod settings;
+mod spotify;
 mod state;
 mod streams;
+mod system_stats;
+mod updates;
 
-pub use app::WebApplication;
+pub use app::{ApiDoc, WebApplication};
 pub use auth::PairingAuth;
 pub use config::{AppConfig, CliOptions, EngineOutputOptions, OutputBackendArg};
 pub use control::ControlPlane;

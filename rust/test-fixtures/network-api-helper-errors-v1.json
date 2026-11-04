@@ -1,0 +1,76 @@
+[
+  {
+    "name": "invalid",
+    "method": "POST",
+    "path": "/api/network/scan",
+    "body": {"interface": "wlan0"},
+    "helper_code": "invalid",
+    "error": "The hotspot adapter cannot connect to an internet network.",
+    "status_code": 409
+  },
+  {
+    "name": "unsupported",
+    "method": "POST",
+    "path": "/api/network/scan",
+    "body": {"interface": "wlan9"},
+    "helper_code": "unsupported",
+    "error": "Wi-Fi scanning is not supported on this adapter.",
+    "status_code": 422
+  },
+  {
+    "name": "unavailable",
+    "method": "POST",
+    "path": "/api/network/scan",
+    "body": {"interface": "wlan8"},
+    "helper_code": "unavailable",
+    "error": "NetworkManager is unavailable.",
+    "status_code": 503
+  },
+  {
+    "name": "connection_failed",
+    "method": "POST",
+    "path": "/api/network/connect",
+    "body": {
+      "interface": "wlan1",
+      "ssid": "Party Wi-Fi",
+      "password": "wrong-pass"
+    },
+    "helper_code": "connection_failed",
+    "error": "Could not connect to that Wi-Fi network. Check the password and try again.",
+    "status_code": 409
+  },
+  {
+    "name": "unknown_code",
+    "method": "POST",
+    "path": "/api/network/scan",
+    "body": {"interface": "wlan7"},
+    "helper_code": "permission_denied",
+    "error": "NetworkManager could not complete the request.",
+    "status_code": 503
+  },
+  {
+    "name": "helper_exit",
+    "method": "POST",
+    "path": "/api/network/scan",
+    "body": {"interface": "wlan6"},
+    "failure": "nonzero_exit",
+    "error": "Network management is unavailable. Install or update the Pi appliance.",
+    "status_code": 503
+  },
+  {
+    "name": "helper_timeout",
+    "method": "POST",
+    "path": "/api/network/scan",
+    "body": {"interface": "wlan5"},
+    "failure": "timeout",
+    "error": "Network management is unavailable. Install or update the Pi appliance. Otherwise, retry shortly.",
+    "status_code": 503
+  },
+  {
+    "name": "helper_unspawnable",
+    "method": "GET",
+    "path": "/api/network/status",
+    "error": "Network management is unavailable. Install or update the Pi appliance. Otherwise, retry shortly.",
+    "status_code": 503
+  }
+]

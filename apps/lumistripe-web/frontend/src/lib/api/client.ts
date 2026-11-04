@@ -260,6 +260,8 @@ const dashboardStateSchema = z.object({
   music_gate: z.string(),
   bpm: z.number(),
   audio_status: z.string(),
+  spotify: z.lazy(() => spotifyStatusSchema).optional(),
+  bluetooth: z.lazy(() => bluetoothStatusSchema).optional(),
   configured_audio_source: z.string().nullable().optional(),
   active_audio_source: z.string().nullable().optional(),
   audio_monitoring: z.boolean().nullable().optional(),
@@ -618,6 +620,8 @@ const systemStatsSchema = z.object({
   disk_total_bytes: z.number().int().nullable(),
   disk_usage_percent: z.number().nullable(),
   uptime_seconds: z.number().nullable(),
+  process_memory_used_bytes: z.number().int().nullable(),
+  process_thread_count: z.number().int().nullable(),
   sampled_at: z.string(),
 }).strict() satisfies z.ZodType<SystemStats>
 const calibrationSessionSchema = z.object({

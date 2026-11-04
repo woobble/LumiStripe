@@ -251,6 +251,12 @@ class DashboardState(BaseModel):
 
     revision: int = 0
     runtime: RuntimeKind
+    spotify: SpotifyStatusResponse = Field(
+        default_factory=lambda: SpotifyStatusResponse()
+    )
+    bluetooth: BluetoothStatusResponse = Field(
+        default_factory=lambda: BluetoothStatusResponse()
+    )
     output_backend: str = "simulation"
     output_devices: tuple[str, ...] = ()
     spi_speed_hz: int | None = None
@@ -807,3 +813,6 @@ class AudioTelemetry(BaseModel):
     drop_accent_status: Literal["idle", "pending", "activated", "skipped"] = "idle"
     drop_accent_reason: str | None = None
     health: str = "inactive"
+
+
+DashboardState.model_rebuild()

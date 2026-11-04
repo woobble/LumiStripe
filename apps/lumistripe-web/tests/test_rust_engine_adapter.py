@@ -90,6 +90,10 @@ def _mock_spec(output_id: str, pixel_count: int, *, reversed: bool = False) -> R
     return RustOutputSpec(output_id, pixel_count, reversed, "mock")
 
 
+def _history_end_timestamp_ns(monotonic_now_ns: int, history_span_ns: int) -> int:
+    return max(monotonic_now_ns, history_span_ns + 2_000_000_000)
+
+
 def test_runtime_defaults_to_python_and_rust_hardware_is_enabled_explicitly() -> None:
     assert RuntimeSettings().engine_backend == "python"
     assert RuntimeSettings().audio_backend == "python"
@@ -98,6 +102,15 @@ def test_runtime_defaults_to_python_and_rust_hardware_is_enabled_explicitly() ->
     assert RuntimeSettings(engine_backend="rust", audio_backend="rust").audio_backend == "rust"
     with pytest.raises(ValueError, match="requires the Rust engine"):
         RuntimeSettings(audio_backend="rust")
+
+
+def test_synthetic_history_starts_after_zero_on_a_fresh_monotonic_clock() -> None:
+    period_ns = round(60.0 / 128.0 * 1_000_000_000)
+    history_span_ns = (384 - 1) * period_ns
+
+    timestamp_ns = _history_end_timestamp_ns(0, history_span_ns)
+
+    assert timestamp_ns - history_span_ns == 2_000_000_000
 
 
 def test_cli_defaults_to_python_and_accepts_rust_hardware() -> None:
@@ -1544,10 +1557,13 @@ def test_rust_scheduled_dynamic_playback_matches_python_clock_for_three_minute_b
         dynamic_idle=RustRenderDynamicIdle("off", None, {}, (0, 0, 0), 1.0),
     )
     try:
-        timestamp_ns = time.monotonic_ns()
         period_ns = round(60.0 / 128.0 * 1_000_000_000)
         beat_count = 384
-        first_event_ns = timestamp_ns - (beat_count - 1) * period_ns
+        history_span_ns = (beat_count - 1) * period_ns
+        # Keep synthetic history non-negative even when CI has only just booted.
+        timestamp_ns = _history_end_timestamp_ns(time.monotonic_ns(), history_span_ns)
+        first_event_ns = timestamp_ns - history_span_ns
+        assert first_event_ns > 0
         beat_events_list: list[RustRenderBeatEvent] = []
         for index in range(beat_count):
             if index > 0 and index % 97 == 41:

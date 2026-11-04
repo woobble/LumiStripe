@@ -54,13 +54,14 @@ pub(crate) fn tuning_value(profile: &AudioTuningProfile) -> Value {
 
 pub(crate) fn sync_route(
     status: Option<&EngineAudioStatus>,
-    configured_source: &str,
+    active_source: &str,
     settings: &DashboardSettings,
 ) -> String {
-    let source = if configured_source == "demo" && status.is_some_and(|status| status.active) {
-        "demo"
-    } else if status.is_some_and(|status| status.active) {
-        "mic"
+    let source = if status.is_some_and(|status| status.active) {
+        match active_source {
+            "demo" | "mic" | "bluetooth" | "spotify" => active_source,
+            _ => "mic",
+        }
     } else {
         "off"
     };
@@ -75,23 +76,28 @@ pub(crate) fn sync_route(
 
 pub(crate) fn stream_context(
     settings: &DashboardSettings,
-    source: &str,
+    configured_source: &str,
+    active_source: &str,
     status: Option<&EngineAudioStatus>,
 ) -> AudioStreamContext {
-    let route = sync_route(status, source, settings);
+    let route = sync_route(status, active_source, settings);
     let active_status = status.filter(|status| status.active);
     let active_device = active_status.and_then(|status| status.device.as_ref());
-    let selected_name = active_device
-        .map(|device| device.name.as_str())
-        .or(settings.selected_audio_device.as_deref());
+    let selected_name = match active_source {
+        "bluetooth" | "spotify" => Some(active_source),
+        _ => active_device
+            .map(|device| device.name.as_str())
+            .or(settings.selected_audio_device.as_deref()),
+    };
     let profile = selected_name
         .and_then(|name| settings.audio_profiles.get(name))
         .cloned()
         .unwrap_or_default();
-    let microphone_requested = matches!(source, "auto" | "mic");
+    let microphone_requested =
+        active_source == "mic" || (configured_source == "auto" && active_source == "off");
 
     AudioStreamContext {
-        source: source.to_owned(),
+        source: configured_source.to_owned(),
         sync_offset_ms: settings
             .audio_sync_offsets_ms
             .get(&route)
@@ -105,7 +111,8 @@ pub(crate) fn stream_context(
 
 pub(crate) fn response(
     settings: &DashboardSettings,
-    source: &str,
+    configured_source: &str,
+    active_source: &str,
     status: Option<&EngineAudioStatus>,
     devices: &[InputAudioDevice],
     enumeration_error: Option<&str>,
@@ -114,7 +121,10 @@ pub(crate) fn response(
         .filter(|status| status.active)
         .and_then(|status| status.device.as_ref())
         .map(|device| device.name.as_str());
-    let selected_name = active_name.or(settings.selected_audio_device.as_deref());
+    let selected_name = match active_source {
+        "bluetooth" | "spotify" => Some(active_source),
+        _ => active_name.or(settings.selected_audio_device.as_deref()),
+    };
     let active_device = status
         .filter(|status| status.active)
         .and_then(|status| status.device.as_ref())
@@ -138,9 +148,9 @@ pub(crate) fn response(
         .and_then(|name| settings.audio_profiles.get(name))
         .cloned()
         .unwrap_or_default();
-    let route = sync_route(status, source, settings);
+    let route = sync_route(status, active_source, settings);
     let active_source = if status.is_some_and(|status| status.active) {
-        if source == "demo" { "demo" } else { "mic" }
+        active_source
     } else {
         "off"
     };
@@ -148,9 +158,9 @@ pub(crate) fn response(
         .and_then(|status| status.last_error.as_deref())
         .or(enumeration_error);
     json!({
-        "source": source,
+        "source": configured_source,
         "active_source": active_source,
-        "monitoring": status.is_some_and(|status| status.active) && source != "demo",
+        "monitoring": status.is_some_and(|status| status.active) && active_source != "demo",
         "active_device": active_device,
         "fallback_device": fallback_device,
         "active_device_name": active_name,
@@ -247,7 +257,7 @@ mod tests {
         settings
             .audio_sync_offsets_ms
             .insert("off|USB mic|default".to_owned(), -24.5);
-        let response = response(&settings, "auto", None, &[], None);
+        let response = response(&settings, "auto", "off", None, &[], None);
         assert_eq!(response["source"], "auto");
         assert_eq!(response["active_source"], "off");
         assert_eq!(response["monitoring"], false);
@@ -269,7 +279,7 @@ mod tests {
             ..Default::default()
         };
 
-        let response = response(&settings, "demo", Some(&status), &[], None);
+        let response = response(&settings, "demo", "demo", Some(&status), &[], None);
 
         assert_eq!(response["source"], "demo");
         assert_eq!(response["active_source"], "demo");
@@ -308,7 +318,7 @@ mod tests {
             ..Default::default()
         };
 
-        let context = stream_context(&settings, "auto", Some(&status));
+        let context = stream_context(&settings, "auto", "mic", Some(&status));
 
         assert_eq!(context.source, "auto");
         assert_eq!(context.sync_route, "mic|USB mic|default");

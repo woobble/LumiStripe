@@ -23,7 +23,7 @@ pub enum PersistedPlaybackMode {
     Dynamic,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MusicIdleMode {
     #[default]
@@ -32,7 +32,7 @@ pub enum MusicIdleMode {
     Animation,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum StripeLayout {
     #[default]
@@ -41,7 +41,7 @@ pub enum StripeLayout {
     Independent,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum StripeBackend {
     #[default]
@@ -49,7 +49,7 @@ pub enum StripeBackend {
     Gpio,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ZonePattern {
     #[default]
@@ -57,7 +57,7 @@ pub enum ZonePattern {
     Alternate,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SwitchQuantization {
     #[default]
@@ -67,7 +67,7 @@ pub enum SwitchQuantization {
     Phrase,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TransitionEffect {
     #[default]
@@ -331,14 +331,20 @@ impl DashboardSettings {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, utoipa::ToSchema)]
 #[serde(default)]
+#[schema(as = MusicIdleState)]
 pub struct MusicIdleSettings {
+    #[schema(schema_with = crate::api_schema::music_idle_mode_schema)]
     pub mode: MusicIdleMode,
+    #[schema(default = "#2060FF", pattern = "^#[0-9A-Fa-f]{6}$")]
     pub color: String,
+    #[schema(default = "")]
     pub animation: String,
+    #[schema(minimum = 0.0, maximum = 1.0, default = 1.0)]
     pub brightness: f64,
     #[serde(flatten)]
+    #[schema(ignore)]
     pub extra: BTreeMap<String, Value>,
 }
 
@@ -395,25 +401,42 @@ impl Default for ColorCorrection {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, utoipa::ToSchema)]
 #[serde(default)]
+#[schema(as = AudioTuningValues)]
 pub struct AudioTuningProfile {
+    #[schema(minimum = 0.1, maximum = 0.8, default = 0.36)]
     pub target_level: f64,
+    #[schema(minimum = 0.0, maximum = 1.0)]
     pub hardware_gain_target: Option<f64>,
+    #[schema(minimum = 0.0, maximum = 1.0, default = 0.015)]
     pub noise_floor: f64,
+    #[schema(minimum = 0.0, maximum = 0.5, default = 0.003)]
     pub input_noise_floor: f64,
+    #[schema(minimum = 0.0, maximum = 1.0, default = 0.65)]
     pub dynamic_response: f64,
+    #[schema(minimum = 0.01, maximum = 1.0, default = 0.45)]
     pub rms_attack: f64,
+    #[schema(minimum = 0.01, maximum = 1.0, default = 0.12)]
     pub rms_release: f64,
+    #[schema(minimum = 0.01, maximum = 1.0, default = 0.4)]
     pub band_attack: f64,
+    #[schema(minimum = 0.01, maximum = 1.0, default = 0.1)]
     pub band_release: f64,
+    #[schema(minimum = 0.01, maximum = 1.0, default = 0.18)]
     pub beat_release: f64,
+    #[schema(minimum = 0.0, maximum = 1.0, default = 0.03)]
     pub energy_threshold: f64,
+    #[schema(minimum = 0.0, maximum = 1.0, default = 0.025)]
     pub onset_threshold: f64,
+    #[schema(minimum = 0.0, maximum = 1.0, default = 0.05)]
     pub beat_density_threshold: f64,
+    #[schema(minimum = 0.0, maximum = 1.0, default = 0.08)]
     pub brightness_threshold: f64,
+    #[schema(minimum = 0.0, maximum = 1.0, default = 0.35)]
     pub spectral_balance_ratio: f64,
     #[serde(flatten)]
+    #[schema(ignore)]
     pub extra: BTreeMap<String, Value>,
 }
 
@@ -582,25 +605,42 @@ impl StripeTopologySettings {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, utoipa::ToSchema)]
 #[serde(default)]
+#[schema(as = StripeOutputConfig)]
 pub struct StripeOutputSettings {
+    #[schema(required = true, min_length = 1, max_length = 64)]
     pub id: String,
+    #[schema(required = true, min_length = 1, max_length = 40)]
     pub name: String,
+    #[schema(required = true, minimum = 1, maximum = 4096)]
     pub pixels: usize,
+    #[schema(default = "spi")]
     pub backend: StripeBackend,
+    #[schema(default = false)]
     pub reversed: bool,
+    #[schema(minimum = 1, maximum = 4096, default = 1)]
     pub zone_count: usize,
+    #[schema(default = "repeat")]
     pub zone_pattern: ZonePattern,
+    #[schema(min_length = 1, default = "/dev/spidev0.0")]
     pub spi_device: String,
+    #[schema(minimum = 1, maximum = 32000000, default = 1000000)]
     pub spi_speed_hz: u32,
+    #[schema(min_length = 1, default = "/dev/gpiochip0")]
     pub chip: String,
+    #[schema(minimum = 0, default = 10)]
     pub data_pin: u32,
+    #[schema(minimum = 0, default = 11)]
     pub clock_pin: u32,
+    #[schema(minimum = 0.0, default = 5.0)]
     pub voltage_v: f64,
+    #[schema(minimum = 0.0, default = 0.06)]
     pub full_white_current_a: f64,
+    #[serde(default)]
     pub power_limit_watts: Option<f64>,
     #[serde(flatten)]
+    #[schema(ignore)]
     pub extra: BTreeMap<String, Value>,
 }
 
@@ -711,13 +751,18 @@ impl StartupPlaybackSettings {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, utoipa::ToSchema)]
 #[serde(default)]
+#[schema(as = TransitionSettingsResponse)]
 pub struct TransitionSettings {
+    #[schema(default = true)]
     pub enabled: bool,
+    #[schema(minimum = 100, maximum = 1500, default = 300)]
     pub duration_ms: u16,
+    #[schema(schema_with = crate::api_schema::transition_effect_schema)]
     pub effect: TransitionEffect,
     #[serde(flatten)]
+    #[schema(ignore)]
     pub extra: BTreeMap<String, Value>,
 }
 
@@ -741,19 +786,26 @@ impl TransitionSettings {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
+#[schema(as = AnimationSequenceContract)]
 pub struct SavedAnimationSequence {
+    #[schema(min_length = 1, max_length = 64)]
     pub id: String,
+    #[schema(min_length = 1, max_length = 80)]
     pub name: String,
     pub repeat: bool,
+    #[schema(min_items = 1, max_items = 32)]
     pub steps: Vec<SavedAnimationSequenceStep>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
+#[schema(as = AnimationSequenceStepContract)]
 pub struct SavedAnimationSequenceStep {
+    #[schema(min_length = 1, max_length = 100)]
     pub animation_name: String,
+    #[schema(schema_with = crate::api_schema::duration_sequence_bars_schema)]
     pub duration_bars: u8,
 }
 

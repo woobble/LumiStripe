@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import time
 from dataclasses import replace
@@ -7,6 +8,7 @@ from pathlib import Path
 
 import lumistripe_web.bluetooth as bluetooth_module
 import lumistripe_web.runtime as runtime_module
+from fastapi.testclient import TestClient
 from lumistripe import (
     AudioFrame,
     AudioInputDevice,
@@ -17,6 +19,7 @@ from lumistripe import (
     PlaybackMode,
     Stripe,
 )
+from lumistripe_web.app import create_app
 from lumistripe_web.bluetooth import (
     BluetoothCommandError,
     BluetoothDevice,
@@ -440,6 +443,46 @@ def test_bluetooth_status_separates_phone_input_and_speaker_output() -> None:
     assert ("pactl", "set-sink-mute", SPEAKER_SINK, "0") in commands
 
 
+def test_bluetooth_refresh_reconciles_out_of_band_changes_and_keeps_audio_status_on_bluez_error() -> None:
+    state = {"renamed": False, "bluez_available": True}
+
+    def runner(command: tuple[str, ...], timeout: float) -> str:
+        if command[0] == "bluetoothctl" and not state["bluez_available"]:
+            raise BluetoothCommandError("BlueZ D-Bus service is unavailable.")
+        if command == ("bluetoothctl", "devices") and state["renamed"]:
+            return f"Device {PHONE_ADDRESS} Renamed Headset"
+        if command in {
+            ("bluetoothctl", "devices", "Connected"),
+            ("bluetoothctl", "devices", "Paired"),
+        } and state["renamed"]:
+            return ""
+        return _pipewire_runner(command, timeout)
+
+    manager = BluetoothManager(
+        runner=runner,
+        command_exists=lambda command: command in {"bluetoothctl", "pactl"},
+    )
+
+    initial = manager.refresh()
+    assert initial.connected_inputs[0].name == "Party iPhone"
+    assert initial.default_sink == "alsa_output.usb-speakers"
+
+    state["renamed"] = True
+    changed = manager.refresh()
+    assert changed.devices[0].name == "Renamed Headset"
+    assert changed.devices[0].connected is False
+    assert changed.connected_inputs == ()
+    assert changed.output_devices
+
+    state["bluez_available"] = False
+    degraded = manager.refresh()
+    assert degraded.available is True
+    assert degraded.error == "BlueZ D-Bus service is unavailable."
+    assert degraded.devices == changed.devices
+    assert degraded.output_devices == changed.output_devices
+    assert degraded.default_sink == changed.default_sink
+
+
 def test_bluetooth_status_uses_current_bluetoothctl_filter_command() -> None:
     commands: list[tuple[str, ...]] = []
 
@@ -751,6 +794,12 @@ class FakeBluetoothManager:
         self.defaults: list[str] = []
         self.restored: list[str] = []
         self.spotify_routes = 0
+        self.api_calls: list[tuple[object, ...]] = []
+        self.pair_failure: str | None = None
+        self.pair_pending = False
+        self.operation_failures: dict[str, str] = {}
+        self.output_failure: str | None = None
+        self.output_operation_failures: dict[str, str] = {}
 
     def start(self) -> None:
         return
@@ -776,6 +825,262 @@ class FakeBluetoothManager:
 
     def refresh_spotify_route(self) -> None:
         self.spotify_routes += 1
+
+    def _record_api_call(
+        self,
+        operation: str,
+        *arguments: object,
+        state_operation: str | None = None,
+    ) -> BluetoothStatus:
+        if self.current.operation_state == "running":
+            raise BluetoothCommandError("another Bluetooth operation is already running")
+        self.api_calls.append((operation, *arguments))
+        failure = self.operation_failures.get(operation)
+        if failure is not None:
+            running = replace(
+                self.current,
+                operation=state_operation or operation,
+                operation_id=f"fixture-failure-{len(self.api_calls)}",
+                operation_state="running",
+                error=None,
+            )
+            self.current = replace(
+                running,
+                operation=None,
+                operation_state="failed",
+                error=failure,
+            )
+            return running
+        return self.current
+
+    def set_power(self, powered: bool) -> BluetoothStatus:
+        return self._record_api_call(
+            "set_power",
+            powered,
+            state_operation=f"power:{'on' if powered else 'off'}",
+        )
+
+    def set_alias(self, alias: str) -> BluetoothStatus:
+        return self._record_api_call("set_alias", alias, state_operation="renaming")
+
+    def start_scan(self) -> BluetoothStatus:
+        return self._record_api_call("scan", state_operation="scanning")
+
+    def pair(self, address: str) -> BluetoothStatus:
+        if self.current.operation_state == "running":
+            raise BluetoothCommandError("another Bluetooth operation is already running")
+        self.api_calls.append(("pair", address))
+        if self.pair_pending:
+            self.current = replace(
+                self.current,
+                operation=f"pairing:{address}",
+                operation_id="fixture-pending-operation",
+                operation_state="running",
+                error=None,
+            )
+            return self.current
+        if self.pair_failure is None:
+            return self.current
+        running = replace(
+            self.current,
+            operation=f"pairing:{address}",
+            operation_id="fixture-operation",
+            operation_state="running",
+            error=None,
+        )
+        self.current = replace(
+            running,
+            operation=None,
+            operation_state="failed",
+            error=self.pair_failure,
+        )
+        return running
+
+    def connect(self, address: str, role: str | None = None) -> BluetoothStatus:
+        return self._record_api_call(
+            "connect",
+            address,
+            role,
+            state_operation=f"connecting:{address}",
+        )
+
+    def disconnect(self, address: str) -> BluetoothStatus:
+        return self._record_api_call(
+            "disconnect", address, state_operation=f"disconnecting:{address}"
+        )
+
+    def forget(self, address: str) -> BluetoothStatus:
+        return self._record_api_call(
+            "forget", address, state_operation=f"forgetting:{address}"
+        )
+
+    def set_default_sink(self, selector: str) -> BluetoothStatus:
+        status = self._record_api_call("set_default_sink", selector)
+        if self.output_failure is not None:
+            raise BluetoothCommandError(self.output_failure)
+        return status
+
+    def set_output_volume(self, selector: str, volume: float) -> BluetoothStatus:
+        status = self._record_api_call("set_volume", selector, volume)
+        if error := self.output_operation_failures.get("set_volume"):
+            raise BluetoothCommandError(error)
+        return status
+
+    def set_output_mute(self, selector: str, muted: bool) -> BluetoothStatus:
+        status = self._record_api_call("set_mute", selector, muted)
+        if error := self.output_operation_failures.get("set_mute"):
+            raise BluetoothCommandError(error)
+        return status
+
+
+def test_bluetooth_api_mutations_follow_shared_rust_fixture(tmp_path: Path) -> None:
+    fixture_path = (
+        Path(__file__).resolve().parents[3]
+        / "rust"
+        / "test-fixtures"
+        / "bluetooth-api-mutations-v1.json"
+    )
+    cases = json.loads(fixture_path.read_text(encoding="utf-8"))
+    manager = FakeBluetoothManager()
+    settings = RuntimeSettings(
+        hardware=True,
+        pixels=8,
+        audio_source="off",
+        settings_file=tmp_path / "settings.json",
+    )
+
+    def runtime_factory(runtime_settings: RuntimeSettings) -> LumiStripeRuntime:
+        return LumiStripeRuntime(
+            runtime_settings,
+            controller_factory=lambda value: Stripe(value.pixels),
+            bluetooth_manager=manager,
+        )
+
+    with TestClient(create_app(settings, runtime_factory=runtime_factory)) as client:
+        for case in cases:
+            method = case["method"]
+            path = case["path"]
+            if "body" in case:
+                response = client.request(method, path, json=case["body"])
+            else:
+                response = client.request(method, path)
+            assert response.status_code == 200, (method, path, response.text)
+            assert manager.api_calls[-1] == (
+                case["operation"],
+                *case["arguments"],
+            )
+        assert len(manager.api_calls) == len(cases) == 10
+
+        failure_path = fixture_path.with_name("bluetooth-api-failure-v1.json")
+        failure_case = json.loads(failure_path.read_text(encoding="utf-8"))
+        manager.pair_failure = failure_case["error"]
+        response = client.request(
+            failure_case["method"],
+            failure_case["path"],
+            json=failure_case["body"],
+        )
+        assert response.status_code == 200
+        assert response.json()["operation"] == failure_case["operation"]
+        assert response.json()["operation_state"] == "running"
+        failed_status = client.get("/api/audio/bluetooth").json()
+        assert failed_status["operation_state"] == "failed"
+        assert failed_status["error"] == failure_case["error"]
+
+        api_failures_path = failure_path.with_name("bluetooth-api-failures-v1.json")
+        api_failure_cases = json.loads(api_failures_path.read_text(encoding="utf-8"))
+        for case in api_failure_cases:
+            manager.operation_failures[case["operation"]] = case["error"]
+            if "body" in case:
+                response = client.request(
+                    case["method"], case["path"], json=case["body"]
+                )
+            else:
+                response = client.request(case["method"], case["path"])
+            assert response.status_code == 200, response.text
+            assert response.json()["operation"] == case["state_operation"]
+            assert response.json()["operation_state"] == "running"
+            assert manager.api_calls[-1] == (
+                case["operation"],
+                *case["arguments"],
+            )
+            failed_status = client.get("/api/audio/bluetooth").json()
+            assert failed_status["operation_state"] == "failed"
+            assert failed_status["error"] == case["error"]
+        manager.current = replace(
+            manager.current,
+            operation=None,
+            operation_state="complete",
+            error=None,
+        )
+
+        output_failure_path = failure_path.with_name(
+            "bluetooth-api-output-failure-v1.json"
+        )
+        output_failure_case = json.loads(
+            output_failure_path.read_text(encoding="utf-8")
+        )
+        manager.output_failure = output_failure_case["error"]
+        response = client.request(
+            output_failure_case["method"],
+            output_failure_case["path"],
+            json=output_failure_case["body"],
+        )
+        assert response.status_code == output_failure_case["status"]
+        assert response.json()["detail"] == output_failure_case["error"]
+        assert manager.api_calls[-1] == (
+            output_failure_case["operation"],
+            *output_failure_case["arguments"],
+        )
+        assert manager.status().default_sink == "alsa_output.usb-speakers"
+
+        output_operation_failures_path = failure_path.with_name(
+            "bluetooth-api-output-operation-failures-v1.json"
+        )
+        output_operation_failure_cases = json.loads(
+            output_operation_failures_path.read_text(encoding="utf-8")
+        )
+        for case in output_operation_failure_cases:
+            manager.output_operation_failures[case["operation"]] = case["error"]
+            response = client.request(
+                case["method"], case["path"], json=case["body"]
+            )
+            assert response.status_code == case["status"]
+            assert response.json()["detail"] == case["error"]
+            assert manager.api_calls[-1] == (
+                case["operation"],
+                *case["arguments"],
+            )
+            assert manager.status().default_sink == "alsa_output.usb-speakers"
+
+        conflict_path = fixture_path.with_name("bluetooth-api-conflict-v1.json")
+        conflict_fixture = json.loads(conflict_path.read_text(encoding="utf-8"))
+        start_case = conflict_fixture["start"]
+        conflict_case = conflict_fixture["conflict"]
+        manager.pair_pending = True
+        response = client.request(
+            start_case["method"], start_case["path"], json=start_case["body"]
+        )
+        assert response.status_code == 200
+        assert response.json()["operation"] == start_case["operation"]
+        assert response.json()["operation_state"] == "running"
+        api_calls_before_conflict = len(manager.api_calls)
+        response = client.request(
+            conflict_case["method"],
+            conflict_case["path"],
+            json=conflict_case["body"],
+        )
+        assert response.status_code == conflict_case["status"]
+        assert response.json()["detail"] == conflict_case["error"]
+        assert len(manager.api_calls) == api_calls_before_conflict
+        manager.pair_pending = False
+        manager.current = replace(
+            manager.current,
+            operation=None,
+            operation_state="complete",
+            error=None,
+        )
+
+    assert len(manager.api_calls) == 21
 
 
 class FakeSpotifyManager:

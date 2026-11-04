@@ -7,12 +7,13 @@ import argparse
 import fcntl
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 BRANCH_REF = "refs/heads/main"
 UPDATE_REMOTE_URL = "https://github.com/woobble/LumiStripe.git"
@@ -42,7 +43,19 @@ def empty_status() -> dict[str, Any]:
 
 def load_status(path: Path) -> dict[str, Any]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                return empty_status()
+            with os.fdopen(descriptor, "r", encoding="utf-8") as status_file:
+                descriptor = -1
+                value = json.load(status_file)
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
     except (OSError, json.JSONDecodeError):
         return empty_status()
     status = empty_status()
@@ -51,8 +64,20 @@ def load_status(path: Path) -> dict[str, Any]:
     return status
 
 
+def _status_owner(path: Path) -> tuple[int, int]:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        metadata = path.parent.stat()
+    else:
+        if not stat.S_ISREG(metadata.st_mode):
+            raise OSError("update status path must be a regular file")
+    return metadata.st_uid, metadata.st_gid
+
+
 def write_status(path: Path, status: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    owner_uid, owner_gid = _status_owner(path)
     temporary_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -63,6 +88,9 @@ def write_status(path: Path, status: dict[str, Any]) -> None:
             delete=False,
         ) as temporary:
             temporary_path = Path(temporary.name)
+            current = os.fstat(temporary.fileno())
+            if (current.st_uid, current.st_gid) != (owner_uid, owner_gid):
+                os.fchown(temporary.fileno(), owner_uid, owner_gid)
             os.fchmod(temporary.fileno(), 0o644)
             json.dump(status, temporary, separators=(",", ":"))
             temporary.write("\n")
@@ -72,6 +100,27 @@ def write_status(path: Path, status: dict[str, Any]) -> None:
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
+
+
+def _open_update_lock(status_path: Path) -> TextIO:
+    lock_path = status_path.with_name("update-check.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    owner_uid, owner_gid = _status_owner(status_path)
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(
+        os, "O_NOFOLLOW", 0
+    )
+    descriptor = os.open(lock_path, flags, 0o644)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise OSError("update lock path must be a regular file")
+        if (metadata.st_uid, metadata.st_gid) != (owner_uid, owner_gid):
+            os.fchown(descriptor, owner_uid, owner_gid)
+        os.fchmod(descriptor, 0o644)
+        return os.fdopen(descriptor, "r+", encoding="utf-8")
+    except Exception:
+        os.close(descriptor)
+        raise
 
 
 def git(project_dir: Path, *arguments: str) -> str:
@@ -98,9 +147,7 @@ def update_is_running() -> bool:
 
 
 def check(project_dir: Path, status_path: Path) -> int:
-    lock_path = status_path.with_name("update-check.lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a", encoding="utf-8") as lock_file:
+    with _open_update_lock(status_path) as lock_file:
         try:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -164,9 +211,7 @@ def check(project_dir: Path, status_path: Path) -> int:
 
 
 def record_install_state(command: str, project_dir: Path, status_path: Path) -> int:
-    lock_path = status_path.with_name("update-check.lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a", encoding="utf-8") as lock_file:
+    with _open_update_lock(status_path) as lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         status = load_status(status_path)
         timestamp = now()

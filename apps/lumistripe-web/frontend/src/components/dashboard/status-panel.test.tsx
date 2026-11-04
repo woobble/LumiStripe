@@ -17,6 +17,8 @@ const systemStats: SystemStats = {
   disk_total_bytes: 8 * 1024 ** 3,
   disk_usage_percent: 50,
   uptime_seconds: 1234,
+  process_memory_used_bytes: 4 * 1024 * 1024,
+  process_thread_count: 5,
   sampled_at: "2026-01-01T00:00:00Z",
 }
 

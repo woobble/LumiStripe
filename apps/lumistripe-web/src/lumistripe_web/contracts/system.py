@@ -20,6 +20,8 @@ class SystemStats(BaseModel):
     disk_total_bytes: int | None = Field(ge=0)
     disk_usage_percent: float | None = Field(ge=0.0, le=100.0)
     uptime_seconds: float | None = Field(ge=0.0)
+    process_memory_used_bytes: int | None = Field(ge=0)
+    process_thread_count: int | None = Field(ge=0)
     sampled_at: datetime
 
 

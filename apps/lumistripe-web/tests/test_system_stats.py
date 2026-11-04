@@ -16,6 +16,9 @@ def _write_linux_stats(root: Path, *, cpu_line: str = "cpu 100 0 50 800 0 0 0 0"
         encoding="ascii",
     )
     (root / "uptime").write_text("1234.5 500.0\n", encoding="ascii")
+    self_status = root / "self" / "status"
+    self_status.parent.mkdir(parents=True, exist_ok=True)
+    self_status.write_text("Name:\ttest\nVmRSS:\t4096 kB\nThreads:\t5\n", encoding="ascii")
 
 
 def test_system_stats_collector_reads_linux_metrics_and_cpu_deltas(tmp_path: Path) -> None:
@@ -47,6 +50,8 @@ def test_system_stats_collector_reads_linux_metrics_and_cpu_deltas(tmp_path: Pat
     assert first.disk_total_bytes is not None
     assert first.disk_usage_percent is not None
     assert first.uptime_seconds == 1234.5
+    assert first.process_memory_used_bytes == 4 * 1024 * 1024
+    assert first.process_thread_count == 5
     assert first.sampled_at.tzinfo is not None
 
     _write_linux_stats(proc_root, cpu_line="cpu 200 0 100 900 0 0 0 0")
@@ -72,6 +77,8 @@ def test_system_stats_collector_returns_null_for_unavailable_sources(tmp_path: P
     assert stats.disk_total_bytes is None
     assert stats.disk_usage_percent is None
     assert stats.uptime_seconds is None
+    assert stats.process_memory_used_bytes is None
+    assert stats.process_thread_count is None
 
 
 def test_system_stats_endpoint_requires_pairing_and_returns_collected_values(tmp_path: Path) -> None:

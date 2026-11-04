@@ -149,6 +149,9 @@ USER_RUNTIME_DIR="/run/user/$SERVICE_UID"
 
 for required_file in \
   "$PROJECT_DIR/deploy/lumistripe-web.service" \
+  "$PROJECT_DIR/deploy/lumistripe-web-launcher.sh" \
+  "$PROJECT_DIR/deploy/build-rust-backend.sh" \
+  "$PROJECT_DIR/deploy/rust-toolchain.sh" \
   "$PROJECT_DIR/deploy/lumistripe-spotify.service" \
   "$PROJECT_DIR/deploy/90-lumistripe-bluetooth.conf" \
   "$PROJECT_DIR/deploy/90-lumistripe-spotify.conf" \
@@ -163,7 +166,8 @@ for required_file in \
   "$PROJECT_DIR/deploy/nginx/led-controller.conf" \
   "$PROJECT_DIR/deploy/tls.sh" \
   "$PROJECT_DIR/deploy/soloist.sh" \
-  "$PROJECT_DIR/deploy/extract_soloist.py"; do
+  "$PROJECT_DIR/deploy/extract_soloist.py" \
+  "$PROJECT_DIR/deploy/soloist_diagnostics.py"; do
   [[ -f "$required_file" ]] || {
     echo "Required deployment file is missing: $required_file" >&2
     exit 1
@@ -174,6 +178,8 @@ done
 source "$SCRIPT_DIR/tls.sh"
 # shellcheck source=deploy/soloist.sh
 source "$SCRIPT_DIR/soloist.sh"
+# shellcheck source=deploy/rust-toolchain.sh
+source "$SCRIPT_DIR/rust-toolchain.sh"
 
 command -v apt-get >/dev/null 2>&1 || {
   echo "This installer requires apt-get (Raspberry Pi OS/Debian)." >&2
@@ -201,17 +207,23 @@ as_user_with_env() {
 install_system_packages() {
   # Python build tools are included because the native LumiStripe extensions
   # and hardware-gain dependency may not have an ARM wheel for every Pi image.
+  # libclang-dev supplies bindgen's resource headers for native Rust providers.
   local packages=(
     bluez
     bluetooth
     pipewire
     pipewire-pulse
+    pulseaudio-utils
     wireplumber
     libspa-0.2-bluetooth
     pipewire-alsa
     libasound2-plugins
     libportaudio2
     libasound2-dev
+    libclang-dev
+    libdbus-1-dev
+    libpipewire-0.3-dev
+    libpulse-dev
     network-manager
     iw
     libgpiod-dev
@@ -326,7 +338,7 @@ download_and_run_as_user() {
   chown "$SERVICE_USER:$SERVICE_GROUP" "$installer_file"
   chmod 700 "$installer_file"
 
-  if ! as_user_with_env "$@" "$shell_name" "$installer_file"; then
+  if ! as_user_with_env "$shell_name" "$installer_file" "$@"; then
     rm -f -- "$installer_file"
     return 1
   fi
@@ -360,6 +372,8 @@ install_toolchains() {
       "This may be an unsupported 32-bit Pi image." >&2
     exit 1
   }
+
+  install_rust_toolchain
 }
 
 install_project_dependencies() {
@@ -652,6 +666,7 @@ install_nginx() {
 
   nginx -t
   systemctl enable --now nginx.service
+  systemctl reload nginx.service
 }
 
 write_install_state() {

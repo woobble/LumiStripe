@@ -1,0 +1,11 @@
+{
+  "method": "POST",
+  "path": "/api/network/connect",
+  "body": {
+    "interface": "wlan1",
+    "ssid": "Party Wi-Fi",
+    "password": "wrong-pass"
+  },
+  "status": 409,
+  "error": "Could not connect to that Wi-Fi network. Check the password and try again."
+}

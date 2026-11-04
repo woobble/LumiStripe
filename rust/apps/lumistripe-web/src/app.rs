@@ -1,22 +1,45 @@
+use crate::api_schema::{
+    AccessStatus, AnimationList, AnimationSettingsResponse, AudioCalibrationSessionResponse,
+    AudioOutputDeviceInfoSchema, AudioResetRequest, AudioSettingsResponse,
+    AudioSyncCalibrationResponse, AudioTuningValuesSchema, BluetoothStatusResponseSchema,
+    CalibrationSessionResponse, DashboardStateSchema, IdentitySettingsResponse,
+    SequenceLibraryResponse, SequencerSettingsResponse, StartupSettingsResponse,
+    StripeTopologyResponse, ValidationLocation,
+};
 use crate::auth::{PairingAuth, PairingError, SESSION_COOKIE, SESSION_MAX_AGE_SECONDS};
+use crate::bluetooth::BluetoothService;
+use crate::bluetooth_models::{
+    AudioOutputMuteRequest, AudioOutputSelectionRequest, AudioOutputVolumeRequest,
+    BluetoothAliasRequest, BluetoothDeviceRequest, BluetoothPowerRequest, BluetoothRole,
+    BluetoothStatus,
+};
+use crate::bluetooth_process::BluetoothError;
+use crate::bluetooth_providers::{BlueZProvider, PipeWireProvider};
 use crate::config::AppConfig;
 use crate::control::ControlPlane;
 use crate::error::ApiError;
+use crate::network::{
+    NetworkError, NetworkManagerService, NetworkStatusResponse, WifiConnectRequest,
+    WifiConnectResponse, WifiScanRequest, WifiScanResponse, remove_secret_from_message,
+};
 use crate::settings::{
     AudioTuningProfile, ColorCorrection, MusicIdleMode, MusicIdleSettings, SavedAnimationSequence,
     SavedAnimationSequenceStep, SettingsStore, StripeBackend, StripeLayout, StripeOutputSettings,
     StripeTopologySettings, SwitchQuantization, TransitionEffect, TransitionSettings, ZonePattern,
 };
+use crate::spotify::{SoloistBackend, SpotifyControlAction, SpotifyProvider, SpotifyStatus};
 use crate::state::{ControlModel, EngineDesiredState, PlaybackMode, animation_list};
 use crate::streams::{
     AudioTelemetryReceiver, PreviewReceiver, spawn_audio_telemetry_publisher,
     spawn_health_publisher, spawn_preview_publisher, websocket_audio, websocket_preview,
     websocket_state,
 };
+use crate::system_stats::{SystemStats, spawn_system_stats_publisher};
+use crate::updates::{SystemUpdateService, UpdateError, UpdateStatus};
 use axum::Json;
-use axum::body::Body;
-use axum::extract::{Json as JsonExtractor, Path, Query, Request, State};
-use axum::http::header::{COOKIE, HOST, ORIGIN, RETRY_AFTER, SET_COOKIE};
+use axum::body::{Body, to_bytes};
+use axum::extract::{Json as JsonExtractor, MatchedPath, Path, Query, Request, State};
+use axum::http::header::{CONTENT_TYPE, COOKIE, HOST, ORIGIN, RETRY_AFTER, SET_COOKIE};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -57,12 +80,134 @@ pub(crate) struct AppState {
     pub(crate) access: PairingAuth,
     pub(crate) audio_telemetry: AudioTelemetryReceiver,
     pub(crate) preview: PreviewReceiver,
+    pub(crate) dashboard_state: watch::Receiver<Arc<Value>>,
+    pub(crate) system_stats: watch::Receiver<SystemStats>,
+    pub(crate) updates: SystemUpdateService,
+    pub(crate) network: NetworkManagerService,
+    pub(crate) bluetooth: BluetoothService,
+    pub(crate) spotify: Arc<dyn SpotifyProvider>,
     secure_cookie: bool,
 }
+
+#[derive(utoipa::OpenApi)]
+#[openapi(
+    info(title = "LumiStripe", version = "0.1.0"),
+    paths(
+        health,
+        runtime_state,
+        system_stats,
+        update_status,
+        check_for_updates,
+        install_update,
+        network_status,
+        network_scan,
+        network_connect,
+        animations,
+        get_animation_settings,
+        put_animation_settings,
+        reset_animation_settings,
+        set_mode,
+        set_brightness,
+        select_animation,
+        set_blackout,
+        get_stripe_topology,
+        put_stripe_topology,
+        test_stripe,
+        start_color_calibration,
+        update_color_calibration,
+        finish_color_calibration,
+        get_audio_settings,
+        select_audio_device,
+        put_audio_settings,
+        reset_audio_settings,
+        select_audio_source,
+        set_audio_sync_offset,
+        set_audio_sync_calibration,
+        start_audio_calibration,
+        get_audio_calibration,
+        begin_audio_calibration_music,
+        finish_audio_calibration,
+        get_spotify_status,
+        control_spotify,
+        bluetooth_status,
+        bluetooth_power,
+        bluetooth_alias,
+        bluetooth_scan,
+        bluetooth_pair,
+        bluetooth_connect,
+        bluetooth_forget,
+        bluetooth_disconnect,
+        select_audio_output,
+        set_audio_output_volume,
+        set_audio_output_mute,
+        get_identity_settings,
+        put_identity_settings,
+        set_music_idle,
+        get_startup_settings,
+        put_startup_settings,
+        get_transition_settings,
+        put_transition_settings,
+        get_sequencer_settings,
+        put_sequencer_settings,
+        get_sequence_library,
+        create_sequence,
+        update_sequence,
+        delete_sequence,
+        set_active_sequence,
+        auth_status,
+        pair,
+        logout
+    ),
+    components(schemas(
+        SpotifyControlRequest,
+        AccessStatus,
+        AnimationList,
+        AnimationSettingsResponse,
+        AudioCalibrationSessionResponse,
+        CalibrationSessionResponse,
+        AudioResetRequest,
+        AudioSettingsResponse,
+        AudioSyncCalibrationResponse,
+        DashboardStateSchema,
+        IdentitySettingsResponse,
+        SequenceLibraryResponse,
+        SequencerSettingsResponse,
+        StartupSettingsResponse,
+        StripeTopologyResponse,
+        BluetoothStatusResponseSchema,
+        AudioOutputDeviceInfoSchema,
+        AudioTuningValuesSchema,
+        MusicIdleRequestSchema,
+        BluetoothPowerRequest,
+        BluetoothAliasRequest,
+        BluetoothDeviceRequest,
+        AudioOutputSelectionRequest,
+        AudioOutputVolumeRequest,
+        AudioOutputMuteRequest,
+        NetworkStatusResponse,
+        WifiScanRequest,
+        WifiScanResponse,
+        WifiConnectRequest,
+        WifiConnectResponse,
+        SystemStats,
+        UpdateStatus,
+        TransitionEffect,
+        ErrorResponseSchema,
+        ValidationErrorSchema,
+        HttpValidationErrorSchema
+    )),
+    tags(
+        (name = "system", description = "System status and update operations"),
+        (name = "network", description = "Wi-Fi network operations"),
+        (name = "audio", description = "Spotify, Bluetooth, and audio output operations")
+    )
+)]
+pub struct ApiDoc;
 
 pub struct WebApplication {
     router: Router,
     cancellation: CancellationToken,
+    spotify: Arc<dyn SpotifyProvider>,
     engine_manager: Option<JoinHandle<()>>,
     tasks: Vec<JoinHandle<()>>,
     _engine_directory: TempDir,
@@ -70,9 +215,38 @@ pub struct WebApplication {
 
 impl WebApplication {
     pub async fn start(
+        config: AppConfig,
+        engine_binary: PathBuf,
+        pairing_code: Option<String>,
+    ) -> Result<Self, String> {
+        Self::start_inner(config, engine_binary, pairing_code, None, None).await
+    }
+
+    #[cfg(test)]
+    async fn start_with_bluetooth_providers(
+        config: AppConfig,
+        engine_binary: PathBuf,
+        pairing_code: Option<String>,
+        bluez: Arc<dyn BlueZProvider>,
+        pipewire: Arc<dyn PipeWireProvider>,
+        network: Option<NetworkManagerService>,
+    ) -> Result<Self, String> {
+        Self::start_inner(
+            config,
+            engine_binary,
+            pairing_code,
+            Some((bluez, pipewire)),
+            network,
+        )
+        .await
+    }
+
+    async fn start_inner(
         mut config: AppConfig,
         engine_binary: PathBuf,
         pairing_code: Option<String>,
+        bluetooth_providers: Option<(Arc<dyn BlueZProvider>, Arc<dyn PipeWireProvider>)>,
+        network_service: Option<NetworkManagerService>,
     ) -> Result<Self, String> {
         let settings_store =
             SettingsStore::open(&config.settings_file).map_err(|error| error.to_string())?;
@@ -160,6 +334,7 @@ impl WebApplication {
             match audio_result {
                 Ok(ResponseResult::AudioConfigured { active: true }) => {
                     model.audio_started = true;
+                    model.active_audio_source = "mic".to_owned();
                     let audio = model.desired_audio();
                     desired_state.send_modify(|desired| desired.audio = audio);
                     match client.audio_status().await {
@@ -186,6 +361,33 @@ impl WebApplication {
                 Err(error) => model.set_audio_status(Err(error.to_string())),
             }
         }
+        let (spotify_backend, spotify_task) = SoloistBackend::new(
+            config.spotify_ws_uri.clone(),
+            spotify_enabled(&config),
+            cancellation.clone(),
+        );
+        spotify_backend.start();
+        let spotify: Arc<dyn SpotifyProvider> = Arc::new(spotify_backend);
+        let bluetooth_enabled = config.runtime_kind == "hardware";
+        let spotify_audio_routing_enabled = bluetooth_enabled || spotify_enabled(&config);
+        let (bluetooth, bluetooth_task) = match bluetooth_providers {
+            Some((bluez, pipewire)) => BluetoothService::with_limits_and_providers(
+                bluetooth_enabled,
+                spotify_audio_routing_enabled,
+                bluez,
+                pipewire,
+                config.bluetooth_max_inputs,
+                config.bluetooth_max_outputs,
+                cancellation.clone(),
+            ),
+            None => BluetoothService::new(
+                bluetooth_enabled,
+                spotify_audio_routing_enabled,
+                config.bluetooth_max_inputs,
+                config.bluetooth_max_outputs,
+                cancellation.clone(),
+            ),
+        };
         let (control, control_task) = ControlPlane::start(
             model,
             settings_store,
@@ -193,6 +395,14 @@ impl WebApplication {
             client.clone(),
             health.clone(),
             audio.clone(),
+            Some(bluetooth.clone()),
+            Some(spotify.clone()),
+            cancellation.clone(),
+        );
+        let (dashboard_state, dashboard_state_task) = spawn_dashboard_state_publisher(
+            control.state(),
+            spotify.clone(),
+            bluetooth.clone(),
             cancellation.clone(),
         );
         let (telemetry_sender, telemetry_receiver) = watch::channel(None);
@@ -203,16 +413,24 @@ impl WebApplication {
             cancellation.clone(),
             telemetry_sender,
         );
+        let (system_stats, system_stats_task) = spawn_system_stats_publisher(cancellation.clone());
         let app_state = AppState {
             control,
             access: access.clone(),
             audio_telemetry: telemetry_receiver,
             preview: preview.clone(),
+            dashboard_state,
+            system_stats,
+            updates: SystemUpdateService::with_cancellation(cancellation.clone()),
+            network: network_service.unwrap_or_default(),
+            bluetooth,
+            spotify: spotify.clone(),
             secure_cookie: config.secure_cookie,
         };
         let router = build_router(app_state, config.static_dir.clone());
         let tasks = vec![
             control_task,
+            dashboard_state_task,
             spawn_health_publisher(client, cancellation.clone(), health_sender),
             spawn_audio_status_publisher(
                 EngineClient::new(
@@ -224,10 +442,14 @@ impl WebApplication {
             ),
             spawn_preview_publisher(health, cancellation.clone(), preview_sender),
             telemetry_task,
+            system_stats_task,
+            spotify_task,
+            bluetooth_task,
         ];
         Ok(Self {
             router,
             cancellation,
+            spotify,
             engine_manager: Some(engine_manager),
             tasks,
             _engine_directory: engine_directory,
@@ -276,6 +498,7 @@ impl WebApplication {
 
 impl Drop for WebApplication {
     fn drop(&mut self) {
+        self.spotify.stop();
         self.cancellation.cancel();
     }
 }
@@ -284,6 +507,13 @@ pub(crate) fn build_router(state: AppState, static_dir: Option<PathBuf>) -> Rout
     let routes = Router::new()
         .route("/api/health", get(health))
         .route("/api/state", get(runtime_state))
+        .route("/api/system/stats", get(system_stats))
+        .route("/api/system/update", get(update_status))
+        .route("/api/system/update/check", post(check_for_updates))
+        .route("/api/system/update/install", post(install_update))
+        .route("/api/network/status", get(network_status))
+        .route("/api/network/scan", post(network_scan))
+        .route("/api/network/connect", post(network_connect))
         .route("/api/animations", get(animations))
         .route(
             "/api/animations/{animation_name}/settings",
@@ -310,6 +540,22 @@ pub(crate) fn build_router(state: AppState, static_dir: Option<PathBuf>) -> Rout
             "/api/audio/settings",
             get(get_audio_settings).put(put_audio_settings),
         )
+        .route("/api/audio/spotify", get(get_spotify_status))
+        .route("/api/audio/spotify/control", post(control_spotify))
+        .route("/api/audio/bluetooth", get(bluetooth_status))
+        .route("/api/audio/bluetooth/power", put(bluetooth_power))
+        .route("/api/audio/bluetooth/alias", put(bluetooth_alias))
+        .route("/api/audio/bluetooth/scan", post(bluetooth_scan))
+        .route("/api/audio/bluetooth/pair", post(bluetooth_pair))
+        .route("/api/audio/bluetooth/connect", post(bluetooth_connect))
+        .route("/api/audio/bluetooth/forget", post(bluetooth_forget))
+        .route(
+            "/api/audio/bluetooth/disconnect",
+            post(bluetooth_disconnect),
+        )
+        .route("/api/audio/output", put(select_audio_output))
+        .route("/api/audio/output/volume", put(set_audio_output_volume))
+        .route("/api/audio/output/mute", put(set_audio_output_mute))
         .route("/api/audio/settings/reset", post(reset_audio_settings))
         .route("/api/audio/device", put(select_audio_device))
         .route("/api/audio/source", put(select_audio_source))
@@ -362,6 +608,7 @@ pub(crate) fn build_router(state: AppState, static_dir: Option<PathBuf>) -> Rout
         .route("/api/auth/status", get(auth_status))
         .route("/api/auth/pair", post(pair))
         .route("/api/auth/logout", post(logout))
+        .route_layer(axum_middleware::from_fn(validate_json_object))
         .route("/ws/state", get(websocket_state))
         .route("/ws/audio", get(websocket_audio))
         .route("/ws/preview", get(websocket_preview))
@@ -382,6 +629,12 @@ pub(crate) fn build_router(state: AppState, static_dir: Option<PathBuf>) -> Rout
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/health",
+    tag = "system",
+    responses((status = 200, body = Value))
+)]
 async fn health(State(state): State<AppState>) -> Response {
     let mut snapshot = state.control.state();
     let current = snapshot.borrow_and_update().clone();
@@ -400,64 +653,696 @@ async fn health(State(state): State<AppState>) -> Response {
     }
 }
 
-async fn runtime_state(State(state): State<AppState>) -> Json<Value> {
-    let snapshot = state.control.state();
-    Json(snapshot.borrow().as_ref().clone())
+#[utoipa::path(
+    get,
+    path = "/api/system/stats",
+    tag = "system",
+    responses((status = 200, body = SystemStats))
+)]
+async fn system_stats(State(state): State<AppState>) -> Json<SystemStats> {
+    Json(state.system_stats.borrow().clone())
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/system/update",
+    tag = "system",
+    responses((status = 200, body = UpdateStatus))
+)]
+async fn update_status(State(state): State<AppState>) -> Json<UpdateStatus> {
+    Json(state.updates.status())
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/system/update/check",
+    tag = "system",
+    responses((status = 202, body = UpdateStatus))
+)]
+async fn check_for_updates(
+    State(state): State<AppState>,
+) -> Result<(StatusCode, Json<UpdateStatus>), ApiError> {
+    state
+        .updates
+        .check()
+        .await
+        .map(|status| (StatusCode::ACCEPTED, Json(status)))
+        .map_err(update_api_error)
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/system/update/install",
+    tag = "system",
+    responses((status = 202, body = UpdateStatus))
+)]
+async fn install_update(
+    State(state): State<AppState>,
+) -> Result<(StatusCode, Json<UpdateStatus>), ApiError> {
+    state
+        .updates
+        .install()
+        .await
+        .map(|status| (StatusCode::ACCEPTED, Json(status)))
+        .map_err(update_api_error)
+}
+
+fn update_api_error(error: UpdateError) -> ApiError {
+    let status = match error.code {
+        "unsupported" | "already_running" | "dirty_checkout" | "no_update" => StatusCode::CONFLICT,
+        _ => StatusCode::SERVICE_UNAVAILABLE,
+    };
+    ApiError::new(status, error.message)
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/audio/spotify",
+    tag = "audio",
+    responses((status = 200, body = SpotifyStatus))
+)]
+async fn get_spotify_status(State(state): State<AppState>) -> Json<Value> {
+    Json(spotify_status_value(&state.spotify.status()))
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct SpotifyControlRequest {
+    action: SpotifyControlAction,
+    #[serde(default)]
+    #[schema(schema_with = crate::api_schema::spotify_control_value_schema)]
+    value: Option<Value>,
+}
+
+#[derive(utoipa::ToSchema)]
+#[schema(as = ValidationError)]
+#[allow(dead_code)]
+struct ValidationErrorSchema {
+    loc: Vec<ValidationLocation>,
+    msg: String,
+    #[schema(rename = "type")]
+    error_type: String,
+    #[schema(nullable = true)]
+    input: Option<Value>,
+    #[schema(nullable = true)]
+    ctx: Option<Map<String, Value>>,
+}
+
+#[derive(utoipa::ToSchema)]
+#[schema(as = HTTPValidationError)]
+#[allow(dead_code)]
+struct HttpValidationErrorSchema {
+    #[schema(required = false)]
+    detail: Vec<ValidationErrorSchema>,
+}
+
+#[derive(utoipa::ToSchema)]
+#[schema(as = ErrorResponse)]
+#[allow(dead_code)]
+struct ErrorResponseSchema {
+    detail: String,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/audio/spotify/control",
+    tag = "audio",
+    request_body = SpotifyControlRequest,
+    responses(
+        (status = 200, body = SpotifyStatus),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
+async fn control_spotify(
+    State(state): State<AppState>,
+    body: Result<JsonExtractor<SpotifyControlRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let body = body.map_err(json_rejection)?.0;
+    state
+        .spotify
+        .control(body.action, body.value)
+        .await
+        .map(|status| Json(spotify_status_value(&status)))
+        .map_err(|error| ApiError::new(StatusCode::CONFLICT, error.message))
+}
+
+fn spotify_status_value(status: &SpotifyStatus) -> Value {
+    serde_json::to_value(status).expect("Spotify status contains only JSON-compatible fields")
+}
+
+fn spotify_enabled(config: &AppConfig) -> bool {
+    config.runtime_kind == "hardware" || config.spotify_provider_enabled
+}
+
+fn with_spotify_status(response: Value, state: &AppState) -> Value {
+    with_provider_status(response, state.spotify.as_ref(), &state.bluetooth)
+}
+
+fn with_provider_status(
+    mut response: Value,
+    spotify: &dyn SpotifyProvider,
+    bluetooth: &BluetoothService,
+) -> Value {
+    if let Some(object) = response.as_object_mut() {
+        object.insert(
+            "spotify".to_owned(),
+            spotify_status_value(&spotify.status()),
+        );
+        object.insert(
+            "bluetooth".to_owned(),
+            serde_json::to_value(bluetooth.status())
+                .expect("Bluetooth status contains only JSON-compatible fields"),
+        );
+    }
+    response
+}
+
+fn spawn_dashboard_state_publisher(
+    mut control_state: watch::Receiver<Arc<Value>>,
+    spotify: Arc<dyn SpotifyProvider>,
+    bluetooth: BluetoothService,
+    cancellation: CancellationToken,
+) -> (watch::Receiver<Arc<Value>>, JoinHandle<()>) {
+    let initial_control_state = control_state.borrow_and_update().as_ref().clone();
+    let initial_state =
+        with_provider_status(initial_control_state.clone(), spotify.as_ref(), &bluetooth);
+    let (publisher, receiver) = watch::channel(Arc::new(initial_state.clone()));
+    let task = tokio::spawn(async move {
+        let mut latest_control_state = initial_control_state;
+        let mut latest_published_state = initial_state;
+        let mut cadence = tokio::time::interval(Duration::from_millis(250));
+        cadence.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = cancellation.cancelled() => break,
+                changed = control_state.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
+                    latest_control_state = control_state.borrow_and_update().as_ref().clone();
+                }
+                _ = cadence.tick() => {}
+            }
+            let next =
+                with_provider_status(latest_control_state.clone(), spotify.as_ref(), &bluetooth);
+            if next != latest_published_state {
+                publisher.send_replace(Arc::new(next.clone()));
+                latest_published_state = next;
+            }
+        }
+    });
+    (receiver, task)
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/audio/bluetooth",
+    tag = "audio",
+    responses((status = 200, body = BluetoothStatusResponseSchema))
+)]
+async fn bluetooth_status(State(state): State<AppState>) -> Json<BluetoothStatus> {
+    Json(state.bluetooth.status())
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/audio/bluetooth/power",
+    tag = "audio",
+    request_body = BluetoothPowerRequest,
+    responses(
+        (status = 200, body = BluetoothStatusResponseSchema),
+        (status = 409, body = ErrorResponseSchema),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
+async fn bluetooth_power(
+    State(state): State<AppState>,
+    body: Result<JsonExtractor<BluetoothPowerRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<BluetoothStatus>, ApiError> {
+    state
+        .bluetooth
+        .set_power(body.map_err(json_rejection)?.0.powered)
+        .map(Json)
+        .map_err(bluetooth_api_error)
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/audio/bluetooth/alias",
+    tag = "audio",
+    request_body = BluetoothAliasRequest,
+    responses(
+        (status = 200, body = BluetoothStatusResponseSchema),
+        (status = 409, body = ErrorResponseSchema),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
+async fn bluetooth_alias(
+    State(state): State<AppState>,
+    body: Result<JsonExtractor<BluetoothAliasRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<BluetoothStatus>, ApiError> {
+    let alias = body.map_err(json_rejection)?.0.alias;
+    validate_body_string_length(&alias, "alias", 1, 64)?;
+    state
+        .bluetooth
+        .set_alias(alias)
+        .map(Json)
+        .map_err(bluetooth_api_error)
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/audio/bluetooth/scan",
+    tag = "audio",
+    responses(
+        (status = 200, body = BluetoothStatusResponseSchema),
+        (status = 409, body = ErrorResponseSchema)
+    )
+)]
+async fn bluetooth_scan(State(state): State<AppState>) -> Result<Json<BluetoothStatus>, ApiError> {
+    state
+        .bluetooth
+        .start_scan()
+        .map(Json)
+        .map_err(bluetooth_api_error)
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/audio/bluetooth/pair",
+    tag = "audio",
+    request_body = BluetoothDeviceRequest,
+    responses(
+        (status = 200, body = BluetoothStatusResponseSchema),
+        (status = 409, body = ErrorResponseSchema),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
+async fn bluetooth_pair(
+    State(state): State<AppState>,
+    body: Result<JsonExtractor<BluetoothDeviceRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<BluetoothStatus>, ApiError> {
+    let address = body.map_err(json_rejection)?.0.address;
+    validate_body_string_length(&address, "address", 17, 17)?;
+    state
+        .bluetooth
+        .pair(address)
+        .map(Json)
+        .map_err(bluetooth_api_error)
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/audio/bluetooth/connect",
+    tag = "audio",
+    request_body = BluetoothDeviceRequest,
+    responses(
+        (status = 200, body = BluetoothStatusResponseSchema),
+        (status = 409, body = ErrorResponseSchema),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
+async fn bluetooth_connect(
+    State(state): State<AppState>,
+    body: Result<JsonExtractor<BluetoothDeviceRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<BluetoothStatus>, ApiError> {
+    let body = body.map_err(json_rejection)?.0;
+    validate_body_string_length(&body.address, "address", 17, 17)?;
+    state
+        .bluetooth
+        .connect(
+            body.address,
+            body.role
+                .map(|role: BluetoothRole| role.as_str().to_owned()),
+        )
+        .map(Json)
+        .map_err(bluetooth_api_error)
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/audio/bluetooth/forget",
+    tag = "audio",
+    request_body = BluetoothDeviceRequest,
+    responses(
+        (status = 200, body = BluetoothStatusResponseSchema),
+        (status = 409, body = ErrorResponseSchema),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
+async fn bluetooth_forget(
+    State(state): State<AppState>,
+    body: Result<JsonExtractor<BluetoothDeviceRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<BluetoothStatus>, ApiError> {
+    let address = body.map_err(json_rejection)?.0.address;
+    validate_body_string_length(&address, "address", 17, 17)?;
+    state
+        .bluetooth
+        .forget(address)
+        .map(Json)
+        .map_err(bluetooth_api_error)
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/audio/bluetooth/disconnect",
+    tag = "audio",
+    request_body = BluetoothDeviceRequest,
+    responses(
+        (status = 200, body = BluetoothStatusResponseSchema),
+        (status = 409, body = ErrorResponseSchema),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
+async fn bluetooth_disconnect(
+    State(state): State<AppState>,
+    body: Result<JsonExtractor<BluetoothDeviceRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<BluetoothStatus>, ApiError> {
+    let address = body.map_err(json_rejection)?.0.address;
+    validate_body_string_length(&address, "address", 17, 17)?;
+    state
+        .bluetooth
+        .disconnect(address)
+        .map(Json)
+        .map_err(bluetooth_api_error)
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/audio/output",
+    tag = "audio",
+    request_body = AudioOutputSelectionRequest,
+    responses(
+        (status = 200, body = BluetoothStatusResponseSchema),
+        (status = 409, body = ErrorResponseSchema),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
+async fn select_audio_output(
+    State(state): State<AppState>,
+    body: Result<
+        JsonExtractor<AudioOutputSelectionRequest>,
+        axum::extract::rejection::JsonRejection,
+    >,
+) -> Result<Json<BluetoothStatus>, ApiError> {
+    let selector = body.map_err(json_rejection)?.0.selector;
+    validate_body_string_length(&selector, "selector", 1, 256)?;
+    state
+        .bluetooth
+        .set_default_sink(selector)
+        .await
+        .map(Json)
+        .map_err(bluetooth_api_error)
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/audio/output/volume",
+    tag = "audio",
+    request_body = AudioOutputVolumeRequest,
+    responses(
+        (status = 200, body = BluetoothStatusResponseSchema),
+        (status = 409, body = ErrorResponseSchema),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
+async fn set_audio_output_volume(
+    State(state): State<AppState>,
+    body: Result<JsonExtractor<AudioOutputVolumeRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<BluetoothStatus>, ApiError> {
+    let body = body.map_err(json_rejection)?.0;
+    validate_body_string_length(&body.selector, "selector", 1, 256)?;
+    if !(0.0..=1.0).contains(&body.volume) {
+        let (error_type, message, context) = if body.volume < 0.0 {
+            (
+                "greater_than_equal",
+                "Input should be greater than or equal to 0",
+                json!({"ge": 0.0}),
+            )
+        } else {
+            (
+                "less_than_equal",
+                "Input should be less than or equal to 1",
+                json!({"le": 1.0}),
+            )
+        };
+        return Err(ApiError::validation(json!([{
+            "type": error_type,
+            "loc": ["body", "volume"],
+            "msg": message,
+            "input": body.volume,
+            "ctx": context,
+        }])));
+    }
+    state
+        .bluetooth
+        .set_output_volume(body.selector, body.volume)
+        .await
+        .map(Json)
+        .map_err(bluetooth_api_error)
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/audio/output/mute",
+    tag = "audio",
+    request_body = AudioOutputMuteRequest,
+    responses(
+        (status = 200, body = BluetoothStatusResponseSchema),
+        (status = 409, body = ErrorResponseSchema),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
+async fn set_audio_output_mute(
+    State(state): State<AppState>,
+    body: Result<JsonExtractor<AudioOutputMuteRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<BluetoothStatus>, ApiError> {
+    let body = body.map_err(json_rejection)?.0;
+    validate_body_string_length(&body.selector, "selector", 1, 256)?;
+    state
+        .bluetooth
+        .set_output_mute(body.selector, body.muted)
+        .await
+        .map(Json)
+        .map_err(bluetooth_api_error)
+}
+
+fn validate_body_string_length(
+    value: &str,
+    field: &str,
+    minimum: usize,
+    maximum: usize,
+) -> Result<(), ApiError> {
+    let length = value.chars().count();
+    if length >= minimum && length <= maximum {
+        return Ok(());
+    }
+    let too_short = length < minimum;
+    let limit = if too_short { minimum } else { maximum };
+    let detail = if too_short {
+        json!([{
+            "type": "string_too_short",
+            "loc": ["body", field],
+            "msg": format!("String should have at least {minimum} character{}", if minimum == 1 { "" } else { "s" }),
+            "input": value,
+            "ctx": {"min_length": minimum},
+        }])
+    } else {
+        json!([{
+            "type": "string_too_long",
+            "loc": ["body", field],
+            "msg": format!("String should have at most {maximum} characters"),
+            "input": value,
+            "ctx": {"max_length": maximum},
+        }])
+    };
+    let _ = limit;
+    Err(ApiError::validation(detail))
+}
+
+fn bluetooth_api_error(error: BluetoothError) -> ApiError {
+    ApiError::new(StatusCode::CONFLICT, error.message)
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/network/status",
+    tag = "network",
+    responses((status = 200, body = NetworkStatusResponse))
+)]
+async fn network_status(
+    State(state): State<AppState>,
+) -> Result<Json<NetworkStatusResponse>, ApiError> {
+    state
+        .network
+        .status()
+        .await
+        .map(Json)
+        .map_err(network_api_error)
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/network/scan",
+    tag = "network",
+    request_body = WifiScanRequest,
+    responses(
+        (status = 200, body = WifiScanResponse),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
+async fn network_scan(
+    State(state): State<AppState>,
+    body: Result<JsonExtractor<WifiScanRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<WifiScanResponse>, ApiError> {
+    state
+        .network
+        .scan(body.map_err(json_rejection)?.0)
+        .await
+        .map(Json)
+        .map_err(network_api_error)
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/network/connect",
+    tag = "network",
+    request_body = WifiConnectRequest,
+    responses(
+        (status = 200, body = WifiConnectResponse),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
+async fn network_connect(
+    State(state): State<AppState>,
+    body: Result<JsonExtractor<WifiConnectRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<WifiConnectResponse>, ApiError> {
+    let request = body.map_err(json_rejection)?.0;
+    let password = request.password.clone();
+    state
+        .network
+        .connect(request)
+        .await
+        .map(Json)
+        .map_err(|error| network_api_error_with_secret(error, &password))
+}
+
+fn network_api_error(error: NetworkError) -> ApiError {
+    network_api_error_with_secret(error, "")
+}
+
+fn network_api_error_with_secret(error: NetworkError, secret: &str) -> ApiError {
+    let status = match error.code {
+        "invalid_contract" | "unsupported" => StatusCode::UNPROCESSABLE_ENTITY,
+        "invalid" | "connection_failed" | "busy" => StatusCode::CONFLICT,
+        _ => StatusCode::SERVICE_UNAVAILABLE,
+    };
+    ApiError::new(status, remove_secret_from_message(error.message, secret))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/state",
+    tag = "control",
+    responses((status = 200, body = DashboardStateSchema))
+)]
+async fn runtime_state(State(state): State<AppState>) -> Json<Value> {
+    Json(state.dashboard_state.borrow().as_ref().clone())
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/animations",
+    tag = "animations",
+    responses((status = 200, body = AnimationList))
+)]
 async fn animations() -> Json<Value> {
     Json(animation_list())
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/stripes",
+    tag = "stripes",
+    responses((status = 200, body = StripeTopologyResponse))
+)]
 async fn get_stripe_topology(State(state): State<AppState>) -> Json<Value> {
     Json(state.control.stripe_topology())
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct StripeTopologyRequest {
     layout: StripeLayout,
+    #[schema(max_items = 2)]
     outputs: Vec<StripeOutputRequest>,
+    #[schema(default = false)]
     #[serde(default)]
     power_budget_enabled: bool,
+    #[schema(exclusive_minimum = 0.0)]
     #[serde(default)]
     power_budget_watts: Option<f64>,
+    #[schema(default = false)]
     #[serde(default)]
     shared_supply_enabled: bool,
+    #[schema(exclusive_minimum = 0.0, default = 200.0)]
     #[serde(default = "default_supply_capacity")]
     supply_capacity_watts: f64,
+    #[schema(minimum = 0.0, default = 15.0)]
     #[serde(default = "default_pi_reserve")]
     pi_reserve_watts: f64,
 }
 
-#[derive(Deserialize)]
-struct StripeOutputRequest {
+#[derive(Clone, Debug, Deserialize, utoipa::ToSchema)]
+#[schema(as = StripeOutputConfig)]
+pub(crate) struct StripeOutputRequest {
+    #[schema(min_length = 1, max_length = 64)]
     id: String,
+    #[schema(min_length = 1, max_length = 40)]
     name: String,
+    #[schema(minimum = 1, maximum = 4096)]
     pixels: usize,
     #[serde(default)]
+    #[schema(schema_with = crate::api_schema::stripe_backend_schema)]
     backend: StripeBackend,
     #[serde(default)]
+    #[schema(default = false)]
     reversed: bool,
     #[serde(default = "default_zone_count")]
+    #[schema(minimum = 1, maximum = 4096, default = 1)]
     zone_count: usize,
     #[serde(default)]
+    #[schema(schema_with = crate::api_schema::zone_pattern_schema)]
     zone_pattern: ZonePattern,
     #[serde(default = "default_spi_device")]
+    #[schema(min_length = 1, default = "/dev/spidev0.0")]
     spi_device: String,
     #[serde(default = "default_spi_speed")]
+    #[schema(exclusive_minimum = 0.0, maximum = 32000000, default = 1000000)]
     spi_speed_hz: u32,
     #[serde(default = "default_gpio_chip")]
+    #[schema(min_length = 1, default = "/dev/gpiochip0")]
     chip: String,
     #[serde(default = "default_data_pin")]
+    #[schema(minimum = 0, default = 10)]
     data_pin: u32,
     #[serde(default = "default_clock_pin")]
+    #[schema(minimum = 0, default = 11)]
     clock_pin: u32,
     #[serde(default = "default_voltage")]
+    #[schema(exclusive_minimum = 0.0, default = 5.0)]
     voltage_v: f64,
     #[serde(default = "default_full_white_current")]
+    #[schema(exclusive_minimum = 0.0, default = 0.06)]
     full_white_current_a: f64,
     #[serde(default)]
+    #[schema(exclusive_minimum = 0.0)]
     power_limit_watts: Option<f64>,
+    #[serde(default)]
+    #[schema(format = DateTime)]
+    #[allow(dead_code)]
+    last_output_at: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    error: Option<String>,
 }
 
 impl From<StripeOutputRequest> for StripeOutputSettings {
@@ -498,15 +1383,26 @@ impl From<StripeTopologyRequest> for StripeTopologySettings {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct StripeTestRequest {
     stripe_id: String,
+    #[schema(required = false, schema_with = crate::api_schema::stripe_test_pattern_schema)]
     #[serde(default = "default_identify_pattern")]
     pattern: String,
     #[serde(default)]
     topology: Option<StripeTopologyRequest>,
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/stripes",
+    tag = "stripes",
+    request_body = StripeTopologyRequest,
+    responses(
+        (status = 200, body = DashboardStateSchema),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn put_stripe_topology(
     State(state): State<AppState>,
     body: Result<JsonExtractor<StripeTopologyRequest>, axum::extract::rejection::JsonRejection>,
@@ -515,6 +1411,16 @@ async fn put_stripe_topology(
     state.control.set_stripe_topology(topology).await.map(Json)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/stripes/test",
+    tag = "stripes",
+    request_body = StripeTestRequest,
+    responses(
+        (status = 200, body = DashboardStateSchema),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn test_stripe(
     State(state): State<AppState>,
     body: Result<JsonExtractor<StripeTestRequest>, axum::extract::rejection::JsonRejection>,
@@ -534,24 +1440,39 @@ async fn test_stripe(
         .map(Json)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct CalibrationStartRequest {
+    #[schema(minimum = 0)]
     output_index: usize,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct CalibrationUpdateRequest {
+    #[schema(maximum = 255)]
     red: u8,
+    #[schema(maximum = 255)]
     green: u8,
+    #[schema(maximum = 255)]
     blue: u8,
+    #[schema(value_type = crate::api_schema::CalibrationPattern)]
     pattern: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct CalibrationFinishRequest {
     save: bool,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/calibration/session",
+    tag = "calibration",
+    request_body = CalibrationStartRequest,
+    responses(
+        (status = 200, body = CalibrationSessionResponse),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn start_color_calibration(
     State(state): State<AppState>,
     body: Result<JsonExtractor<CalibrationStartRequest>, axum::extract::rejection::JsonRejection>,
@@ -564,6 +1485,17 @@ async fn start_color_calibration(
         .map(Json)
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/calibration/session/{session_id}",
+    tag = "calibration",
+    params(("session_id" = String, Path)),
+    request_body = CalibrationUpdateRequest,
+    responses(
+        (status = 200, body = DashboardStateSchema),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn update_color_calibration(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
@@ -592,6 +1524,17 @@ async fn update_color_calibration(
         .map(Json)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/calibration/session/{session_id}/finish",
+    tag = "calibration",
+    params(("session_id" = String, Path)),
+    request_body = CalibrationFinishRequest,
+    responses(
+        (status = 200, body = DashboardStateSchema),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn finish_color_calibration(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
@@ -605,28 +1548,33 @@ async fn finish_color_calibration(
         .map(Json)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct AudioDeviceRequest {
+    #[schema(min_length = 1)]
     device: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct AudioSettingsRequest {
+    #[schema(min_length = 1)]
     device: String,
+    #[schema(value_type = AudioTuningValuesSchema)]
     settings: AudioTuningProfile,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct AudioSyncOffsetRequest {
+    #[schema(minimum = -500.0, maximum = 500.0)]
     offset_ms: f64,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct AudioSourceRequest {
+    #[schema(value_type = crate::api_schema::AudioSource)]
     source: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct AudioSyncCalibrationRequest {
     active: bool,
 }
@@ -635,32 +1583,55 @@ fn default_audio_calibration_duration() -> f64 {
     8.0
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct AudioCalibrationStartRequest {
+    #[schema(min_length = 1)]
     device: String,
+    #[schema(minimum = 3.0, maximum = 30.0, default = 8.0)]
     #[serde(default = "default_audio_calibration_duration")]
     duration_seconds: f64,
+    #[schema(default = false)]
     #[serde(default)]
     two_step: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct AudioCalibrationFinishRequest {
     apply: bool,
+    #[schema(minimum = 0.1, maximum = 0.8)]
     target_level: Option<f64>,
+    #[schema(minimum = 0.0, maximum = 1.0)]
     noise_floor: Option<f64>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct IdentitySettingsRequest {
+    #[schema(min_length = 1, max_length = 64)]
     application_name: String,
+    #[schema(min_length = 1, max_length = 64)]
     spotify_device_name: String,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/identity",
+    tag = "identity",
+    responses((status = 200, body = IdentitySettingsResponse))
+)]
 async fn get_identity_settings(State(state): State<AppState>) -> Json<Value> {
     Json(state.control.identity_settings())
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/identity",
+    tag = "identity",
+    request_body = IdentitySettingsRequest,
+    responses(
+        (status = 200, body = IdentitySettingsResponse),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn put_identity_settings(
     State(state): State<AppState>,
     body: Result<JsonExtractor<IdentitySettingsRequest>, axum::extract::rejection::JsonRejection>,
@@ -673,10 +1644,27 @@ async fn put_identity_settings(
         .map(Json)
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/audio/settings",
+    tag = "audio",
+    responses((status = 200, body = AudioSettingsResponse))
+)]
 async fn get_audio_settings(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    state.control.audio_settings().await.map(Json)
+    let response = state.control.audio_settings().await?;
+    Ok(Json(with_spotify_status(response, &state)))
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/audio/device",
+    tag = "audio",
+    request_body = AudioDeviceRequest,
+    responses(
+        (status = 200, body = AudioSettingsResponse),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn select_audio_device(
     State(state): State<AppState>,
     body: Result<JsonExtractor<AudioDeviceRequest>, axum::extract::rejection::JsonRejection>,
@@ -692,9 +1680,19 @@ async fn select_audio_device(
         .control
         .select_audio_device(body.device)
         .await
-        .map(Json)
+        .map(|response| Json(with_spotify_status(response, &state)))
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/audio/settings",
+    tag = "audio",
+    request_body = AudioSettingsRequest,
+    responses(
+        (status = 200, body = AudioSettingsResponse),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn put_audio_settings(
     State(state): State<AppState>,
     body: Result<JsonExtractor<AudioSettingsRequest>, axum::extract::rejection::JsonRejection>,
@@ -710,9 +1708,19 @@ async fn put_audio_settings(
         .control
         .apply_audio_settings(body.device, body.settings)
         .await
-        .map(Json)
+        .map(|response| Json(with_spotify_status(response, &state)))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/audio/settings/reset",
+    tag = "audio",
+    request_body = AudioResetRequest,
+    responses(
+        (status = 200, body = AudioSettingsResponse),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn reset_audio_settings(
     State(state): State<AppState>,
     body: Result<JsonExtractor<AudioDeviceRequest>, axum::extract::rejection::JsonRejection>,
@@ -728,9 +1736,19 @@ async fn reset_audio_settings(
         .control
         .reset_audio_settings(body.device)
         .await
-        .map(Json)
+        .map(|response| Json(with_spotify_status(response, &state)))
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/audio/sync-offset",
+    tag = "audio",
+    request_body = AudioSyncOffsetRequest,
+    responses(
+        (status = 200, body = AudioSettingsResponse),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn set_audio_sync_offset(
     State(state): State<AppState>,
     body: Result<JsonExtractor<AudioSyncOffsetRequest>, axum::extract::rejection::JsonRejection>,
@@ -740,17 +1758,41 @@ async fn set_audio_sync_offset(
         .control
         .set_audio_sync_offset(body.offset_ms)
         .await
-        .map(Json)
+        .map(|response| Json(with_spotify_status(response, &state)))
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/audio/source",
+    tag = "audio",
+    request_body = AudioSourceRequest,
+    responses(
+        (status = 200, body = AudioSettingsResponse),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn select_audio_source(
     State(state): State<AppState>,
     body: Result<JsonExtractor<AudioSourceRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let body = body.map_err(json_rejection)?.0;
-    state.control.set_audio_source(body.source).await.map(Json)
+    state
+        .control
+        .set_audio_source(body.source)
+        .await
+        .map(|response| Json(with_spotify_status(response, &state)))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/audio/sync-calibration",
+    tag = "audio",
+    request_body = AudioSyncCalibrationRequest,
+    responses(
+        (status = 200, body = AudioSyncCalibrationResponse),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn set_audio_sync_calibration(
     State(state): State<AppState>,
     body: Result<
@@ -759,7 +1801,7 @@ async fn set_audio_sync_calibration(
     >,
 ) -> Result<Json<Value>, ApiError> {
     let body = body.map_err(json_rejection)?.0;
-    let settings = state.control.audio_settings().await?;
+    let settings = with_spotify_status(state.control.audio_settings().await?, &state);
     if body.active {
         return Err(ApiError::new(
             StatusCode::CONFLICT,
@@ -773,6 +1815,16 @@ async fn set_audio_sync_calibration(
     })))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/audio/calibration/session",
+    tag = "audio",
+    request_body = AudioCalibrationStartRequest,
+    responses(
+        (status = 200, body = AudioCalibrationSessionResponse),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn start_audio_calibration(
     State(state): State<AppState>,
     body: Result<
@@ -794,6 +1846,16 @@ async fn start_audio_calibration(
         .map(Json)
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/audio/calibration/session/{session_id}",
+    tag = "audio",
+    params(("session_id" = String, Path)),
+    responses(
+        (status = 200, body = AudioCalibrationSessionResponse),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn get_audio_calibration(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
@@ -804,6 +1866,16 @@ async fn get_audio_calibration(
         .map(Json)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/audio/calibration/session/{session_id}/music",
+    tag = "audio",
+    params(("session_id" = String, Path)),
+    responses(
+        (status = 200, body = AudioCalibrationSessionResponse),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn begin_audio_calibration_music(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
@@ -815,6 +1887,17 @@ async fn begin_audio_calibration_music(
         .map(Json)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/audio/calibration/session/{session_id}/finish",
+    tag = "audio",
+    params(("session_id" = String, Path)),
+    request_body = AudioCalibrationFinishRequest,
+    responses(
+        (status = 200, body = AudioSettingsResponse),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn finish_audio_calibration(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
@@ -828,7 +1911,7 @@ async fn finish_audio_calibration(
         .control
         .finish_audio_calibration(session_id, body.apply, body.target_level, body.noise_floor)
         .await
-        .map(Json)
+        .map(|response| Json(with_spotify_status(response, &state)))
 }
 
 fn default_supply_capacity() -> f64 {
@@ -865,18 +1948,33 @@ fn default_identify_pattern() -> String {
     "identify".to_owned()
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct AnimationSettingsQuery {
     stripe_id: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 struct AnimationSettingsUpdateRequest {
+    #[schema(schema_with = crate::api_schema::arbitrary_object_schema)]
     values: Map<String, Value>,
+    #[schema(min_length = 1, max_length = 64)]
     stripe_id: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/animations/{animation_name}/settings",
+    tag = "animations",
+    params(
+        ("animation_name" = String, Path, min_length = 1, max_length = 100),
+        ("stripe_id" = Option<String>, Query, min_length = 1, max_length = 64)
+    ),
+    responses(
+        (status = 200, body = AnimationSettingsResponse),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn get_animation_settings(
     State(state): State<AppState>,
     Path(animation_name): Path<String>,
@@ -892,6 +1990,17 @@ async fn get_animation_settings(
         .map(Json)
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/animations/{animation_name}/settings",
+    tag = "animations",
+    params(("animation_name" = String, Path, min_length = 1, max_length = 100)),
+    request_body = AnimationSettingsUpdateRequest,
+    responses(
+        (status = 200, body = AnimationSettingsResponse),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn put_animation_settings(
     State(state): State<AppState>,
     Path(animation_name): Path<String>,
@@ -919,6 +2028,19 @@ async fn put_animation_settings(
         .map(Json)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/animations/{animation_name}/settings/reset",
+    tag = "animations",
+    params(
+        ("animation_name" = String, Path, min_length = 1, max_length = 100),
+        ("stripe_id" = Option<String>, Query, min_length = 1, max_length = 64)
+    ),
+    responses(
+        (status = 200, body = AnimationSettingsResponse),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn reset_animation_settings(
     State(state): State<AppState>,
     Path(animation_name): Path<String>,
@@ -984,10 +2106,11 @@ fn validate_path_text(
     Ok(value)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct ModeRequest {
     mode: PlaybackMode,
     #[serde(default)]
+    #[schema(pattern = "^#[0-9A-Fa-f]{6}$")]
     color: Option<String>,
     #[serde(default)]
     stripe_id: Option<String>,
@@ -995,8 +2118,9 @@ struct ModeRequest {
     music_recognition_enabled: Option<bool>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct BrightnessRequest {
+    #[schema(minimum = 0.0, maximum = 1.0)]
     #[serde(deserialize_with = "deserialize_float")]
     brightness: f64,
     #[serde(default)]
@@ -1020,20 +2144,31 @@ where
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct AnimationRequest {
+    #[schema(min_length = 1)]
     name: String,
     #[serde(default)]
     stripe_id: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct BlackoutRequest {
     enabled: bool,
     #[serde(default)]
     stripe_id: Option<String>,
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/mode",
+    tag = "control",
+    request_body = ModeRequest,
+    responses(
+        (status = 200, body = DashboardStateSchema),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn set_mode(
     State(state): State<AppState>,
     body: Result<JsonExtractor<ModeRequest>, axum::extract::rejection::JsonRejection>,
@@ -1051,6 +2186,16 @@ async fn set_mode(
         .map(Json)
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/brightness",
+    tag = "control",
+    request_body = BrightnessRequest,
+    responses(
+        (status = 200, body = DashboardStateSchema),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn set_brightness(
     State(state): State<AppState>,
     body: Result<JsonExtractor<BrightnessRequest>, axum::extract::rejection::JsonRejection>,
@@ -1063,6 +2208,16 @@ async fn set_brightness(
         .map(Json)
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/animation",
+    tag = "control",
+    request_body = AnimationRequest,
+    responses(
+        (status = 200, body = DashboardStateSchema),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn select_animation(
     State(state): State<AppState>,
     body: Result<JsonExtractor<AnimationRequest>, axum::extract::rejection::JsonRejection>,
@@ -1084,6 +2239,16 @@ async fn select_animation(
         .map(Json)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/blackout",
+    tag = "control",
+    request_body = BlackoutRequest,
+    responses(
+        (status = 200, body = DashboardStateSchema),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn set_blackout(
     State(state): State<AppState>,
     body: Result<JsonExtractor<BlackoutRequest>, axum::extract::rejection::JsonRejection>,
@@ -1096,13 +2261,29 @@ async fn set_blackout(
         .map(Json)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 #[serde(default)]
 struct MusicIdleRequest {
     mode: MusicIdleMode,
     color: String,
     animation: String,
     brightness: f64,
+    stripe_id: Option<String>,
+}
+
+#[derive(utoipa::ToSchema)]
+#[schema(as = MusicIdleRequest)]
+#[allow(dead_code)]
+struct MusicIdleRequestSchema {
+    #[schema(required = false, schema_with = crate::api_schema::music_idle_mode_schema)]
+    mode: MusicIdleMode,
+    #[schema(required = false, default = "#2060FF", pattern = "^#[0-9A-Fa-f]{6}$")]
+    color: String,
+    #[schema(required = false, default = "")]
+    animation: String,
+    #[schema(required = false, minimum = 0.0, maximum = 1.0, default = 1.0)]
+    brightness: f64,
+    #[schema(required = false)]
     stripe_id: Option<String>,
 }
 
@@ -1119,6 +2300,16 @@ impl Default for MusicIdleRequest {
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/music-idle",
+    tag = "control",
+    request_body = MusicIdleRequestSchema,
+    responses(
+        (status = 200, body = DashboardStateSchema),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn set_music_idle(
     State(state): State<AppState>,
     body: Result<JsonExtractor<MusicIdleRequest>, axum::extract::rejection::JsonRejection>,
@@ -1140,15 +2331,31 @@ async fn set_music_idle(
         .map(Json)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct StartupSettingsRequest {
     restore_last_state: bool,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/startup",
+    tag = "startup",
+    responses((status = 200, body = StartupSettingsResponse))
+)]
 async fn get_startup_settings(State(state): State<AppState>) -> Json<Value> {
     Json(state.control.startup_settings())
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/startup",
+    tag = "startup",
+    request_body = StartupSettingsRequest,
+    responses(
+        (status = 200, body = StartupSettingsResponse),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn put_startup_settings(
     State(state): State<AppState>,
     body: Result<JsonExtractor<StartupSettingsRequest>, axum::extract::rejection::JsonRejection>,
@@ -1161,20 +2368,38 @@ async fn put_startup_settings(
     Ok(Json(state.control.startup_settings()))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/transitions/settings",
+    tag = "transitions",
+    responses((status = 200, body = TransitionSettings))
+)]
 async fn get_transition_settings(State(state): State<AppState>) -> Json<Value> {
     let snapshot = state.control.state();
     Json(snapshot.borrow()["transition_settings"].clone())
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 struct TransitionSettingsRequest {
     enabled: bool,
+    #[schema(minimum = 100, maximum = 1500)]
     duration_ms: u16,
+    #[schema(required = false, schema_with = crate::api_schema::transition_effect_schema)]
     #[serde(default)]
     effect: TransitionEffect,
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/transitions/settings",
+    tag = "transitions",
+    request_body = TransitionSettingsRequest,
+    responses(
+        (status = 200, body = DashboardStateSchema),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn put_transition_settings(
     State(state): State<AppState>,
     body: Result<JsonExtractor<TransitionSettingsRequest>, axum::extract::rejection::JsonRejection>,
@@ -1214,17 +2439,34 @@ async fn put_transition_settings(
         .map(Json)
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/sequencer/settings",
+    tag = "sequencer",
+    responses((status = 200, body = SequencerSettingsResponse))
+)]
 async fn get_sequencer_settings(State(state): State<AppState>) -> Json<Value> {
     let snapshot = state.control.state();
     Json(snapshot.borrow()["sequencer_settings"].clone())
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct SequencerSettingsRequest {
     switch_quantization: SwitchQuantization,
+    #[schema(schema_with = crate::api_schema::duration_phrase_bars_schema)]
     bars_per_phrase: u8,
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/sequencer/settings",
+    tag = "sequencer",
+    request_body = SequencerSettingsRequest,
+    responses(
+        (status = 200, body = DashboardStateSchema),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn put_sequencer_settings(
     State(state): State<AppState>,
     body: Result<JsonExtractor<SequencerSettingsRequest>, axum::extract::rejection::JsonRejection>,
@@ -1246,41 +2488,66 @@ async fn put_sequencer_settings(
         .map(Json)
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/sequencer/sequences",
+    tag = "sequencer",
+    responses((status = 200, body = SequenceLibraryResponse))
+)]
 async fn get_sequence_library(State(state): State<AppState>) -> Json<Value> {
     let snapshot = state.control.state();
     Json(snapshot.borrow()["sequence_library"].clone())
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 struct SequenceStepRequest {
+    #[schema(min_length = 1, max_length = 100)]
     animation_name: String,
+    #[schema(schema_with = crate::api_schema::duration_sequence_bars_schema)]
     duration_bars: u8,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 struct SequenceDefinitionRequest {
+    #[schema(min_length = 1, max_length = 80)]
     name: String,
     repeat: bool,
+    #[schema(min_items = 1, max_items = 32, value_type = Vec<crate::settings::SavedAnimationSequenceStep>)]
     steps: Vec<SequenceStepRequest>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 struct SequenceCreateRequest {
+    #[schema(min_length = 1, max_length = 64)]
     id: String,
+    #[schema(min_length = 1, max_length = 80)]
     name: String,
     repeat: bool,
+    #[schema(min_items = 1, max_items = 32, value_type = Vec<crate::settings::SavedAnimationSequenceStep>)]
     steps: Vec<SequenceStepRequest>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
+#[schema(as = SequenceActiveRequest)]
 struct ActiveSequenceRequest {
+    #[schema(value_type = Option<String>, required = true, min_length = 1, max_length = 64)]
     sequence_id: Value,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/sequencer/sequences",
+    tag = "sequencer",
+    request_body = SequenceCreateRequest,
+    responses(
+        (status = 200, body = DashboardStateSchema),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn create_sequence(
     State(state): State<AppState>,
     body: Result<JsonExtractor<SequenceCreateRequest>, axum::extract::rejection::JsonRejection>,
@@ -1290,6 +2557,17 @@ async fn create_sequence(
     state.control.create_sequence(sequence).await.map(Json)
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/sequencer/sequences/{sequence_id}",
+    tag = "sequencer",
+    params(("sequence_id" = String, Path, min_length = 1, max_length = 64)),
+    request_body = SequenceDefinitionRequest,
+    responses(
+        (status = 200, body = DashboardStateSchema),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn update_sequence(
     State(state): State<AppState>,
     Path(sequence_id): Path<String>,
@@ -1305,6 +2583,16 @@ async fn update_sequence(
         .map(Json)
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/sequencer/sequences/{sequence_id}",
+    tag = "sequencer",
+    params(("sequence_id" = String, Path, min_length = 1, max_length = 64)),
+    responses(
+        (status = 200, body = DashboardStateSchema),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn delete_sequence(
     State(state): State<AppState>,
     Path(sequence_id): Path<String>,
@@ -1313,6 +2601,16 @@ async fn delete_sequence(
     state.control.delete_sequence(sequence_id).await.map(Json)
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/sequencer/active",
+    tag = "sequencer",
+    request_body = ActiveSequenceRequest,
+    responses(
+        (status = 200, body = DashboardStateSchema),
+        (status = 422, body = HttpValidationErrorSchema)
+    )
+)]
 async fn set_active_sequence(
     State(state): State<AppState>,
     body: Result<JsonExtractor<ActiveSequenceRequest>, axum::extract::rejection::JsonRejection>,
@@ -1459,6 +2757,12 @@ fn validate_sequence_text(
     Ok(value)
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/auth/status",
+    tag = "auth",
+    responses((status = 200, body = AccessStatus))
+)]
 async fn auth_status(State(state): State<AppState>, headers: HeaderMap) -> Json<Value> {
     Json(json!({
         "required": state.access.required(),
@@ -1466,11 +2770,24 @@ async fn auth_status(State(state): State<AppState>, headers: HeaderMap) -> Json<
     }))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
+#[schema(as = PairingRequest)]
 struct PairRequest {
+    #[schema(pattern = "^[0-9]{4}$")]
     code: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/auth/pair",
+    tag = "auth",
+    request_body = PairRequest,
+    responses(
+        (status = 200, body = AccessStatus),
+        (status = 422, body = HttpValidationErrorSchema),
+        (status = 429, description = "Too many pairing attempts; retry after the indicated delay.")
+    )
+)]
 async fn pair(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1529,6 +2846,12 @@ async fn pair(
     Ok(response)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/auth/logout",
+    tag = "auth",
+    responses((status = 200, body = AccessStatus))
+)]
 async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let token = session_from_headers(&headers);
     state.access.revoke(token.as_deref());
@@ -1585,6 +2908,112 @@ async fn access_middleware(
         }
     }
     next.run(request).await
+}
+
+async fn validate_json_object(request: Request<Body>, next: Next) -> Response {
+    if !matches!(
+        request.method(),
+        &Method::POST | &Method::PUT | &Method::PATCH | &Method::DELETE
+    ) {
+        return next.run(request).await;
+    }
+    let matched_path = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(MatchedPath::as_str)
+        .unwrap_or_else(|| request.uri().path());
+    if !has_json_object_body(request.method(), matched_path) {
+        return next.run(request).await;
+    }
+    let is_json = request
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|media_type| {
+            media_type.trim().eq_ignore_ascii_case("application/json")
+                || media_type.trim().to_ascii_lowercase().ends_with("+json")
+        });
+    if !is_json {
+        return next.run(request).await;
+    }
+
+    const MAX_JSON_REQUEST_BYTES: usize = 2 * 1024 * 1024;
+    let (parts, body) = request.into_parts();
+    let bytes = match to_bytes(body, MAX_JSON_REQUEST_BYTES).await {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return ApiError::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "The JSON request body is too large.",
+            )
+            .into_response();
+        }
+    };
+    if let Ok(value) = serde_json::from_slice::<Value>(&bytes)
+        && !value.is_object()
+    {
+        return ApiError::validation(json!([{
+            "type": "model_type",
+            "loc": ["body"],
+            "msg": "Input should be a valid JSON object",
+            "input": value,
+        }]))
+        .into_response();
+    }
+    next.run(Request::from_parts(parts, Body::from(bytes)))
+        .await
+}
+
+fn has_json_object_body(method: &Method, path: &str) -> bool {
+    matches!(
+        (method, path),
+        (&Method::PUT, "/api/animation")
+            | (&Method::PUT, "/api/animations/{animation_name}/settings")
+            | (&Method::PUT, "/api/audio/bluetooth/alias")
+            | (&Method::POST, "/api/audio/bluetooth/connect")
+            | (&Method::POST, "/api/audio/bluetooth/disconnect")
+            | (&Method::POST, "/api/audio/bluetooth/forget")
+            | (&Method::POST, "/api/audio/bluetooth/pair")
+            | (&Method::PUT, "/api/audio/bluetooth/power")
+            | (&Method::POST, "/api/audio/calibration/session")
+            | (
+                &Method::POST,
+                "/api/audio/calibration/session/{session_id}/finish"
+            )
+            | (&Method::PUT, "/api/audio/device")
+            | (&Method::PUT, "/api/audio/output")
+            | (&Method::PUT, "/api/audio/output/mute")
+            | (&Method::PUT, "/api/audio/output/volume")
+            | (&Method::PUT, "/api/audio/settings")
+            | (&Method::POST, "/api/audio/settings/reset")
+            | (&Method::PUT, "/api/audio/source")
+            | (&Method::POST, "/api/audio/spotify/control")
+            | (&Method::POST, "/api/audio/sync-calibration")
+            | (&Method::PUT, "/api/audio/sync-offset")
+            | (&Method::POST, "/api/auth/pair")
+            | (&Method::POST, "/api/blackout")
+            | (&Method::PUT, "/api/brightness")
+            | (&Method::POST, "/api/calibration/session")
+            | (&Method::PUT, "/api/calibration/session/{session_id}")
+            | (
+                &Method::POST,
+                "/api/calibration/session/{session_id}/finish"
+            )
+            | (&Method::PUT, "/api/identity")
+            | (&Method::PUT, "/api/mode")
+            | (&Method::PUT, "/api/music-idle")
+            | (&Method::POST, "/api/network/connect")
+            | (&Method::POST, "/api/network/scan")
+            | (&Method::PUT, "/api/sequencer/active")
+            | (&Method::POST, "/api/sequencer/sequences")
+            | (&Method::PUT, "/api/sequencer/sequences/{sequence_id}")
+            | (&Method::PUT, "/api/sequencer/settings")
+            | (&Method::PUT, "/api/startup")
+            | (&Method::PUT, "/api/stripes")
+            | (&Method::POST, "/api/stripes/test")
+            | (&Method::PUT, "/api/transitions/settings")
+    )
 }
 
 async fn api_not_found() -> Response {
@@ -1884,8 +3313,513 @@ fn spawn_audio_status_publisher(
 
 #[cfg(test)]
 mod tests {
-    use super::websocket_origin_allowed;
-    use axum::http::{HeaderMap, HeaderValue};
+    use super::{
+        NetworkManagerService, WebApplication, spawn_dashboard_state_publisher,
+        websocket_origin_allowed,
+    };
+    use crate::bluetooth::BluetoothService;
+    use crate::bluetooth_process::BluetoothError;
+    use crate::bluetooth_providers::{
+        BlueZCommand, BlueZProvider, BlueZSnapshot, PipeWireCommand, PipeWireProvider,
+    };
+    use crate::config::{AppConfig, EngineOutputOptions};
+    use crate::settings::ZonePattern;
+    use crate::spotify::{
+        ProviderFuture, SpotifyControlAction, SpotifyError, SpotifyPlaybackStatus, SpotifyProvider,
+        SpotifyRepeat, SpotifyStatus,
+    };
+    use crate::updates::UpdateError;
+    use axum::body::Body;
+    use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
+    use futures_util::future::BoxFuture;
+    use serde_json::{Value, json};
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+    use tempfile::tempdir;
+    use tokio::sync::{mpsc, watch};
+    use tokio::time::{sleep, timeout};
+    use tokio_util::sync::CancellationToken;
+    use tower::ServiceExt;
+
+    #[test]
+    fn update_install_launch_failure_maps_to_service_unavailable() {
+        let error = super::update_api_error(UpdateError {
+            code: "start_install_failed",
+            message: "Could not start the system updater. Check the Pi installation.",
+        });
+
+        assert_eq!(error.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            error.detail(),
+            &json!("Could not start the system updater. Check the Pi installation.")
+        );
+    }
+
+    struct PendingBlueZDisconnect {
+        commands: mpsc::UnboundedSender<BlueZCommand>,
+        operation_dropped: Arc<AtomicBool>,
+    }
+
+    impl BlueZProvider for PendingBlueZDisconnect {
+        fn snapshot(&self) -> BoxFuture<'static, Result<BlueZSnapshot, BluetoothError>> {
+            Box::pin(async { Ok(BlueZSnapshot::default()) })
+        }
+
+        fn execute(&self, command: BlueZCommand) -> BoxFuture<'static, Result<(), BluetoothError>> {
+            let commands = self.commands.clone();
+            let operation_dropped = self.operation_dropped.clone();
+            Box::pin(async move {
+                struct DropSignal(Arc<AtomicBool>);
+
+                impl Drop for DropSignal {
+                    fn drop(&mut self) {
+                        self.0.store(true, Ordering::Release);
+                    }
+                }
+
+                let _drop_signal = DropSignal(operation_dropped);
+                commands
+                    .send(command)
+                    .map_err(|_| BluetoothError::new("test", "command receiver stopped"))?;
+                std::future::pending::<Result<(), BluetoothError>>().await
+            })
+        }
+    }
+
+    struct EmptyPipeWire;
+
+    impl PipeWireProvider for EmptyPipeWire {
+        fn available(&self) -> bool {
+            true
+        }
+
+        fn has_wpctl(&self) -> bool {
+            false
+        }
+
+        fn execute(
+            &self,
+            _command: PipeWireCommand,
+        ) -> BoxFuture<'static, Result<String, BluetoothError>> {
+            Box::pin(async { Ok(String::new()) })
+        }
+    }
+
+    struct EmptyBlueZ;
+
+    impl BlueZProvider for EmptyBlueZ {
+        fn snapshot(&self) -> BoxFuture<'static, Result<BlueZSnapshot, BluetoothError>> {
+            Box::pin(async { Ok(BlueZSnapshot::default()) })
+        }
+
+        fn execute(
+            &self,
+            _command: BlueZCommand,
+        ) -> BoxFuture<'static, Result<(), BluetoothError>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    struct ApiFixtureBlueZ {
+        commands: mpsc::UnboundedSender<BlueZCommand>,
+        fail_next_pair: Arc<AtomicBool>,
+        fail_next_operation: Arc<std::sync::Mutex<Option<(String, String)>>>,
+        block_next_pair: Arc<AtomicBool>,
+        pair_gate: Arc<tokio::sync::Semaphore>,
+    }
+
+    impl BlueZProvider for ApiFixtureBlueZ {
+        fn snapshot(&self) -> BoxFuture<'static, Result<BlueZSnapshot, BluetoothError>> {
+            Box::pin(async {
+                Ok(BlueZSnapshot {
+                    powered: true,
+                    alias: Some("LumiStripe".to_owned()),
+                    scanning: false,
+                    devices: vec![
+                        crate::bluetooth_models::BluetoothDevice {
+                            address: "AA:BB:CC:DD:EE:01".to_owned(),
+                            name: "Test headset".to_owned(),
+                            paired: true,
+                            connected: false,
+                            roles: vec!["input".to_owned()],
+                        },
+                        crate::bluetooth_models::BluetoothDevice {
+                            address: "AA:BB:CC:DD:EE:02".to_owned(),
+                            name: "Test speaker".to_owned(),
+                            paired: true,
+                            connected: false,
+                            roles: vec!["output".to_owned()],
+                        },
+                    ],
+                })
+            })
+        }
+
+        fn execute(&self, command: BlueZCommand) -> BoxFuture<'static, Result<(), BluetoothError>> {
+            let commands = self.commands.clone();
+            let fail_next_pair = self.fail_next_pair.clone();
+            let fail_next_operation = self.fail_next_operation.clone();
+            let block_next_pair = self.block_next_pair.clone();
+            let pair_gate = self.pair_gate.clone();
+            Box::pin(async move {
+                if matches!(&command, BlueZCommand::Pair(_))
+                    && block_next_pair.swap(false, Ordering::AcqRel)
+                {
+                    commands
+                        .send(command)
+                        .map_err(|_| BluetoothError::new("test", "command receiver stopped"))?;
+                    let _permit = pair_gate
+                        .acquire_owned()
+                        .await
+                        .map_err(|_| BluetoothError::new("test", "pair gate closed"))?;
+                    return Ok(());
+                }
+                if matches!(&command, BlueZCommand::Pair(_))
+                    && fail_next_pair.swap(false, Ordering::AcqRel)
+                {
+                    return Err(BluetoothError::new("fixture", "pairing was rejected"));
+                }
+                let failure = fail_next_operation.lock().ok().and_then(|mut pending| {
+                    if pending.as_ref().is_some_and(|(operation, _)| {
+                        operation == bluez_command_operation(&command)
+                    }) {
+                        pending.take()
+                    } else {
+                        None
+                    }
+                });
+                commands
+                    .send(command)
+                    .map_err(|_| BluetoothError::new("test", "command receiver stopped"))?;
+                if let Some((_, message)) = failure {
+                    return Err(BluetoothError::new("fixture", message));
+                }
+                Ok(())
+            })
+        }
+    }
+
+    #[derive(Debug, PartialEq)]
+    enum ApiFixturePipeWireCommand {
+        SetDefaultSink(String),
+        SetVolume { sink: String, volume: f64 },
+        SetMute { sink: String, muted: bool },
+    }
+
+    struct ApiFixturePipeWire {
+        commands: mpsc::UnboundedSender<ApiFixturePipeWireCommand>,
+        fail_next_default_sink: Arc<AtomicBool>,
+        fail_next_operation: Arc<std::sync::Mutex<Option<(String, String)>>>,
+    }
+
+    impl PipeWireProvider for ApiFixturePipeWire {
+        fn available(&self) -> bool {
+            true
+        }
+
+        fn has_wpctl(&self) -> bool {
+            false
+        }
+
+        fn execute(
+            &self,
+            command: PipeWireCommand,
+        ) -> BoxFuture<'static, Result<String, BluetoothError>> {
+            let commands = self.commands.clone();
+            let fail_next_default_sink = self.fail_next_default_sink.clone();
+            let fail_next_operation = self.fail_next_operation.clone();
+            Box::pin(async move {
+                let output = match command {
+                    PipeWireCommand::Sources => {
+                        "1 alsa_input.usb_test PipeWire s16le 2ch 48000Hz RUNNING".to_owned()
+                    }
+                    PipeWireCommand::Sinks => {
+                        "1 speaker_main module-test s16le 2ch 48000Hz RUNNING".to_owned()
+                    }
+                    PipeWireCommand::SinkDetails => "Sink #1\n Name: speaker_main\n Description: Test speaker\n Mute: no\n Volume: front-left: 65536 / 75%".to_owned(),
+                    PipeWireCommand::Info => {
+                        "Default Sink: speaker_main\nDefault Source: alsa_input.usb_test".to_owned()
+                    }
+                    PipeWireCommand::Modules => {
+                        "1 module-loopback source=lumistripe_spotify.monitor sink=speaker_main".to_owned()
+                    }
+                    PipeWireCommand::SetDefaultSink(sink) => {
+                        if fail_next_default_sink.swap(false, Ordering::AcqRel) {
+                            return Err(BluetoothError::new(
+                                "fixture",
+                                "PipeWire speaker switch was rejected",
+                            ));
+                        }
+                        commands
+                            .send(ApiFixturePipeWireCommand::SetDefaultSink(sink))
+                            .map_err(|_| {
+                                BluetoothError::new("test", "command receiver stopped")
+                            })?;
+                        String::new()
+                    }
+                    PipeWireCommand::SetVolume { sink, volume } => {
+                        let failure = take_fixture_operation_failure(
+                            &fail_next_operation,
+                            "set_volume",
+                        );
+                        if let Some(message) = failure {
+                            return Err(BluetoothError::new("fixture", message));
+                        }
+                        commands
+                            .send(ApiFixturePipeWireCommand::SetVolume { sink, volume })
+                            .map_err(|_| {
+                                BluetoothError::new("test", "command receiver stopped")
+                            })?;
+                        String::new()
+                    }
+                    PipeWireCommand::SetMute { sink, muted } => {
+                        let failure = take_fixture_operation_failure(
+                            &fail_next_operation,
+                            "set_mute",
+                        );
+                        if let Some(message) = failure {
+                            return Err(BluetoothError::new("fixture", message));
+                        }
+                        commands
+                            .send(ApiFixturePipeWireCommand::SetMute { sink, muted })
+                            .map_err(|_| {
+                                BluetoothError::new("test", "command receiver stopped")
+                            })?;
+                        String::new()
+                    }
+                    PipeWireCommand::SinkInputs
+                    | PipeWireCommand::StreamStatus
+                    | PipeWireCommand::SetDefaultSource(_)
+                    | PipeWireCommand::MoveSinkInput { .. }
+                    | PipeWireCommand::LoadModule { .. }
+                    | PipeWireCommand::UnloadModule(_) => String::new(),
+                };
+                Ok(output)
+            })
+        }
+    }
+
+    async fn api_request(
+        app: &WebApplication,
+        method: &str,
+        uri: &str,
+        body: Option<Value>,
+    ) -> (StatusCode, Value) {
+        let mut builder = Request::builder().method(method).uri(uri);
+        let body = match body {
+            Some(value) => {
+                builder = builder.header("content-type", "application/json");
+                Body::from(serde_json::to_vec(&value).unwrap())
+            }
+            None => Body::empty(),
+        };
+        let response = app
+            .router()
+            .oneshot(builder.body(body).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&body).unwrap())
+    }
+
+    async fn wait_for_completed_bluetooth_operation(app: &WebApplication) -> Value {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while tokio::time::Instant::now() < deadline {
+            let (status, body) = api_request(app, "GET", "/api/audio/bluetooth", None).await;
+            assert_eq!(status, StatusCode::OK);
+            match body["operation_state"].as_str() {
+                Some("complete") => return body,
+                Some("failed") => panic!("Bluetooth operation failed: {body}"),
+                _ => sleep(Duration::from_millis(10)).await,
+            }
+        }
+        panic!("Bluetooth operation did not complete before the test deadline");
+    }
+
+    async fn wait_for_failed_bluetooth_operation(app: &WebApplication) -> Value {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while tokio::time::Instant::now() < deadline {
+            let (status, body) = api_request(app, "GET", "/api/audio/bluetooth", None).await;
+            assert_eq!(status, StatusCode::OK);
+            match body["operation_state"].as_str() {
+                Some("failed") => return body,
+                Some("complete") => panic!("Bluetooth operation unexpectedly completed: {body}"),
+                _ => sleep(Duration::from_millis(10)).await,
+            }
+        }
+        panic!("Bluetooth operation did not fail before the test deadline");
+    }
+
+    fn bluez_command_operation(command: &BlueZCommand) -> &'static str {
+        match command {
+            BlueZCommand::Scan => "scan",
+            BlueZCommand::SetPower(_) => "set_power",
+            BlueZCommand::SetAlias(_) => "set_alias",
+            BlueZCommand::Pair(_) => "pair",
+            BlueZCommand::Connect { .. } => "connect",
+            BlueZCommand::Forget(_) => "forget",
+            BlueZCommand::Disconnect(_) => "disconnect",
+        }
+    }
+
+    fn take_fixture_operation_failure(
+        pending: &Arc<std::sync::Mutex<Option<(String, String)>>>,
+        operation: &str,
+    ) -> Option<String> {
+        pending.lock().ok().and_then(|mut pending| {
+            if pending
+                .as_ref()
+                .is_some_and(|(expected, _)| expected == operation)
+            {
+                pending.take().map(|(_, message)| message)
+            } else {
+                None
+            }
+        })
+    }
+
+    fn bluetooth_fixture_command_matches(
+        command: BlueZCommand,
+        operation: &str,
+        arguments: &[Value],
+    ) -> bool {
+        match command {
+            BlueZCommand::Scan => operation == "scan" && arguments.is_empty(),
+            BlueZCommand::SetPower(powered) => {
+                operation == "set_power"
+                    && arguments.first().and_then(Value::as_bool) == Some(powered)
+            }
+            BlueZCommand::SetAlias(alias) => {
+                operation == "set_alias"
+                    && arguments.first().and_then(Value::as_str) == Some(alias.as_str())
+            }
+            BlueZCommand::Pair(address) => {
+                operation == "pair"
+                    && arguments.first().and_then(Value::as_str) == Some(address.as_str())
+            }
+            BlueZCommand::Forget(address) => {
+                operation == "forget"
+                    && arguments.first().and_then(Value::as_str) == Some(address.as_str())
+            }
+            BlueZCommand::Disconnect(address) => {
+                operation == "disconnect"
+                    && arguments.first().and_then(Value::as_str) == Some(address.as_str())
+            }
+            BlueZCommand::Connect { address, role } => {
+                operation == "connect"
+                    && arguments.first().and_then(Value::as_str) == Some(address.as_str())
+                    && arguments.get(1).and_then(Value::as_str) == Some(role.as_str())
+            }
+        }
+    }
+
+    fn pipewire_fixture_command_matches(
+        command: ApiFixturePipeWireCommand,
+        operation: &str,
+        arguments: &[Value],
+    ) -> bool {
+        match command {
+            ApiFixturePipeWireCommand::SetDefaultSink(sink) => {
+                operation == "set_default_sink"
+                    && arguments.first().and_then(Value::as_str) == Some(sink.as_str())
+            }
+            ApiFixturePipeWireCommand::SetVolume { sink, volume } => {
+                operation == "set_volume"
+                    && arguments.first().and_then(Value::as_str) == Some(sink.as_str())
+                    && arguments.get(1).and_then(Value::as_f64) == Some(volume)
+            }
+            ApiFixturePipeWireCommand::SetMute { sink, muted } => {
+                operation == "set_mute"
+                    && arguments.first().and_then(Value::as_str) == Some(sink.as_str())
+                    && arguments.get(1).and_then(Value::as_bool) == Some(muted)
+            }
+        }
+    }
+
+    async fn assert_bluetooth_route_fixture_case(
+        app: &WebApplication,
+        bluez_commands: &mut mpsc::UnboundedReceiver<BlueZCommand>,
+        pipewire_commands: &mut mpsc::UnboundedReceiver<ApiFixturePipeWireCommand>,
+        case: &Value,
+    ) {
+        let method = case["method"].as_str().expect("fixture method");
+        let uri = case["path"].as_str().expect("fixture path");
+        let body = case.get("body").cloned();
+        let busy_deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+        let (status, response) = loop {
+            let result = api_request(app, method, uri, body.clone()).await;
+            if result.0 == StatusCode::CONFLICT
+                && result.1["detail"] == "another Bluetooth operation is already running"
+            {
+                assert!(
+                    tokio::time::Instant::now() < busy_deadline,
+                    "Bluetooth operation gate did not release before {method} {uri}"
+                );
+                sleep(Duration::from_millis(5)).await;
+                continue;
+            }
+            break result;
+        };
+        assert_eq!(status, StatusCode::OK, "{method} {uri}: {response}");
+        let provider = case["provider"].as_str().expect("fixture provider");
+        let operation = case["operation"].as_str().expect("fixture operation");
+        let arguments = case["arguments"]
+            .as_array()
+            .expect("fixture operation arguments");
+        match provider {
+            "bluez" => {
+                let command = timeout(Duration::from_secs(1), bluez_commands.recv())
+                    .await
+                    .expect("BlueZ provider should receive the route command")
+                    .expect("BlueZ provider command channel should stay open");
+                assert!(
+                    bluetooth_fixture_command_matches(command, operation, arguments),
+                    "unexpected BlueZ command for {method} {uri}"
+                );
+                let completed = wait_for_completed_bluetooth_operation(app).await;
+                assert_eq!(completed["operation_state"], "complete");
+            }
+            "pipewire" => {
+                let command = timeout(Duration::from_secs(1), pipewire_commands.recv())
+                    .await
+                    .expect("PipeWire provider should receive the route command")
+                    .expect("PipeWire provider command channel should stay open");
+                assert!(
+                    pipewire_fixture_command_matches(command, operation, arguments),
+                    "unexpected PipeWire command for {method} {uri}"
+                );
+            }
+            _ => panic!("unknown provider in Bluetooth API fixture: {provider}"),
+        }
+    }
+
+    struct ChangingSpotify {
+        status: watch::Receiver<SpotifyStatus>,
+    }
+
+    impl SpotifyProvider for ChangingSpotify {
+        fn start(&self) {}
+
+        fn stop(&self) {}
+
+        fn status(&self) -> SpotifyStatus {
+            self.status.borrow().clone()
+        }
+
+        fn control<'a>(
+            &'a self,
+            _action: SpotifyControlAction,
+            _value: Option<Value>,
+        ) -> ProviderFuture<'a> {
+            Box::pin(async { Err(SpotifyError::new("test", "test provider")) })
+        }
+    }
 
     #[test]
     fn origin_check_accepts_same_origin_and_rejects_cross_origin() {
@@ -1895,5 +3829,793 @@ mod tests {
         assert!(websocket_origin_allowed(&headers));
         headers.insert("origin", HeaderValue::from_static("https://evil.example"));
         assert!(!websocket_origin_allowed(&headers));
+    }
+
+    #[tokio::test]
+    async fn dashboard_state_publishes_provider_changes_without_control_revisions() {
+        let cancellation = CancellationToken::new();
+        let (spotify_status, spotify_receiver) = watch::channel(SpotifyStatus {
+            configured: true,
+            connected: false,
+            logged_in: false,
+            is_active: false,
+            device_name: None,
+            status: SpotifyPlaybackStatus::Idle,
+            track: None,
+            position_ms: 0,
+            duration_ms: None,
+            volume: 0,
+            shuffle: false,
+            repeat: SpotifyRepeat::Off,
+            error: None,
+        });
+        let spotify: Arc<dyn SpotifyProvider> = Arc::new(ChangingSpotify {
+            status: spotify_receiver,
+        });
+        let (bluetooth, bluetooth_task) =
+            BluetoothService::new(false, false, 1, 1, cancellation.clone());
+        let (_control_state, control_receiver) = watch::channel(Arc::new(json!({
+            "running": true,
+            "revision": 7,
+        })));
+        let (mut dashboard_state, publisher_task) = spawn_dashboard_state_publisher(
+            control_receiver,
+            spotify,
+            bluetooth,
+            cancellation.clone(),
+        );
+        assert_eq!(dashboard_state.borrow()["revision"], 7);
+        assert_eq!(dashboard_state.borrow()["spotify"]["connected"], false);
+
+        spotify_status.send_modify(|status| {
+            status.connected = true;
+            status.logged_in = true;
+            status.is_active = true;
+            status.status = SpotifyPlaybackStatus::Playing;
+            status.device_name = Some("LumiStripe".to_owned());
+        });
+        timeout(Duration::from_secs(2), async {
+            loop {
+                dashboard_state.changed().await.unwrap();
+                if dashboard_state.borrow()["spotify"]["status"] == "playing" {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("provider changes should reach dashboard state");
+        assert_eq!(dashboard_state.borrow()["revision"], 7);
+
+        cancellation.cancel();
+        timeout(Duration::from_secs(1), publisher_task)
+            .await
+            .expect("dashboard publisher should stop promptly")
+            .unwrap();
+        timeout(Duration::from_secs(1), bluetooth_task)
+            .await
+            .expect("disabled Bluetooth poller should stop promptly")
+            .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn application_shutdown_cancels_an_inflight_bluetooth_disconnect() {
+        let directory = tempdir().unwrap();
+        let (command_sender, mut command_receiver) = mpsc::unbounded_channel();
+        let operation_dropped = Arc::new(AtomicBool::new(false));
+        let bluez = Arc::new(PendingBlueZDisconnect {
+            commands: command_sender,
+            operation_dropped: operation_dropped.clone(),
+        });
+        let engine_binary = std::env::var_os("LUMISTRIPE_ENGINE_TEST_BINARY")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../target/debug/lumistripe-engine")
+            });
+        assert!(
+            engine_binary.is_file(),
+            "build the engine binary before this test: {}",
+            engine_binary.display()
+        );
+        let config = AppConfig {
+            outputs: vec![EngineOutputOptions {
+                id: "main".to_owned(),
+                name: "Main stripe".to_owned(),
+                pixel_count: 8,
+                backend: lumistripe_engine_config::OutputBackend::Mock,
+                reversed: false,
+                zone_count: 1,
+                zone_pattern: ZonePattern::Repeat,
+                voltage_v: 5.0,
+                full_white_current_a: 0.06,
+                power_limit_watts: None,
+            }],
+            runtime_kind: "hardware",
+            output_backend: "simulation",
+            output_devices: vec!["simulation".to_owned()],
+            spi_speed_hz: None,
+            audio_device: None,
+            spotify_ws_uri: "127.0.0.1:9090".to_owned(),
+            spotify_provider_enabled: false,
+            bluetooth_max_inputs: 1,
+            bluetooth_max_outputs: 1,
+            secure_cookie: false,
+            static_dir: None,
+            settings_file: directory.path().join("settings.json"),
+        };
+        let mut app = WebApplication::start_with_bluetooth_providers(
+            config,
+            engine_binary,
+            None,
+            bluez,
+            Arc::new(EmptyPipeWire),
+            None,
+        )
+        .await
+        .expect("web application should start with injected providers");
+
+        let response = app
+            .router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/audio/bluetooth/disconnect")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"address":"AA:BB:CC:DD:EE:02"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(matches!(
+            timeout(Duration::from_secs(1), command_receiver.recv())
+                .await
+                .unwrap(),
+            Some(BlueZCommand::Disconnect(address)) if address == "AA:BB:CC:DD:EE:02"
+        ));
+        assert!(!operation_dropped.load(Ordering::Acquire));
+
+        timeout(Duration::from_secs(12), app.shutdown())
+            .await
+            .expect("application shutdown should finish within its task deadlines");
+        timeout(Duration::from_secs(1), async {
+            while !operation_dropped.load(Ordering::Acquire) {
+                sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("shutdown should cancel the pending BlueZ provider operation");
+    }
+
+    #[cfg(all(feature = "bluez", feature = "pipewire", target_os = "linux"))]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "requires a live BlueZ adapter and PipeWire user daemon"]
+    async fn live_native_audio_status_uses_system_providers_with_mock_outputs() {
+        let directory = tempdir().unwrap();
+        let engine_binary = std::env::var_os("LUMISTRIPE_ENGINE_TEST_BINARY")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../target/debug/lumistripe-engine")
+            });
+        assert!(
+            engine_binary.is_file(),
+            "build the engine binary before this test: {}",
+            engine_binary.display()
+        );
+        let config = AppConfig {
+            outputs: vec![EngineOutputOptions {
+                id: "main".to_owned(),
+                name: "Main stripe".to_owned(),
+                pixel_count: 8,
+                backend: lumistripe_engine_config::OutputBackend::Mock,
+                reversed: false,
+                zone_count: 1,
+                zone_pattern: ZonePattern::Repeat,
+                voltage_v: 5.0,
+                full_white_current_a: 0.06,
+                power_limit_watts: None,
+            }],
+            runtime_kind: "hardware",
+            output_backend: "simulation",
+            output_devices: vec!["simulation".to_owned()],
+            spi_speed_hz: None,
+            audio_device: None,
+            spotify_ws_uri: "127.0.0.1:9090".to_owned(),
+            spotify_provider_enabled: false,
+            bluetooth_max_inputs: 1,
+            bluetooth_max_outputs: 1,
+            secure_cookie: false,
+            static_dir: None,
+            settings_file: directory.path().join("settings.json"),
+        };
+        let mut app = WebApplication::start(config, engine_binary, None)
+            .await
+            .expect("web application should start with mock outputs and system providers");
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let (status, body) = api_request(&app, "GET", "/api/audio/bluetooth", None).await;
+            assert_eq!(status, StatusCode::OK);
+            if body["available"] == true && body["error"].is_null() {
+                let outputs = body["output_devices"]
+                    .as_array()
+                    .expect("Bluetooth status should always include the output-device list");
+                assert!(
+                    outputs.iter().all(|output| output["selector"]
+                        .as_str()
+                        .is_some_and(|selector| !selector.is_empty())),
+                    "each available PipeWire output should have a selector"
+                );
+                if std::env::var_os("LUMISTRIPE_REQUIRE_PIPEWIRE_OUTPUT").is_some() {
+                    assert!(
+                        !outputs.is_empty(),
+                        "the live PipeWire graph should expose at least one selectable output"
+                    );
+                }
+                break;
+            }
+            let output_count = body["output_devices"]
+                .as_array()
+                .map_or(0, std::vec::Vec::len);
+            let error = body["error"].as_str().unwrap_or("none");
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "native provider status did not become available: available={}, powered={}, error={}, output_count={output_count}",
+                body["available"],
+                body["powered"],
+                error
+            );
+            sleep(Duration::from_millis(50)).await;
+        }
+
+        app.shutdown().await;
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "requires the installed NetworkManager wrapper and service-user sudo rule"]
+    async fn live_networkmanager_status_route_uses_installed_restricted_wrapper() {
+        let directory = tempdir().unwrap();
+        let engine_binary = std::env::var_os("LUMISTRIPE_ENGINE_TEST_BINARY")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../target/debug/lumistripe-engine")
+            });
+        assert!(
+            engine_binary.is_file(),
+            "build the engine binary before this test: {}",
+            engine_binary.display()
+        );
+        let config = AppConfig {
+            outputs: vec![EngineOutputOptions {
+                id: "main".to_owned(),
+                name: "Main stripe".to_owned(),
+                pixel_count: 8,
+                backend: lumistripe_engine_config::OutputBackend::Mock,
+                reversed: false,
+                zone_count: 1,
+                zone_pattern: ZonePattern::Repeat,
+                voltage_v: 5.0,
+                full_white_current_a: 0.06,
+                power_limit_watts: None,
+            }],
+            runtime_kind: "simulation",
+            output_backend: "simulation",
+            output_devices: vec!["simulation".to_owned()],
+            spi_speed_hz: None,
+            audio_device: None,
+            spotify_ws_uri: "127.0.0.1:9090".to_owned(),
+            spotify_provider_enabled: false,
+            bluetooth_max_inputs: 1,
+            bluetooth_max_outputs: 1,
+            secure_cookie: false,
+            static_dir: None,
+            settings_file: directory.path().join("settings.json"),
+        };
+        let mut app = WebApplication::start_with_bluetooth_providers(
+            config,
+            engine_binary,
+            None,
+            Arc::new(EmptyBlueZ),
+            Arc::new(EmptyPipeWire),
+            None,
+        )
+        .await
+        .expect("web application should start with mock outputs and isolated audio providers");
+
+        let (status, body) = api_request(&app, "GET", "/api/network/status", None).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "network status route returned {body}"
+        );
+        assert_eq!(body["manager_available"], true);
+        assert!(body["error"].is_null());
+
+        let (update_status, update_body) =
+            api_request(&app, "GET", "/api/system/update", None).await;
+        assert_eq!(
+            update_status,
+            StatusCode::OK,
+            "update status route returned {update_body}"
+        );
+        assert_eq!(update_body["supported"], true);
+        assert_eq!(update_body["install_state"], "idle");
+
+        app.shutdown().await;
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "requires initialized updater state and outbound GitHub access"]
+    async fn live_update_check_route_refreshes_status_without_python() {
+        let directory = tempdir().unwrap();
+        let engine_binary = std::env::var_os("LUMISTRIPE_ENGINE_TEST_BINARY")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../target/debug/lumistripe-engine")
+            });
+        assert!(
+            engine_binary.is_file(),
+            "build the engine binary before this test: {}",
+            engine_binary.display()
+        );
+        let config = AppConfig {
+            outputs: vec![EngineOutputOptions {
+                id: "main".to_owned(),
+                name: "Main stripe".to_owned(),
+                pixel_count: 8,
+                backend: lumistripe_engine_config::OutputBackend::Mock,
+                reversed: false,
+                zone_count: 1,
+                zone_pattern: ZonePattern::Repeat,
+                voltage_v: 5.0,
+                full_white_current_a: 0.06,
+                power_limit_watts: None,
+            }],
+            runtime_kind: "simulation",
+            output_backend: "simulation",
+            output_devices: vec!["simulation".to_owned()],
+            spi_speed_hz: None,
+            audio_device: None,
+            spotify_ws_uri: "127.0.0.1:9090".to_owned(),
+            spotify_provider_enabled: false,
+            bluetooth_max_inputs: 1,
+            bluetooth_max_outputs: 1,
+            secure_cookie: false,
+            static_dir: None,
+            settings_file: directory.path().join("settings.json"),
+        };
+        let mut app = WebApplication::start_with_bluetooth_providers(
+            config,
+            engine_binary,
+            None,
+            Arc::new(EmptyBlueZ),
+            Arc::new(EmptyPipeWire),
+            None,
+        )
+        .await
+        .expect("web application should start with mock outputs and isolated audio providers");
+
+        let (status, before) = api_request(&app, "GET", "/api/system/update", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(before["supported"], true);
+        let previous_check = before["checked_at"].clone();
+
+        let (accepted, body) = api_request(&app, "POST", "/api/system/update/check", None).await;
+        assert_eq!(
+            accepted,
+            StatusCode::ACCEPTED,
+            "update check returned {body}"
+        );
+        assert_eq!(body["supported"], true);
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(40);
+        loop {
+            let (status, refreshed) = api_request(&app, "GET", "/api/system/update", None).await;
+            assert_eq!(status, StatusCode::OK);
+            if refreshed["checked_at"].is_string() && refreshed["checked_at"] != previous_check {
+                assert!(
+                    refreshed["check_error"].is_null(),
+                    "Rust update check failed: {refreshed}"
+                );
+                assert!(refreshed["installed_commit"].as_str().is_some());
+                assert_eq!(
+                    refreshed["update_available"].as_bool(),
+                    Some(refreshed["available_commit"].is_string())
+                );
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Rust update check did not finish: {refreshed}"
+            );
+            sleep(Duration::from_millis(50)).await;
+        }
+
+        app.shutdown().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn bluetooth_output_and_wifi_routes_execute_injected_providers() {
+        let directory = tempdir().unwrap();
+        let (bluez_sender, mut bluez_commands) = mpsc::unbounded_channel();
+        let (pipewire_sender, mut pipewire_commands) = mpsc::unbounded_channel();
+        let fail_next_pair = Arc::new(AtomicBool::new(false));
+        let fail_next_bluez_operation = Arc::new(std::sync::Mutex::new(None));
+        let block_next_pair = Arc::new(AtomicBool::new(false));
+        let pair_gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let fail_next_default_sink = Arc::new(AtomicBool::new(false));
+        let fail_next_pipewire_operation = Arc::new(std::sync::Mutex::new(None));
+        let bluez = Arc::new(ApiFixtureBlueZ {
+            commands: bluez_sender,
+            fail_next_pair: fail_next_pair.clone(),
+            fail_next_operation: fail_next_bluez_operation.clone(),
+            block_next_pair: block_next_pair.clone(),
+            pair_gate: pair_gate.clone(),
+        });
+        let pipewire = Arc::new(ApiFixturePipeWire {
+            commands: pipewire_sender,
+            fail_next_default_sink: fail_next_default_sink.clone(),
+            fail_next_operation: fail_next_pipewire_operation.clone(),
+        });
+        let network_helper = directory.path().join("network-helper");
+        std::fs::write(
+            &network_helper,
+            r#"#!/bin/sh
+request="$(cat)"
+case "$request" in
+  *'"operation":"status"'*)
+    printf '%s' '{"ok":true,"manager_available":true,"error":null,"adapters":[]}'
+    ;;
+  *'"operation":"scan"'*)
+    case "$request" in
+      *'"interface":"wlan0"'*) printf '%s' '{"ok":false,"error_code":"invalid","error":"The hotspot adapter cannot connect to an internet network."}' ;;
+      *'"interface":"wlan9"'*) printf '%s' '{"ok":false,"error_code":"unsupported","error":"Wi-Fi scanning is not supported on this adapter."}' ;;
+      *'"interface":"wlan8"'*) printf '%s' '{"ok":false,"error_code":"unavailable","error":"NetworkManager is unavailable."}' ;;
+      *'"interface":"wlan7"'*) printf '%s' '{"ok":false,"error_code":"permission_denied","error":"NetworkManager could not complete the request."}' ;;
+      *'"interface":"wlan6"'*) exit 2 ;;
+      *'"interface":"wlan5"'*) exec /usr/bin/sleep 5 ;;
+      *) printf '%s' '{"ok":true,"interface":"wlan1","networks":[{"ssid":"Party Wi-Fi","security":"WPA2","signal":88,"secured":true}]}' ;;
+    esac
+    ;;
+  *'"password":"wrong-pass"'*)
+    printf '%s' '{"ok":false,"error_code":"connection_failed","error":"Could not connect to that Wi-Fi network. Check the password and try again."}'
+    ;;
+  *'"operation":"connect"'*)
+    printf '%s' '{"ok":true,"interface":"wlan1","ssid":"Party Wi-Fi","connected":true}'
+    ;;
+  *) exit 1 ;;
+esac
+"#,
+        )
+        .unwrap();
+        let mut helper_permissions = std::fs::metadata(&network_helper).unwrap().permissions();
+        helper_permissions.set_mode(0o700);
+        std::fs::set_permissions(&network_helper, helper_permissions).unwrap();
+        let network = NetworkManagerService::new(
+            &network_helper,
+            std::iter::empty::<String>(),
+            Duration::from_secs(2),
+        );
+        let engine_binary = std::env::var_os("LUMISTRIPE_ENGINE_TEST_BINARY")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../target/debug/lumistripe-engine")
+            });
+        assert!(
+            engine_binary.is_file(),
+            "build the engine binary before this test: {}",
+            engine_binary.display()
+        );
+        let config = AppConfig {
+            outputs: vec![EngineOutputOptions {
+                id: "main".to_owned(),
+                name: "Main stripe".to_owned(),
+                pixel_count: 8,
+                backend: lumistripe_engine_config::OutputBackend::Mock,
+                reversed: false,
+                zone_count: 1,
+                zone_pattern: ZonePattern::Repeat,
+                voltage_v: 5.0,
+                full_white_current_a: 0.06,
+                power_limit_watts: None,
+            }],
+            runtime_kind: "hardware",
+            output_backend: "simulation",
+            output_devices: vec!["simulation".to_owned()],
+            spi_speed_hz: None,
+            audio_device: None,
+            spotify_ws_uri: "127.0.0.1:9090".to_owned(),
+            spotify_provider_enabled: false,
+            bluetooth_max_inputs: 1,
+            bluetooth_max_outputs: 1,
+            secure_cookie: false,
+            static_dir: None,
+            settings_file: directory.path().join("settings.json"),
+        };
+        let mut app = WebApplication::start_with_bluetooth_providers(
+            config,
+            engine_binary,
+            None,
+            bluez,
+            pipewire,
+            Some(network),
+        )
+        .await
+        .expect("web application should start with injected providers");
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let (status, body) = api_request(&app, "GET", "/api/audio/bluetooth", None).await;
+            assert_eq!(status, StatusCode::OK);
+            if body["available"] == true && body["default_sink"] == "speaker_main" {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Bluetooth snapshot did not reach the fixture state: {body}"
+            );
+            sleep(Duration::from_millis(10)).await;
+        }
+
+        let fixture_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test-fixtures/bluetooth-api-mutations-v1.json");
+        let mutation_cases: Vec<Value> =
+            serde_json::from_slice(&std::fs::read(&fixture_path).unwrap()).unwrap();
+        assert_eq!(mutation_cases.len(), 10);
+        for case in &mutation_cases {
+            assert_bluetooth_route_fixture_case(
+                &app,
+                &mut bluez_commands,
+                &mut pipewire_commands,
+                case,
+            )
+            .await;
+        }
+
+        let failure_fixture_path = fixture_path.with_file_name("bluetooth-api-failure-v1.json");
+        let failure_case: Value =
+            serde_json::from_slice(&std::fs::read(failure_fixture_path).unwrap()).unwrap();
+        fail_next_pair.store(true, Ordering::Release);
+        let (status, body) = api_request(
+            &app,
+            failure_case["method"].as_str().unwrap(),
+            failure_case["path"].as_str().unwrap(),
+            failure_case.get("body").cloned(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "pair request: {body}");
+        assert_eq!(body["operation"], failure_case["operation"]);
+        assert_eq!(body["operation_state"], "running");
+
+        let failure_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        let failed_status = loop {
+            let (status, current) = api_request(&app, "GET", "/api/audio/bluetooth", None).await;
+            assert_eq!(status, StatusCode::OK);
+            if current["operation_state"] == "failed" {
+                break current;
+            }
+            assert!(
+                tokio::time::Instant::now() < failure_deadline,
+                "provider failure did not reach a terminal Bluetooth status: {current}"
+            );
+            sleep(Duration::from_millis(5)).await;
+        };
+        assert_eq!(failed_status["error"], failure_case["error"]);
+
+        let api_failures_path = fixture_path.with_file_name("bluetooth-api-failures-v1.json");
+        let api_failure_cases: Vec<Value> =
+            serde_json::from_slice(&std::fs::read(api_failures_path).unwrap()).unwrap();
+        for case in &api_failure_cases {
+            *fail_next_bluez_operation.lock().unwrap() = Some((
+                case["operation"].as_str().unwrap().to_owned(),
+                case["error"].as_str().unwrap().to_owned(),
+            ));
+            let (status, body) = api_request(
+                &app,
+                case["method"].as_str().unwrap(),
+                case["path"].as_str().unwrap(),
+                case.get("body").cloned(),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "Bluetooth failure request: {body}");
+            assert_eq!(body["operation"], case["state_operation"]);
+            assert_eq!(body["operation_state"], "running");
+            let command = timeout(Duration::from_secs(1), bluez_commands.recv())
+                .await
+                .expect("BlueZ provider should receive the failing route command")
+                .expect("BlueZ provider command channel should stay open");
+            assert!(bluetooth_fixture_command_matches(
+                command,
+                case["operation"].as_str().unwrap(),
+                case["arguments"].as_array().unwrap(),
+            ));
+            let failed_status = wait_for_failed_bluetooth_operation(&app).await;
+            assert_eq!(failed_status["operation_state"], "failed");
+            assert_eq!(failed_status["error"], case["error"]);
+        }
+
+        let output_failure_path =
+            fixture_path.with_file_name("bluetooth-api-output-failure-v1.json");
+        let output_failure_case: Value =
+            serde_json::from_slice(&std::fs::read(output_failure_path).unwrap()).unwrap();
+        fail_next_default_sink.store(true, Ordering::Release);
+        let (status, body) = api_request(
+            &app,
+            output_failure_case["method"].as_str().unwrap(),
+            output_failure_case["path"].as_str().unwrap(),
+            output_failure_case.get("body").cloned(),
+        )
+        .await;
+        assert_eq!(status.as_u16(), output_failure_case["status"]);
+        assert_eq!(body["detail"], output_failure_case["error"]);
+        assert!(!fail_next_default_sink.load(Ordering::Acquire));
+        assert!(pipewire_commands.try_recv().is_err());
+        let (status, body) = api_request(&app, "GET", "/api/audio/bluetooth", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["default_sink"], "speaker_main");
+
+        let output_operation_failures_path =
+            fixture_path.with_file_name("bluetooth-api-output-operation-failures-v1.json");
+        let output_operation_failure_cases: Vec<Value> =
+            serde_json::from_slice(&std::fs::read(output_operation_failures_path).unwrap())
+                .unwrap();
+        for case in &output_operation_failure_cases {
+            *fail_next_pipewire_operation.lock().unwrap() = Some((
+                case["operation"].as_str().unwrap().to_owned(),
+                case["error"].as_str().unwrap().to_owned(),
+            ));
+            let (status, body) = api_request(
+                &app,
+                case["method"].as_str().unwrap(),
+                case["path"].as_str().unwrap(),
+                case.get("body").cloned(),
+            )
+            .await;
+            assert_eq!(status.as_u16(), case["status"]);
+            assert_eq!(body["detail"], case["error"]);
+            assert!(pipewire_commands.try_recv().is_err());
+            let (status, current) = api_request(&app, "GET", "/api/audio/bluetooth", None).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(current["default_sink"], "speaker_main");
+            assert_eq!(current["output_volume"], 0.75);
+            assert_eq!(current["output_muted"], false);
+        }
+
+        let conflict_fixture_path = fixture_path.with_file_name("bluetooth-api-conflict-v1.json");
+        let conflict_fixture: Value =
+            serde_json::from_slice(&std::fs::read(conflict_fixture_path).unwrap()).unwrap();
+        let start_case = &conflict_fixture["start"];
+        let conflict_case = &conflict_fixture["conflict"];
+        block_next_pair.store(true, Ordering::Release);
+        let (status, body) = api_request(
+            &app,
+            start_case["method"].as_str().unwrap(),
+            start_case["path"].as_str().unwrap(),
+            start_case.get("body").cloned(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "pending pair request: {body}");
+        assert_eq!(body["operation"], start_case["operation"]);
+        assert_eq!(body["operation_state"], "running");
+        let command = timeout(Duration::from_secs(1), bluez_commands.recv())
+            .await
+            .expect("BlueZ provider should receive the pending pair command")
+            .expect("BlueZ provider command channel should stay open");
+        assert!(matches!(
+            command,
+            BlueZCommand::Pair(address)
+                if address == start_case["body"]["address"].as_str().unwrap()
+        ));
+        let (status, body) = api_request(
+            &app,
+            conflict_case["method"].as_str().unwrap(),
+            conflict_case["path"].as_str().unwrap(),
+            conflict_case.get("body").cloned(),
+        )
+        .await;
+        assert_eq!(status.as_u16(), conflict_case["status"]);
+        assert_eq!(body["detail"], conflict_case["error"]);
+        assert!(bluez_commands.try_recv().is_err());
+        pair_gate.add_permits(1);
+        let completed_pair = wait_for_completed_bluetooth_operation(&app).await;
+        assert_eq!(completed_pair["operation_state"], "complete");
+
+        let (status, body) = api_request(&app, "GET", "/api/network/status", None).await;
+        assert_eq!(status, StatusCode::OK, "network status: {body}");
+        assert_eq!(body["manager_available"], true);
+        assert_eq!(body["adapters"], json!([]));
+
+        let (status, body) = api_request(
+            &app,
+            "POST",
+            "/api/network/scan",
+            Some(json!({"interface": "wlan1"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "network scan: {body}");
+        assert_eq!(
+            body,
+            json!({
+                "interface": "wlan1",
+                "networks": [{
+                    "ssid": "Party Wi-Fi",
+                    "security": "WPA2",
+                    "signal": 88,
+                    "secured": true
+                }]
+            })
+        );
+
+        let (status, body) = api_request(
+            &app,
+            "POST",
+            "/api/network/connect",
+            Some(json!({
+                "interface": "wlan1",
+                "ssid": "Party Wi-Fi",
+                "password": "correct-horse"
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "network connect: {body}");
+        assert_eq!(
+            body,
+            json!({
+                "interface": "wlan1",
+                "ssid": "Party Wi-Fi",
+                "connected": true
+            })
+        );
+
+        let network_failure_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test-fixtures/network-api-connect-failure-v1.json");
+        let network_failure_case: Value =
+            serde_json::from_slice(&std::fs::read(network_failure_path).unwrap()).unwrap();
+        let (status, body) = api_request(
+            &app,
+            network_failure_case["method"].as_str().unwrap(),
+            network_failure_case["path"].as_str().unwrap(),
+            network_failure_case.get("body").cloned(),
+        )
+        .await;
+        assert_eq!(status.as_u16(), network_failure_case["status"]);
+        assert_eq!(body["detail"], network_failure_case["error"]);
+        assert!(
+            !body
+                .to_string()
+                .contains(network_failure_case["body"]["password"].as_str().unwrap())
+        );
+
+        let network_helper_errors_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test-fixtures/network-api-helper-errors-v1.json");
+        let network_helper_errors: Vec<Value> =
+            serde_json::from_slice(&std::fs::read(network_helper_errors_path).unwrap()).unwrap();
+        for case in network_helper_errors {
+            if case["name"] == "helper_unspawnable" {
+                std::fs::remove_file(&network_helper).unwrap();
+            }
+            let (status, body) = api_request(
+                &app,
+                case["method"].as_str().unwrap(),
+                case["path"].as_str().unwrap(),
+                case.get("body").cloned(),
+            )
+            .await;
+            assert_eq!(status.as_u16(), case["status_code"], "{}", case["name"]);
+            assert_eq!(body["detail"], case["error"], "{}", case["name"]);
+            if let Some(password) = case["body"]["password"].as_str() {
+                assert!(!body.to_string().contains(password), "{}", case["name"]);
+            }
+        }
+
+        app.shutdown().await;
     }
 }

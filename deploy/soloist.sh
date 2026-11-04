@@ -35,5 +35,7 @@ install_spotify_soloist() (
   as_user /usr/bin/python3 "$SCRIPT_DIR/extract_soloist.py" \
     --download "$archive_url" "$archive_file" "$executable_file"
   as_user test -s "$executable_file"
+  as_user /usr/bin/env -u LUMI_SPOTIFY_API_KEY /usr/bin/python3 \
+    "$SCRIPT_DIR/soloist_diagnostics.py" --binary "$executable_file"
   as_user install -m 755 "$executable_file" "$service_home/.local/bin/soloist"
 )

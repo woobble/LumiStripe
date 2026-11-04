@@ -347,7 +347,7 @@ pub async fn websocket_state(
                 close_socket(socket, 4401, "pairing required").await;
                 return;
             }
-            let receiver = state.control.state();
+            let receiver = state.dashboard_state.clone();
             let _ = send_state_watch(socket, receiver, state.access, token).await;
         })
         .into_response()

@@ -12,8 +12,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Select Animation */
-        put: operations["select_animation_api_animation_put"];
+        put: operations["select_animation"];
         post?: never;
         delete?: never;
         options?: never;
@@ -28,8 +27,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Animations */
-        get: operations["animations_api_animations_get"];
+        get: operations["animations"];
         put?: never;
         post?: never;
         delete?: never;
@@ -45,10 +43,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Animation Settings */
-        get: operations["get_animation_settings_api_animations__animation_name__settings_get"];
-        /** Update Animation Settings */
-        put: operations["update_animation_settings_api_animations__animation_name__settings_put"];
+        get: operations["get_animation_settings"];
+        put: operations["put_animation_settings"];
         post?: never;
         delete?: never;
         options?: never;
@@ -65,8 +61,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Reset Animation Settings */
-        post: operations["reset_animation_settings_api_animations__animation_name__settings_reset_post"];
+        post: operations["reset_animation_settings"];
         delete?: never;
         options?: never;
         head?: never;
@@ -80,8 +75,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Bluetooth Status */
-        get: operations["bluetooth_status_api_audio_bluetooth_get"];
+        get: operations["bluetooth_status"];
         put?: never;
         post?: never;
         delete?: never;
@@ -98,8 +92,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Bluetooth Alias */
-        put: operations["bluetooth_alias_api_audio_bluetooth_alias_put"];
+        put: operations["bluetooth_alias"];
         post?: never;
         delete?: never;
         options?: never;
@@ -116,8 +109,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Bluetooth Connect */
-        post: operations["bluetooth_connect_api_audio_bluetooth_connect_post"];
+        post: operations["bluetooth_connect"];
         delete?: never;
         options?: never;
         head?: never;
@@ -133,8 +125,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Bluetooth Disconnect */
-        post: operations["bluetooth_disconnect_api_audio_bluetooth_disconnect_post"];
+        post: operations["bluetooth_disconnect"];
         delete?: never;
         options?: never;
         head?: never;
@@ -150,8 +141,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Bluetooth Forget */
-        post: operations["bluetooth_forget_api_audio_bluetooth_forget_post"];
+        post: operations["bluetooth_forget"];
         delete?: never;
         options?: never;
         head?: never;
@@ -167,8 +157,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Bluetooth Pair */
-        post: operations["bluetooth_pair_api_audio_bluetooth_pair_post"];
+        post: operations["bluetooth_pair"];
         delete?: never;
         options?: never;
         head?: never;
@@ -183,8 +172,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Bluetooth Power */
-        put: operations["bluetooth_power_api_audio_bluetooth_power_put"];
+        put: operations["bluetooth_power"];
         post?: never;
         delete?: never;
         options?: never;
@@ -201,8 +189,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Bluetooth Scan */
-        post: operations["bluetooth_scan_api_audio_bluetooth_scan_post"];
+        post: operations["bluetooth_scan"];
         delete?: never;
         options?: never;
         head?: never;
@@ -218,8 +205,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Start Audio Calibration */
-        post: operations["start_audio_calibration_api_audio_calibration_session_post"];
+        post: operations["start_audio_calibration"];
         delete?: never;
         options?: never;
         head?: never;
@@ -233,8 +219,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Audio Calibration Status */
-        get: operations["audio_calibration_status_api_audio_calibration_session__session_id__get"];
+        get: operations["get_audio_calibration"];
         put?: never;
         post?: never;
         delete?: never;
@@ -252,8 +237,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Finish Audio Calibration */
-        post: operations["finish_audio_calibration_api_audio_calibration_session__session_id__finish_post"];
+        post: operations["finish_audio_calibration"];
         delete?: never;
         options?: never;
         head?: never;
@@ -269,8 +253,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Begin Audio Calibration Music */
-        post: operations["begin_audio_calibration_music_api_audio_calibration_session__session_id__music_post"];
+        post: operations["begin_audio_calibration_music"];
         delete?: never;
         options?: never;
         head?: never;
@@ -285,8 +268,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Select Audio Device */
-        put: operations["select_audio_device_api_audio_device_put"];
+        put: operations["select_audio_device"];
         post?: never;
         delete?: never;
         options?: never;
@@ -302,8 +284,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Select Audio Output */
-        put: operations["select_audio_output_api_audio_output_put"];
+        put: operations["select_audio_output"];
         post?: never;
         delete?: never;
         options?: never;
@@ -319,8 +300,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Set Audio Output Mute */
-        put: operations["set_audio_output_mute_api_audio_output_mute_put"];
+        put: operations["set_audio_output_mute"];
         post?: never;
         delete?: never;
         options?: never;
@@ -336,8 +316,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Set Audio Output Volume */
-        put: operations["set_audio_output_volume_api_audio_output_volume_put"];
+        put: operations["set_audio_output_volume"];
         post?: never;
         delete?: never;
         options?: never;
@@ -352,10 +331,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Audio Settings */
-        get: operations["audio_settings_api_audio_settings_get"];
-        /** Update Audio Settings */
-        put: operations["update_audio_settings_api_audio_settings_put"];
+        get: operations["get_audio_settings"];
+        put: operations["put_audio_settings"];
         post?: never;
         delete?: never;
         options?: never;
@@ -372,8 +349,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Reset Audio Settings */
-        post: operations["reset_audio_settings_api_audio_settings_reset_post"];
+        post: operations["reset_audio_settings"];
         delete?: never;
         options?: never;
         head?: never;
@@ -388,8 +364,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Select Audio Source */
-        put: operations["select_audio_source_api_audio_source_put"];
+        put: operations["select_audio_source"];
         post?: never;
         delete?: never;
         options?: never;
@@ -404,8 +379,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Spotify Status */
-        get: operations["spotify_status_api_audio_spotify_get"];
+        get: operations["get_spotify_status"];
         put?: never;
         post?: never;
         delete?: never;
@@ -423,8 +397,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Control Spotify */
-        post: operations["control_spotify_api_audio_spotify_control_post"];
+        post: operations["control_spotify"];
         delete?: never;
         options?: never;
         head?: never;
@@ -440,8 +413,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Set Audio Sync Calibration */
-        post: operations["set_audio_sync_calibration_api_audio_sync_calibration_post"];
+        post: operations["set_audio_sync_calibration"];
         delete?: never;
         options?: never;
         head?: never;
@@ -456,8 +428,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Set Audio Sync Offset */
-        put: operations["set_audio_sync_offset_api_audio_sync_offset_put"];
+        put: operations["set_audio_sync_offset"];
         post?: never;
         delete?: never;
         options?: never;
@@ -474,8 +445,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Logout */
-        post: operations["logout_api_auth_logout_post"];
+        post: operations["logout"];
         delete?: never;
         options?: never;
         head?: never;
@@ -491,8 +461,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Pair */
-        post: operations["pair_api_auth_pair_post"];
+        post: operations["pair"];
         delete?: never;
         options?: never;
         head?: never;
@@ -506,8 +475,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Access Status */
-        get: operations["access_status_api_auth_status_get"];
+        get: operations["auth_status"];
         put?: never;
         post?: never;
         delete?: never;
@@ -525,8 +493,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Set Blackout */
-        post: operations["set_blackout_api_blackout_post"];
+        post: operations["set_blackout"];
         delete?: never;
         options?: never;
         head?: never;
@@ -541,8 +508,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Set Brightness */
-        put: operations["set_brightness_api_brightness_put"];
+        put: operations["set_brightness"];
         post?: never;
         delete?: never;
         options?: never;
@@ -559,8 +525,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Start Calibration */
-        post: operations["start_calibration_api_calibration_session_post"];
+        post: operations["start_color_calibration"];
         delete?: never;
         options?: never;
         head?: never;
@@ -575,8 +540,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Update Calibration */
-        put: operations["update_calibration_api_calibration_session__session_id__put"];
+        put: operations["update_color_calibration"];
         post?: never;
         delete?: never;
         options?: never;
@@ -593,8 +557,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Finish Calibration */
-        post: operations["finish_calibration_api_calibration_session__session_id__finish_post"];
+        post: operations["finish_color_calibration"];
         delete?: never;
         options?: never;
         head?: never;
@@ -608,8 +571,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Health */
-        get: operations["health_api_health_get"];
+        get: operations["health"];
         put?: never;
         post?: never;
         delete?: never;
@@ -625,10 +587,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Identity Settings */
-        get: operations["identity_settings_api_identity_get"];
-        /** Update Identity Settings */
-        put: operations["update_identity_settings_api_identity_put"];
+        get: operations["get_identity_settings"];
+        put: operations["put_identity_settings"];
         post?: never;
         delete?: never;
         options?: never;
@@ -644,8 +604,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Set Mode */
-        put: operations["set_mode_api_mode_put"];
+        put: operations["set_mode"];
         post?: never;
         delete?: never;
         options?: never;
@@ -661,8 +620,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Set Music Idle */
-        put: operations["set_music_idle_api_music_idle_put"];
+        put: operations["set_music_idle"];
         post?: never;
         delete?: never;
         options?: never;
@@ -679,8 +637,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Connect Wifi */
-        post: operations["connect_wifi_api_network_connect_post"];
+        post: operations["network_connect"];
         delete?: never;
         options?: never;
         head?: never;
@@ -696,8 +653,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Scan Wifi */
-        post: operations["scan_wifi_api_network_scan_post"];
+        post: operations["network_scan"];
         delete?: never;
         options?: never;
         head?: never;
@@ -711,8 +667,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Network Status */
-        get: operations["network_status_api_network_status_get"];
+        get: operations["network_status"];
         put?: never;
         post?: never;
         delete?: never;
@@ -729,8 +684,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Set Active Animation Sequence */
-        put: operations["set_active_animation_sequence_api_sequencer_active_put"];
+        put: operations["set_active_sequence"];
         post?: never;
         delete?: never;
         options?: never;
@@ -745,11 +699,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Animation Sequences */
-        get: operations["get_animation_sequences_api_sequencer_sequences_get"];
+        get: operations["get_sequence_library"];
         put?: never;
-        /** Create Animation Sequence */
-        post: operations["create_animation_sequence_api_sequencer_sequences_post"];
+        post: operations["create_sequence"];
         delete?: never;
         options?: never;
         head?: never;
@@ -764,11 +716,9 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Update Animation Sequence */
-        put: operations["update_animation_sequence_api_sequencer_sequences__sequence_id__put"];
+        put: operations["update_sequence"];
         post?: never;
-        /** Delete Animation Sequence */
-        delete: operations["delete_animation_sequence_api_sequencer_sequences__sequence_id__delete"];
+        delete: operations["delete_sequence"];
         options?: never;
         head?: never;
         patch?: never;
@@ -781,10 +731,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Sequencer Settings */
-        get: operations["get_sequencer_settings_api_sequencer_settings_get"];
-        /** Set Sequencer Settings */
-        put: operations["set_sequencer_settings_api_sequencer_settings_put"];
+        get: operations["get_sequencer_settings"];
+        put: operations["put_sequencer_settings"];
         post?: never;
         delete?: never;
         options?: never;
@@ -799,10 +747,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Startup Settings */
-        get: operations["startup_settings_api_startup_get"];
-        /** Update Startup Settings */
-        put: operations["update_startup_settings_api_startup_put"];
+        get: operations["get_startup_settings"];
+        put: operations["put_startup_settings"];
         post?: never;
         delete?: never;
         options?: never;
@@ -817,8 +763,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** State */
-        get: operations["state_api_state_get"];
+        get: operations["runtime_state"];
         put?: never;
         post?: never;
         delete?: never;
@@ -834,10 +779,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Stripe Topology */
-        get: operations["stripe_topology_api_stripes_get"];
-        /** Update Stripe Topology */
-        put: operations["update_stripe_topology_api_stripes_put"];
+        get: operations["get_stripe_topology"];
+        put: operations["put_stripe_topology"];
         post?: never;
         delete?: never;
         options?: never;
@@ -854,8 +797,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Test Stripe */
-        post: operations["test_stripe_api_stripes_test_post"];
+        post: operations["test_stripe"];
         delete?: never;
         options?: never;
         head?: never;
@@ -869,8 +811,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** System Stats */
-        get: operations["system_stats_api_system_stats_get"];
+        get: operations["system_stats"];
         put?: never;
         post?: never;
         delete?: never;
@@ -886,8 +827,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Update Status */
-        get: operations["update_status_api_system_update_get"];
+        get: operations["update_status"];
         put?: never;
         post?: never;
         delete?: never;
@@ -905,8 +845,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Check For Updates */
-        post: operations["check_for_updates_api_system_update_check_post"];
+        post: operations["check_for_updates"];
         delete?: never;
         options?: never;
         head?: never;
@@ -922,8 +861,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Install Update */
-        post: operations["install_update_api_system_update_install_post"];
+        post: operations["install_update"];
         delete?: never;
         options?: never;
         head?: never;
@@ -937,10 +875,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Transition Settings */
-        get: operations["get_transition_settings_api_transitions_settings_get"];
-        /** Set Transition Settings */
-        put: operations["set_transition_settings_api_transitions_settings_put"];
+        get: operations["get_transition_settings"];
+        put: operations["put_transition_settings"];
         post?: never;
         delete?: never;
         options?: never;
@@ -952,714 +888,460 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** AccessStatus */
         AccessStatus: {
-            /** Authenticated */
             authenticated: boolean;
-            /** Required */
             required: boolean;
         };
-        /** AnimationList */
         AnimationList: {
-            /** Items */
             items: components["schemas"]["AnimationOption"][];
         };
-        /** AnimationOption */
         AnimationOption: {
-            /** Description */
             description: string;
-            /** Display Name */
             display_name: string;
-            /** Dynamic Safe */
             dynamic_safe: boolean;
-            /** Mood */
             mood: string;
-            /** Name */
             name: string;
-            /**
-             * Role
-             * @enum {string}
-             */
-            role: "base" | "effect";
-            /** Sequence Eligible */
+            role: components["schemas"]["AnimationRole"];
             sequence_eligible: boolean;
-            /**
-             * Settings
-             * @default []
-             */
+            /** @default [] */
             settings: components["schemas"]["AnimationSettingOption"][];
         };
-        /** AnimationRequest */
         AnimationRequest: {
-            /** Name */
             name: string;
-            /** Stripe Id */
             stripe_id?: string | null;
         };
-        /** AnimationSequenceContract */
+        /** @enum {string} */
+        AnimationRole: "base" | "effect";
         AnimationSequenceContract: {
-            /** Id */
             id: string;
-            /** Name */
             name: string;
-            /** Repeat */
             repeat: boolean;
-            /** Steps */
             steps: components["schemas"]["AnimationSequenceStepContract"][];
         };
-        /** AnimationSequenceStepContract */
         AnimationSequenceStepContract: {
-            /** Animation Name */
             animation_name: string;
-            /**
-             * Duration Bars
-             * @enum {integer}
-             */
+            /** @enum {integer} */
             duration_bars: 1 | 2 | 4 | 8;
         };
-        /** AnimationSettingOption */
         AnimationSettingOption: {
-            /**
-             * Choices
-             * @default []
-             */
+            /** @default [] */
             choices: string[];
-            /** Default */
             default: string | number | boolean;
-            /** Description */
             description: string;
-            /** Id */
             id: string;
-            /** Label */
             label: string;
-            /** Maximum */
+            /** Format: double */
             maximum?: number | null;
-            /** Minimum */
+            /** Format: double */
             minimum?: number | null;
-            /** Step */
+            /** Format: double */
             step?: number | null;
-            /**
-             * Type
-             * @enum {string}
-             */
-            type: "number" | "boolean" | "enum" | "color";
-            /** Unit */
+            type: components["schemas"]["AnimationSettingType"];
             unit?: string | null;
-            /** Visible When Option */
             visible_when_option?: string | null;
-            /** Visible When Value */
             visible_when_value?: string | null;
         };
-        /** AnimationSettingsResponse */
+        /** @enum {string} */
+        AnimationSettingType: "number" | "boolean" | "enum" | "color";
         AnimationSettingsResponse: {
-            /** Animation */
             animation: string;
-            /** Options */
             options: components["schemas"]["AnimationSettingOption"][];
-            /** Stripe Id */
             stripe_id?: string | null;
-            /** Values */
             values: {
                 [key: string]: string | number | boolean;
             };
         };
-        /** AnimationSettingsUpdateRequest */
         AnimationSettingsUpdateRequest: {
-            /** Stripe Id */
             stripe_id?: string | null;
-            /** Values */
             values: {
                 [key: string]: unknown;
             };
         };
-        /** AudioCalibrationFinishRequest */
         AudioCalibrationFinishRequest: {
-            /** Apply */
             apply: boolean;
-            /** Noise Floor */
+            /** Format: double */
             noise_floor?: number | null;
-            /** Target Level */
+            /** Format: double */
             target_level?: number | null;
         };
-        /** AudioCalibrationResult */
         AudioCalibrationResult: {
             /**
-             * Clipping Fraction
+             * Format: double
              * @default 0
              */
             clipping_fraction: number;
-            /** Duration Seconds */
+            /** Format: double */
             duration_seconds: number;
-            /** Measured Floor */
+            /** Format: double */
             measured_floor: number;
             /**
-             * Measured Music Level
+             * Format: double
              * @default 0
              */
             measured_music_level: number;
-            /** Measured Peak */
+            /** Format: double */
             measured_peak: number;
-            /** Recommended Hardware Gain */
+            /** Format: double */
             recommended_hardware_gain?: number | null;
-            /** Recommended Idle Threshold Scale */
+            /** Format: double */
             recommended_idle_threshold_scale: number;
             /**
-             * Recommended Input Noise Floor
+             * Format: double
              * @default 0.003
              */
             recommended_input_noise_floor: number;
-            /** Recommended Noise Floor */
+            /** Format: double */
             recommended_noise_floor: number;
-            /** Recommended Target Level */
+            /** Format: double */
             recommended_target_level: number;
-            /** Samples */
             samples: number;
         };
-        /** AudioCalibrationSessionResponse */
         AudioCalibrationSessionResponse: {
             /**
-             * Elapsed Seconds
+             * Format: double
              * @default 0
              */
             elapsed_seconds: number;
-            /** Error */
             error?: string | null;
-            /**
-             * Phase
-             * @default quiet
-             */
+            /** @default quiet */
             phase: string;
             /**
-             * Remaining Seconds
+             * Format: double
              * @default 0
              */
             remaining_seconds: number;
             result?: components["schemas"]["AudioCalibrationResult"] | null;
-            /** Session Id */
             session_id: string;
-            /** Status */
             status: string;
         };
-        /** AudioCalibrationStartRequest */
         AudioCalibrationStartRequest: {
-            /** Device */
             device: string;
             /**
-             * Duration Seconds
+             * Format: double
              * @default 8
              */
             duration_seconds: number;
-            /**
-             * Two Step
-             * @default false
-             */
+            /** @default false */
             two_step: boolean;
         };
-        /** AudioDeviceOption */
         AudioDeviceOption: {
-            /** Name */
             name: string;
-            /** Selector */
             selector: string;
             settings: components["schemas"]["AudioTuningValues"];
         };
-        /** AudioDeviceRequest */
         AudioDeviceRequest: {
-            /** Device */
             device: string;
         };
-        /** AudioOutputDeviceInfo */
         AudioOutputDeviceInfo: {
-            /**
-             * Bluetooth
-             * @default false
-             */
+            /** @default false */
             bluetooth: boolean;
-            /**
-             * Connected
-             * @default true
-             */
+            /** @default true */
             connected: boolean;
-            /**
-             * Muted
-             * @default false
-             */
+            /** @default false */
             muted: boolean;
-            /** Name */
             name: string;
-            /** Selector */
             selector: string;
-            /** Volume */
+            /** Format: double */
             volume?: number | null;
         };
-        /** AudioOutputMuteRequest */
         AudioOutputMuteRequest: {
-            /** Muted */
             muted: boolean;
-            /** Selector */
             selector: string;
         };
-        /** AudioOutputSelectionRequest */
         AudioOutputSelectionRequest: {
-            /** Selector */
             selector: string;
         };
-        /** AudioOutputVolumeRequest */
         AudioOutputVolumeRequest: {
-            /** Selector */
             selector: string;
-            /** Volume */
+            /** Format: double */
             volume: number;
         };
-        /** AudioResetRequest */
         AudioResetRequest: {
-            /** Device */
             device: string;
         };
-        /** AudioSettingsRequest */
         AudioSettingsRequest: {
-            /** Device */
             device: string;
             settings: components["schemas"]["AudioTuningValues"];
         };
-        /** AudioSettingsResponse */
         AudioSettingsResponse: {
-            /** Active Device */
             active_device?: string | null;
-            /** Active Device Name */
             active_device_name?: string | null;
-            /**
-             * Active Source
-             * @default off
-             */
+            /** @default off */
             active_source: string;
             bluetooth?: components["schemas"]["BluetoothStatusResponse"];
             /**
-             * Configured Noise Floor
+             * Format: double
              * @default 0.015
              */
             configured_noise_floor: number;
-            /**
-             * Devices
-             * @default []
-             */
+            /** @default [] */
             devices: components["schemas"]["AudioDeviceOption"][];
-            /** Error */
             error?: string | null;
-            /** Fallback Device */
             fallback_device?: string | null;
-            /** Hardware Gain Backend */
             hardware_gain_backend?: string | null;
-            /** Hardware Gain Control */
             hardware_gain_control?: string | null;
-            /** Hardware Gain Error */
             hardware_gain_error?: string | null;
-            /**
-             * Hardware Gain Supported
-             * @default false
-             */
+            /** @default false */
             hardware_gain_supported: boolean;
-            /** Hardware Gain Value */
+            /** Format: double */
             hardware_gain_value?: number | null;
-            /**
-             * Hardware Gain Writable
-             * @default false
-             */
+            /** @default false */
             hardware_gain_writable: boolean;
-            /** Monitoring */
             monitoring: boolean;
-            /**
-             * @default {
-             *       "band_attack": 0.4,
-             *       "band_release": 0.1,
-             *       "beat_density_threshold": 0.05,
-             *       "beat_release": 0.18,
-             *       "brightness_threshold": 0.08,
-             *       "dynamic_response": 0.65,
-             *       "energy_threshold": 0.03,
-             *       "input_noise_floor": 0.003,
-             *       "noise_floor": 0.015,
-             *       "onset_threshold": 0.025,
-             *       "rms_attack": 0.45,
-             *       "rms_release": 0.12,
-             *       "spectral_balance_ratio": 0.35,
-             *       "target_level": 0.36
-             *     }
-             */
+            /** @default {} */
             settings: components["schemas"]["AudioTuningValues"];
-            /** Source */
             source: string;
             spotify: components["schemas"]["SpotifyStatusResponse"];
             /**
-             * Sync Offset Ms
+             * Format: double
              * @default 0
              */
             sync_offset_ms: number;
-            /**
-             * Sync Route
-             * @default mic|unknown|default
-             */
+            /** @default mic|unknown|default */
             sync_route: string;
         };
-        /** AudioSourceRequest */
+        /** @enum {string} */
+        AudioSource: "auto" | "off" | "demo" | "mic" | "bluetooth" | "spotify";
         AudioSourceRequest: {
-            /**
-             * Source
-             * @enum {string}
-             */
-            source: "auto" | "off" | "demo" | "mic" | "bluetooth" | "spotify";
+            source: components["schemas"]["AudioSource"];
         };
-        /** AudioSyncCalibrationRequest */
         AudioSyncCalibrationRequest: {
-            /** Active */
             active: boolean;
         };
-        /** AudioSyncCalibrationResponse */
         AudioSyncCalibrationResponse: {
-            /** Start At Ms */
+            /** Format: int64 */
             start_at_ms?: number | null;
-            /** Sync Offset Ms */
+            /** Format: double */
             sync_offset_ms: number;
-            /** Sync Route */
             sync_route: string;
         };
-        /** AudioSyncOffsetRequest */
         AudioSyncOffsetRequest: {
-            /** Offset Ms */
+            /** Format: double */
             offset_ms: number;
         };
-        /** AudioTuningValues */
         AudioTuningValues: {
             /**
-             * Band Attack
+             * Format: double
              * @default 0.4
              */
             band_attack: number;
             /**
-             * Band Release
+             * Format: double
              * @default 0.1
              */
             band_release: number;
             /**
-             * Beat Density Threshold
+             * Format: double
              * @default 0.05
              */
             beat_density_threshold: number;
             /**
-             * Beat Release
+             * Format: double
              * @default 0.18
              */
             beat_release: number;
             /**
-             * Brightness Threshold
+             * Format: double
              * @default 0.08
              */
             brightness_threshold: number;
             /**
-             * Dynamic Response
+             * Format: double
              * @default 0.65
              */
             dynamic_response: number;
             /**
-             * Energy Threshold
+             * Format: double
              * @default 0.03
              */
             energy_threshold: number;
-            /** Hardware Gain Target */
+            /** Format: double */
             hardware_gain_target?: number | null;
             /**
-             * Input Noise Floor
+             * Format: double
              * @default 0.003
              */
             input_noise_floor: number;
             /**
-             * Noise Floor
+             * Format: double
              * @default 0.015
              */
             noise_floor: number;
             /**
-             * Onset Threshold
+             * Format: double
              * @default 0.025
              */
             onset_threshold: number;
             /**
-             * Rms Attack
+             * Format: double
              * @default 0.45
              */
             rms_attack: number;
             /**
-             * Rms Release
+             * Format: double
              * @default 0.12
              */
             rms_release: number;
             /**
-             * Spectral Balance Ratio
+             * Format: double
              * @default 0.35
              */
             spectral_balance_ratio: number;
             /**
-             * Target Level
+             * Format: double
              * @default 0.36
              */
             target_level: number;
         };
-        /** BlackoutRequest */
         BlackoutRequest: {
-            /** Enabled */
             enabled: boolean;
-            /** Stripe Id */
             stripe_id?: string | null;
         };
-        /** BluetoothAliasRequest */
         BluetoothAliasRequest: {
-            /** Alias */
             alias: string;
         };
-        /** BluetoothCapabilities */
         BluetoothCapabilities: {
-            /**
-             * Max Inputs
-             * @default 1
-             */
+            /** @default 1 */
             max_inputs: number;
-            /**
-             * Max Outputs
-             * @default 1
-             */
+            /** @default 1 */
             max_outputs: number;
-            /**
-             * Operations
-             * @default []
-             */
-            operations: ("power" | "rename" | "scan" | "pair" | "connect" | "disconnect" | "forget" | "output_select" | "output_volume" | "output_mute")[];
+            /** @default [] */
+            operations: components["schemas"]["BluetoothOperation"][];
         };
-        /** BluetoothDeviceInfo */
         BluetoothDeviceInfo: {
-            /** Address */
             address: string;
-            /**
-             * Connected
-             * @default false
-             */
+            /** @default false */
             connected: boolean;
-            /** Name */
             name: string;
-            /**
-             * Paired
-             * @default false
-             */
+            /** @default false */
             paired: boolean;
-            /**
-             * Roles
-             * @default []
-             */
-            roles: ("input" | "output")[];
+            /** @default [] */
+            roles: components["schemas"]["BluetoothDeviceRole"][];
         };
-        /** BluetoothDeviceRequest */
         BluetoothDeviceRequest: {
-            /** Address */
             address: string;
-            /** Role */
-            role?: ("input" | "output") | null;
+            role?: components["schemas"]["BluetoothRole"] | null;
         };
-        /** BluetoothPowerRequest */
+        /** @enum {string} */
+        BluetoothDeviceRole: "input" | "output";
+        /** @enum {string} */
+        BluetoothOperation: "power" | "rename" | "scan" | "pair" | "connect" | "disconnect" | "forget" | "output_select" | "output_volume" | "output_mute";
         BluetoothPowerRequest: {
-            /** Powered */
             powered: boolean;
         };
-        /** BluetoothStatusResponse */
+        /** @enum {string} */
+        BluetoothRole: "input" | "output";
         BluetoothStatusResponse: {
-            /** Adapter Alias */
             adapter_alias?: string | null;
-            /**
-             * Available
-             * @default false
-             */
+            /** @default false */
             available: boolean;
             capabilities?: components["schemas"]["BluetoothCapabilities"];
             connected_device?: components["schemas"]["BluetoothDeviceInfo"] | null;
-            /**
-             * Connected Inputs
-             * @default []
-             */
+            /** @default [] */
             connected_inputs: components["schemas"]["BluetoothDeviceInfo"][];
-            /**
-             * Connected Outputs
-             * @default []
-             */
+            /** @default [] */
             connected_outputs: components["schemas"]["BluetoothDeviceInfo"][];
-            /** Default Sink */
             default_sink?: string | null;
-            /**
-             * Devices
-             * @default []
-             */
+            /** @default [] */
             devices: components["schemas"]["BluetoothDeviceInfo"][];
-            /** Error */
             error?: string | null;
-            /** Input Source */
             input_source?: string | null;
-            /** Operation */
             operation?: string | null;
-            /** Operation Id */
             operation_id?: string | null;
             /**
-             * Operation State
              * @default idle
              * @enum {string}
              */
             operation_state: "idle" | "running" | "complete" | "failed";
-            /**
-             * Output Devices
-             * @default []
-             */
+            /** @default [] */
             output_devices: components["schemas"]["AudioOutputDeviceInfo"][];
-            /**
-             * Output Muted
-             * @default false
-             */
+            /** @default false */
             output_muted: boolean;
-            /**
-             * Output Ready
-             * @default false
-             */
+            /** @default false */
             output_ready: boolean;
-            /** Output Volume */
+            /** Format: double */
             output_volume?: number | null;
-            /**
-             * Powered
-             * @default false
-             */
+            /** @default false */
             powered: boolean;
-            /**
-             * Scanning
-             * @default false
-             */
+            /** @default false */
             scanning: boolean;
-            /**
-             * Streaming
-             * @default false
-             */
+            /** @default false */
             streaming: boolean;
         };
-        /** BrightnessRequest */
         BrightnessRequest: {
-            /** Brightness */
+            /** Format: double */
             brightness: number;
-            /** Stripe Id */
             stripe_id?: string | null;
         };
-        /** CalibrationFinishRequest */
         CalibrationFinishRequest: {
-            /** Save */
             save: boolean;
         };
-        /** CalibrationSessionResponse */
+        /** @enum {string} */
+        CalibrationPattern: "white" | "red" | "green" | "blue";
         CalibrationSessionResponse: {
-            /** Session Id */
             session_id: string;
             state: components["schemas"]["DashboardState"];
         };
-        /** CalibrationStartRequest */
         CalibrationStartRequest: {
-            /** Output Index */
             output_index: number;
         };
-        /** CalibrationStatus */
         CalibrationStatus: {
-            /**
-             * Active
-             * @default false
-             */
+            /** @default false */
             active: boolean;
-            /** Expires In Seconds */
+            /** Format: double */
             expires_in_seconds?: number | null;
-            /** Output Index */
             output_index?: number | null;
-            /** Pattern */
-            pattern?: ("white" | "red" | "green" | "blue") | null;
+            pattern?: components["schemas"]["CalibrationPattern"] | null;
         };
-        /** CalibrationUpdateRequest */
         CalibrationUpdateRequest: {
-            /** Blue */
+            /** Format: int32 */
             blue: number;
-            /** Green */
+            /** Format: int32 */
             green: number;
-            /**
-             * Pattern
-             * @enum {string}
-             */
-            pattern: "white" | "red" | "green" | "blue";
-            /** Red */
+            pattern: components["schemas"]["CalibrationPattern"];
+            /** Format: int32 */
             red: number;
         };
-        /** ColorCorrectionProfile */
         ColorCorrectionProfile: {
-            /** Blue */
+            /** Format: int32 */
             blue: number;
-            /** Device */
             device: string;
-            /** Green */
+            /** Format: int32 */
             green: number;
-            /** Name */
             name: string;
-            /** Output Index */
             output_index: number;
-            /** Red */
+            /** Format: int32 */
             red: number;
         };
-        /** DashboardState */
         DashboardState: {
-            /** Active Audio Source */
             active_audio_source?: string | null;
-            /**
-             * Active Effects
-             * @default []
-             */
+            /** @default [] */
             active_effects: string[];
-            /**
-             * Animation
-             * @default
-             */
+            /** @default  */
             animation: string;
-            /**
-             * Application Name
-             * @default LumiStripe
-             */
+            /** @default LumiStripe */
             application_name: string;
-            /**
-             * Application Version
-             * @default development
-             */
+            /** @default development */
             application_version: string;
-            /** Audio Callback Age Seconds */
+            /** Format: double */
             audio_callback_age_seconds?: number | null;
-            /** Audio Frame Age Seconds */
+            /** Format: double */
             audio_frame_age_seconds?: number | null;
-            /**
-             * Audio Health
-             * @default inactive
-             */
+            /** @default inactive */
             audio_health: string;
-            /** Audio Monitoring */
             audio_monitoring?: boolean | null;
-            /**
-             * Audio Status
-             * @default No audio source active.
-             */
+            /** @default No audio source active. */
             audio_status: string;
-            /**
-             * Blackout
-             * @default false
-             */
+            /** @default false */
             blackout: boolean;
+            bluetooth?: components["schemas"]["BluetoothStatusResponse"];
             /**
-             * Bpm
+             * Format: double
              * @default 0
              */
             bpm: number;
             /**
-             * Brightness
+             * Format: double
              * @default 1
              */
             brightness: number;
@@ -1669,101 +1351,74 @@ export interface components {
              *     }
              */
             calibration: components["schemas"]["CalibrationStatus"];
-            /**
-             * Color Corrections
-             * @default []
-             */
+            /** @default [] */
             color_corrections: components["schemas"]["ColorCorrectionProfile"][];
-            /**
-             * Command Queue Depth
-             * @default 0
-             */
+            /** @default 0 */
             command_queue_depth: number;
-            /** Configured Audio Source */
             configured_audio_source?: string | null;
-            /**
-             * Diagnostic Issues
-             * @default []
-             */
+            /** @default [] */
             diagnostic_issues: components["schemas"]["DiagnosticIssue"][];
-            /** Error */
             error?: string | null;
             /**
-             * Frame Rate
+             * Format: double
              * @default 0
              */
             frame_rate: number;
-            /** Last Output Age Seconds */
+            /** Format: double */
             last_output_age_seconds?: number | null;
-            /** Last Output At */
+            /** Format: date-time */
             last_output_at?: string | null;
             /**
-             * Missed Frame Count
+             * Format: int64
              * @default 0
              */
             missed_frame_count: number;
             /** @default static */
             mode: components["schemas"]["PlaybackMode"];
-            /**
-             * Music Active
-             * @default false
-             */
+            /** @default false */
             music_active: boolean;
-            /**
-             * Music Gate
-             * @default calm
-             */
+            /** @default calm */
             music_gate: string;
             music_idle?: components["schemas"]["MusicIdleState"];
-            /**
-             * Music Recognition Enabled
-             * @default true
-             */
+            /** @default true */
             music_recognition_enabled: boolean;
-            /**
-             * Output Backend
-             * @default simulation
-             */
+            /** @default simulation */
             output_backend: string;
-            /**
-             * Output Devices
-             * @default []
-             */
+            /** @default [] */
             output_devices: string[];
             /**
-             * Output Dropped Frame Count
+             * Format: int64
              * @default 0
              */
             output_dropped_frame_count: number;
-            /** Output Error */
             output_error?: string | null;
             /**
-             * Output Failure Count
+             * Format: int64
              * @default 0
              */
             output_failure_count: number;
-            /** Output Frame Latency Ms */
+            /** Format: double */
             output_frame_latency_ms?: number | null;
-            /** Output Frame Latency P50 Ms */
+            /** Format: double */
             output_frame_latency_p50_ms?: number | null;
-            /** Output Frame Latency P95 Ms */
+            /** Format: double */
             output_frame_latency_p95_ms?: number | null;
-            /** Output Frame Latency P99 Ms */
+            /** Format: double */
             output_frame_latency_p99_ms?: number | null;
             /**
-             * Output Frame Rate
+             * Format: double
              * @default 0
              */
             output_frame_rate: number;
-            /** Output Heartbeat Age Seconds */
+            /** Format: double */
             output_heartbeat_age_seconds?: number | null;
-            /** Output Ipc Latency Ms */
+            /** Format: double */
             output_ipc_latency_ms?: number | null;
-            /** Output Queue Latency Ms */
+            /** Format: double */
             output_queue_latency_ms?: number | null;
-            /** Output Sequential Skew Ms */
+            /** Format: double */
             output_sequential_skew_ms?: number | null;
-            /** Output Transmission Ms */
+            /** Format: double */
             output_transmission_ms?: number | null;
             /**
              * @default {
@@ -1776,41 +1431,33 @@ export interface components {
              */
             power_budget: components["schemas"]["PowerBudgetState"];
             /**
-             * Recent Frame Miss Rate
+             * Format: double
              * @default 0
              */
             recent_frame_miss_rate: number;
             /**
-             * Render Time Ms
+             * Format: double
              * @default 0
              */
             render_time_ms: number;
             /**
-             * Revision
+             * Format: int64
              * @default 0
              */
             revision: number;
-            /**
-             * Running
-             * @default false
-             */
+            /** @default false */
             running: boolean;
             runtime: components["schemas"]["RuntimeKind"];
-            /** Scheduler Time Ms */
+            /** Format: double */
             scheduler_time_ms?: number | null;
             sequence_library?: components["schemas"]["SequenceLibrarySummary"];
             sequencer_settings?: components["schemas"]["SequencerSettingsResponse"];
-            /**
-             * Solid Color
-             * @default #7C3AED
-             */
+            /** @default #7C3AED */
             solid_color: string;
-            /** Spi Speed Hz */
+            /** Format: int32 */
             spi_speed_hz?: number | null;
-            /**
-             * Stripe Playback
-             * @default []
-             */
+            spotify?: components["schemas"]["SpotifyStatusResponse"];
+            /** @default [] */
             stripe_playback: components["schemas"]["StripePlaybackState"][];
             /**
              * @default {
@@ -1825,337 +1472,224 @@ export interface components {
             stripe_topology: components["schemas"]["StripeTopology"];
             transition_settings?: components["schemas"]["TransitionSettingsResponse"];
             /**
-             * Uptime Seconds
+             * Format: double
              * @default 0
              */
             uptime_seconds: number;
-            /** Worker Heartbeat Age Seconds */
+            /** Format: double */
             worker_heartbeat_age_seconds?: number | null;
         };
-        /** DiagnosticIssue */
         DiagnosticIssue: {
-            /** Action */
             action: string;
-            /** Message */
             message: string;
-            /** Severity */
             severity: string;
-            /** Title */
             title: string;
         };
-        /** HTTPValidationError */
+        ErrorResponse: {
+            detail: string;
+        };
         HTTPValidationError: {
-            /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
-        /** IdentitySettingsRequest */
         IdentitySettingsRequest: {
-            /** Application Name */
             application_name: string;
-            /** Spotify Device Name */
             spotify_device_name: string;
         };
-        /** IdentitySettingsResponse */
         IdentitySettingsResponse: {
-            /** Application Name */
             application_name: string;
-            /** Spotify Device Name */
             spotify_device_name: string;
-            /** Spotify Restart Requested */
             spotify_restart_requested: boolean;
         };
-        /** ModeRequest */
+        /** @enum {string} */
+        InstallState: "idle" | "running" | "success" | "failed";
         ModeRequest: {
-            /** Color */
             color?: string | null;
             mode: components["schemas"]["PlaybackMode"];
-            /** Music Recognition Enabled */
             music_recognition_enabled?: boolean | null;
-            /** Stripe Id */
             stripe_id?: string | null;
         };
-        /** MusicIdleRequest */
         MusicIdleRequest: {
-            /**
-             * Animation
-             * @default
-             */
+            /** @default  */
             animation: string;
             /**
-             * Brightness
+             * Format: double
              * @default 1
              */
             brightness: number;
-            /**
-             * Color
-             * @default #2060FF
-             */
+            /** @default #2060FF */
             color: string;
             /**
-             * Mode
              * @default off
              * @enum {string}
              */
             mode: "off" | "solid" | "animation";
-            /** Stripe Id */
             stripe_id?: string | null;
         };
-        /** MusicIdleState */
         MusicIdleState: {
-            /**
-             * Animation
-             * @default
-             */
+            /** @default  */
             animation: string;
             /**
-             * Brightness
+             * Format: double
              * @default 1
              */
             brightness: number;
-            /**
-             * Color
-             * @default #2060FF
-             */
+            /** @default #2060FF */
             color: string;
             /**
-             * Mode
              * @default off
              * @enum {string}
              */
             mode: "off" | "solid" | "animation";
         };
-        /** NetworkAdapterInfo */
         NetworkAdapterInfo: {
-            /** Connectable */
             connectable: boolean;
-            /** Connection */
             connection?: string | null;
-            /** Current Ssid */
             current_ssid?: string | null;
-            /** Hotspot */
             hotspot: boolean | null;
-            /** Interface */
             interface: string;
-            /** Reason */
             reason?: string | null;
-            /** State */
             state: string;
         };
-        /** NetworkStatusResponse */
         NetworkStatusResponse: {
-            /**
-             * Adapters
-             * @default []
-             */
+            /** @default [] */
             adapters: components["schemas"]["NetworkAdapterInfo"][];
-            /** Error */
             error?: string | null;
-            /** Manager Available */
             manager_available: boolean;
         };
-        /** PairingRequest */
         PairingRequest: {
-            /** Code */
             code: string;
         };
-        /**
-         * PlaybackMode
-         * @enum {string}
-         */
+        /** @enum {string} */
         PlaybackMode: "solid" | "static" | "cycling" | "dynamic";
-        /** PowerBudgetState */
         PowerBudgetState: {
             /**
-             * Applied Scale
+             * Format: double
              * @default 1
              */
             applied_scale: number;
-            /** Available Led Watts */
+            /** Format: double */
             available_led_watts?: number | null;
-            /** Budget Watts */
+            /** Format: double */
             budget_watts?: number | null;
-            /**
-             * Enabled
-             * @default false
-             */
+            /** @default false */
             enabled: boolean;
             /**
-             * Estimated Watts
+             * Format: double
              * @default 0
              */
             estimated_watts: number;
-            /** Limiting Output Id */
             limiting_output_id?: string | null;
-            /**
-             * Outputs
-             * @default []
-             */
+            /** @default [] */
             outputs: components["schemas"]["PowerOutputState"][];
-            /** Pi Reserve Watts */
+            /** Format: double */
             pi_reserve_watts?: number | null;
-            /**
-             * Shared Supply Enabled
-             * @default false
-             */
+            /** @default false */
             shared_supply_enabled: boolean;
-            /** Supply Capacity Watts */
+            /** Format: double */
             supply_capacity_watts?: number | null;
         };
-        /** PowerOutputState */
         PowerOutputState: {
-            /** Applied Scale */
+            /** Format: double */
             applied_scale: number;
-            /** Estimated Watts */
+            /** Format: double */
             estimated_watts: number;
-            /** Limit Watts */
+            /** Format: double */
             limit_watts?: number | null;
-            /** Output Id */
             output_id: string;
         };
-        /**
-         * RuntimeKind
-         * @enum {string}
-         */
+        /** @enum {string} */
         RuntimeKind: "simulation" | "hardware";
-        /** SequenceActiveRequest */
         SequenceActiveRequest: {
-            /** Sequence Id */
             sequence_id: string | null;
         };
-        /** SequenceCreateRequest */
         SequenceCreateRequest: {
-            /** Id */
             id: string;
-            /** Name */
             name: string;
-            /** Repeat */
             repeat: boolean;
-            /** Steps */
             steps: components["schemas"]["AnimationSequenceStepContract"][];
         };
-        /** SequenceDefinitionRequest */
         SequenceDefinitionRequest: {
-            /** Name */
             name: string;
-            /** Repeat */
             repeat: boolean;
-            /** Steps */
             steps: components["schemas"]["AnimationSequenceStepContract"][];
         };
-        /** SequenceLibraryEntry */
         SequenceLibraryEntry: {
-            /** Id */
             id: string;
-            /** Name */
             name: string;
         };
-        /** SequenceLibraryResponse */
         SequenceLibraryResponse: {
-            /** Active Sequence Id */
             active_sequence_id?: string | null;
-            /**
-             * Sequences
-             * @default []
-             */
+            /** @default [] */
             sequences: components["schemas"]["AnimationSequenceContract"][];
         };
-        /** SequenceLibrarySummary */
         SequenceLibrarySummary: {
-            /** Active Sequence Id */
             active_sequence_id?: string | null;
-            /**
-             * Sequences
-             * @default []
-             */
+            /** @default [] */
             sequences: components["schemas"]["SequenceLibraryEntry"][];
         };
-        /** SequencePlaybackDiagnostics */
         SequencePlaybackDiagnostics: {
-            /**
-             * Active
-             * @default false
-             */
+            /** @default false */
             active: boolean;
-            /** Animation Name */
             animation_name?: string | null;
-            /** Current Step Index */
             current_step_index?: number | null;
-            /** Next Transition In S */
+            /** Format: double */
             next_transition_in_s?: number | null;
-            /** Remaining Bars */
+            /** Format: int32 */
             remaining_bars?: number | null;
-            /** Selected Sequence Id */
             selected_sequence_id?: string | null;
-            /**
-             * Waiting For Clock
-             * @default false
-             */
+            /** @default false */
             waiting_for_clock: boolean;
         };
-        /** SequencerDiagnostics */
         SequencerDiagnostics: {
-            /**
-             * Alignment Estimated
-             * @default false
-             */
+            /** @default false */
             alignment_estimated: boolean;
-            /** Bar In Phrase */
+            /** Format: int64 */
             bar_in_phrase?: number | null;
-            /** Bar Index */
+            /** Format: int64 */
             bar_index?: number | null;
             /**
-             * Bars Per Phrase
+             * Format: int32
              * @default 8
              */
             bars_per_phrase: number;
             /**
-             * Beat Clock Confidence
+             * Format: double
              * @default 0
              */
             beat_clock_confidence: number;
-            /** Beat In Bar */
+            /** Format: int64 */
             beat_in_bar?: number | null;
-            /** Beat In Phrase */
+            /** Format: int64 */
             beat_in_phrase?: number | null;
-            /** Beat Index */
+            /** Format: int64 */
             beat_index?: number | null;
             /**
-             * Beats Per Bar
+             * Format: int32
              * @default 4
              */
             beats_per_bar: number;
             /**
-             * Bpm
+             * Format: double
              * @default 0
              */
             bpm: number;
             /** @default off */
             mode: components["schemas"]["SwitchQuantization"];
-            /** Next Switch In S */
+            /** Format: double */
             next_switch_in_s?: number | null;
-            /** Pending Animation */
             pending_animation?: string | null;
-            /** Phrase Index */
+            /** Format: int64 */
             phrase_index?: number | null;
-            /**
-             * Waiting For Clock
-             * @default false
-             */
+            /** @default false */
             waiting_for_clock: boolean;
         };
-        /** SequencerSettingsRequest */
         SequencerSettingsRequest: {
-            /**
-             * Bars Per Phrase
-             * @enum {integer}
-             */
+            /** @enum {integer} */
             bars_per_phrase: 4 | 8 | 16;
             switch_quantization: components["schemas"]["SwitchQuantization"];
         };
-        /** SequencerSettingsResponse */
         SequencerSettingsResponse: {
             /**
-             * Bars Per Phrase
              * @default 8
              * @enum {integer}
              */
@@ -2163,475 +1697,322 @@ export interface components {
             /** @default off */
             switch_quantization: components["schemas"]["SwitchQuantization"];
         };
-        /** SpotifyControlRequest */
+        /** @enum {string} */
+        SpotifyControlAction: "play" | "pause" | "skip_next" | "skip_prev" | "seek" | "set_volume" | "set_shuffle" | "set_repeat";
         SpotifyControlRequest: {
-            /**
-             * Action
-             * @enum {string}
-             */
-            action: "play" | "pause" | "skip_next" | "skip_prev" | "seek" | "set_volume" | "set_shuffle" | "set_repeat";
-            /** Value */
+            action: components["schemas"]["SpotifyControlAction"];
             value?: number | boolean | string | null;
         };
-        /** SpotifyStatusResponse */
         SpotifyStatusResponse: {
-            /**
-             * Configured
-             * @default false
-             */
+            /** @default false */
             configured: boolean;
-            /**
-             * Connected
-             * @default false
-             */
+            /** @default false */
             connected: boolean;
-            /** Device Name */
             device_name?: string | null;
-            /** Duration Ms */
+            /** Format: int64 */
             duration_ms?: number | null;
-            /** Error */
             error?: string | null;
-            /**
-             * Is Active
-             * @default false
-             */
+            /** @default false */
             is_active: boolean;
-            /**
-             * Logged In
-             * @default false
-             */
+            /** @default false */
             logged_in: boolean;
             /**
-             * Position Ms
+             * Format: int64
              * @default 0
              */
             position_ms: number;
             /**
-             * Repeat
              * @default off
              * @enum {string}
              */
             repeat: "off" | "context" | "track";
-            /**
-             * Shuffle
-             * @default false
-             */
+            /** @default false */
             shuffle: boolean;
             /**
-             * Status
              * @default idle
              * @enum {string}
              */
             status: "idle" | "playing" | "paused" | "buffering";
             track?: components["schemas"]["SpotifyTrackInfo"] | null;
             /**
-             * Volume
+             * Format: int32
              * @default 0
              */
             volume: number;
         };
-        /** SpotifyTrackInfo */
         SpotifyTrackInfo: {
-            /** Album */
             album?: string | null;
-            /**
-             * Artists
-             * @default []
-             */
+            /** @default [] */
             artists: string[];
-            /** Cover Url */
             cover_url?: string | null;
-            /** Duration Ms */
+            /** Format: int64 */
             duration_ms?: number | null;
-            /**
-             * Name
-             * @default
-             */
+            /** @default  */
             name: string;
-            /**
-             * Uri
-             * @default
-             */
+            /** @default  */
             uri: string;
         };
-        /** StartupPlaybackState */
         StartupPlaybackState: {
-            /**
-             * Animation
-             * @default
-             */
+            /** @default  */
             animation: string;
-            /**
-             * Blackout
-             * @default false
-             */
+            /** @default false */
             blackout: boolean;
             /**
-             * Brightness
+             * Format: double
              * @default 1
              */
             brightness: number;
             /** @default static */
             mode: components["schemas"]["PlaybackMode"];
-            /**
-             * Solid Color
-             * @default #7C3AED
-             */
+            /** @default #7C3AED */
             solid_color: string;
         };
-        /** StartupSettingsRequest */
         StartupSettingsRequest: {
-            /** Restore Last State */
             restore_last_state: boolean;
         };
-        /** StartupSettingsResponse */
         StartupSettingsResponse: {
             remembered: components["schemas"]["StartupPlaybackState"];
-            /** Restore Last State */
             restore_last_state: boolean;
         };
-        /** StripeOutputConfig */
+        /** @enum {string} */
+        StripeLayout: "mirrored" | "continuous" | "independent";
         StripeOutputConfig: {
             /**
-             * Backend
              * @default spi
              * @enum {string}
              */
             backend: "spi" | "gpio";
-            /**
-             * Chip
-             * @default /dev/gpiochip0
-             */
+            /** @default /dev/gpiochip0 */
             chip: string;
             /**
-             * Clock Pin
+             * Format: int32
              * @default 11
              */
             clock_pin: number;
             /**
-             * Data Pin
+             * Format: int32
              * @default 10
              */
             data_pin: number;
-            /** Error */
             error?: string | null;
             /**
-             * Full White Current A
+             * Format: double
              * @default 0.06
              */
             full_white_current_a: number;
-            /** Id */
             id: string;
-            /** Last Output At */
+            /** Format: date-time */
             last_output_at?: string | null;
-            /** Name */
             name: string;
-            /** Pixels */
             pixels: number;
-            /** Power Limit Watts */
+            /** Format: double */
             power_limit_watts?: number | null;
-            /**
-             * Reversed
-             * @default false
-             */
+            /** @default false */
             reversed: boolean;
-            /**
-             * Spi Device
-             * @default /dev/spidev0.0
-             */
+            /** @default /dev/spidev0.0 */
             spi_device: string;
             /**
-             * Spi Speed Hz
+             * Format: int32
              * @default 1000000
              */
             spi_speed_hz: number;
             /**
-             * Voltage V
+             * Format: double
              * @default 5
              */
             voltage_v: number;
-            /**
-             * Zone Count
-             * @default 1
-             */
+            /** @default 1 */
             zone_count: number;
             /**
-             * Zone Pattern
              * @default repeat
              * @enum {string}
              */
             zone_pattern: "repeat" | "alternate";
         };
-        /** StripePlaybackState */
         StripePlaybackState: {
-            /**
-             * Animation
-             * @default
-             */
+            /** @default  */
             animation: string;
-            /**
-             * Blackout
-             * @default false
-             */
+            /** @default false */
             blackout: boolean;
             /**
-             * Brightness
+             * Format: double
              * @default 1
              */
             brightness: number;
             /** @default static */
             mode: components["schemas"]["PlaybackMode"];
-            /**
-             * Music Active
-             * @default false
-             */
+            /** @default false */
             music_active: boolean;
             music_idle?: components["schemas"]["MusicIdleState"];
-            /**
-             * Music Recognition Enabled
-             * @default true
-             */
+            /** @default true */
             music_recognition_enabled: boolean;
             sequence_playback?: components["schemas"]["SequencePlaybackDiagnostics"];
             sequencer_diagnostics?: components["schemas"]["SequencerDiagnostics"];
-            /**
-             * Solid Color
-             * @default #7C3AED
-             */
+            /** @default #7C3AED */
             solid_color: string;
-            /** Stripe Id */
             stripe_id: string;
         };
-        /** StripeTestRequest */
         StripeTestRequest: {
             /**
-             * Pattern
              * @default identify
              * @enum {string}
              */
             pattern: "identify" | "red" | "green" | "blue" | "white";
-            /** Stripe Id */
             stripe_id: string;
             topology?: components["schemas"]["StripeTopologyRequest"] | null;
         };
-        /** StripeTopology */
         StripeTopology: {
             /**
-             * Layout
              * @default mirrored
              * @enum {string}
              */
             layout: "mirrored" | "continuous" | "independent";
-            /**
-             * Outputs
-             * @default []
-             */
+            /** @default [] */
             outputs: components["schemas"]["StripeOutputConfig"][];
             /**
-             * Pi Reserve Watts
+             * Format: double
              * @default 15
              */
             pi_reserve_watts: number;
-            /**
-             * Power Budget Enabled
-             * @default false
-             */
+            /** @default false */
             power_budget_enabled: boolean;
-            /** Power Budget Watts */
+            /** Format: double */
             power_budget_watts?: number | null;
-            /**
-             * Shared Supply Enabled
-             * @default false
-             */
+            /** @default false */
             shared_supply_enabled: boolean;
             /**
-             * Supply Capacity Watts
+             * Format: double
              * @default 200
              */
             supply_capacity_watts: number;
         };
-        /** StripeTopologyRequest */
         StripeTopologyRequest: {
-            /**
-             * Layout
-             * @enum {string}
-             */
-            layout: "mirrored" | "continuous" | "independent";
-            /** Outputs */
+            layout: components["schemas"]["StripeLayout"];
             outputs: components["schemas"]["StripeOutputConfig"][];
             /**
-             * Pi Reserve Watts
+             * Format: double
              * @default 15
              */
             pi_reserve_watts: number;
-            /**
-             * Power Budget Enabled
-             * @default false
-             */
+            /** @default false */
             power_budget_enabled: boolean;
-            /** Power Budget Watts */
+            /** Format: double */
             power_budget_watts?: number | null;
-            /**
-             * Shared Supply Enabled
-             * @default false
-             */
+            /** @default false */
             shared_supply_enabled: boolean;
             /**
-             * Supply Capacity Watts
+             * Format: double
              * @default 200
              */
             supply_capacity_watts: number;
         };
-        /**
-         * SwitchQuantization
-         * @enum {string}
-         */
+        /** @enum {string} */
         SwitchQuantization: "off" | "beat" | "bar" | "phrase";
-        /**
-         * SystemStats
-         * @description Best-effort host resource metrics for the dashboard.
-         */
         SystemStats: {
-            /** Cpu Temperature C */
+            /** Format: double */
             cpu_temperature_c: number | null;
-            /** Cpu Usage Percent */
+            /** Format: double */
             cpu_usage_percent: number | null;
-            /** Disk Total Bytes */
+            /** Format: int64 */
             disk_total_bytes: number | null;
-            /** Disk Usage Percent */
+            /** Format: double */
             disk_usage_percent: number | null;
-            /** Disk Used Bytes */
+            /** Format: int64 */
             disk_used_bytes: number | null;
-            /** Memory Total Bytes */
+            /** Format: int64 */
             memory_total_bytes: number | null;
-            /** Memory Usage Percent */
+            /** Format: double */
             memory_usage_percent: number | null;
-            /** Memory Used Bytes */
+            /** Format: int64 */
             memory_used_bytes: number | null;
-            /**
-             * Sampled At
-             * Format: date-time
-             */
+            /** Format: int64 */
+            process_memory_used_bytes: number | null;
+            /** Format: int64 */
+            process_thread_count: number | null;
+            /** Format: date-time */
             sampled_at: string;
-            /** Uptime Seconds */
+            /** Format: double */
             uptime_seconds: number | null;
         };
-        /**
-         * TransitionEffect
-         * @enum {string}
-         */
+        /** @enum {string} */
         TransitionEffect: "crossfade" | "fade_black" | "wipe";
-        /** TransitionSettingsRequest */
         TransitionSettingsRequest: {
-            /** Duration Ms */
+            /** Format: int32 */
             duration_ms: number;
-            /** @default crossfade */
-            effect: components["schemas"]["TransitionEffect"];
-            /** Enabled */
+            /**
+             * @default crossfade
+             * @enum {string}
+             */
+            effect: "crossfade" | "fade_black" | "wipe";
             enabled: boolean;
         };
-        /** TransitionSettingsResponse */
         TransitionSettingsResponse: {
             /**
-             * Duration Ms
+             * Format: int32
              * @default 300
              */
             duration_ms: number;
-            /** @default crossfade */
-            effect: components["schemas"]["TransitionEffect"];
             /**
-             * Enabled
-             * @default true
-             */
-            enabled: boolean;
-        };
-        /** UpdateStatus */
-        UpdateStatus: {
-            /** Available Commit */
-            available_commit: string | null;
-            /** Check Error */
-            check_error: string | null;
-            /** Checked At */
-            checked_at: string | null;
-            /** Install Error */
-            install_error: string | null;
-            /** Install Finished At */
-            install_finished_at: string | null;
-            /** Install Started At */
-            install_started_at: string | null;
-            /**
-             * Install State
+             * @default crossfade
              * @enum {string}
              */
-            install_state: "idle" | "running" | "success" | "failed";
-            /** Installed Commit */
+            effect: "crossfade" | "fade_black" | "wipe";
+            /** @default true */
+            enabled: boolean;
+        };
+        UpdateStatus: {
+            available_commit: string | null;
+            check_error: string | null;
+            /** Format: date-time */
+            checked_at: string | null;
+            install_error: string | null;
+            /** Format: date-time */
+            install_finished_at: string | null;
+            /** Format: date-time */
+            install_started_at: string | null;
+            install_state: components["schemas"]["InstallState"];
             installed_commit: string | null;
-            /** Supported */
             supported: boolean;
-            /** Update Available */
             update_available: boolean;
-            /** Working Tree Dirty */
             working_tree_dirty: boolean;
         };
-        /** ValidationError */
         ValidationError: {
-            /** Context */
-            ctx?: Record<string, never>;
-            /** Input */
+            ctx?: {
+                [key: string]: unknown;
+            } | null;
             input?: unknown;
-            /** Location */
-            loc: (string | number)[];
-            /** Message */
+            loc: components["schemas"]["ValidationLocation"][];
             msg: string;
-            /** Error Type */
             type: string;
         };
-        /** WifiConnectRequest */
+        ValidationLocation: number | string;
         WifiConnectRequest: {
-            /** Interface */
             interface: string;
             /**
-             * Password
              * Format: password
              * @default
              */
             password: string;
-            /** Ssid */
             ssid: string;
         };
-        /** WifiConnectResponse */
         WifiConnectResponse: {
-            /** Connected */
             connected: boolean;
-            /** Interface */
             interface: string;
-            /** Ssid */
             ssid: string;
         };
-        /** WifiNetworkInfo */
         WifiNetworkInfo: {
-            /** Secured */
             secured: boolean;
-            /** Security */
             security: string;
-            /** Signal */
+            /** Format: int32 */
             signal: number;
-            /** Ssid */
             ssid: string;
         };
-        /** WifiScanRequest */
         WifiScanRequest: {
-            /** Interface */
             interface: string;
         };
-        /** WifiScanResponse */
         WifiScanResponse: {
-            /** Interface */
             interface: string;
-            /**
-             * Networks
-             * @default []
-             */
+            /** @default [] */
             networks: components["schemas"]["WifiNetworkInfo"][];
         };
     };
@@ -2643,7 +2024,7 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    select_animation_api_animation_put: {
+    select_animation: {
         parameters: {
             query?: never;
             header?: never;
@@ -2656,7 +2037,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2665,7 +2045,6 @@ export interface operations {
                     "application/json": components["schemas"]["DashboardState"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -2676,7 +2055,7 @@ export interface operations {
             };
         };
     };
-    animations_api_animations_get: {
+    animations: {
         parameters: {
             query?: never;
             header?: never;
@@ -2685,7 +2064,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2696,10 +2074,10 @@ export interface operations {
             };
         };
     };
-    get_animation_settings_api_animations__animation_name__settings_get: {
+    get_animation_settings: {
         parameters: {
             query?: {
-                stripe_id?: string | null;
+                stripe_id?: string;
             };
             header?: never;
             path: {
@@ -2709,7 +2087,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2718,7 +2095,6 @@ export interface operations {
                     "application/json": components["schemas"]["AnimationSettingsResponse"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -2729,7 +2105,7 @@ export interface operations {
             };
         };
     };
-    update_animation_settings_api_animations__animation_name__settings_put: {
+    put_animation_settings: {
         parameters: {
             query?: never;
             header?: never;
@@ -2744,7 +2120,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2753,7 +2128,6 @@ export interface operations {
                     "application/json": components["schemas"]["AnimationSettingsResponse"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -2764,10 +2138,10 @@ export interface operations {
             };
         };
     };
-    reset_animation_settings_api_animations__animation_name__settings_reset_post: {
+    reset_animation_settings: {
         parameters: {
             query?: {
-                stripe_id?: string | null;
+                stripe_id?: string;
             };
             header?: never;
             path: {
@@ -2777,7 +2151,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2786,7 +2159,6 @@ export interface operations {
                     "application/json": components["schemas"]["AnimationSettingsResponse"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -2797,7 +2169,7 @@ export interface operations {
             };
         };
     };
-    bluetooth_status_api_audio_bluetooth_get: {
+    bluetooth_status: {
         parameters: {
             query?: never;
             header?: never;
@@ -2806,7 +2178,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2817,7 +2188,7 @@ export interface operations {
             };
         };
     };
-    bluetooth_alias_api_audio_bluetooth_alias_put: {
+    bluetooth_alias: {
         parameters: {
             query?: never;
             header?: never;
@@ -2830,7 +2201,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2839,7 +2209,14 @@ export interface operations {
                     "application/json": components["schemas"]["BluetoothStatusResponse"];
                 };
             };
-            /** @description Validation Error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -2850,7 +2227,7 @@ export interface operations {
             };
         };
     };
-    bluetooth_connect_api_audio_bluetooth_connect_post: {
+    bluetooth_connect: {
         parameters: {
             query?: never;
             header?: never;
@@ -2863,7 +2240,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2872,7 +2248,14 @@ export interface operations {
                     "application/json": components["schemas"]["BluetoothStatusResponse"];
                 };
             };
-            /** @description Validation Error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -2883,7 +2266,7 @@ export interface operations {
             };
         };
     };
-    bluetooth_disconnect_api_audio_bluetooth_disconnect_post: {
+    bluetooth_disconnect: {
         parameters: {
             query?: never;
             header?: never;
@@ -2896,7 +2279,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2905,7 +2287,14 @@ export interface operations {
                     "application/json": components["schemas"]["BluetoothStatusResponse"];
                 };
             };
-            /** @description Validation Error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -2916,7 +2305,7 @@ export interface operations {
             };
         };
     };
-    bluetooth_forget_api_audio_bluetooth_forget_post: {
+    bluetooth_forget: {
         parameters: {
             query?: never;
             header?: never;
@@ -2929,7 +2318,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2938,7 +2326,14 @@ export interface operations {
                     "application/json": components["schemas"]["BluetoothStatusResponse"];
                 };
             };
-            /** @description Validation Error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -2949,7 +2344,7 @@ export interface operations {
             };
         };
     };
-    bluetooth_pair_api_audio_bluetooth_pair_post: {
+    bluetooth_pair: {
         parameters: {
             query?: never;
             header?: never;
@@ -2962,7 +2357,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2971,7 +2365,14 @@ export interface operations {
                     "application/json": components["schemas"]["BluetoothStatusResponse"];
                 };
             };
-            /** @description Validation Error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -2982,7 +2383,7 @@ export interface operations {
             };
         };
     };
-    bluetooth_power_api_audio_bluetooth_power_put: {
+    bluetooth_power: {
         parameters: {
             query?: never;
             header?: never;
@@ -2995,7 +2396,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3004,7 +2404,14 @@ export interface operations {
                     "application/json": components["schemas"]["BluetoothStatusResponse"];
                 };
             };
-            /** @description Validation Error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3015,7 +2422,7 @@ export interface operations {
             };
         };
     };
-    bluetooth_scan_api_audio_bluetooth_scan_post: {
+    bluetooth_scan: {
         parameters: {
             query?: never;
             header?: never;
@@ -3024,7 +2431,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3033,9 +2439,17 @@ export interface operations {
                     "application/json": components["schemas"]["BluetoothStatusResponse"];
                 };
             };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
-    start_audio_calibration_api_audio_calibration_session_post: {
+    start_audio_calibration: {
         parameters: {
             query?: never;
             header?: never;
@@ -3048,7 +2462,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3057,7 +2470,6 @@ export interface operations {
                     "application/json": components["schemas"]["AudioCalibrationSessionResponse"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3068,7 +2480,7 @@ export interface operations {
             };
         };
     };
-    audio_calibration_status_api_audio_calibration_session__session_id__get: {
+    get_audio_calibration: {
         parameters: {
             query?: never;
             header?: never;
@@ -3079,7 +2491,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3088,7 +2499,6 @@ export interface operations {
                     "application/json": components["schemas"]["AudioCalibrationSessionResponse"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3099,7 +2509,7 @@ export interface operations {
             };
         };
     };
-    finish_audio_calibration_api_audio_calibration_session__session_id__finish_post: {
+    finish_audio_calibration: {
         parameters: {
             query?: never;
             header?: never;
@@ -3114,7 +2524,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3123,7 +2532,6 @@ export interface operations {
                     "application/json": components["schemas"]["AudioSettingsResponse"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3134,7 +2542,7 @@ export interface operations {
             };
         };
     };
-    begin_audio_calibration_music_api_audio_calibration_session__session_id__music_post: {
+    begin_audio_calibration_music: {
         parameters: {
             query?: never;
             header?: never;
@@ -3145,7 +2553,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3154,7 +2561,6 @@ export interface operations {
                     "application/json": components["schemas"]["AudioCalibrationSessionResponse"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3165,7 +2571,7 @@ export interface operations {
             };
         };
     };
-    select_audio_device_api_audio_device_put: {
+    select_audio_device: {
         parameters: {
             query?: never;
             header?: never;
@@ -3178,7 +2584,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3187,7 +2592,6 @@ export interface operations {
                     "application/json": components["schemas"]["AudioSettingsResponse"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3198,7 +2602,7 @@ export interface operations {
             };
         };
     };
-    select_audio_output_api_audio_output_put: {
+    select_audio_output: {
         parameters: {
             query?: never;
             header?: never;
@@ -3211,7 +2615,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3220,7 +2623,14 @@ export interface operations {
                     "application/json": components["schemas"]["BluetoothStatusResponse"];
                 };
             };
-            /** @description Validation Error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3231,7 +2641,7 @@ export interface operations {
             };
         };
     };
-    set_audio_output_mute_api_audio_output_mute_put: {
+    set_audio_output_mute: {
         parameters: {
             query?: never;
             header?: never;
@@ -3244,7 +2654,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3253,7 +2662,14 @@ export interface operations {
                     "application/json": components["schemas"]["BluetoothStatusResponse"];
                 };
             };
-            /** @description Validation Error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3264,7 +2680,7 @@ export interface operations {
             };
         };
     };
-    set_audio_output_volume_api_audio_output_volume_put: {
+    set_audio_output_volume: {
         parameters: {
             query?: never;
             header?: never;
@@ -3277,7 +2693,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3286,7 +2701,14 @@ export interface operations {
                     "application/json": components["schemas"]["BluetoothStatusResponse"];
                 };
             };
-            /** @description Validation Error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3297,7 +2719,7 @@ export interface operations {
             };
         };
     };
-    audio_settings_api_audio_settings_get: {
+    get_audio_settings: {
         parameters: {
             query?: never;
             header?: never;
@@ -3306,7 +2728,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3317,7 +2738,7 @@ export interface operations {
             };
         };
     };
-    update_audio_settings_api_audio_settings_put: {
+    put_audio_settings: {
         parameters: {
             query?: never;
             header?: never;
@@ -3330,7 +2751,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3339,7 +2759,6 @@ export interface operations {
                     "application/json": components["schemas"]["AudioSettingsResponse"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3350,7 +2769,7 @@ export interface operations {
             };
         };
     };
-    reset_audio_settings_api_audio_settings_reset_post: {
+    reset_audio_settings: {
         parameters: {
             query?: never;
             header?: never;
@@ -3363,7 +2782,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3372,7 +2790,6 @@ export interface operations {
                     "application/json": components["schemas"]["AudioSettingsResponse"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3383,7 +2800,7 @@ export interface operations {
             };
         };
     };
-    select_audio_source_api_audio_source_put: {
+    select_audio_source: {
         parameters: {
             query?: never;
             header?: never;
@@ -3396,7 +2813,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3405,7 +2821,6 @@ export interface operations {
                     "application/json": components["schemas"]["AudioSettingsResponse"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3416,7 +2831,7 @@ export interface operations {
             };
         };
     };
-    spotify_status_api_audio_spotify_get: {
+    get_spotify_status: {
         parameters: {
             query?: never;
             header?: never;
@@ -3425,7 +2840,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3436,7 +2850,7 @@ export interface operations {
             };
         };
     };
-    control_spotify_api_audio_spotify_control_post: {
+    control_spotify: {
         parameters: {
             query?: never;
             header?: never;
@@ -3449,7 +2863,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3458,7 +2871,6 @@ export interface operations {
                     "application/json": components["schemas"]["SpotifyStatusResponse"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3469,7 +2881,7 @@ export interface operations {
             };
         };
     };
-    set_audio_sync_calibration_api_audio_sync_calibration_post: {
+    set_audio_sync_calibration: {
         parameters: {
             query?: never;
             header?: never;
@@ -3482,7 +2894,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3491,7 +2902,6 @@ export interface operations {
                     "application/json": components["schemas"]["AudioSyncCalibrationResponse"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3502,7 +2912,7 @@ export interface operations {
             };
         };
     };
-    set_audio_sync_offset_api_audio_sync_offset_put: {
+    set_audio_sync_offset: {
         parameters: {
             query?: never;
             header?: never;
@@ -3515,7 +2925,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3524,7 +2933,6 @@ export interface operations {
                     "application/json": components["schemas"]["AudioSettingsResponse"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3535,7 +2943,7 @@ export interface operations {
             };
         };
     };
-    logout_api_auth_logout_post: {
+    logout: {
         parameters: {
             query?: never;
             header?: never;
@@ -3544,7 +2952,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3555,7 +2962,7 @@ export interface operations {
             };
         };
     };
-    pair_api_auth_pair_post: {
+    pair: {
         parameters: {
             query?: never;
             header?: never;
@@ -3568,7 +2975,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3577,7 +2983,6 @@ export interface operations {
                     "application/json": components["schemas"]["AccessStatus"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3595,7 +3000,7 @@ export interface operations {
             };
         };
     };
-    access_status_api_auth_status_get: {
+    auth_status: {
         parameters: {
             query?: never;
             header?: never;
@@ -3604,7 +3009,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3615,7 +3019,7 @@ export interface operations {
             };
         };
     };
-    set_blackout_api_blackout_post: {
+    set_blackout: {
         parameters: {
             query?: never;
             header?: never;
@@ -3628,7 +3032,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3637,7 +3040,6 @@ export interface operations {
                     "application/json": components["schemas"]["DashboardState"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3648,7 +3050,7 @@ export interface operations {
             };
         };
     };
-    set_brightness_api_brightness_put: {
+    set_brightness: {
         parameters: {
             query?: never;
             header?: never;
@@ -3661,7 +3063,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3670,7 +3071,6 @@ export interface operations {
                     "application/json": components["schemas"]["DashboardState"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3681,7 +3081,7 @@ export interface operations {
             };
         };
     };
-    start_calibration_api_calibration_session_post: {
+    start_color_calibration: {
         parameters: {
             query?: never;
             header?: never;
@@ -3694,7 +3094,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3703,7 +3102,6 @@ export interface operations {
                     "application/json": components["schemas"]["CalibrationSessionResponse"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3714,7 +3112,7 @@ export interface operations {
             };
         };
     };
-    update_calibration_api_calibration_session__session_id__put: {
+    update_color_calibration: {
         parameters: {
             query?: never;
             header?: never;
@@ -3729,7 +3127,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3738,7 +3135,6 @@ export interface operations {
                     "application/json": components["schemas"]["DashboardState"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3749,7 +3145,7 @@ export interface operations {
             };
         };
     };
-    finish_calibration_api_calibration_session__session_id__finish_post: {
+    finish_color_calibration: {
         parameters: {
             query?: never;
             header?: never;
@@ -3764,7 +3160,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3773,7 +3168,6 @@ export interface operations {
                     "application/json": components["schemas"]["DashboardState"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3784,7 +3178,7 @@ export interface operations {
             };
         };
     };
-    health_api_health_get: {
+    health: {
         parameters: {
             query?: never;
             header?: never;
@@ -3793,7 +3187,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3804,7 +3197,7 @@ export interface operations {
             };
         };
     };
-    identity_settings_api_identity_get: {
+    get_identity_settings: {
         parameters: {
             query?: never;
             header?: never;
@@ -3813,7 +3206,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3824,7 +3216,7 @@ export interface operations {
             };
         };
     };
-    update_identity_settings_api_identity_put: {
+    put_identity_settings: {
         parameters: {
             query?: never;
             header?: never;
@@ -3837,7 +3229,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3846,7 +3237,6 @@ export interface operations {
                     "application/json": components["schemas"]["IdentitySettingsResponse"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3857,7 +3247,7 @@ export interface operations {
             };
         };
     };
-    set_mode_api_mode_put: {
+    set_mode: {
         parameters: {
             query?: never;
             header?: never;
@@ -3870,7 +3260,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3879,7 +3268,6 @@ export interface operations {
                     "application/json": components["schemas"]["DashboardState"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3890,7 +3278,7 @@ export interface operations {
             };
         };
     };
-    set_music_idle_api_music_idle_put: {
+    set_music_idle: {
         parameters: {
             query?: never;
             header?: never;
@@ -3903,7 +3291,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3912,7 +3299,6 @@ export interface operations {
                     "application/json": components["schemas"]["DashboardState"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3923,7 +3309,7 @@ export interface operations {
             };
         };
     };
-    connect_wifi_api_network_connect_post: {
+    network_connect: {
         parameters: {
             query?: never;
             header?: never;
@@ -3936,7 +3322,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3945,7 +3330,6 @@ export interface operations {
                     "application/json": components["schemas"]["WifiConnectResponse"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3956,7 +3340,7 @@ export interface operations {
             };
         };
     };
-    scan_wifi_api_network_scan_post: {
+    network_scan: {
         parameters: {
             query?: never;
             header?: never;
@@ -3969,7 +3353,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3978,7 +3361,6 @@ export interface operations {
                     "application/json": components["schemas"]["WifiScanResponse"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3989,7 +3371,7 @@ export interface operations {
             };
         };
     };
-    network_status_api_network_status_get: {
+    network_status: {
         parameters: {
             query?: never;
             header?: never;
@@ -3998,7 +3380,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4009,7 +3390,7 @@ export interface operations {
             };
         };
     };
-    set_active_animation_sequence_api_sequencer_active_put: {
+    set_active_sequence: {
         parameters: {
             query?: never;
             header?: never;
@@ -4022,7 +3403,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4031,7 +3411,6 @@ export interface operations {
                     "application/json": components["schemas"]["DashboardState"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -4042,7 +3421,7 @@ export interface operations {
             };
         };
     };
-    get_animation_sequences_api_sequencer_sequences_get: {
+    get_sequence_library: {
         parameters: {
             query?: never;
             header?: never;
@@ -4051,7 +3430,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4062,7 +3440,7 @@ export interface operations {
             };
         };
     };
-    create_animation_sequence_api_sequencer_sequences_post: {
+    create_sequence: {
         parameters: {
             query?: never;
             header?: never;
@@ -4075,7 +3453,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4084,7 +3461,6 @@ export interface operations {
                     "application/json": components["schemas"]["DashboardState"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -4095,7 +3471,7 @@ export interface operations {
             };
         };
     };
-    update_animation_sequence_api_sequencer_sequences__sequence_id__put: {
+    update_sequence: {
         parameters: {
             query?: never;
             header?: never;
@@ -4110,7 +3486,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4119,7 +3494,6 @@ export interface operations {
                     "application/json": components["schemas"]["DashboardState"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -4130,7 +3504,7 @@ export interface operations {
             };
         };
     };
-    delete_animation_sequence_api_sequencer_sequences__sequence_id__delete: {
+    delete_sequence: {
         parameters: {
             query?: never;
             header?: never;
@@ -4141,7 +3515,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4150,7 +3523,6 @@ export interface operations {
                     "application/json": components["schemas"]["DashboardState"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -4161,7 +3533,7 @@ export interface operations {
             };
         };
     };
-    get_sequencer_settings_api_sequencer_settings_get: {
+    get_sequencer_settings: {
         parameters: {
             query?: never;
             header?: never;
@@ -4170,7 +3542,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4181,7 +3552,7 @@ export interface operations {
             };
         };
     };
-    set_sequencer_settings_api_sequencer_settings_put: {
+    put_sequencer_settings: {
         parameters: {
             query?: never;
             header?: never;
@@ -4194,7 +3565,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4203,7 +3573,6 @@ export interface operations {
                     "application/json": components["schemas"]["DashboardState"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -4214,7 +3583,7 @@ export interface operations {
             };
         };
     };
-    startup_settings_api_startup_get: {
+    get_startup_settings: {
         parameters: {
             query?: never;
             header?: never;
@@ -4223,7 +3592,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4234,7 +3602,7 @@ export interface operations {
             };
         };
     };
-    update_startup_settings_api_startup_put: {
+    put_startup_settings: {
         parameters: {
             query?: never;
             header?: never;
@@ -4247,7 +3615,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4256,7 +3623,6 @@ export interface operations {
                     "application/json": components["schemas"]["StartupSettingsResponse"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -4267,7 +3633,7 @@ export interface operations {
             };
         };
     };
-    state_api_state_get: {
+    runtime_state: {
         parameters: {
             query?: never;
             header?: never;
@@ -4276,7 +3642,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4287,7 +3652,7 @@ export interface operations {
             };
         };
     };
-    stripe_topology_api_stripes_get: {
+    get_stripe_topology: {
         parameters: {
             query?: never;
             header?: never;
@@ -4296,7 +3661,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4307,7 +3671,7 @@ export interface operations {
             };
         };
     };
-    update_stripe_topology_api_stripes_put: {
+    put_stripe_topology: {
         parameters: {
             query?: never;
             header?: never;
@@ -4320,7 +3684,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4329,7 +3692,6 @@ export interface operations {
                     "application/json": components["schemas"]["DashboardState"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -4340,7 +3702,7 @@ export interface operations {
             };
         };
     };
-    test_stripe_api_stripes_test_post: {
+    test_stripe: {
         parameters: {
             query?: never;
             header?: never;
@@ -4353,7 +3715,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4362,7 +3723,6 @@ export interface operations {
                     "application/json": components["schemas"]["DashboardState"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -4373,7 +3733,7 @@ export interface operations {
             };
         };
     };
-    system_stats_api_system_stats_get: {
+    system_stats: {
         parameters: {
             query?: never;
             header?: never;
@@ -4382,7 +3742,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4393,7 +3752,7 @@ export interface operations {
             };
         };
     };
-    update_status_api_system_update_get: {
+    update_status: {
         parameters: {
             query?: never;
             header?: never;
@@ -4402,7 +3761,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4413,7 +3771,7 @@ export interface operations {
             };
         };
     };
-    check_for_updates_api_system_update_check_post: {
+    check_for_updates: {
         parameters: {
             query?: never;
             header?: never;
@@ -4422,7 +3780,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             202: {
                 headers: {
                     [name: string]: unknown;
@@ -4433,7 +3790,7 @@ export interface operations {
             };
         };
     };
-    install_update_api_system_update_install_post: {
+    install_update: {
         parameters: {
             query?: never;
             header?: never;
@@ -4442,7 +3799,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             202: {
                 headers: {
                     [name: string]: unknown;
@@ -4453,7 +3809,7 @@ export interface operations {
             };
         };
     };
-    get_transition_settings_api_transitions_settings_get: {
+    get_transition_settings: {
         parameters: {
             query?: never;
             header?: never;
@@ -4462,7 +3818,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4473,7 +3828,7 @@ export interface operations {
             };
         };
     };
-    set_transition_settings_api_transitions_settings_put: {
+    put_transition_settings: {
         parameters: {
             query?: never;
             header?: never;
@@ -4486,7 +3841,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4495,7 +3849,6 @@ export interface operations {
                     "application/json": components["schemas"]["DashboardState"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;

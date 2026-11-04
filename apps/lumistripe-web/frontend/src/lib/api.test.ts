@@ -278,6 +278,54 @@ describe("dashboardApi", () => {
     })).toThrow()
   })
 
+  it("validates provider status snapshots on dashboard state messages", () => {
+    const parsed = parseDashboardState({
+      ...initialState,
+      spotify: {
+        configured: true,
+        connected: true,
+        logged_in: true,
+        is_active: true,
+        device_name: "LumiStripe",
+        status: "playing",
+        track: null,
+        position_ms: 1200,
+        duration_ms: null,
+        volume: 70,
+        shuffle: false,
+        repeat: "off",
+        error: null,
+      },
+      bluetooth: {
+        available: true,
+        powered: true,
+        adapter_alias: "LumiStripe",
+        scanning: false,
+        streaming: true,
+        devices: [],
+        connected_inputs: [],
+        connected_outputs: [],
+        connected_device: null,
+        input_source: null,
+        output_devices: [],
+        default_sink: null,
+        output_volume: null,
+        output_muted: false,
+        output_ready: false,
+        capabilities: { operations: ["scan", "connect"], max_inputs: 2, max_outputs: 1 },
+        operation: null,
+        operation_id: null,
+        operation_state: "idle",
+        error: null,
+      },
+    })
+
+    expect(parsed.spotify?.status).toBe("playing")
+    expect(parsed.bluetooth?.capabilities?.max_inputs).toBe(2)
+    expect(parseDashboardState(initialState).spotify).toBeUndefined()
+    expect(() => parseDashboardState({ ...initialState, spotify: { status: "unknown" } })).toThrow()
+  })
+
   it("builds the websocket URL from the current origin", () => {
     expect(websocketUrl()).toBe("ws://localhost:3000/ws/state")
   })
@@ -293,6 +341,8 @@ describe("dashboardApi", () => {
       disk_total_bytes: 8 * 1024 ** 3,
       disk_usage_percent: 50,
       uptime_seconds: 1234.5,
+      process_memory_used_bytes: 4 * 1024 * 1024,
+      process_thread_count: 5,
       sampled_at: "2026-01-01T00:00:00Z",
     }
     fetchMock.mockReturnValueOnce(jsonResponse(systemStats))

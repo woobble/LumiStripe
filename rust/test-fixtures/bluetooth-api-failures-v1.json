@@ -1,0 +1,55 @@
+[
+  {
+    "method": "PUT",
+    "path": "/api/audio/bluetooth/power",
+    "body": {"powered": false},
+    "operation": "set_power",
+    "arguments": [false],
+    "state_operation": "power:off",
+    "error": "Bluetooth adapter rejected the power change"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/audio/bluetooth/alias",
+    "body": {"alias": "Stage speaker"},
+    "operation": "set_alias",
+    "arguments": ["Stage speaker"],
+    "state_operation": "renaming",
+    "error": "Bluetooth adapter rejected the alias update"
+  },
+  {
+    "method": "POST",
+    "path": "/api/audio/bluetooth/scan",
+    "operation": "scan",
+    "arguments": [],
+    "state_operation": "scanning",
+    "error": "Bluetooth discovery failed"
+  },
+  {
+    "method": "POST",
+    "path": "/api/audio/bluetooth/connect",
+    "body": {"address": "AA:BB:CC:DD:EE:01", "role": "input"},
+    "operation": "connect",
+    "arguments": ["AA:BB:CC:DD:EE:01", "input"],
+    "state_operation": "connecting:AA:BB:CC:DD:EE:01",
+    "error": "Bluetooth connection was rejected"
+  },
+  {
+    "method": "POST",
+    "path": "/api/audio/bluetooth/disconnect",
+    "body": {"address": "AA:BB:CC:DD:EE:01"},
+    "operation": "disconnect",
+    "arguments": ["AA:BB:CC:DD:EE:01"],
+    "state_operation": "disconnecting:AA:BB:CC:DD:EE:01",
+    "error": "Bluetooth disconnect was rejected"
+  },
+  {
+    "method": "POST",
+    "path": "/api/audio/bluetooth/forget",
+    "body": {"address": "AA:BB:CC:DD:EE:01"},
+    "operation": "forget",
+    "arguments": ["AA:BB:CC:DD:EE:01"],
+    "state_operation": "forgetting:AA:BB:CC:DD:EE:01",
+    "error": "Bluetooth device removal was rejected"
+  }
+]

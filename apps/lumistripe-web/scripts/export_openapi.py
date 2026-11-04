@@ -1,4 +1,4 @@
-"""Export the FastAPI REST contract for frontend type generation."""
+"""Export the FastAPI REST contract for rollback and differential checks."""
 
 from __future__ import annotations
 

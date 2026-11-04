@@ -27,6 +27,8 @@ from lumistripe import (
     TransitionEffect,
 )
 from lumistripe.gpio.spi import SPIConfig
+from lumistripe.playback.config import AudioSource
+from lumistripe_web.bluetooth_models import BluetoothDevice, BluetoothStatus
 from lumistripe_web.runtime import (
     LumiStripeRuntime,
     OutputGateController,
@@ -1258,6 +1260,189 @@ def test_watchdog_distinguishes_slow_commands_from_stalled_commands(
     finally:
         release.set()
         runtime.stop(timeout=2)
+
+
+def test_dashboard_snapshot_includes_provider_status_from_injected_managers() -> None:
+    class FakeSpotify:
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+        def status(self) -> SpotifyStatus:
+            return SpotifyStatus(
+                configured=True,
+                connected=True,
+                logged_in=True,
+                is_active=True,
+                device_name="LumiStripe",
+                status="playing",
+                position_ms=1200,
+                volume=72,
+            )
+
+        def control(self, action: str, value: object | None = None) -> SpotifyStatus:
+            del action, value
+            return self.status()
+
+    class FakeBluetooth:
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+        def status(self) -> BluetoothStatus:
+            return BluetoothStatus(available=True, powered=True, adapter_alias="Adapter")
+
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(pixels=8),
+        bluetooth_manager=FakeBluetooth(),
+        spotify_manager=FakeSpotify(),
+    )
+    snapshot = runtime.snapshot()
+    assert snapshot.spotify.connected is True
+    assert snapshot.spotify.status == "playing"
+    assert snapshot.spotify.position_ms == 1200
+    assert snapshot.bluetooth.available is True
+    assert snapshot.bluetooth.adapter_alias == "Adapter"
+
+
+def test_automatic_audio_source_handoff_matches_spotify_bluetooth_mic_priority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    device = BluetoothDevice(
+        address="AA:BB:CC:DD:EE:01",
+        name="Headset",
+        paired=True,
+        connected=True,
+        roles=("input",),
+    )
+    bluetooth_state = {
+        "status": BluetoothStatus(
+            available=True,
+            powered=True,
+            devices=(device,),
+            connected_inputs=(device,),
+            connected_device=device,
+            input_source="bluez_input.AA_BB_CC_DD_EE_01.0",
+        )
+    }
+    spotify_state = {
+        "status": SpotifyStatus(
+            configured=True,
+            connected=True,
+            logged_in=True,
+            is_active=True,
+            status="playing",
+        )
+    }
+
+    class MutableBluetooth:
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+        def status(self) -> BluetoothStatus:
+            return bluetooth_state["status"]
+
+    class MutableSpotify:
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+        def status(self) -> SpotifyStatus:
+            return spotify_state["status"]
+
+        def control(
+            self, action: str, value: object | None = None
+        ) -> SpotifyStatus:
+            del action, value
+            return self.status()
+
+    runtime = LumiStripeRuntime(
+        RuntimeSettings(hardware=True, pixels=4, audio_source="auto"),
+        bluetooth_manager=MutableBluetooth(),
+        spotify_manager=MutableSpotify(),
+    )
+    opened: list[tuple[str, bool]] = []
+    closed: list[AudioSource] = []
+
+    def close_capture() -> None:
+        if runtime._monitor_audio_source is not AudioSource.OFF:
+            closed.append(runtime._monitor_audio_source)
+        runtime._monitor_audio_source = AudioSource.OFF
+        runtime._active_audio_source = AudioSource.OFF
+        runtime._active_bluetooth_address = None
+
+    def open_spotify(*, refresh_route: bool = False) -> None:
+        opened.append(("spotify", refresh_route))
+        runtime._monitor_audio_source = AudioSource.SPOTIFY
+        runtime._active_audio_source = AudioSource.SPOTIFY
+
+    def open_bluetooth(status: BluetoothStatus) -> None:
+        assert status.connected_device is not None
+        opened.append(("bluetooth", False))
+        runtime._monitor_audio_source = AudioSource.BLUETOOTH
+        runtime._active_audio_source = AudioSource.BLUETOOTH
+        runtime._active_bluetooth_address = status.connected_device.address
+
+    def open_microphone() -> None:
+        opened.append(("mic", False))
+        runtime._monitor_audio_source = AudioSource.MIC
+        runtime._active_audio_source = AudioSource.MIC
+
+    monkeypatch.setattr(
+        runtime, "_audio_capture_requested", lambda: runtime._monitor_audio_source is not AudioSource.OFF
+    )
+    monkeypatch.setattr(runtime, "_close_audio_input", close_capture)
+    monkeypatch.setattr(runtime, "_open_spotify_monitor", open_spotify)
+    monkeypatch.setattr(runtime, "_open_bluetooth_monitor", open_bluetooth)
+    monkeypatch.setattr(runtime, "_open_microphone_monitor", open_microphone)
+
+    runtime._maintain_automatic_audio_monitor(10.0)
+    assert runtime._monitor_audio_source is AudioSource.SPOTIFY
+
+    spotify_state["status"] = SpotifyStatus(
+        configured=True,
+        connected=True,
+        logged_in=True,
+        is_active=False,
+        status="paused",
+    )
+    runtime._maintain_automatic_audio_monitor(11.0)
+    assert runtime._monitor_audio_source is AudioSource.BLUETOOTH
+    runtime._maintain_automatic_audio_monitor(12.0)
+    assert len(opened) == 2
+
+    bluetooth_state["status"] = BluetoothStatus(available=True, powered=True)
+    runtime._maintain_automatic_audio_monitor(13.0)
+    assert runtime._monitor_audio_source is AudioSource.MIC
+
+    spotify_state["status"] = SpotifyStatus(
+        configured=True,
+        connected=True,
+        logged_in=True,
+        is_active=True,
+        status="playing",
+    )
+    runtime._maintain_automatic_audio_monitor(14.0)
+    assert runtime._monitor_audio_source is AudioSource.SPOTIFY
+    runtime._maintain_automatic_audio_monitor(15.0)
+
+    assert runtime._audio_source_setting == "auto"
+    assert opened == [
+        ("spotify", False),
+        ("bluetooth", False),
+        ("mic", False),
+        ("spotify", True),
+    ]
+    assert closed == [AudioSource.SPOTIFY, AudioSource.BLUETOOTH, AudioSource.MIC]
 
 
 def test_microphone_monitor_stays_active_outside_dynamic_mode_and_saves_profile(

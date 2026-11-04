@@ -3,6 +3,7 @@ from __future__ import annotations
 import fcntl
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +18,58 @@ assert SPEC is not None and SPEC.loader is not None
 update_state = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = update_state
 SPEC.loader.exec_module(update_state)
+
+
+def test_write_status_initializes_owner_from_parent_directory(tmp_path: Path) -> None:
+    state_dir = tmp_path / "update"
+    state_dir.mkdir()
+    expected = state_dir.stat()
+    state_file = state_dir / "status.json"
+
+    update_state.write_status(state_file, update_state.empty_status())
+
+    actual = state_file.stat()
+    assert (actual.st_uid, actual.st_gid) == (expected.st_uid, expected.st_gid)
+    assert actual.st_mode & 0o777 == 0o644
+
+
+def test_write_status_preserves_existing_owner_for_root_updater(tmp_path: Path) -> None:
+    if os.geteuid() != 0:
+        pytest.skip("preserving a different service owner requires root")
+    state_file = tmp_path / "update" / "status.json"
+    update_state.write_status(state_file, update_state.empty_status())
+    os.chown(state_file, 65534, 65534)
+
+    update_state.write_status(state_file, update_state.empty_status())
+
+    actual = state_file.stat()
+    assert (actual.st_uid, actual.st_gid) == (65534, 65534)
+
+
+def test_write_status_rejects_symlinked_status_path(tmp_path: Path) -> None:
+    target = tmp_path / "target.json"
+    target.write_text("sensitive data", encoding="utf-8")
+    state_file = tmp_path / "update" / "status.json"
+    state_file.parent.mkdir()
+    state_file.symlink_to(target)
+
+    with pytest.raises(OSError, match="regular file"):
+        update_state.write_status(state_file, update_state.empty_status())
+    assert target.read_text(encoding="utf-8") == "sensitive data"
+
+
+def test_root_created_lock_uses_status_file_owner(tmp_path: Path) -> None:
+    if os.geteuid() != 0:
+        pytest.skip("changing lock ownership requires root")
+    state_file = tmp_path / "update" / "status.json"
+    update_state.write_status(state_file, update_state.empty_status())
+    os.chown(state_file, 65534, 65534)
+
+    with update_state._open_update_lock(state_file):
+        lock = state_file.with_name("update-check.lock").stat()
+
+    assert (lock.st_uid, lock.st_gid) == (65534, 65534)
+    assert lock.st_mode & 0o777 == 0o644
 
 
 def test_update_check_recovers_stale_installing_state(

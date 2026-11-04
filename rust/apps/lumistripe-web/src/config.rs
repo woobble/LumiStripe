@@ -46,6 +46,22 @@ pub struct CliOptions {
     pub settings_file: Option<PathBuf>,
     #[arg(long, env = "LUMISTRIPE_AUDIO_DEVICE")]
     pub audio_device: Option<String>,
+    #[arg(
+        long = "spotify-ws",
+        env = "LUMI_SPOTIFY_WS",
+        default_value = "127.0.0.1:9090"
+    )]
+    pub spotify_ws_uri: String,
+    #[arg(
+        long = "enable-spotify",
+        env = "LUMISTRIPE_ENABLE_SPOTIFY",
+        default_value_t = false
+    )]
+    pub spotify_provider_enabled: bool,
+    #[arg(long, env = "LUMI_BLUETOOTH_MAX_INPUTS", default_value_t = 1)]
+    pub bluetooth_max_inputs: usize,
+    #[arg(long, env = "LUMI_BLUETOOTH_MAX_OUTPUTS", default_value_t = 1)]
+    pub bluetooth_max_outputs: usize,
     #[arg(long, env = "LUMISTRIPE_SECURE_COOKIE", default_value_t = false)]
     pub secure_cookie: bool,
 }
@@ -80,6 +96,10 @@ pub struct AppConfig {
     pub output_devices: Vec<String>,
     pub spi_speed_hz: Option<u32>,
     pub audio_device: Option<String>,
+    pub spotify_ws_uri: String,
+    pub spotify_provider_enabled: bool,
+    pub bluetooth_max_inputs: usize,
+    pub bluetooth_max_outputs: usize,
     pub secure_cookie: bool,
     pub static_dir: Option<PathBuf>,
     pub settings_file: PathBuf,
@@ -87,6 +107,9 @@ pub struct AppConfig {
 
 impl CliOptions {
     pub fn into_config(self) -> Result<(AppConfig, PathBuf, String, u16), String> {
+        if self.bluetooth_max_inputs == 0 || self.bluetooth_max_outputs == 0 {
+            return Err("Bluetooth connection limits must be at least one".to_owned());
+        }
         if self.pairing_code.as_ref().is_some_and(|code| {
             code.len() != 4 || !code.is_ascii() || !code.bytes().all(|byte| byte.is_ascii_digit())
         }) {
@@ -184,6 +207,10 @@ impl CliOptions {
                 output_devices: devices,
                 spi_speed_hz,
                 audio_device: self.audio_device,
+                spotify_ws_uri: self.spotify_ws_uri,
+                spotify_provider_enabled: self.spotify_provider_enabled,
+                bluetooth_max_inputs: self.bluetooth_max_inputs,
+                bluetooth_max_outputs: self.bluetooth_max_outputs,
                 secure_cookie: self.secure_cookie,
                 static_dir: self.static_dir,
                 settings_file: self.settings_file.unwrap_or_else(default_settings_file),
@@ -331,10 +358,11 @@ fn default_settings_file() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppConfig, EngineOutputOptions};
+    use super::{AppConfig, CliOptions, EngineOutputOptions};
     use crate::settings::{
         StripeBackend, StripeOutputSettings, StripeTopologySettings, ZonePattern,
     };
+    use clap::Parser;
     use lumistripe_engine_config::OutputBackend;
     use std::path::PathBuf;
 
@@ -358,6 +386,10 @@ mod tests {
             output_devices: vec!["simulation".to_owned()],
             spi_speed_hz: None,
             audio_device: None,
+            spotify_ws_uri: "127.0.0.1:9090".to_owned(),
+            spotify_provider_enabled: false,
+            bluetooth_max_inputs: 1,
+            bluetooth_max_outputs: 1,
             secure_cookie: false,
             static_dir: None,
             settings_file: PathBuf::new(),
@@ -399,5 +431,45 @@ mod tests {
         assert_eq!(config.engine_config().pixel_counts(), vec![100]);
         assert!(config.engine_config().outputs[0].reversed);
         assert!(matches!(config.outputs[0].backend, OutputBackend::Mock));
+    }
+
+    #[test]
+    fn bluetooth_connection_limits_are_configurable_and_must_be_positive() {
+        let options = CliOptions::try_parse_from([
+            "lumistripe-web",
+            "--bluetooth-max-inputs",
+            "3",
+            "--bluetooth-max-outputs",
+            "2",
+        ])
+        .unwrap();
+        let (config, _, _, _) = options.into_config().unwrap();
+        assert_eq!(config.bluetooth_max_inputs, 3);
+        assert_eq!(config.bluetooth_max_outputs, 2);
+
+        let mut options = CliOptions::try_parse_from([
+            "lumistripe-web",
+            "--bluetooth-max-inputs",
+            "1",
+            "--bluetooth-max-outputs",
+            "1",
+        ])
+        .unwrap();
+        options.bluetooth_max_inputs = 0;
+        assert!(options.into_config().is_err());
+    }
+
+    #[test]
+    fn soloist_endpoint_and_simulation_opt_in_are_configurable() {
+        let options = CliOptions::try_parse_from([
+            "lumistripe-web",
+            "--spotify-ws",
+            "ws://127.0.0.1:9123",
+            "--enable-spotify",
+        ])
+        .unwrap();
+        let (config, _, _, _) = options.into_config().unwrap();
+        assert_eq!(config.spotify_ws_uri, "ws://127.0.0.1:9123");
+        assert!(config.spotify_provider_enabled);
     }
 }

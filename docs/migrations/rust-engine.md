@@ -149,8 +149,8 @@ once as root:
 ```bash
 apt-get update
 apt-get install --yes --no-install-recommends \
-  build-essential ca-certificates curl pkg-config libasound2-dev \
-  libpipewire-0.3-dev libpulse-dev
+  build-essential ca-certificates curl pkg-config libasound2-dev libclang-dev \
+  libdbus-1-dev libpipewire-0.3-dev libpulse-dev pulseaudio-utils
 ```
 
 As the runner account, install a stable Rust toolchain with rustup:

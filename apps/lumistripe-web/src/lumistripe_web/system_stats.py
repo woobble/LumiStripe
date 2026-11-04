@@ -39,6 +39,7 @@ class SystemStatsCollector:
 
         memory_used, memory_total, memory_percent = self._read_memory()
         disk_used, disk_total, disk_percent = self._read_disk()
+        process_memory_used, process_thread_count = self._read_process()
         return SystemStats(
             cpu_temperature_c=self._read_temperature(),
             cpu_usage_percent=cpu_usage,
@@ -49,6 +50,8 @@ class SystemStatsCollector:
             disk_total_bytes=disk_total,
             disk_usage_percent=disk_percent,
             uptime_seconds=self._read_uptime(),
+            process_memory_used_bytes=process_memory_used,
+            process_thread_count=process_thread_count,
             sampled_at=datetime.now(UTC),
         )
 
@@ -119,6 +122,20 @@ class SystemStatsCollector:
         except (OSError, IndexError, ValueError):
             return None
         return value if value >= 0 else None
+
+    def _read_process(self) -> tuple[int | None, int | None]:
+        values: dict[str, int] = {}
+        try:
+            status = (self._proc_root / "self" / "status").read_text(encoding="ascii")
+            for line in status.splitlines():
+                key, separator, value = line.partition(":")
+                if not separator or key not in {"VmRSS", "Threads"}:
+                    continue
+                number = int(value.strip().split()[0])
+                values[key] = number * _KIBIBYTE if key == "VmRSS" else number
+        except (OSError, IndexError, ValueError):
+            return None, None
+        return values.get("VmRSS"), values.get("Threads")
 
     def _read_temperature(self) -> float | None:
         candidates: list[tuple[int, str, float]] = []

@@ -69,12 +69,12 @@ Spotify key through the provisioning process environment. Keep their values
 out of shell history and command arguments.
 
 The installer provisions the complete appliance: Debian/Raspberry Pi OS
-packages and native
-build tools, the service user and GPIO/SPI/audio permissions, Raspberry Pi SPI,
-uv 0.13.0 or newer with managed Python 3.12, the native audio, GPIO, and SPI
-extensions, Bun, NetworkManager and Wi-Fi adapter tools, locked Python and
-frontend dependencies, the frontend production build,
-and the Bluetooth/WirePlumber configuration. It installs the Spotify Soloist
+packages and native build tools, D-Bus and PipeWire development headers, the
+service user and GPIO/SPI/audio permissions, Raspberry Pi SPI, Rust 1.88.0,
+uv 0.13.0 or newer with managed Python 3.12, native audio/GPIO/SPI extensions,
+Bun, NetworkManager and Wi-Fi adapter tools, locked Python and frontend
+dependencies, the frontend production build, and Bluetooth/WirePlumber
+configuration. It installs the Spotify Soloist
 binary under the non-root service account when configured, plus a local mkcert
 CA and HTTPS certificate, Nginx, and the required systemd services. Without a
 Spotify key the Spotify service remains disabled. Existing
@@ -113,11 +113,34 @@ The pairing code is stored in `/etc/lumistripe/lumistripe-web.env` with mode
 `600`. The systemd service passes it through the process environment, not its
 command-line arguments.
 
+## Select the Rust web backend
+
+Python remains the default and rollback backend. The installer provisions Rust
+1.88.0 and the `libdbus-1-dev` and `libpipewire-0.3-dev` headers for the
+non-root service account. From a clean checkout, build the commit-matched web
+and engine binaries as that account:
+
+```bash
+sudo -H -u pi env \
+  HOME=/home/pi \
+  CARGO_HOME=/home/pi/.cargo \
+  RUSTUP_HOME=/home/pi/.rustup \
+  /opt/lumistripe-install/deploy/build-rust-backend.sh \
+  /opt/lumistripe-install
+```
+
+Then set `LUMI_WEB_BACKEND=rust` in
+`/etc/lumistripe/lumistripe-web.env` and restart `lumistripe-web.service`.
+The launcher checks that the staged binaries match the checkout and pins the
+running web process and its engine restarts to the same release. The updater
+rebuilds both binaries before switching releases; a failed build leaves the
+previous release active. Keep the Python backend available for rollback.
+
 On Trixie the installer selects `libgpiod3`; older supported Debian-based Pi
 images are handled with `libgpiod2` when that is the available runtime package.
 
-The installer needs internet access for apt, uv, Bun, mkcert, and package
-downloads. After installation the runtime checkout is service-user-writable,
+The installer needs internet access for apt, Rustup, uv, Bun, mkcert, and
+package downloads. After installation the runtime checkout is service-user-writable,
 so it is no longer a trusted source for another root installer run. For a
 repair or reinstall, provide a fresh reviewed checkout under an
 administrator-controlled path; existing pairing and complete TLS files are
@@ -440,7 +463,9 @@ that port outside the Pi.
 - Spotify is unavailable: check that `/etc/lumistripe/lumistripe-spotify.env`
   contains a valid `LUMI_SPOTIFY_API_KEY`, then restart
   `lumistripe-spotify.service`. If the Soloist build has expired, rerun
-  `deploy/update.sh` to download the current official build.
+  `deploy/update.sh` to download the current official build. The service checks
+  the installed build timestamp before startup and reports missing, malformed,
+  or expired builds in `journalctl -u lumistripe-spotify.service`.
 - Spotify plays but the Stripe is quiet: confirm that the dedicated sink and
   monitor are present with `pactl list short sinks` and
   `pactl list short sources`, then reselect Spotify in Setup → Audio.

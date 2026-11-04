@@ -5,10 +5,11 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import pytest
 from fastapi.testclient import TestClient
+from lumistripe_web import networking
 from lumistripe_web.app import create_app
 from lumistripe_web.networking import (
     NetworkManagerError,
@@ -126,16 +127,25 @@ def test_network_api_lists_adapters_scans_connects_and_protects_hotspot() -> Non
         }
         assert "password" not in connected.json()
 
+        network_failure_fixture = (
+            Path(__file__).resolve().parents[3]
+            / "rust"
+            / "test-fixtures"
+            / "network-api-connect-failure-v1.json"
+        )
+        failure_case = json.loads(network_failure_fixture.read_text(encoding="utf-8"))
+        bad_password = client.request(
+            failure_case["method"],
+            failure_case["path"],
+            json=failure_case["body"],
+        )
+        assert bad_password.status_code == failure_case["status"]
+        assert bad_password.json()["detail"] == failure_case["error"]
+        assert failure_case["body"]["password"] not in bad_password.text
+
         hotspot_scan = client.post("/api/network/scan", json={"interface": "wlan0"})
         assert hotspot_scan.status_code == 409
         assert "hotspot adapter" in hotspot_scan.json()["detail"].lower()
-
-        bad_password = client.post(
-            "/api/network/connect",
-            json={"interface": "wlan1", "ssid": "Party Wi-Fi", "password": "wrong-pass"},
-        )
-        assert bad_password.status_code == 409
-        assert "wrong-pass" not in bad_password.text
 
         invalid = client.post(
             "/api/network/connect",
@@ -167,6 +177,69 @@ def test_network_api_requires_pairing() -> None:
         assert client.get("/api/network/status").status_code == 401
         assert client.post("/api/auth/pair", json={"code": "1234"}).status_code == 200
         assert client.get("/api/network/status").status_code == 200
+
+
+def test_network_api_helper_errors_follow_shared_rust_fixture() -> None:
+    fixture_path = (
+        Path(__file__).resolve().parents[3]
+        / "rust"
+        / "test-fixtures"
+        / "network-api-helper-errors-v1.json"
+    )
+    cases = json.loads(fixture_path.read_text(encoding="utf-8"))
+    active_case: list[dict[str, Any]] = [{}]
+
+    class FixtureFailureService:
+        def _raise_failure(self) -> NoReturn:
+            case = active_case[0]
+            raise NetworkManagerError(
+                case["error"], code=case.get("helper_code", "unavailable")
+            )
+
+        def status(self) -> dict[str, Any]:
+            self._raise_failure()
+
+        def scan(self, _interface: str) -> dict[str, Any]:
+            self._raise_failure()
+
+        def connect(self, _interface: str, _ssid: str, _password: str) -> dict[str, Any]:
+            self._raise_failure()
+
+    app = create_app(
+        RuntimeSettings(pixels=8),
+        network_service=FixtureFailureService(),  # type: ignore[arg-type]
+    )
+    with TestClient(app) as client:
+        for case in cases:
+            active_case[0] = case
+            response = client.request(
+                case["method"], case["path"], json=case.get("body")
+            )
+            assert response.status_code == case["status_code"], case["name"]
+            assert response.json() == {"detail": case["error"]}, case["name"]
+            if (body := case.get("body")) and (password := body.get("password")):
+                assert password not in response.text
+
+
+def test_network_api_maps_unspawnable_helper_to_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_to_spawn(*_args: object, **_kwargs: object) -> None:
+        raise FileNotFoundError("private helper path")
+
+    monkeypatch.setattr(networking.subprocess, "run", fail_to_spawn)
+    app = create_app(
+        RuntimeSettings(pixels=8),
+        network_service=NetworkManagerService(),
+    )
+    with TestClient(app) as client:
+        response = client.get("/api/network/status")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "Network management is unavailable. Install or update the Pi appliance. Otherwise, retry shortly."
+    }
+    assert "private helper path" not in response.text
 
 
 def test_network_service_sends_password_on_stdin_not_command_line(

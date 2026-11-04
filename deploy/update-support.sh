@@ -33,6 +33,33 @@ uv_version_at_least() {
   [[ "$(printf '%s\n' "$minimum_version" "$installed_version" | sort -V | tail -n 1)" == "$installed_version" ]]
 }
 
+read_web_backend() {
+  local env_file="${1:-/etc/lumistripe/lumistripe-web.env}"
+  [[ -r "$env_file" ]] || {
+    echo "Web backend configuration is missing: $env_file" >&2
+    return 1
+  }
+  awk '
+    /^[[:space:]]*#/ { next }
+    {
+      line = $0
+      sub(/^[[:space:]]*/, "", line)
+      if (line !~ /^LUMI_WEB_BACKEND[[:space:]]*=/) next
+      sub(/^[^=]*=/, "", line)
+      sub(/^[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
+      first = substr(line, 1, 1)
+      last = substr(line, length(line), 1)
+      if ((first == "\"" && last == "\"") ||
+          (first == sprintf("%c", 39) && last == sprintf("%c", 39))) {
+        line = substr(line, 2, length(line) - 2)
+      }
+      backend = line
+    }
+    END { print backend }
+  ' "$env_file"
+}
+
 install_update_support() {
   local rendered_dir
   local rendered_file
@@ -61,6 +88,8 @@ install_update_support() {
   install -d -o root -g root -m 755 "$NETWORK_LIBEXEC_DIR"
   for template in \
     update.sh update_state.py update-support.sh tls.sh soloist.sh extract_soloist.py \
+    soloist_diagnostics.py \
+    build-rust-backend.sh \
     spotify_device_name.py lumistripe-spotify-name.sudoers lumistripe-spotify-device-name \
     90-lumistripe-bluetooth.conf 90-lumistripe-spotify.conf \
     lumistripe-spotify.env.example \
@@ -70,7 +99,7 @@ install_update_support() {
     lumistripe-update-trigger; do
     local mode=644
     case "$template" in
-      update.sh|update_state.py|lumistripe-update-trigger|lumistripe-spotify-device-name) mode=755 ;;
+      update.sh|update_state.py|build-rust-backend.sh|lumistripe-update-trigger|lumistripe-spotify-device-name) mode=755 ;;
     esac
     install -o root -g root -m "$mode" \
       "$PROJECT_DIR/deploy/$template" "$UPDATE_LIBEXEC_DIR/$template"
@@ -142,6 +171,22 @@ install_update_support() {
       --project-dir "$PROJECT_DIR" \
       --state-file /var/lib/lumistripe/update/status.json
   fi
+  for state_path in \
+    /var/lib/lumistripe/update/status.json \
+    /var/lib/lumistripe/update/update-check.lock; do
+    if [[ -L "$state_path" ]]; then
+      echo "Updater state path must not be a symlink: $state_path" >&2
+      return 1
+    fi
+    if [[ -e "$state_path" ]]; then
+      [[ -f "$state_path" ]] || {
+        echo "Updater state path must be a regular file: $state_path" >&2
+        return 1
+      }
+      chown --no-dereference "$SERVICE_USER:$SERVICE_GROUP" "$state_path"
+      chmod 644 "$state_path"
+    fi
+  done
 
   install -o root -g root -m 755 \
     "$UPDATE_LIBEXEC_DIR/lumistripe-update-trigger" \

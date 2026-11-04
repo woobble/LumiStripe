@@ -1,0 +1,19 @@
+{
+  "start": {
+    "method": "POST",
+    "path": "/api/audio/bluetooth/pair",
+    "body": {
+      "address": "AA:BB:CC:DD:EE:01"
+    },
+    "operation": "pairing:AA:BB:CC:DD:EE:01"
+  },
+  "conflict": {
+    "method": "PUT",
+    "path": "/api/audio/bluetooth/power",
+    "body": {
+      "powered": false
+    },
+    "status": 409,
+    "error": "another Bluetooth operation is already running"
+  }
+}

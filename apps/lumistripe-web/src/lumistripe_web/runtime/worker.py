@@ -547,6 +547,8 @@ class RuntimeWorker:
         self._power_budget_state = _power_budget_state_for(self._topology)
         self._snapshot = DashboardState(
             runtime=self.settings.kind,
+            spotify=self._spotify_status_response(),
+            bluetooth=self._bluetooth_status_response(),
             application_name=self._application_name,
             mode=PlaybackMode.STATIC,
             animation=self._current_animation(),
@@ -5872,6 +5874,8 @@ profile.audio_config(microphone=True),
         state = DashboardState(
             revision=self._revision,
             runtime=self.settings.kind,
+            spotify=self._spotify_status_response(),
+            bluetooth=self._bluetooth_status_response(),
             output_backend=self._output_backend_label(),
             output_devices=self._output_device_paths(),
             spi_speed_hz=self._common_spi_speed(),

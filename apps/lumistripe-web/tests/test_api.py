@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -29,6 +30,7 @@ from lumistripe_web.settings import (
     StripeOutputSettings,
     StripeTopologySettings,
 )
+from lumistripe_web.spotify import SpotifyStatus
 from starlette.websockets import WebSocketDisconnect
 
 
@@ -215,6 +217,83 @@ def test_update_install_rejects_dirty_checkout_and_check_starts_helper(
 
     assert launched and launched[0][0][1] == str(helper)
     assert launched[0][1]["start_new_session"] is True
+
+
+def test_update_install_guards_follow_shared_rust_fixture(tmp_path: Path) -> None:
+    fixture_path = (
+        Path(__file__).resolve().parents[3]
+        / "rust"
+        / "test-fixtures"
+        / "system-update-api-install-failures-v1.json"
+    )
+    cases = json.loads(fixture_path.read_text(encoding="utf-8"))
+    state_file = tmp_path / "update-status.json"
+    app = create_app(
+        RuntimeSettings(pixels=8),
+        update_state_file=state_file,
+        project_dir=tmp_path,
+    )
+
+    with TestClient(app) as client:
+        for case in cases:
+            state_file.write_text(json.dumps(case["status"]), encoding="utf-8")
+            response = client.post("/api/system/update/install")
+            assert response.status_code == case["status_code"], case["name"]
+            assert response.json() == {"detail": case["detail"]}, case["name"]
+
+
+def test_update_checker_and_installer_launch_failures_are_redacted(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_file = tmp_path / "update-status.json"
+    state_file.write_text(
+        UpdateStatus(
+            supported=True,
+            installed_commit="a" * 40,
+            available_commit="b" * 40,
+            update_available=True,
+            working_tree_dirty=False,
+            checked_at=None,
+            check_error=None,
+            install_state="idle",
+            install_started_at=None,
+            install_finished_at=None,
+            install_error=None,
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    project_dir = tmp_path / "project"
+    app = create_app(
+        RuntimeSettings(pixels=8),
+        update_state_file=state_file,
+        project_dir=project_dir,
+    )
+
+    with TestClient(app) as client:
+        missing_checker = client.post("/api/system/update/check")
+        assert missing_checker.status_code == 503
+        assert missing_checker.json() == {"detail": "The update checker is unavailable."}
+
+        checker = project_dir / "deploy" / "update_state.py"
+        checker.parent.mkdir(parents=True)
+        checker.write_text("", encoding="utf-8")
+
+        def fail_to_start(*_args: object, **_kwargs: object) -> None:
+            raise OSError("private executable path")
+
+        monkeypatch.setattr(system_routes.subprocess, "Popen", fail_to_start)
+        checker_failure = client.post("/api/system/update/check")
+        assert checker_failure.status_code == 503
+        assert checker_failure.json() == {"detail": "Could not start the update check."}
+
+        monkeypatch.setattr(system_routes.subprocess, "run", fail_to_start)
+        installer_failure = client.post("/api/system/update/install")
+        assert installer_failure.status_code == 503
+        assert installer_failure.json() == {
+            "detail": "Could not start the system updater. Check the Pi installation."
+        }
+        assert "private executable path" not in installer_failure.text
 
 
 def test_api_maps_validation_and_runtime_errors() -> None:
@@ -1279,12 +1358,60 @@ def test_websocket_sends_initial_and_changed_state() -> None:
         assert initial["configured_audio_source"] is not None
         assert initial["active_audio_source"] == "demo"
         assert initial["audio_monitoring"] is False
+        assert initial["spotify"]["configured"] is False
+        assert initial["bluetooth"]["available"] is False
 
         response = client.put("/api/brightness", json={"brightness": 0.25})
         assert response.status_code == 200
         changed = websocket.receive_json()
         assert changed["revision"] > initial["revision"]
         assert changed["brightness"] == 0.25
+
+
+def test_websocket_state_includes_current_spotify_and_bluetooth_status() -> None:
+    class FakeSpotify:
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+        def status(self) -> SpotifyStatus:
+            return SpotifyStatus(
+                configured=True,
+                connected=True,
+                logged_in=True,
+                is_active=True,
+                device_name="LumiStripe",
+                status="playing",
+                position_ms=1200,
+                volume=72,
+            )
+
+        def control(self, action: str, value: object | None = None) -> SpotifyStatus:
+            del action, value
+            return self.status()
+
+    class FakeBluetoothManager(BluetoothManager):
+        def __init__(self) -> None:
+            super().__init__(enabled=False)
+
+        def status(self) -> BluetoothStatus:
+            return BluetoothStatus(available=True, powered=True, adapter_alias="Adapter")
+
+    def runtime_factory(settings: RuntimeSettings) -> LumiStripeRuntime:
+        return LumiStripeRuntime(
+            settings,
+            bluetooth_manager=FakeBluetoothManager(),
+            spotify_manager=FakeSpotify(),
+        )
+
+    app = create_app(RuntimeSettings(pixels=8), runtime_factory=runtime_factory)
+    with TestClient(app) as client, client.websocket_connect("/ws/state") as websocket:
+        initial = websocket.receive_json()
+        assert initial["spotify"]["device_name"] == "LumiStripe"
+        assert initial["spotify"]["status"] == "playing"
+        assert initial["bluetooth"]["adapter_alias"] == "Adapter"
 
 
 @pytest.mark.parametrize(

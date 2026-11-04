@@ -54,6 +54,7 @@ SERVICE_USER="$PROJECT_USER"
 SERVICE_HOME="$PROJECT_HOME"
 SERVICE_GROUP="$PROJECT_GROUP"
 UPDATE_STATE_FILE="${LUMI_UPDATE_STATE_FILE:-/var/lib/lumistripe/update/status.json}"
+WEB_ENV_FILE=/etc/lumistripe/lumistripe-web.env
 UV_BIN="$PROJECT_HOME/.local/bin/uv"
 BUN_BIN="$PROJECT_HOME/.bun/bin/bun"
 WIREPLUMBER_DIR="$PROJECT_HOME/.config/wireplumber/wireplumber.conf.d"
@@ -156,6 +157,51 @@ spotify_environment_ready() {
 }
 
 git_user() { as_user git -C "$PROJECT_DIR" "$@"; }
+
+configured_web_backend() {
+  local backend
+  backend="$(read_web_backend "$WEB_ENV_FILE")" || return 1
+  [[ -n "$backend" ]] || backend=python
+  case "$backend" in
+    python|rust) printf '%s\n' "$backend" ;;
+    *) echo "Unsupported LUMI_WEB_BACKEND in $WEB_ENV_FILE: $backend" >&2; return 1 ;;
+  esac
+}
+
+build_rust_backend() {
+  local backend
+  backend="$(configured_web_backend)" || return 1
+  [[ "$backend" == rust ]] || return 0
+  [[ -x "$SCRIPT_DIR/build-rust-backend.sh" ]] || {
+    echo "Rust deployment builder is missing from $SCRIPT_DIR." >&2
+    return 1
+  }
+  as_user_with_env \
+    RUSTUP_HOME="$PROJECT_HOME/.rustup" \
+    CARGO_HOME="$PROJECT_HOME/.cargo" \
+    "$SCRIPT_DIR/build-rust-backend.sh" "$PROJECT_DIR"
+}
+
+prune_rust_backend_releases() {
+  local backend active_commit release_commit release_dir
+  backend="$(configured_web_backend)" || return 1
+  [[ "$backend" == rust ]] || return 0
+  local releases_dir="$PROJECT_DIR/rust/target/rust-deploy/releases"
+  [[ -d "$releases_dir" ]] || return 0
+  active_commit="$(git_user rev-parse --verify HEAD)" || return 1
+
+  for release_dir in "$releases_dir"/*; do
+    [[ -d "$release_dir" && ! -L "$release_dir" ]] || continue
+    release_commit="${release_dir##*/}"
+    [[ "$release_commit" =~ ^[0-9a-f]{40}$ ]] || continue
+    [[ "$release_commit" == "$active_commit" || "$release_commit" == "$PREVIOUS_REF" ]] && continue
+    as_user rm -f -- \
+      "$release_dir/lumistripe-web" \
+      "$release_dir/lumistripe-engine" \
+      "$release_dir/source-commit" || return 1
+    as_user rmdir -- "$release_dir" || return 1
+  done
+}
 
 sync_dependencies() (
   cd "$PROJECT_DIR" || return 1
@@ -302,6 +348,7 @@ rollback() {
     return 1
   fi
   sync_dependencies || failed=1
+  build_rust_backend || failed=1
   build_frontend || failed=1
   refresh_deployment_files || failed=1
   systemctl restart lumistripe-web.service || failed=1
@@ -349,6 +396,7 @@ else
   systemctl disable --now lumistripe-spotify.service >/dev/null 2>&1 || true
 fi
 sync_dependencies
+build_rust_backend
 build_frontend
 refresh_deployment_files
 if spotify_environment_ready; then
@@ -361,6 +409,7 @@ systemctl is-active --quiet lumistripe-web.service
 for _ in {1..30}; do
   if curl --disable --fail --silent --show-error http://127.0.0.1:8000/api/health >/dev/null; then
     echo "LumiStripe updated to $(git_user rev-parse --short HEAD)."
+    prune_rust_backend_releases || echo "Could not prune old Rust release binaries." >&2
     record_update_state install-succeeded
     trap - ERR
     exit 0

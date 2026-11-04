@@ -96,7 +96,7 @@ pub(crate) struct ActiveAudioCalibration {
     pub error: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PlaybackMode {
     Solid,
@@ -122,12 +122,14 @@ pub struct ControlModel {
     pub settings: DashboardSettings,
     pub outputs: Vec<OutputControl>,
     pub revision: u64,
+    pub spotify_restart_requested: bool,
     pub started_at: Instant,
     pub engine_health: Option<ResponseResult>,
     pub engine_error: Option<String>,
     pub audio_status: Option<lumistripe_engine_protocol::EngineAudioStatus>,
     pub audio_started: bool,
     pub audio_source: String,
+    pub active_audio_source: String,
     pub(crate) audio_calibration: Option<ActiveAudioCalibration>,
     pub(crate) calibration: Option<ActiveColorCalibration>,
 }
@@ -171,12 +173,14 @@ impl ControlModel {
             settings,
             outputs,
             revision: 1,
+            spotify_restart_requested: false,
             started_at: Instant::now(),
             engine_health: None,
             engine_error: None,
             audio_status: None,
             audio_started: false,
             audio_source: "auto".to_owned(),
+            active_audio_source: "off".to_owned(),
             audio_calibration: None,
             calibration: None,
         }
@@ -407,7 +411,7 @@ impl ControlModel {
         };
         let audio = self.audio_status.as_ref();
         let audio_active = audio.is_some_and(|status| status.active);
-        let audio_monitoring = audio_active && self.audio_source != "demo";
+        let audio_monitoring = audio_active && self.active_audio_source != "demo";
         let audio_error = audio.and_then(|status| status.last_error.clone());
         let output_stats = &health_fields;
         let gate = output_stats
@@ -537,14 +541,22 @@ impl ControlModel {
             "music_gate": gate,
             "bpm": bpm,
             "audio_status": audio_error.clone().unwrap_or_else(|| {
-                if audio_active && self.audio_source == "demo" { "Using the internal demo beat.".to_owned() }
-                else if audio_active { "Rust audio capture active.".to_owned() }
-                else { "No audio source active.".to_owned() }
+                if self.active_audio_source == "demo" && audio_active {
+                    "Using the internal demo beat.".to_owned()
+                } else if audio_active && self.active_audio_source == "bluetooth" {
+                    audio.and_then(|status| status.device.as_ref())
+                        .map(|device| format!("Bluetooth: {}", device.name))
+                        .unwrap_or_else(|| "Bluetooth audio capture active.".to_owned())
+                } else if audio_active && self.active_audio_source == "spotify" {
+                    "Spotify: waiting for playback".to_owned()
+                } else if audio_active {
+                    "Rust audio capture active.".to_owned()
+                } else {
+                    "No audio source active.".to_owned()
+                }
             }),
             "configured_audio_source": self.audio_source,
-            "active_audio_source": if audio_active {
-                if self.audio_source == "demo" { Some("demo") } else { Some("mic") }
-            } else { Some("off") },
+            "active_audio_source": self.active_audio_source,
             "audio_monitoring": audio_monitoring,
             "active_effects": active_effects,
             "uptime_seconds": self.started_at.elapsed().as_secs_f64(),
@@ -670,11 +682,16 @@ impl ControlModel {
         let device_name = device
             .map(|device| device.name.as_str())
             .or(self.settings.selected_audio_device.as_deref());
-        let profile = device_name
+        let profile_name = match self.active_audio_source.as_str() {
+            "bluetooth" | "spotify" => Some(self.active_audio_source.as_str()),
+            _ => device_name,
+        };
+        let profile = profile_name
             .and_then(|name| self.settings.audio_profiles.get(name))
             .cloned()
             .unwrap_or_default();
-        let is_demo = self.audio_source == "demo";
+        let is_demo = self.active_audio_source == "demo";
+        let microphone = matches!(self.active_audio_source.as_str(), "mic" | "auto");
         let selector = if is_demo {
             Some("demo".to_owned())
         } else {
@@ -686,7 +703,7 @@ impl ControlModel {
 
         Some(EngineDesiredAudio {
             selector,
-            config: crate::audio::engine_config(&profile, !is_demo),
+            config: crate::audio::engine_config(&profile, microphone && !is_demo),
         })
     }
 
@@ -1280,6 +1297,10 @@ mod tests {
             output_devices: vec!["simulation".to_owned()],
             spi_speed_hz: None,
             audio_device: None,
+            spotify_ws_uri: "127.0.0.1:9090".to_owned(),
+            spotify_provider_enabled: false,
+            bluetooth_max_inputs: 1,
+            bluetooth_max_outputs: 1,
             secure_cookie: false,
             static_dir: None,
             settings_file: std::path::PathBuf::new(),

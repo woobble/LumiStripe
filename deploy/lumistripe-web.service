@@ -17,7 +17,9 @@ WorkingDirectory=@LUMI_PROJECT_DIR@
 # Keep the toolchains available when systemd starts without a login shell.
 Environment=PATH=@LUMI_HOME@/.bun/bin:@LUMI_HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=PYTHONUNBUFFERED=1
+Environment=HOME=@LUMI_HOME@
 Environment=LUMI_PROJECT_DIR=@LUMI_PROJECT_DIR@
+Environment=LUMI_PYTHON_VERSION=@LUMI_PYTHON_VERSION@
 Environment=LUMI_UPDATE_STATE_FILE=/var/lib/lumistripe/update/status.json
 # System services do not inherit the user's PipeWire runtime environment.
 # PortAudio's Pulse/ALSA bridge needs this socket to capture the Bluetooth
@@ -38,8 +40,9 @@ ProtectHostname=yes
 # current UI, manifest, and service worker from its static directory.
 # ExecStartPre=/bin/bash -c 'cd "@LUMI_PROJECT_DIR@/apps/lumistripe-web/frontend" && bun run build'
 
-# Match the installer-selected interpreter and production dependency profile.
-ExecStart=/bin/bash -c 'exec "@LUMI_HOME@/.local/bin/uv" run --python "@LUMI_PYTHON_VERSION@" --no-dev --extra hardware-gain lumistripe-web --host 127.0.0.1 --hardware'
+# LUMI_WEB_BACKEND=python remains the safe default and rollback path. Set it
+# to rust only after building both release binaries as the service account.
+ExecStart=/bin/bash "@LUMI_PROJECT_DIR@/deploy/lumistripe-web-launcher.sh"
 
 Restart=on-failure
 RestartSec=3

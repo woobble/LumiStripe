@@ -1,0 +1,74 @@
+[
+  {
+    "name": "unsupported",
+    "status": {
+      "supported": false,
+      "installed_commit": null,
+      "available_commit": null,
+      "update_available": false,
+      "working_tree_dirty": false,
+      "checked_at": null,
+      "check_error": null,
+      "install_state": "idle",
+      "install_started_at": null,
+      "install_finished_at": null,
+      "install_error": null
+    },
+    "status_code": 409,
+    "detail": "The system updater is not installed."
+  },
+  {
+    "name": "already_running",
+    "status": {
+      "supported": true,
+      "installed_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "available_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "update_available": true,
+      "working_tree_dirty": false,
+      "checked_at": null,
+      "check_error": null,
+      "install_state": "running",
+      "install_started_at": null,
+      "install_finished_at": null,
+      "install_error": null
+    },
+    "status_code": 409,
+    "detail": "An update is already being installed."
+  },
+  {
+    "name": "dirty_checkout",
+    "status": {
+      "supported": true,
+      "installed_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "available_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "update_available": true,
+      "working_tree_dirty": true,
+      "checked_at": null,
+      "check_error": null,
+      "install_state": "idle",
+      "install_started_at": null,
+      "install_finished_at": null,
+      "install_error": null
+    },
+    "status_code": 409,
+    "detail": "The project checkout has local changes and cannot be updated."
+  },
+  {
+    "name": "no_update",
+    "status": {
+      "supported": true,
+      "installed_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "available_commit": null,
+      "update_available": false,
+      "working_tree_dirty": false,
+      "checked_at": null,
+      "check_error": null,
+      "install_state": "idle",
+      "install_started_at": null,
+      "install_finished_at": null,
+      "install_error": null
+    },
+    "status_code": 409,
+    "detail": "There is no update ready to install."
+  }
+]

@@ -5,9 +5,18 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+bluez = ["dep:bluer"]
+pipewire = ["dep:pipewire"]
+
 [[bin]]
 name = "lumistripe-web"
 path = "src/main.rs"
+
+[[bin]]
+name = "export-openapi"
+path = "src/bin/export_openapi.rs"
 
 [dependencies]
 axum.workspace = true
@@ -27,13 +36,20 @@ subtle.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-tungstenite.workspace = true
 tokio-util.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true
+utoipa.workspace = true
+utoipa-axum.workspace = true
+uuid.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+bluer = { workspace = true, features = ["bluetoothd"], optional = true }
+pipewire = { workspace = true, optional = true }
 
 [dev-dependencies]
 http-body-util.workspace = true
-tokio-tungstenite.workspace = true
 tower.workspace = true

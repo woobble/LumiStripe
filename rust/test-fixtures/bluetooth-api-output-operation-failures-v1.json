@@ -1,0 +1,20 @@
+[
+  {
+    "method": "PUT",
+    "path": "/api/audio/output/volume",
+    "body": {"selector": "speaker_main", "volume": 0.42},
+    "operation": "set_volume",
+    "arguments": ["speaker_main", 0.42],
+    "status": 409,
+    "error": "PipeWire volume change was rejected"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/audio/output/mute",
+    "body": {"selector": "speaker_main", "muted": true},
+    "operation": "set_mute",
+    "arguments": ["speaker_main", true],
+    "status": 409,
+    "error": "PipeWire mute change was rejected"
+  }
+]
