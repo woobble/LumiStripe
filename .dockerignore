@@ -33,6 +33,7 @@
 !apps/lumistripe-web/tests/*.rs
 !apps/lumistripe-web/frontend/
 !apps/lumistripe-web/frontend/**
+apps/lumistripe-web/frontend/.env*
 apps/lumistripe-web/frontend/node_modules/
 apps/lumistripe-web/frontend/dist/
 apps/lumistripe-web/static/

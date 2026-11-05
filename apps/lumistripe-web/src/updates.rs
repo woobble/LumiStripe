@@ -23,10 +23,16 @@ const MAX_STATUS_BYTES: u64 = 64 * 1024;
 const MAX_GIT_OUTPUT_BYTES: usize = 1024 * 1024;
 const UPDATE_TRIGGER: &str = "/usr/local/sbin/lumistripe-update-trigger";
 const GIT: &str = "/usr/bin/git";
+const CURL: &str = "/usr/bin/curl";
 const UPDATE_REMOTE_URL: &str = "https://github.com/woobble/LumiStripe.git";
 const UPDATE_BRANCH_REF: &str = "refs/heads/main";
+const GITHUB_API_ROOT: &str = "https://api.github.com/repos/woobble/LumiStripe";
+const RELEASE_TAG_PREFIX: &str = "build-";
+const RELEASE_ARCHIVE_PREFIX: &str = "lumistripe-linux-aarch64-";
+const RELEASE_ARCHIVE_SUFFIX: &str = ".tar.gz";
 const UPDATE_LOCK_FILE: &str = "/run/lumistripe-update/update.lock";
 const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_secs(25);
+const MAX_CURL_OUTPUT_BYTES: usize = 1024 * 1024;
 #[cfg(unix)]
 const LOCK_EXCLUSIVE_NONBLOCKING: libc::c_int = libc::LOCK_EX | libc::LOCK_NB;
 #[cfg(not(unix))]
@@ -46,6 +52,18 @@ pub(crate) enum InstallState {
     Failed,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ReleaseStatus {
+    #[default]
+    Unknown,
+    Available,
+    Building,
+    Failed,
+    Unavailable,
+    Unsupported,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, utoipa::ToSchema)]
 pub(crate) struct UpdateStatus {
     #[schema(required = true)]
@@ -56,6 +74,9 @@ pub(crate) struct UpdateStatus {
     pub available_commit: Option<String>,
     #[schema(required = true)]
     pub update_available: bool,
+    #[serde(default)]
+    #[schema(required = true)]
+    pub release_status: ReleaseStatus,
     #[schema(required = true)]
     pub working_tree_dirty: bool,
     #[schema(required = true, format = DateTime)]
@@ -111,6 +132,8 @@ pub(crate) struct SystemUpdateService {
     update_lock_file: PathBuf,
     sudo_path: PathBuf,
     update_trigger_path: PathBuf,
+    curl_path: PathBuf,
+    binary_target_supported: bool,
     install_timeout: Duration,
     check_timeout: Duration,
     cancellation: CancellationToken,
@@ -145,6 +168,8 @@ impl Default for SystemUpdateService {
             update_lock_file: PathBuf::from(UPDATE_LOCK_FILE),
             sudo_path: PathBuf::from("/usr/bin/sudo"),
             update_trigger_path: PathBuf::from(UPDATE_TRIGGER),
+            curl_path: PathBuf::from(CURL),
+            binary_target_supported: binary_target_supported(),
             install_timeout: Duration::from_secs(5),
             check_timeout: UPDATE_CHECK_TIMEOUT,
             cancellation: CancellationToken::new(),
@@ -187,6 +212,8 @@ impl SystemUpdateService {
             update_lock_file: PathBuf::from(UPDATE_LOCK_FILE),
             sudo_path,
             update_trigger_path,
+            curl_path: PathBuf::from(CURL),
+            binary_target_supported: binary_target_supported(),
             install_timeout,
             check_timeout,
             cancellation: CancellationToken::new(),
@@ -258,12 +285,13 @@ impl SystemUpdateService {
         let checked_at = crate::system_stats::utc_timestamp(SystemTime::now());
         let result = self.read_remote_status().await;
         match result {
-            Ok((installed_commit, available_commit, working_tree_dirty)) => {
+            Ok((installed_commit, available_commit, working_tree_dirty, release_status)) => {
                 status.supported = true;
                 status.installed_commit = Some(installed_commit.clone());
                 status.available_commit =
                     (available_commit != installed_commit).then_some(available_commit);
                 status.update_available = status.available_commit.is_some();
+                status.release_status = release_status;
                 status.working_tree_dirty = working_tree_dirty;
                 status.checked_at = Some(checked_at);
                 status.check_error = None;
@@ -271,6 +299,7 @@ impl SystemUpdateService {
             Err(()) => {
                 status.supported = true;
                 status.checked_at = Some(checked_at);
+                status.release_status = ReleaseStatus::Unknown;
                 status.check_error =
                     Some("Could not reach GitHub. The next check will retry.".to_owned());
             }
@@ -278,7 +307,7 @@ impl SystemUpdateService {
         self.write_status(&status)
     }
 
-    async fn read_remote_status(&self) -> Result<(String, String, bool), ()> {
+    async fn read_remote_status(&self) -> Result<(String, String, bool, ReleaseStatus), ()> {
         let installed_commit = self.git_output(&["rev-parse", "HEAD"]).await?;
         let remote = self
             .git_output(&[
@@ -300,7 +329,224 @@ impl SystemUpdateService {
             .git_output(&["status", "--porcelain"])
             .await?
             .is_empty();
-        Ok((installed_commit, available_commit.to_owned(), dirty))
+        let release_status = if available_commit == installed_commit {
+            ReleaseStatus::Available
+        } else {
+            self.read_release_status(available_commit).await?
+        };
+        Ok((
+            installed_commit,
+            available_commit.to_owned(),
+            dirty,
+            release_status,
+        ))
+    }
+
+    async fn read_release_status(&self, commit: &str) -> Result<ReleaseStatus, ()> {
+        if !self.binary_target_supported {
+            return Ok(ReleaseStatus::Unsupported);
+        }
+        let tag = format!("{RELEASE_TAG_PREFIX}{commit}");
+        let release_url = format!("{GITHUB_API_ROOT}/releases/tags/{tag}");
+        let (http_status, body) = self.curl_output(&release_url).await?;
+        if http_status == 404 {
+            return self.read_workflow_status(commit).await;
+        }
+        if http_status != 200 {
+            return Err(());
+        }
+        let release: Value = serde_json::from_slice(&body).map_err(|_| ())?;
+        if release.get("tag_name").and_then(Value::as_str) != Some(tag.as_str())
+            || release.get("draft").and_then(Value::as_bool) != Some(false)
+            || release.get("prerelease").and_then(Value::as_bool) != Some(false)
+            || release.get("immutable").and_then(Value::as_bool) != Some(true)
+        {
+            return Ok(ReleaseStatus::Failed);
+        }
+        let archive_name = format!("{RELEASE_ARCHIVE_PREFIX}{commit}{RELEASE_ARCHIVE_SUFFIX}");
+        let manifest_name = format!("{archive_name}.manifest.json");
+        let Some(assets) = release.get("assets").and_then(Value::as_array) else {
+            return Ok(ReleaseStatus::Failed);
+        };
+        let mut manifest_url = None;
+        let checksum_name = format!("{archive_name}.sha256");
+        let attestation_name = format!("{archive_name}.sigstore.json");
+        let mut required = [
+            archive_name.as_str(),
+            manifest_name.as_str(),
+            checksum_name.as_str(),
+            attestation_name.as_str(),
+        ]
+        .into_iter()
+        .collect::<std::collections::HashSet<_>>();
+        for asset in assets {
+            let Some(name) = asset.get("name").and_then(Value::as_str) else {
+                return Ok(ReleaseStatus::Failed);
+            };
+            required.remove(name);
+            if [
+                archive_name.as_str(),
+                manifest_name.as_str(),
+                checksum_name.as_str(),
+                attestation_name.as_str(),
+            ]
+            .contains(&name)
+                && !asset
+                    .get("digest")
+                    .and_then(Value::as_str)
+                    .is_some_and(|digest| {
+                        digest.len() == 71
+                            && digest.starts_with("sha256:")
+                            && digest[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
+                    })
+            {
+                return Ok(ReleaseStatus::Failed);
+            }
+            if name == manifest_name {
+                manifest_url = asset
+                    .get("browser_download_url")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+            }
+        }
+        if !required.is_empty() {
+            return Ok(ReleaseStatus::Failed);
+        }
+        let Some(manifest_url) = manifest_url else {
+            return Ok(ReleaseStatus::Failed);
+        };
+        let expected_prefix = format!(
+            "https://github.com/woobble/LumiStripe/releases/download/{tag}/{manifest_name}"
+        );
+        if manifest_url != expected_prefix {
+            return Ok(ReleaseStatus::Failed);
+        }
+        let (manifest_status, manifest_body) = self.curl_output(&manifest_url).await?;
+        if manifest_status != 200 {
+            return Ok(ReleaseStatus::Failed);
+        }
+        let manifest: Value = serde_json::from_slice(&manifest_body).map_err(|_| ())?;
+        let target_matches = manifest
+            .get("target")
+            .and_then(Value::as_object)
+            .and_then(|target| target.get("triple"))
+            .and_then(Value::as_str)
+            == Some("aarch64-unknown-linux-gnu");
+        let runtime_matches = manifest
+            .get("runtime_abi")
+            .and_then(Value::as_object)
+            .and_then(|runtime| runtime.get("distribution"))
+            .and_then(Value::as_str)
+            == Some("debian-trixie");
+        if manifest.get("source_commit").and_then(Value::as_str) != Some(commit)
+            || !target_matches
+            || !runtime_matches
+        {
+            return Ok(ReleaseStatus::Failed);
+        }
+        Ok(ReleaseStatus::Available)
+    }
+
+    async fn read_workflow_status(&self, commit: &str) -> Result<ReleaseStatus, ()> {
+        let url = format!(
+            "{GITHUB_API_ROOT}/actions/workflows/ci.yml/runs?head_sha={commit}&per_page=10"
+        );
+        let (http_status, body) = self.curl_output(&url).await?;
+        if http_status != 200 {
+            return Ok(ReleaseStatus::Unavailable);
+        }
+        let runs: Value = serde_json::from_slice(&body).map_err(|_| ())?;
+        let Some(workflow_runs) = runs.get("workflow_runs").and_then(Value::as_array) else {
+            return Ok(ReleaseStatus::Unavailable);
+        };
+        let Some(run) = workflow_runs
+            .iter()
+            .find(|run| run.get("head_sha").and_then(Value::as_str) == Some(commit))
+        else {
+            return Ok(ReleaseStatus::Unavailable);
+        };
+        match run.get("status").and_then(Value::as_str) {
+            Some("queued" | "in_progress" | "waiting" | "requested" | "pending") => {
+                Ok(ReleaseStatus::Building)
+            }
+            Some("completed") => match run.get("conclusion").and_then(Value::as_str) {
+                Some("success") => Ok(ReleaseStatus::Unavailable),
+                Some("failure" | "cancelled" | "timed_out" | "action_required") => {
+                    Ok(ReleaseStatus::Failed)
+                }
+                _ => Ok(ReleaseStatus::Unavailable),
+            },
+            _ => Ok(ReleaseStatus::Unavailable),
+        }
+    }
+
+    async fn curl_output(&self, url: &str) -> Result<(u16, Vec<u8>), ()> {
+        let mut command = Command::new(&self.curl_path);
+        let maximum_output_bytes = MAX_CURL_OUTPUT_BYTES.to_string();
+        command
+            .args([
+                "--disable",
+                "--silent",
+                "--show-error",
+                "--location",
+                "--max-time",
+                "10",
+                "--max-filesize",
+                maximum_output_bytes.as_str(),
+                "--header",
+                "Accept: application/vnd.github+json",
+                "--header",
+                "X-GitHub-Api-Version: 2022-11-28",
+                "--proto",
+                "=https",
+                "--proto-redir",
+                "=https",
+                "--write-out",
+                "\\n%{http_code}",
+                url,
+            ])
+            .env_clear()
+            .env(
+                "HOME",
+                std::env::var_os("HOME").unwrap_or_else(|| "/".into()),
+            )
+            .env("PATH", "/usr/bin:/bin")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let mut child = command.spawn().map_err(|_| ())?;
+        let mut stdout = child.stdout.take().ok_or(())?;
+        timeout(self.check_timeout, async move {
+            let mut output = Vec::with_capacity(4096);
+            let mut buffer = [0_u8; 8192];
+            loop {
+                let count = stdout.read(&mut buffer).await.map_err(|_| ())?;
+                if count == 0 {
+                    break;
+                }
+                if output.len().saturating_add(count) > MAX_CURL_OUTPUT_BYTES + 16 {
+                    let _ = child.kill().await;
+                    let _ = child.wait().await;
+                    return Err(());
+                }
+                output.extend_from_slice(&buffer[..count]);
+            }
+            let status = child.wait().await.map_err(|_| ())?;
+            if !status.success() {
+                return Err(());
+            }
+            let split = output.iter().rposition(|byte| *byte == b'\n').ok_or(())?;
+            let http_status = std::str::from_utf8(&output[split + 1..])
+                .map_err(|_| ())?
+                .trim()
+                .parse::<u16>()
+                .map_err(|_| ())?;
+            output.truncate(split);
+            Ok((http_status, output))
+        })
+        .await
+        .map_err(|_| ())?
     }
 
     async fn git_output(&self, arguments: &[&str]) -> Result<String, ()> {
@@ -426,6 +672,12 @@ impl SystemUpdateService {
                 "There is no update ready to install.",
             ));
         }
+        if current.release_status != ReleaseStatus::Available {
+            return Err(UpdateError::new(
+                "artifact_not_ready",
+                "The matching binary release is not ready to install yet.",
+            ));
+        }
 
         let mut command = Command::new(&self.sudo_path);
         command
@@ -465,6 +717,25 @@ impl SystemUpdateService {
     }
 }
 
+fn binary_target_supported() -> bool {
+    if !cfg!(target_arch = "aarch64") {
+        return false;
+    }
+    let Ok(contents) = fs::read_to_string("/etc/os-release") else {
+        return false;
+    };
+    let mut id = "";
+    let mut codename = "";
+    for line in contents.lines() {
+        if let Some(value) = line.strip_prefix("ID=") {
+            id = value.trim_matches(['"', '\'']);
+        } else if let Some(value) = line.strip_prefix("VERSION_CODENAME=") {
+            codename = value.trim_matches(['"', '\'']);
+        }
+    }
+    codename == "trixie" && matches!(id, "debian" | "raspbian")
+}
+
 fn try_file_lock(file: &File, operation: libc::c_int) -> io::Result<bool> {
     #[cfg(unix)]
     {
@@ -501,6 +772,7 @@ mod tests {
             installed_commit: Some("a".repeat(40)),
             available_commit: Some("b".repeat(40)),
             update_available: true,
+            release_status: super::ReleaseStatus::Available,
             working_tree_dirty: false,
             checked_at: Some("2026-01-02T03:04:05Z".to_owned()),
             check_error: None,
@@ -533,12 +805,75 @@ mod tests {
             install_timeout,
             Duration::from_secs(1),
         );
+        service.curl_path = temp.path().join("curl");
+        service.binary_target_supported = true;
         service.update_lock_file = temp.path().join("update.lock");
         service
     }
 
     fn shell_quote(path: &Path) -> String {
         format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
+    }
+
+    #[cfg(unix)]
+    fn write_curl_for_release(temp: &TempDir, commit: &str, immutable: bool) -> std::path::PathBuf {
+        let archive_name = format!("lumistripe-linux-aarch64-{commit}.tar.gz");
+        let manifest_name = format!("{archive_name}.manifest.json");
+        let assets = [
+            archive_name.clone(),
+            format!("{archive_name}.sha256"),
+            format!("{archive_name}.sigstore.json"),
+            manifest_name.clone(),
+        ];
+        let manifest_path = temp.path().join("release-manifest.json");
+        fs::write(
+            &manifest_path,
+            json!({
+                "source_commit": commit,
+                "target": { "triple": "aarch64-unknown-linux-gnu" },
+                "runtime_abi": { "distribution": "debian-trixie" }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let release_path = temp.path().join("release-api.json");
+        let asset_values = assets
+            .iter()
+            .map(|name| {
+                let mut asset = json!({
+                    "name": name,
+                    "digest": format!("sha256:{}", "a".repeat(64))
+                });
+                if name == &manifest_name {
+                    asset["browser_download_url"] = json!(format!(
+                        "https://github.com/woobble/LumiStripe/releases/download/build-{commit}/{manifest_name}"
+                    ));
+                }
+                asset
+            })
+            .collect::<Vec<_>>();
+        fs::write(
+            &release_path,
+            json!({
+                "tag_name": format!("build-{commit}"),
+                "draft": false,
+                "prerelease": false,
+                "immutable": immutable,
+                "assets": asset_values
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let curl_path = temp.path().join("curl");
+        write_executable(
+            &curl_path,
+            &format!(
+                "case \"$*\" in\n  *'/releases/tags/'*) cat {} ;;\n  *'.manifest.json'*) cat {} ;;\n  *) exit 9 ;;\nesac\nprintf '\\n200'",
+                shell_quote(&release_path),
+                shell_quote(&manifest_path),
+            ),
+        );
+        curl_path
     }
 
     #[cfg(unix)]
@@ -587,6 +922,7 @@ mod tests {
             status.installed_commit.as_deref(),
             Some(expected_commit.as_str())
         );
+        assert_eq!(status.release_status, super::ReleaseStatus::Unknown);
 
         fs::write(&state_file, b"not-json").unwrap();
         assert!(!service.status().supported);
@@ -648,6 +984,7 @@ mod tests {
             ),
         );
         let missing = temp.path().join("unused-command");
+        write_curl_for_release(&temp, &available_commit, true);
         let service = test_service(
             &temp,
             &state_file,
@@ -679,8 +1016,32 @@ mod tests {
             Some(available_commit.as_str())
         );
         assert!(refreshed.update_available);
+        assert_eq!(refreshed.release_status, super::ReleaseStatus::Available);
         assert!(refreshed.working_tree_dirty);
         assert!(refreshed.check_error.is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mutable_release_is_not_reported_as_installable() {
+        let temp = TempDir::new().unwrap();
+        let commit = "b".repeat(40);
+        let git_path = temp.path().join("git");
+        let missing = temp.path().join("unused-command");
+        write_curl_for_release(&temp, &commit, false);
+        let service = test_service(
+            &temp,
+            &temp.path().join("update/status.json"),
+            &git_path,
+            &missing,
+            &missing,
+            Duration::from_secs(1),
+        );
+
+        assert_eq!(
+            service.read_release_status(&commit).await.unwrap(),
+            super::ReleaseStatus::Failed
+        );
     }
 
     #[tokio::test]
@@ -712,6 +1073,69 @@ mod tests {
             service.status().check_error.as_deref(),
             Some("Could not reach GitHub. The next check will retry.")
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn check_reports_a_building_release_without_allowing_installation() {
+        let temp = TempDir::new().unwrap();
+        let state_file = temp.path().join("update/status.json");
+        let mut current = supported_status();
+        current.checked_at = Some("2026-01-02T03:04:05Z".to_owned());
+        write_status(&state_file, &current);
+
+        let installed_commit = "a".repeat(40);
+        let available_commit = "b".repeat(40);
+        let git_path = temp.path().join("git");
+        write_executable(
+            &git_path,
+            &format!(
+                "case \"$3\" in\n  rev-parse) printf '%s\\n' '{installed_commit}' ;;\n  ls-remote) printf '{available_commit}\\trefs/heads/main\\n' ;;\n  status) : ;;\n  *) exit 9 ;;\nesac"
+            ),
+        );
+        let workflow_path = temp.path().join("workflow-api.json");
+        fs::write(
+            &workflow_path,
+            json!({
+                "workflow_runs": [{
+                    "head_sha": available_commit,
+                    "status": "in_progress",
+                    "conclusion": null
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let curl_path = temp.path().join("curl");
+        write_executable(
+            &curl_path,
+            &format!(
+                "case \"$*\" in\n  *'/releases/tags/'*) printf '\\n404' ;;\n  *'/actions/workflows/'*) cat {} ; printf '\\n200' ;;\n  *) exit 9 ;;\nesac",
+                shell_quote(&workflow_path),
+            ),
+        );
+        let missing = temp.path().join("unused-command");
+        let mut service = test_service(
+            &temp,
+            &state_file,
+            &git_path,
+            &missing,
+            &missing,
+            Duration::from_secs(1),
+        );
+        service.curl_path = curl_path;
+
+        service.check().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while service.status().checked_at.as_deref() == Some("2026-01-02T03:04:05Z") {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the workflow check should refresh the release state");
+        let refreshed = service.status();
+        assert_eq!(refreshed.release_status, super::ReleaseStatus::Building);
+        assert!(refreshed.update_available);
     }
 
     #[cfg(unix)]
@@ -825,6 +1249,14 @@ mod tests {
         assert_eq!(service.install().await.unwrap_err().code, "dirty_checkout");
 
         current.working_tree_dirty = false;
+        current.release_status = super::ReleaseStatus::Building;
+        write_status(&state_file, &current);
+        assert_eq!(
+            service.install().await.unwrap_err().code,
+            "artifact_not_ready"
+        );
+
+        current.release_status = super::ReleaseStatus::Available;
         current.update_available = false;
         write_status(&state_file, &current);
         assert_eq!(service.install().await.unwrap_err().code, "no_update");

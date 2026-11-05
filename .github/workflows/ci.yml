@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   deployment-tests:
@@ -407,3 +407,119 @@ jobs:
             printf 'Live Wi-Fi scan skipped: wlan0, NetworkManager, or the restricted wrapper is unavailable.\n' \
               >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  publish-arm64-release:
+    name: Publish verified ARM64 release
+    if: >-
+      ${{
+        github.repository == 'woobble/LumiStripe' &&
+        github.ref == 'refs/heads/main' &&
+        (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      }}
+    needs: [deployment-tests, frontend, rust-engine, rust-engine-arm64]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Check out the source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify release source commit
+        run: |
+          set -eu
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(uname -m)" = aarch64
+          if git ls-remote --exit-code --tags origin "refs/tags/build-$GITHUB_SHA" >/dev/null 2>&1; then
+            echo "A release tag already exists for $GITHUB_SHA; refusing to replace it." >&2
+            exit 1
+          fi
+
+      - name: Build ARM64 binaries and frontend in Debian Trixie
+        run: |
+          set -eu
+          docker buildx build \
+            --platform linux/arm64 \
+            --file deploy/docker/Dockerfile \
+            --target release-output \
+            --build-arg "BUN_VERSION=$(cat .bun-version)" \
+            --build-arg "LUMI_RELEASE_COMMIT=$GITHUB_SHA" \
+            --output "type=local,dest=$RUNNER_TEMP/lumistripe-release" \
+            .
+          test -x "$RUNNER_TEMP/lumistripe-release/release/lumistripe-web"
+          test -x "$RUNNER_TEMP/lumistripe-release/release/lumistripe-engine"
+          test -x "$RUNNER_TEMP/lumistripe-release/release/lumistripe"
+          test -x "$RUNNER_TEMP/lumistripe-release/release/lumistripe-deploy-helper"
+          test "$(cat "$RUNNER_TEMP/lumistripe-release/release/source-commit")" = "$GITHUB_SHA"
+          test -s "$RUNNER_TEMP/lumistripe-release/release/static/index.html"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: false
+          python-version: "3.12"
+          version: "0.13.5"
+
+      - name: Package deterministic release archive and manifest
+        run: |
+          set -eu
+          release_dir="$RUNNER_TEMP/lumistripe-release/release"
+          archive_name="lumistripe-linux-aarch64-$GITHUB_SHA.tar.gz"
+          archive="$RUNNER_TEMP/$archive_name"
+          uv run --no-project --python 3.12 python deploy/release_artifact.py package \
+            --release-dir "$release_dir" \
+            --output "$archive" \
+            --commit "$GITHUB_SHA" \
+            --project-root "$GITHUB_WORKSPACE" \
+            --build-info "$RUNNER_TEMP/lumistripe-release/release-build-info.json"
+          cp "$release_dir/manifest.json" "$archive.manifest.json"
+          (cd "$RUNNER_TEMP" && sha256sum "$archive_name" > "$archive_name.sha256")
+          echo "LUMI_RELEASE_ARCHIVE=$archive" >> "$GITHUB_ENV"
+
+      - name: Attest release archive provenance
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ env.LUMI_RELEASE_ARCHIVE }}
+
+      - name: Verify provenance and publish immutable GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          archive="$LUMI_RELEASE_ARCHIVE"
+          archive_name="${archive##*/}"
+          checksum="$archive.sha256"
+          manifest="$archive.manifest.json"
+          bundle="${archive}.sigstore.json"
+          cp "${{ steps.attest.outputs.bundle-path }}" "$bundle"
+          gh attestation verify "$archive" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/ci.yml" \
+            --source-digest "$GITHUB_SHA" \
+            --deny-self-hosted-runners \
+            --bundle "$bundle"
+
+          tag="build-$GITHUB_SHA"
+          gh release create "$tag" \
+            --draft \
+            --target "$GITHUB_SHA" \
+            --title "LumiStripe $GITHUB_SHA" \
+            --notes "Commit-matched ARM64 Debian Trixie deployment bundle." \
+            "$archive" "$checksum" "$bundle" "$manifest"
+
+          expected_assets="$(printf '%s\n' "$archive_name" "$archive_name.sha256" "$archive_name.sigstore.json" "$archive_name.manifest.json" | jq -R . | jq -s 'sort')"
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isImmutable,assets \
+            | jq -e --arg tag "$tag" --argjson assets "$expected_assets" \
+              'select(.tagName == $tag and .isDraft == true and ([.assets[].name] | sort == $assets))' \
+            >/dev/null
+          gh release edit "$tag" --draft=false --repo "$GITHUB_REPOSITORY"
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isImmutable \
+            | jq -e --arg tag "$tag" \
+              'select(.tagName == $tag and .isDraft == false and .isImmutable == true)' \
+            >/dev/null

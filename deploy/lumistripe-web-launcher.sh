@@ -37,7 +37,11 @@ done
 # Pin the web process to this release. The standalone engine binary remains in
 # the release for the CLI and other IPC clients; the web runtime embeds it.
 WEB_BIN="$RUST_DEPLOY_RELEASE/lumistripe-web"
-STATIC_DIR="$PROJECT_DIR/apps/lumistripe-web/static"
+STATIC_DIR="$RUST_DEPLOY_RELEASE/static"
+if [[ ! -s "$STATIC_DIR/index.html" || ! -d "$STATIC_DIR/assets" ]]; then
+  echo "Rust release $PROJECT_COMMIT is missing its commit-matched frontend assets: $STATIC_DIR" >&2
+  exit 127
+fi
 SETTINGS_FILE="${LUMISTRIPE_SETTINGS_FILE:-${HOME:?HOME must be set}/.config/lumistripe/settings.json}"
 OUTPUT_BACKEND="${LUMI_RUST_OUTPUT_BACKEND:-spi}"
 

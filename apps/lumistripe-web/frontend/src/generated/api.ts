@@ -1625,6 +1625,8 @@ export interface components {
             output_id: string;
         };
         /** @enum {string} */
+        ReleaseStatus: "unknown" | "available" | "building" | "failed" | "unavailable" | "unsupported";
+        /** @enum {string} */
         RuntimeKind: "simulation" | "hardware";
         SequenceActiveRequest: {
             sequence_id: string | null;
@@ -1999,6 +2001,7 @@ export interface components {
             install_started_at: string | null;
             install_state: components["schemas"]["InstallState"];
             installed_commit: string | null;
+            release_status: components["schemas"]["ReleaseStatus"];
             supported: boolean;
             update_available: boolean;
             working_tree_dirty: boolean;

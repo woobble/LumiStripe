@@ -623,6 +623,7 @@ const updateStatusSchema = z.object({
   installed_commit: z.string().nullable(),
   available_commit: z.string().nullable(),
   update_available: z.boolean(),
+  release_status: z.enum(["unknown", "available", "building", "failed", "unavailable", "unsupported"]),
   working_tree_dirty: z.boolean(),
   checked_at: z.string().nullable(),
   check_error: z.string().nullable(),

@@ -3,6 +3,21 @@
 # Shared systemd updater installation for install.sh and update.sh.
 UPDATE_LIBEXEC_DIR=/usr/local/libexec/lumistripe/deploy
 NETWORK_LIBEXEC_DIR=/usr/local/libexec/lumistripe/network
+RELEASE_CACHE_DIR=/var/cache/lumistripe/releases
+
+release_artifact_tool() {
+  if [[ -f "$UPDATE_LIBEXEC_DIR/release_artifact.py" && ! -L "$UPDATE_LIBEXEC_DIR/release_artifact.py" ]]; then
+    printf '%s\n' "$UPDATE_LIBEXEC_DIR/release_artifact.py"
+  else
+    printf '%s\n' "$PROJECT_DIR/deploy/release_artifact.py"
+  fi
+}
+
+may_fallback_to_source() {
+  local mode="${1:-}"
+  local status="${2:-}"
+  [[ "$mode" == auto && ( "$status" == 10 || "$status" == 11 ) ]]
+}
 
 canonical_project_directory() {
   local candidate="${1:-}"
@@ -26,7 +41,7 @@ canonical_project_directory() {
   printf '%s\n' "$canonical"
 }
 
-validate_rust_release() {
+validate_rust_release_binaries() {
   local releases_dir="${1:-}"
   local commit="${2:-}"
   local release_dir="$releases_dir/$commit"
@@ -48,6 +63,83 @@ validate_rust_release() {
       return 1
     }
   done
+}
+
+validate_rust_release() {
+  local releases_dir="${1:-}"
+  local commit="${2:-}"
+  local release_dir="$releases_dir/$commit"
+  local tool
+  [[ "$commit" =~ ^[0-9a-f]{40}$ && -d "$release_dir" && ! -L "$release_dir" ]] || {
+    echo "Rust deployment release has an invalid commit directory: $release_dir" >&2
+    return 1
+  }
+  tool="$(release_artifact_tool)" || return 1
+  python3 "$tool" validate --release-dir "$release_dir" --commit "$commit" || return 1
+}
+
+activate_rust_release() {
+  local commit="${1:-}"
+  local deploy_root="$PROJECT_DIR/target/rust-deploy"
+  local temporary="$deploy_root/.current.$$.tmp"
+  validate_rust_release "$deploy_root/releases" "$commit" || return 1
+  ln -s "releases/$commit" "$temporary" || return 1
+  mv -Tf -- "$temporary" "$deploy_root/current"
+}
+
+ensure_current_release_static() {
+  local deploy_root="$PROJECT_DIR/target/rust-deploy"
+  local current="$deploy_root/current"
+  local release_dir
+  local commit
+  local checkout_commit
+  local tool
+  local project_user="${PROJECT_USER:-${SERVICE_USER:-}}"
+
+  [[ -L "$current" ]] || return 0
+  release_dir="$(readlink -f -- "$current" 2>/dev/null || true)"
+  case "$release_dir" in
+    "$deploy_root/releases"/*) ;;
+    *)
+      echo "The Rust release pointer is outside its expected directory." >&2
+      return 1
+      ;;
+  esac
+  commit="${release_dir##*/}"
+  [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || {
+    echo "The current Rust release directory has an invalid commit name." >&2
+    return 1
+  }
+  if [[ -s "$release_dir/static/index.html" ]]; then
+    validate_rust_release "$deploy_root/releases" "$commit"
+    return $?
+  fi
+  if [[ -e "$release_dir/static" || -L "$release_dir/static" ]]; then
+    echo "The current Rust release has an incomplete frontend directory; refusing to overwrite it." >&2
+    return 1
+  fi
+  checkout_commit="$(git -C "$PROJECT_DIR" rev-parse --verify HEAD 2>/dev/null)" || return 1
+  [[ "$checkout_commit" == "$commit" ]] || {
+    echo "Cannot migrate the legacy frontend because the checkout and active release commits differ." >&2
+    return 1
+  }
+  [[ -s "$PROJECT_DIR/apps/lumistripe-web/static/index.html" ]] || {
+    echo "The legacy frontend output is missing; preserving the active Rust release without changing it." >&2
+    return 1
+  }
+  tool="$(release_artifact_tool)" || return 1
+  if declare -F as_user >/dev/null 2>&1 && [[ -n "$project_user" ]]; then
+    as_user python3 "$tool" migrate-legacy-static \
+      --release-dir "$release_dir" \
+      --static-dir "$PROJECT_DIR/apps/lumistripe-web/static" \
+      --commit "$commit" --project-root "$PROJECT_DIR"
+  else
+    python3 "$tool" migrate-legacy-static \
+      --release-dir "$release_dir" \
+      --static-dir "$PROJECT_DIR/apps/lumistripe-web/static" \
+      --commit "$commit" --project-root "$PROJECT_DIR"
+  fi
+  validate_rust_release "$deploy_root/releases" "$commit"
 }
 
 validate_legacy_rust_deploy_root() {
@@ -96,7 +188,7 @@ validate_legacy_rust_deploy_root() {
         echo "Legacy Rust release has an invalid directory name: $entry" >&2
         return 1
       }
-      validate_rust_release "$releases_dir" "$name" || return 1
+      validate_rust_release_binaries "$releases_dir" "$name" || return 1
     done
   fi
 
@@ -109,7 +201,7 @@ validate_legacy_rust_deploy_root() {
         return 1
         ;;
     esac
-    validate_rust_release "$releases_dir" "$commit" || return 1
+    validate_rust_release_binaries "$releases_dir" "$commit" || return 1
   fi
 }
 
@@ -159,7 +251,7 @@ migrate_legacy_rust_deploy_root() {
             return 1
             ;;
         esac
-        validate_rust_release "$deploy_root/releases" "$release_commit" || return 1
+        validate_rust_release_binaries "$deploy_root/releases" "$release_commit" || return 1
       fi
       return 0
     fi
@@ -253,6 +345,8 @@ install_privileged_network_helper() {
   local checkout_commit
   local source_binary
   local temporary
+  local cached_stage=
+  local tool
 
   migrate_legacy_rust_deploy_root || return 1
 
@@ -274,6 +368,7 @@ install_privileged_network_helper() {
     return 1
   }
   source_commit="$(cat -- "$release_dir/source-commit")" || return 1
+  validate_rust_release "$deploy_root/releases" "$release_commit" || return 1
   checkout_commit="$(git -C "$PROJECT_DIR" rev-parse --verify HEAD 2>/dev/null)" || return 1
   source_binary="$release_dir/lumistripe-deploy-helper"
   if [[ ! "$release_commit" =~ ^[0-9a-f]{40}$ || "$source_commit" != "$release_commit" ||
@@ -285,11 +380,27 @@ install_privileged_network_helper() {
 
   install -d -o root -g root -m 755 "$NETWORK_LIBEXEC_DIR"
   temporary="$(mktemp "$NETWORK_LIBEXEC_DIR/.lumistripe-network-helper.XXXXXX")" || return 1
+  if [[ -d "$RELEASE_CACHE_DIR/$release_commit" ]]; then
+    tool="$(release_artifact_tool)" || return 1
+    cached_stage="$(mktemp -d /tmp/lumistripe-verified-helper.XXXXXX)" || return 1
+    if ! python3 "$tool" extract-binary \
+      --cache-dir "$RELEASE_CACHE_DIR/$release_commit" \
+      --commit "$release_commit" \
+      --binary lumistripe-deploy-helper \
+      --destination "$cached_stage/lumistripe-deploy-helper"; then
+      rm -f -- "$temporary"
+      rm -rf -- "$cached_stage"
+      return 1
+    fi
+    source_binary="$cached_stage/lumistripe-deploy-helper"
+  fi
   if ! install -o root -g root -m 755 "$source_binary" "$temporary" ||
      ! mv -fT -- "$temporary" "$NETWORK_LIBEXEC_DIR/lumistripe-network-helper"; then
     rm -f -- "$temporary"
+    [[ -z "$cached_stage" ]] || rm -rf -- "$cached_stage"
     return 1
   fi
+  [[ -z "$cached_stage" ]] || rm -rf -- "$cached_stage"
 }
 
 read_web_backend() {
@@ -398,6 +509,8 @@ install_update_support() {
   local home_replacement
   local project_replacement
   local template
+  local source_file
+  local destination_file
 
   command -v visudo >/dev/null 2>&1 || {
     echo "visudo is required to install the LumiStripe update permission." >&2
@@ -419,7 +532,8 @@ install_update_support() {
   rm -f -- "$NETWORK_LIBEXEC_DIR/lumistripe_network.py"
   for template in \
     update.sh update-support.sh tls.sh soloist.sh \
-    build-rust-backend.sh \
+    build-rust-backend.sh release_artifact.py install-github-cli.sh rust-toolchain.sh \
+    lumistripe-network lumistripe-network.sudoers \
     lumistripe-spotify-service.sudoers \
     90-lumistripe-bluetooth.conf 90-lumistripe-spotify.conf \
     lumistripe-spotify.env.example \
@@ -429,22 +543,32 @@ install_update_support() {
     lumistripe-update-trigger; do
     local mode=644
     case "$template" in
-      update.sh|build-rust-backend.sh|lumistripe-update-trigger) mode=755 ;;
+      update.sh|build-rust-backend.sh|release_artifact.py|install-github-cli.sh|lumistripe-network|lumistripe-update-trigger) mode=755 ;;
     esac
+    source_file="$SCRIPT_DIR/$template"
+    destination_file="$UPDATE_LIBEXEC_DIR/$template"
+    [[ -f "$source_file" ]] || {
+      rm -rf -- "$rendered_dir"
+      echo "Trusted deployment snapshot is missing $source_file." >&2
+      return 1
+    }
+    [[ "$source_file" == "$destination_file" ]] && continue
     install -o root -g root -m "$mode" \
-      "$PROJECT_DIR/deploy/$template" "$UPDATE_LIBEXEC_DIR/$template"
+      "$source_file" "$destination_file"
   done
 
   install -d -o root -g root -m 755 "$UPDATE_LIBEXEC_DIR/nginx"
-  install -o root -g root -m 644 \
-    "$PROJECT_DIR/deploy/nginx/led-controller.conf" "$UPDATE_LIBEXEC_DIR/nginx/led-controller.conf"
+  source_file="$SCRIPT_DIR/nginx/led-controller.conf"
+  destination_file="$UPDATE_LIBEXEC_DIR/nginx/led-controller.conf"
+  if [[ "$source_file" != "$destination_file" ]]; then
+    install -o root -g root -m 644 "$source_file" "$destination_file"
+  fi
 
   install -o root -g root -m 755 \
-    "$PROJECT_DIR/deploy/lumistripe-network" \
-    /usr/local/sbin/lumistripe-network
+    "$UPDATE_LIBEXEC_DIR/lumistripe-network" /usr/local/sbin/lumistripe-network
   sed \
     -e "s|@LUMI_SERVICE_USER@|$user_replacement|g" \
-    "$PROJECT_DIR/deploy/lumistripe-spotify-service.sudoers" \
+    "$UPDATE_LIBEXEC_DIR/lumistripe-spotify-service.sudoers" \
     > "$rendered_dir/lumistripe-spotify-service.sudoers"
   chmod 440 "$rendered_dir/lumistripe-spotify-service.sudoers"
   if ! visudo -cf "$rendered_dir/lumistripe-spotify-service.sudoers" >/dev/null; then
@@ -457,7 +581,7 @@ install_update_support() {
     /etc/sudoers.d/lumistripe-spotify-service
   sed \
     -e "s|@LUMI_SERVICE_USER@|$user_replacement|g" \
-    "$PROJECT_DIR/deploy/lumistripe-network.sudoers" \
+    "$UPDATE_LIBEXEC_DIR/lumistripe-network.sudoers" \
     > "$rendered_dir/lumistripe-network.sudoers"
   chmod 440 "$rendered_dir/lumistripe-network.sudoers"
   if ! visudo -cf "$rendered_dir/lumistripe-network.sudoers" >/dev/null; then
@@ -488,7 +612,7 @@ install_update_support() {
   migrate_spotify_device_name_override
 
   install -o root -g root -m 644 \
-    "$PROJECT_DIR/deploy/lumistripe-update-check.timer" \
+    "$UPDATE_LIBEXEC_DIR/lumistripe-update-check.timer" \
     /etc/systemd/system/lumistripe-update-check.timer
   install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 755 \
     /var/lib/lumistripe/update

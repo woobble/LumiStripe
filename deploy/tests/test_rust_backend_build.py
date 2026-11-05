@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ UPDATE_SUPPORT = Path(__file__).parents[1] / "update-support.sh"
 INSTALLER = Path(__file__).parents[1] / "install.sh"
 UPDATER = Path(__file__).parents[1] / "update.sh"
 ENV_TEMPLATE = Path(__file__).parents[1] / "lumistripe-web.env.example"
+RELEASE_ARTIFACT = Path(__file__).parents[1] / "release_artifact.py"
 
 
 def _git(project: Path, *arguments: str) -> str:
@@ -89,12 +91,25 @@ def _release(releases_dir: Path, commit: str, build_id: str) -> Path:
         binary = release / name
         binary.write_text(f"#!/bin/sh\nprintf '%s\\n' '{build_id}:{name}'\n", encoding="utf-8")
         binary.chmod(0o755)
+    static = release / "static"
+    (static / "assets").mkdir(parents=True)
+    (static / "index.html").write_text("release fixture\n", encoding="utf-8")
+    (static / "assets/app.js").write_text("fixture\n", encoding="utf-8")
+    subprocess.run(
+        [sys.executable, str(RELEASE_ARTIFACT), "seal-local", "--release-dir", str(release), "--commit", commit],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
     return release
 
 
 def _run_deploy_support(
     project: Path, function: str, *arguments: str
 ) -> subprocess.CompletedProcess[str]:
+    (project / "deploy").mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(RELEASE_ARTIFACT, project / "deploy/release_artifact.py")
     command = 'set -Eeuo pipefail; PROJECT_DIR="$1"; source "$2"; shift 2; ' + function + ' "$@"'
     return subprocess.run(
         ["bash", "-c", command, function, str(project), str(UPDATE_SUPPORT), *arguments],
@@ -233,6 +248,7 @@ def test_web_launcher_defaults_to_rust_and_requires_an_active_release(tmp_path: 
     (project / "deploy/update-support.sh").write_text(
         UPDATE_SUPPORT.read_text(encoding="utf-8"), encoding="utf-8"
     )
+    shutil.copyfile(RELEASE_ARTIFACT, project / "deploy/release_artifact.py")
     empty_path = tmp_path / "empty-path"
     empty_path.mkdir()
     for command in ("cat", "dirname"):
@@ -464,23 +480,90 @@ def test_installer_rejects_python_configuration_before_mutating_it(tmp_path: Pat
     assert "LUMI_WEB_BACKEND=" not in ENV_TEMPLATE.read_text(encoding="utf-8")
 
 
-def test_rust_install_and_update_profiles_skip_python_tooling(tmp_path: Path) -> None:
+def test_binary_install_profile_skips_local_build_toolchains() -> None:
     installer = INSTALLER.read_text(encoding="utf-8")
     updater = UPDATER.read_text(encoding="utf-8")
+    assert "python3-minimal" in installer
     for text in (installer, updater):
         assert "uv " not in text
-        assert "python3" not in text
         assert "LUMI_PYTHON_VERSION" not in text
         assert "submodule" not in text.lower()
     assert "sync_dependencies" not in updater
-    assert "build_frontend" in updater
-    assert "install_project_dependencies()" in installer
-    assert 'as_user "$BUN_BIN" install --frozen-lockfile' in installer
-    assert 'as_user "$BUN_BIN" run build' in installer
+    assert 'DEPLOY_MODE="${LUMI_DEPLOY_MODE:-binary}"' in installer
+    assert 'DEPLOY_MODE="${LUMI_DEPLOY_MODE:-binary}"' in updater
+    assert "install_release_verifier" in installer
+    assert "stage_prebuilt_release" in installer
+    assert "stage_prebuilt_release" in updater
+    assert 'if [[ "$EFFECTIVE_DEPLOY_MODE" == source ]]; then' in installer
+    assert 'if [[ "$EFFECTIVE_DEPLOY_MODE" == source ]]; then' in updater
     assert "resolve_web_backend" in installer
     assert "resolve_web_backend" in updater
-    assert "build_rust_release" in installer
-    assert "build_rust_backend" in updater
+    assert (
+        'if [[ "$EFFECTIVE_DEPLOY_MODE" == source ]]; then\n'
+        "  install_toolchains\n  install_project_dependencies\n  build_rust_release\nelse\n"
+        "  if stage_prebuilt_release; then"
+    ) in installer
+    assert updater.index('stage_prebuilt_release "$TARGET_COMMIT"') < updater.rindex(
+        "require_source_toolchains"
+    )
+
+
+@pytest.mark.parametrize(
+    ("mode", "status", "should_fallback"),
+    [
+        ("auto", 10, True),
+        ("auto", 11, True),
+        ("auto", 12, False),
+        ("auto", 1, False),
+        ("binary", 10, False),
+        ("source", 11, False),
+    ],
+)
+def test_source_fallback_is_limited_to_auto_missing_or_unsupported_artifacts(
+    tmp_path: Path, mode: str, status: int, should_fallback: bool
+) -> None:
+    project = tmp_path / f"project-{mode}-{status}"
+    result = _run_deploy_support(project, "may_fallback_to_source", mode, str(status))
+
+    assert result.returncode == (0 if should_fallback else 1), result.stderr
+
+
+def test_offline_updates_use_only_the_previously_verified_cache() -> None:
+    updater = UPDATER.read_text(encoding="utf-8")
+
+    assert 'OFFLINE_COMMIT="${LUMI_OFFLINE_COMMIT:-}"' in updater
+    assert 'stage_prebuilt_release "$TARGET_COMMIT" --cached-only' in updater
+    assert 'if [[ -z "$OFFLINE_COMMIT" ]]; then\n    install_release_verifier' in updater
+    assert 'if [[ -z "$OFFLINE_COMMIT" ]]; then\n    install_spotify_soloist' in updater
+    assert "fetch --prune" in updater
+
+
+def test_offline_installs_require_a_cached_verified_commit() -> None:
+    installer = INSTALLER.read_text(encoding="utf-8")
+    package_setup = installer[
+        installer.index("install_system_packages() {"):installer.index("binary_target_supported() {")
+    ]
+    stage_release = installer[
+        installer.index("stage_prebuilt_release() {"):installer.index("create_environment_file() {")
+    ]
+
+    assert 'OFFLINE_COMMIT="${LUMI_OFFLINE_COMMIT:-}"' in installer
+    assert '"$DEPLOY_MODE" == binary' in installer
+    assert "install_args+=(--cached-only)" in stage_release
+    assert '[[ "$DEPLOY_RELEASE_COMMIT" == "$OFFLINE_COMMIT" ]]' in stage_release
+    assert 'if [[ -z "$OFFLINE_COMMIT" ]]; then\n    install_release_verifier' in installer
+    assert "required system packages are already installed; skipping apt access" in package_setup
+    assert package_setup.index("return 0") < package_setup.index("apt-get update")
+    assert "leaves the existing Spotify Soloist executable unchanged" in installer
+
+
+def test_privileged_update_refresh_reads_only_the_root_owned_snapshot() -> None:
+    support = UPDATE_SUPPORT.read_text(encoding="utf-8")
+    refresh_support = support[support.index("install_update_support() {"):]
+
+    assert 'source_file="$SCRIPT_DIR/$template"' in refresh_support
+    assert '"$PROJECT_DIR/deploy/$template"' not in refresh_support
+    assert '"$UPDATE_LIBEXEC_DIR/lumistripe-network.sudoers"' in refresh_support
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="builder intentionally rejects root")
@@ -493,14 +576,19 @@ def test_rust_update_build_promotes_a_complete_commit_matched_release(
     (project / "deploy/update-support.sh").write_text(
         UPDATE_SUPPORT.read_text(encoding="utf-8"), encoding="utf-8"
     )
+    shutil.copyfile(RELEASE_ARTIFACT, project / "deploy/release_artifact.py")
     (project / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
     (project / ".gitignore").write_text("/target/\n", encoding="utf-8")
+    static = project / "apps/lumistripe-web/static"
+    (static / "assets").mkdir(parents=True)
+    (static / "index.html").write_text("build fixture\n", encoding="utf-8")
+    (static / "assets/app.js").write_text("fixture\n", encoding="utf-8")
     _git(project, "init", "--quiet")
     _git(project, "config", "user.name", "LumiStripe test")
     _git(project, "config", "user.email", "test@example.invalid")
     _git(project, "config", "commit.gpgsign", "false")
     _git(project, "config", "core.hooksPath", "/dev/null")
-    _git(project, "add", "Cargo.toml", ".gitignore", "deploy/update-support.sh")
+    _git(project, "add", "Cargo.toml", ".gitignore", "deploy/update-support.sh", "deploy/release_artifact.py", "apps/lumistripe-web/static")
     first_commit = _commit(project, "first.txt")
     cargo_log = tmp_path / "cargo.log"
     environment = _builder_environment(tmp_path, cargo_log)

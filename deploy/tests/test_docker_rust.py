@@ -107,6 +107,7 @@ def test_docker_development_image_builds_rust_binaries_without_python() -> None:
     assert "!target/" not in dockerignore
     assert "rust/Cargo.toml" not in dockerfile
     assert "!apps/lumistripe-web/frontend/**" in dockerignore
+    assert "apps/lumistripe-web/frontend/.env*" in dockerignore
 
     assert ".venv" not in compose
     assert "python" not in compose

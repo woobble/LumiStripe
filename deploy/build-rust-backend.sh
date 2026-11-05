@@ -69,7 +69,10 @@ activate_release() {
 if [[ -d "$RELEASE_DIR" ]]; then
   if [[ "$(cat "$RELEASE_DIR/source-commit" 2>/dev/null || true)" == "$COMMIT" && \
     -x "$RELEASE_DIR/lumistripe-web" && -x "$RELEASE_DIR/lumistripe-engine" && \
-    -x "$RELEASE_DIR/lumistripe-deploy-helper" && -x "$RELEASE_DIR/lumistripe" ]]; then
+    -x "$RELEASE_DIR/lumistripe-deploy-helper" && -x "$RELEASE_DIR/lumistripe" && \
+    -s "$RELEASE_DIR/static/index.html" ]]; then
+    python3 "$PROJECT_DIR/deploy/release_artifact.py" validate \
+      --release-dir "$RELEASE_DIR" --commit "$COMMIT" --origin source || exit 1
     activate_release
     echo "Reusing Rust binaries for $COMMIT."
     exit 0
@@ -108,10 +111,7 @@ BUILT_CLI="$BUILD_DIR/release/lumistripe"
 STAGE_DIR="$(mktemp -d "$RELEASES_DIR/.stage.$COMMIT.XXXXXX")"
 cleanup() {
   if [[ -n "${STAGE_DIR:-}" && -d "$STAGE_DIR" ]]; then
-    rm -f -- "$STAGE_DIR/lumistripe-web" "$STAGE_DIR/lumistripe-engine" \
-      "$STAGE_DIR/lumistripe-deploy-helper" "$STAGE_DIR/lumistripe" \
-      "$STAGE_DIR/source-commit"
-    rmdir -- "$STAGE_DIR" 2>/dev/null || true
+    rm -rf -- "$STAGE_DIR"
   fi
 }
 trap cleanup EXIT
@@ -119,7 +119,14 @@ install -m 755 -- "$BUILT_ENGINE" "$STAGE_DIR/lumistripe-engine"
 install -m 755 -- "$BUILT_WEB" "$STAGE_DIR/lumistripe-web"
 install -m 755 -- "$BUILT_DEPLOY_HELPER" "$STAGE_DIR/lumistripe-deploy-helper"
 install -m 755 -- "$BUILT_CLI" "$STAGE_DIR/lumistripe"
+[[ -s "$PROJECT_DIR/apps/lumistripe-web/static/index.html" ]] || {
+  echo "The commit-matched frontend build is missing; run the frontend build before compiling Rust." >&2
+  exit 1
+}
+cp -a -- "$PROJECT_DIR/apps/lumistripe-web/static" "$STAGE_DIR/static"
 printf '%s\n' "$COMMIT" > "$STAGE_DIR/source-commit"
+python3 "$PROJECT_DIR/deploy/release_artifact.py" seal-local \
+  --release-dir "$STAGE_DIR" --commit "$COMMIT" --project-root "$PROJECT_DIR"
 mv -- "$STAGE_DIR" "$RELEASE_DIR"
 STAGE_DIR=
 activate_release

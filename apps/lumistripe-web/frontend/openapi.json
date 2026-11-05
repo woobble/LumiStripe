@@ -4412,6 +4412,17 @@
           }
         }
       },
+      "ReleaseStatus": {
+        "type": "string",
+        "enum": [
+          "unknown",
+          "available",
+          "building",
+          "failed",
+          "unavailable",
+          "unsupported"
+        ]
+      },
       "RuntimeKind": {
         "type": "string",
         "enum": [
@@ -5446,6 +5457,7 @@
           "installed_commit",
           "available_commit",
           "update_available",
+          "release_status",
           "working_tree_dirty",
           "checked_at",
           "check_error",
@@ -5502,6 +5514,9 @@
               "string",
               "null"
             ]
+          },
+          "release_status": {
+            "$ref": "#/components/schemas/ReleaseStatus"
           },
           "supported": {
             "type": "boolean"

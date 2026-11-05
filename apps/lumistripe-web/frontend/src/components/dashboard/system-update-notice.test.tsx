@@ -9,6 +9,7 @@ const availableUpdate: UpdateStatus = {
   installed_commit: "a".repeat(40),
   available_commit: "b".repeat(40),
   update_available: true,
+  release_status: "available",
   working_tree_dirty: false,
   checked_at: "2026-01-01T00:00:00Z",
   check_error: null,
@@ -52,5 +53,19 @@ describe("SystemUpdateNotice", () => {
 
     expect(await screen.findByText(/checkout has local changes/i)).toBeInTheDocument()
     await waitFor(() => expect(dashboardApi.getUpdateStatus).toHaveBeenCalled())
+  })
+
+  it("shows CI status and withholds installation until the release is published", async () => {
+    vi.spyOn(dashboardApi, "getUpdateStatus").mockResolvedValue({
+      ...availableUpdate,
+      release_status: "building",
+    })
+    vi.spyOn(dashboardApi, "checkForUpdates").mockResolvedValue(availableUpdate)
+    vi.spyOn(navigator, "onLine", "get").mockReturnValue(false)
+
+    render(<SystemUpdateNotice />)
+
+    expect(await screen.findByText("CI is building and verifying the release for this commit.")).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Install update" })).not.toBeInTheDocument()
   })
 })

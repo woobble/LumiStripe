@@ -68,20 +68,41 @@ For unattended installation, provide `LUMI_PAIRING_CODE` and the optional
 Spotify key through the provisioning process environment. Keep their values
 out of shell history and command arguments.
 
-The installer provisions the appliance with operating-system packages and
-native build tools, the service user and GPIO/SPI/audio permissions,
-Raspberry Pi SPI, Rust 1.88.0, Bun, NetworkManager tools, the frontend
-production build, and Bluetooth/WirePlumber configuration. It builds
-commit-matched Rust web, engine, CLI, and deployment-helper binaries. It does
-not install Python application packages, Python extensions, or uv. The
-installer also configures Spotify Soloist when an API key is provided, a local
-mkcert CA and HTTPS certificate, Nginx, and systemd services. Existing
+The installer defaults to a commit-matched ARM64 binary release for Debian or
+Raspberry Pi OS Trixie. It downloads the GitHub release for the exact checkout
+commit, verifies its asset digests and GitHub Actions provenance, validates the
+manifest and runtime dependencies, then stages the web server, engine, CLI,
+deployment helper, and frontend together. Binary installs do not compile Rust
+or build the frontend on the Pi. They do not install Rustup, Cargo, Bun, or
+native build headers. Python's standard library is used for bounded archive
+validation; no Python application packages, extensions, or uv are installed.
+
+Choose a deployment mode with `LUMI_DEPLOY_MODE`:
+
+| Mode | Behavior |
+| --- | --- |
+| `binary` (default) | Require a published, verified release for the checked out commit. Missing or unsupported releases stop the operation. |
+| `source` | Install Rust 1.88.0 and Bun, build the frontend and Rust applications locally, and activate that complete release. |
+| `auto` | Prefer a verified binary, then build locally only when the artifact is missing or the target is unsupported. Integrity or provenance failures stop without a source fallback. |
+
+For example, use source mode during installation with:
+
+```bash
+sudo env LUMI_DEPLOY_MODE=source LUMI_SERVICE_USER=pi \
+  LUMI_PROJECT_DIR=/opt/lumistripe-install \
+  /opt/lumistripe-install/deploy/install.sh
+```
+
+The installer also configures operating-system packages, GPIO/SPI/audio
+permissions, Raspberry Pi SPI, NetworkManager, Bluetooth/WirePlumber,
+Spotify Soloist when an API key is provided, a local mkcert CA and HTTPS
+certificate, Nginx, and systemd services. Existing
 `/etc/lumistripe/lumistripe-web.env` and
 `/etc/lumistripe/lumistripe-spotify.env` files are preserved. Spotify's
 official builds are downloaded on the Pi and are not bundled or redistributed
-by LumiStripe. The updater streams the archive with a 512 MiB byte limit,
-allows HTTPS-only redirects, validates its contents, and installs the binary
-under the non-root service account.
+by LumiStripe. Verified archives are cached under
+`/var/cache/lumistripe/releases/<commit>`; the cache retains the active and
+previous releases for rollback.
 
 The installer uses the non-root account that invoked `sudo` (or the checkout
 owner when run from a root shell). To install for another account, set
@@ -117,13 +138,63 @@ configuration remains untouched; an administrator must set
 `LUMI_WEB_BACKEND=rust` manually, then rerun the installer or updater.
 Existing settings are migrated and preserved by the Rust application.
 
-The installer and updater build the web server, standalone engine, CLI, and
-deployment helper from one source commit. They stage a complete release and
-atomically activate it. The web server owns its engine in process and does not
-need an engine binary or Unix socket to start; the standalone engine remains
-deployed for the CLI and other IPC clients. Systemd restarts the complete web
-and engine owner if a native worker fails. The updater checks service health
-after restart and attempts to restore the previous release if the check fails.
+The CI publisher builds the ARM64 release on a hosted ARM64 runner in a Debian
+Trixie container after the hosted deployment, frontend, Rust, and ARM64 checks
+pass. The release tag is `build-<full source commit>` and contains a
+deterministic archive, manifest, SHA-256 file, and signed provenance bundle.
+The Pi verifies the release belongs to that commit and the pinned CI workflow
+before it stages anything. The frontend is stored inside the release and is
+served from the same commit-matched directory as its Rust binaries.
+
+Before enabling release publication, enable GitHub's repository-level release
+immutability setting. The publisher checks that each release is marked
+immutable, and the installer, updater, and dashboard reject releases that are
+not. GitHub locks the release tag and attached assets when an immutable release
+is published.
+
+Published GitHub releases are never automatically deleted or replaced. Keep
+commit-tagged archives, manifests, checksums, and provenance bundles
+indefinitely; local cache cleanup retains the active and previous releases for
+rollback.
+
+To build a release bundle locally for inspection, start from a clean checkout
+and a machine with Docker Buildx and `uv` installed. Local bundles are not
+attested and cannot be installed by binary mode; production releases must be
+published by CI.
+
+```bash
+COMMIT="$(git rev-parse HEAD)"
+OUT_DIR="$(mktemp -d /tmp/lumistripe-release.XXXXXX)"
+test -z "$(git status --porcelain)"
+docker buildx build \
+  --platform linux/arm64 \
+  --file deploy/docker/Dockerfile \
+  --target release-output \
+  --build-arg "BUN_VERSION=$(cat .bun-version)" \
+  --build-arg "LUMI_RELEASE_COMMIT=$COMMIT" \
+  --output "type=local,dest=$OUT_DIR" \
+  .
+ARCHIVE="lumistripe-linux-aarch64-$COMMIT.tar.gz"
+uv run --no-project --python 3.12 python deploy/release_artifact.py package \
+  --release-dir "$OUT_DIR/release" \
+  --output "$OUT_DIR/$ARCHIVE" \
+  --commit "$COMMIT" \
+  --project-root "$PWD" \
+  --build-info "$OUT_DIR/release-build-info.json"
+cp "$OUT_DIR/release/manifest.json" "$OUT_DIR/$ARCHIVE.manifest.json"
+(cd "$OUT_DIR" && sha256sum "$ARCHIVE" > "$ARCHIVE.sha256")
+```
+
+This produces the deterministic `.tar.gz` bundle plus its manifest and SHA-256
+sidecar. CI adds and verifies the signed provenance bundle before publication.
+
+The web server owns its engine in process and does not need an engine binary
+or Unix socket to start; the standalone engine remains deployed for the CLI
+and other IPC clients. Systemd restarts the complete web and engine owner if a
+native worker fails. The updater switches the checkout and release pointer,
+restarts services, and checks dashboard health. If health fails, it restores
+the previous checkout and release pointer without rebuilding dependencies.
+Both releases remain available locally for rollback.
 
 Run the installed CLI as the service user, for example:
 
@@ -135,9 +206,11 @@ On Trixie the installer selects `libgpiod3`; older supported Debian-based Pi
 images are handled with `libgpiod2` when that is the available runtime
 package.
 
-The installer needs internet access for apt, Rustup, Bun, mkcert, and package
-downloads. After installation the runtime checkout is service-user-writable,
-so it is no longer a trusted source for another root installer run. For a
+The installer needs internet access for apt, the matching GitHub release and
+provenance checks, mkcert, and optional Spotify Soloist downloads. Source mode
+also downloads Rustup and Bun. After installation the runtime checkout is
+service-user-writable, so it is no longer a trusted source for another root
+installer run. For a
 repair or reinstall, provide a fresh reviewed checkout under an
 administrator-controlled path; existing pairing and complete TLS files are
 kept. If either TLS file is missing or empty, the installer recreates the
@@ -163,13 +236,16 @@ described above to install the helper permission and adapter tools.
 ## Systemd updates
 
 The systemd installation checks LumiStripe's public GitHub `main` branch every
-six hours. Opening the paired dashboard while online, or reconnecting the phone to
-the Pi while the dashboard is open, also starts a check. A failed check while
-offline is recorded quietly and retried later. When an update is available,
-the dashboard shows its commit and an **Install update** button; installation
-starts only after you select it. The Pi rebuilds the app, restarts the services,
-and checks that the dashboard is healthy. The updater attempts to roll back if
-that check fails.
+six hours. Opening the paired dashboard while online, or reconnecting the phone
+to the Pi while the dashboard is open, also starts a check. A failed check
+while offline is recorded quietly and retried later. The dashboard shows an
+update as ready only after CI has published the matching release and its
+manifest identifies the same source commit and Trixie runtime. While CI is
+building, after a failed build, or when no release is available, the dashboard
+shows that state and withholds the install action. Selecting **Install update**
+starts installation only after the artifact is ready. The updater verifies and
+stages the release, restarts services, and checks dashboard health. A failed
+health check restores the previous checkout and release pointer.
 
 The updater is installed by `deploy/install.sh`. To add it to an existing
 systemd installation, prepare a reviewed administrator-controlled checkout as
@@ -205,6 +281,75 @@ receives the checkout path:
 sudo env LUMI_PROJECT_DIR="$PWD" \
   /usr/local/libexec/lumistripe/deploy/update.sh
 ```
+
+For an explicit source update, use `LUMI_DEPLOY_MODE=source` with that command.
+Source updates require Bun, Cargo, Rust 1.88.0, and the native development
+headers to have been installed already; run the installer in source mode first
+on a binary-only appliance. `auto` also accepts a missing or unsupported
+artifact as a reason to use a local build, but it does not bypass an integrity,
+digest, or provenance failure.
+
+To update offline from a previously verified local bundle, the full commit
+must exist in the checkout and its root-protected cache entry must still be
+present under `/var/cache/lumistripe/releases/<commit>`. Keep the system on
+ARM64 Debian or Raspberry Pi OS Trixie with the runtime packages already
+installed, then run the normal updater in binary mode with that commit:
+
+```bash
+PROJECT_DIR=/opt/lumistripe-install
+SERVICE_USER=pi
+COMMIT=FULL_CACHED_COMMIT_SHA
+sudo -u "$SERVICE_USER" git -C "$PROJECT_DIR" cat-file -e "$COMMIT^{commit}"
+sudo env LUMI_SERVICE_USER="$SERVICE_USER" \
+  LUMI_PROJECT_DIR="$PROJECT_DIR" \
+  LUMI_OFFLINE_COMMIT="$COMMIT" \
+  /usr/local/libexec/lumistripe/deploy/update.sh
+```
+
+The offline path skips GitHub fetching, accepts only the verified cache, and
+uses the same checkout/release activation, health check, and rollback flow. It
+also leaves the existing Spotify Soloist installation unchanged. It fails
+closed if the commit, cache entry, or runtime packages are missing.
+
+To reinstall from the same machine's verified cache, prepare a fresh trusted
+checkout at the cached commit and run:
+
+```bash
+PROJECT_DIR=/opt/lumistripe-install
+SERVICE_USER=pi
+COMMIT=FULL_CACHED_COMMIT_SHA
+sudo env LUMI_SERVICE_USER="$SERVICE_USER" \
+  LUMI_PROJECT_DIR="$PROJECT_DIR" \
+  LUMI_OFFLINE_COMMIT="$COMMIT" \
+  "$PROJECT_DIR/deploy/install.sh"
+```
+
+Offline installation requires the checkout and root-protected verified cache
+to exist locally, along with all runtime packages and `mkcert`. If Spotify is
+configured, the existing Soloist executable must also be present. The
+installer checks these prerequisites and skips GitHub and apt access; if any
+are missing, use the normal online installation path.
+
+For offline recovery, use the previous commit ID retained under
+`target/rust-deploy/releases/`. Replace the example values with the service
+account and project directory on the Pi:
+
+```bash
+PROJECT_DIR=/home/pi/LumiStripe
+SERVICE_USER=pi
+PREVIOUS_COMMIT=FULL_PREVIOUS_COMMIT_SHA
+sudo systemctl stop lumistripe-web.service
+sudo -u "$SERVICE_USER" git -C "$PROJECT_DIR" cat-file -e "$PREVIOUS_COMMIT^{commit}"
+sudo -u "$SERVICE_USER" git -C "$PROJECT_DIR" switch --detach "$PREVIOUS_COMMIT"
+sudo ln -s "releases/$PREVIOUS_COMMIT" "$PROJECT_DIR/target/rust-deploy/.current.rollback"
+sudo mv -Tf "$PROJECT_DIR/target/rust-deploy/.current.rollback" \
+  "$PROJECT_DIR/target/rust-deploy/current"
+sudo systemctl restart lumistripe-web.service
+```
+
+The updater's automatic rollback performs this operation and restarts the web
+and configured Spotify services after a failed health check. Keep the previous
+commit ID and a trusted checkout available before doing a manual recovery.
 
 Check background updater logs with:
 

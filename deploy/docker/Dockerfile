@@ -2,6 +2,7 @@
 
 ARG RUST_VERSION=1.88.0
 ARG BUN_VERSION=1.4.4
+ARG LUMI_RELEASE_COMMIT=0000000000000000000000000000000000000000
 
 FROM oven/bun:${BUN_VERSION} AS frontend
 
@@ -45,6 +46,64 @@ RUN cargo build --locked --release \
         --package lumistripe-deploy-helper --bin lumistripe-deploy-helper \
     && cargo build --locked --release \
         --package lumistripe-web --bin lumistripe-web --features bluez,pipewire
+
+# CI export target for a complete, commit-matched ARM64 deployment bundle.
+# The frontend and all Rust applications are built from this one checkout.
+FROM debian:trixie-slim AS release-bundle
+
+ARG LUMI_RELEASE_COMMIT
+
+WORKDIR /release
+COPY --from=rust-build /src/target/release/lumistripe-web ./lumistripe-web
+COPY --from=rust-build /src/target/release/lumistripe-engine ./lumistripe-engine
+COPY --from=rust-build /src/target/release/lumistripe ./lumistripe
+COPY --from=rust-build /src/target/release/lumistripe-deploy-helper ./lumistripe-deploy-helper
+COPY --from=frontend /src/apps/lumistripe-web/static/ ./static/
+RUN printf '%s\n' "$LUMI_RELEASE_COMMIT" > source-commit \
+    && chmod 755 lumistripe-web lumistripe-engine lumistripe lumistripe-deploy-helper \
+    && find static -type d -exec chmod 755 {} + \
+    && find static -type f -exec chmod 644 {} + \
+    && chmod 644 source-commit
+
+# Validate the actual Trixie runtime ABI and dynamic dependencies in the
+# release environment, rather than inferring compatibility from cross-builds.
+FROM debian:trixie-slim AS release-runtime-check
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends \
+        binutils \
+        file \
+        libasound2 \
+        libatomic1 \
+        libdbus-1-3 \
+        libgpiod3 \
+        libpipewire-0.3-0 \
+        libpulse0 \
+        libspa-0.2-bluetooth \
+        libspa-0.2-modules \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=release-bundle /release /release
+RUN set -eu; \
+    test "$(uname -m)" = aarch64; \
+    grep -Eq '^[0-9a-f]{40}$' /release/source-commit; \
+    for binary in lumistripe-web lumistripe-engine lumistripe lumistripe-deploy-helper; do \
+        test -x "/release/$binary"; \
+        file "/release/$binary" | grep -q 'ARM aarch64'; \
+        readelf -h "/release/$binary" | grep -q 'Machine:.*AArch64'; \
+        if ldd "/release/$binary" | tee "/tmp/$binary.ldd" | grep -q 'not found'; then \
+            echo "Unresolved Trixie runtime dependency for $binary" >&2; exit 1; \
+        fi; \
+    done; \
+    glibc_version="$(getconf GNU_LIBC_VERSION | awk '{print $2}')"; \
+    printf '{"architecture":"aarch64","target":"aarch64-unknown-linux-gnu","distribution":"debian-trixie","glibc_minimum":"%s"}\n' \
+        "$glibc_version" > /release-build-info.json
+
+FROM scratch AS release-output
+COPY --from=release-runtime-check /release /release
+COPY --from=release-runtime-check /release-build-info.json /release-build-info.json
 
 FROM debian:trixie-slim AS soloist
 

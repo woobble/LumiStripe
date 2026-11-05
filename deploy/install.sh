@@ -27,6 +27,25 @@ TLS_CERT="$TLS_DIR/led.controller.pem"
 TLS_KEY="$TLS_DIR/led.controller-key.pem"
 MKCERT_CA_ROOT=
 NGINX_DEFAULT_REMOVED=0
+DEPLOY_MODE="${LUMI_DEPLOY_MODE:-binary}"
+EFFECTIVE_DEPLOY_MODE="$DEPLOY_MODE"
+DEPLOY_RELEASE_COMMIT=
+OFFLINE_COMMIT="${LUMI_OFFLINE_COMMIT:-}"
+
+case "$DEPLOY_MODE" in
+  binary|source|auto) ;;
+  *) echo "LUMI_DEPLOY_MODE must be binary, source, or auto." >&2; exit 2 ;;
+esac
+if [[ -n "$OFFLINE_COMMIT" ]]; then
+  [[ "$DEPLOY_MODE" == binary ]] || {
+    echo "LUMI_OFFLINE_COMMIT requires LUMI_DEPLOY_MODE=binary." >&2
+    exit 2
+  }
+  [[ "$OFFLINE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+    echo "LUMI_OFFLINE_COMMIT must be a full lowercase Git SHA." >&2
+    exit 2
+  }
+fi
 
 if [[ $EUID -ne 0 ]]; then
   echo "Run this installer as root (for example: sudo $0)." >&2
@@ -123,6 +142,8 @@ done
 source "$SCRIPT_DIR/update-support.sh"
 PROJECT_DIR="$(canonical_project_directory "$PROJECT_DIR")" || exit 1
 resolve_web_backend "${LUMI_WEB_BACKEND:-}" "$ENV_FILE" >/dev/null || exit 1
+migrate_legacy_rust_deploy_root || exit 1
+ensure_current_release_static || exit 1
 
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
   echo "Creating service user $SERVICE_USER..."
@@ -131,6 +152,7 @@ fi
 
 SERVICE_HOME="$(getent passwd "$SERVICE_USER" | cut -d: -f6)"
 SERVICE_UID="$(id -u "$SERVICE_USER")"
+SERVICE_GID="$(id -g "$SERVICE_USER")"
 SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
 [[ -n "$SERVICE_HOME" && -d "$SERVICE_HOME" ]] || {
   echo "Could not resolve the home directory for $SERVICE_USER." >&2
@@ -148,6 +170,8 @@ for required_file in \
   "$PROJECT_DIR/deploy/lumistripe-web.service" \
   "$PROJECT_DIR/deploy/lumistripe-web-launcher.sh" \
   "$PROJECT_DIR/deploy/build-rust-backend.sh" \
+  "$PROJECT_DIR/deploy/release_artifact.py" \
+  "$PROJECT_DIR/deploy/install-github-cli.sh" \
   "$PROJECT_DIR/deploy/rust-toolchain.sh" \
   "$PROJECT_DIR/deploy/lumistripe-spotify.service" \
   "$PROJECT_DIR/deploy/90-lumistripe-bluetooth.conf" \
@@ -197,7 +221,6 @@ as_user_with_env() {
 }
 
 install_system_packages() {
-  # libclang-dev supplies bindgen's resource headers for native Rust providers.
   local packages=(
     bluez
     bluetooth
@@ -209,25 +232,47 @@ install_system_packages() {
     pipewire-alsa
     libasound2-plugins
     libportaudio2
-    libasound2-dev
-    libclang-dev
-    libdbus-1-dev
-    libpipewire-0.3-dev
-    libpulse-dev
+    libasound2
+    libatomic1
+    libdbus-1-3
+    libpipewire-0.3-0
+    libpulse0
+    libspa-0.2-modules
     network-manager
     iw
-    libgpiod-dev
     nginx
     libnss3-tools
     curl
     ca-certificates
     git
     unzip
-    build-essential
-    pkg-config
     dbus-user-session
     util-linux
+    python3-minimal
   )
+  if [[ -n "$OFFLINE_COMMIT" ]]; then
+    local missing=()
+    local package
+    for package in "${packages[@]}"; do
+      if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q 'install ok installed'; then
+        missing+=("$package")
+      fi
+    done
+    if ! dpkg-query -W -f='${Status}' libgpiod3 2>/dev/null | grep -q 'install ok installed' &&
+       ! dpkg-query -W -f='${Status}' libgpiod2 2>/dev/null | grep -q 'install ok installed'; then
+      missing+=("libgpiod3 or libgpiod2")
+    fi
+    if ! command -v mkcert >/dev/null 2>&1; then
+      missing+=("mkcert")
+    fi
+    if ((${#missing[@]} > 0)); then
+      echo "Offline installation requires these preinstalled packages/tools: ${missing[*]}" >&2
+      return 1
+    fi
+    echo "Offline mode: required system packages are already installed; skipping apt access."
+    return 0
+  fi
+
   echo "Refreshing Raspberry Pi OS package lists..."
   apt-get update
 
@@ -258,9 +303,35 @@ install_system_packages() {
   apt-get install --yes --no-install-recommends "${packages[@]}"
 }
 
+binary_target_supported() {
+  local architecture
+  local distribution
+  local codename
+  architecture="$(uname -m)"
+  distribution="$(. /etc/os-release && printf '%s' "${ID:-}")"
+  codename="$(. /etc/os-release && printf '%s' "${VERSION_CODENAME:-}")"
+  [[ "$architecture" == aarch64 && "$codename" == trixie &&
+      ( "$distribution" == debian || "$distribution" == raspbian ) ]]
+}
+
+install_source_build_packages() {
+  echo "Installing Rust source-build dependencies because LUMI_DEPLOY_MODE=$DEPLOY_MODE selected a local build..."
+  apt-get install --yes --no-install-recommends \
+    build-essential pkg-config libasound2-dev libclang-dev libdbus-1-dev \
+    libpipewire-0.3-dev libpulse-dev libgpiod-dev
+}
+
+install_release_verifier() {
+  "$PROJECT_DIR/deploy/install-github-cli.sh"
+}
+
 install_mkcert() {
   if command -v mkcert >/dev/null 2>&1; then
     return
+  fi
+  if [[ -n "$OFFLINE_COMMIT" ]]; then
+    echo "Offline installation requires mkcert to be installed already." >&2
+    return 1
   fi
 
   local architecture
@@ -362,6 +433,30 @@ build_rust_release() {
     RUSTUP_HOME="$SERVICE_HOME/.rustup" \
     CARGO_HOME="$SERVICE_HOME/.cargo" \
     "$PROJECT_DIR/deploy/build-rust-backend.sh" "$PROJECT_DIR"
+}
+
+stage_prebuilt_release() {
+  local tool
+  local -a install_args
+  DEPLOY_RELEASE_COMMIT="$(as_user git -C "$PROJECT_DIR" rev-parse --verify HEAD)" || return 1
+  [[ "$DEPLOY_RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+    echo "Could not resolve the deployment source commit." >&2
+    return 1
+  }
+  if [[ -n "$OFFLINE_COMMIT" ]]; then
+    [[ "$DEPLOY_RELEASE_COMMIT" == "$OFFLINE_COMMIT" ]] || {
+      echo "Offline release commit does not match the checked out source commit." >&2
+      return 1
+    }
+  fi
+  tool="$(release_artifact_tool)" || return 1
+  install_args=(install --commit "$DEPLOY_RELEASE_COMMIT" --release-root \
+    "$PROJECT_DIR/target/rust-deploy/releases" --cache-root "$RELEASE_CACHE_DIR" \
+    --uid "$SERVICE_UID" --gid "$SERVICE_GID")
+  if [[ -n "$OFFLINE_COMMIT" ]]; then
+    install_args+=(--cached-only)
+  fi
+  python3 "$tool" "${install_args[@]}"
 }
 
 create_environment_file() {
@@ -651,13 +746,37 @@ write_install_state() {
   rm -f -- "$state_file"
 }
 
+if [[ "$DEPLOY_MODE" != source ]]; then
+  if ! binary_target_supported; then
+    if [[ "$DEPLOY_MODE" == binary ]]; then
+      echo "Prebuilt releases require aarch64 Debian or Raspberry Pi OS Trixie. Set LUMI_DEPLOY_MODE=source for a local build." >&2
+      exit 1
+    fi
+    EFFECTIVE_DEPLOY_MODE=source
+    echo "No LumiStripe prebuilt bundle targets this platform; auto mode will compile from source."
+  fi
+fi
+
 install_system_packages
+if [[ "$EFFECTIVE_DEPLOY_MODE" == source ]]; then
+  install_source_build_packages
+elif [[ "$DEPLOY_MODE" != source ]]; then
+  if [[ -z "$OFFLINE_COMMIT" ]]; then
+    install_release_verifier
+  else
+    echo "Offline installation will use only the previously verified local release cache."
+  fi
+fi
 install_mkcert
 ensure_groups
 enable_spi
-install_toolchains
 create_environment_file
 create_spotify_environment_file
+if [[ -n "$OFFLINE_COMMIT" ]] && spotify_environment_ready &&
+   [[ ! -x "$SERVICE_HOME/.local/bin/soloist" ]]; then
+  echo "Offline installation with Spotify enabled requires the existing Soloist executable at $SERVICE_HOME/.local/bin/soloist." >&2
+  exit 1
+fi
 create_tls_certificate
 render_service_unit
 render_spotify_service_unit
@@ -670,8 +789,29 @@ write_install_state
 # copied into privileged system locations have been installed from the trusted
 # source above.
 chown -R "$SERVICE_USER:$SERVICE_GROUP" "$PROJECT_DIR"
-install_project_dependencies
-build_rust_release
+if [[ "$EFFECTIVE_DEPLOY_MODE" == source ]]; then
+  install_toolchains
+  install_project_dependencies
+  build_rust_release
+else
+  if stage_prebuilt_release; then
+    activate_rust_release "$DEPLOY_RELEASE_COMMIT"
+    echo "Activated verified prebuilt release $DEPLOY_RELEASE_COMMIT."
+  else
+    stage_status=$?
+    if may_fallback_to_source "$DEPLOY_MODE" "$stage_status"; then
+      echo "No compatible published release is available; auto mode is falling back to a local source build."
+      EFFECTIVE_DEPLOY_MODE=source
+      install_source_build_packages
+      install_toolchains
+      install_project_dependencies
+      build_rust_release
+    else
+      echo "Prebuilt release installation failed; the active Rust release was not switched." >&2
+      exit "$stage_status"
+    fi
+  fi
+fi
 install_rust_cli_command "$SERVICE_HOME"
 install_privileged_network_helper
 if [[ ! -e /var/lib/lumistripe/update/status.json ]]; then
@@ -681,7 +821,15 @@ if [[ ! -e /var/lib/lumistripe/update/status.json ]]; then
     --state-file /var/lib/lumistripe/update/status.json
 fi
 if spotify_environment_ready; then
-  install_spotify_soloist "$SERVICE_HOME"
+  if [[ -n "$OFFLINE_COMMIT" ]]; then
+    [[ -x "$SERVICE_HOME/.local/bin/soloist" ]] || {
+      echo "Offline installation with Spotify enabled requires the existing Soloist executable at $SERVICE_HOME/.local/bin/soloist." >&2
+      exit 1
+    }
+    echo "Offline installation leaves the existing Spotify Soloist executable unchanged."
+  else
+    install_spotify_soloist "$SERVICE_HOME"
+  fi
 fi
 start_bluetooth
 start_user_audio

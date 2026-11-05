@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+
 def test_spotify_service_uses_the_version_matched_rust_preflight() -> None:
     service = (Path(__file__).parents[1] / "lumistripe-spotify.service").read_text(
         encoding="utf-8"

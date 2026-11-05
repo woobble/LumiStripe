@@ -1345,6 +1345,7 @@ async fn serves_compatible_http_websockets_with_an_in_process_engine() {
             "installed_commit",
             "available_commit",
             "update_available",
+            "release_status",
             "working_tree_dirty",
             "checked_at",
             "check_error",

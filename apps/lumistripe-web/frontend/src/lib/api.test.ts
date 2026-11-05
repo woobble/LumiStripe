@@ -361,6 +361,7 @@ describe("dashboardApi", () => {
       installed_commit: "a".repeat(40),
       available_commit: "b".repeat(40),
       update_available: true,
+      release_status: "available",
       working_tree_dirty: false,
       checked_at: "2026-01-01T00:00:00Z",
       check_error: null,

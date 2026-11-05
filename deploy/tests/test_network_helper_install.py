@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ import pytest
 DEPLOY = Path(__file__).parents[1]
 SUPPORT = DEPLOY / "update-support.sh"
 WRAPPER = DEPLOY / "lumistripe-network"
+RELEASE_ARTIFACT = DEPLOY / "release_artifact.py"
 
 
 def _git(project: Path, *arguments: str) -> str:
@@ -41,6 +43,17 @@ def _release(project: Path, source_commit: str) -> Path:
         )
         binary.write_text(contents, encoding="utf-8")
         binary.chmod(0o755)
+    static = release / "static"
+    (static / "assets").mkdir(parents=True)
+    (static / "index.html").write_text("release fixture\n", encoding="utf-8")
+    (static / "assets/app.js").write_text("fixture\n", encoding="utf-8")
+    subprocess.run(
+        [sys.executable, str(RELEASE_ARTIFACT), "seal-local", "--release-dir", str(release), "--commit", source_commit],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
     (deploy_root / "current").symlink_to(Path("releases") / source_commit)
     return release
 
@@ -48,6 +61,8 @@ def _release(project: Path, source_commit: str) -> Path:
 def _project(tmp_path: Path) -> tuple[Path, str]:
     project = tmp_path / "project"
     project.mkdir()
+    (project / "deploy").mkdir()
+    (project / "deploy/release_artifact.py").write_bytes(RELEASE_ARTIFACT.read_bytes())
     _git(project, "init", "--quiet")
     _git(project, "config", "user.name", "LumiStripe test")
     _git(project, "config", "user.email", "test@example.invalid")

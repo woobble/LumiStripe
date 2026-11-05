@@ -122,6 +122,25 @@ export function SystemUpdateNotice() {
     )
   }
 
+  if (status.release_status !== "available") {
+    const releaseMessage = {
+      unknown: "Checking whether the matching release is ready.",
+      building: "CI is building and verifying the release for this commit.",
+      failed: "The release build or verification failed. Check again after the next successful deployment.",
+      unavailable: "No compatible immutable binary release was published for this commit.",
+      unsupported: "Binary updates require 64-bit Debian or Raspberry Pi OS Trixie.",
+    }[status.release_status]
+    return (
+      <section className="mb-4 flex items-start gap-3 rounded-2xl border border-amber-300/20 bg-amber-400/10 px-4 py-3" role="status">
+        <CircleAlertIcon className="mt-0.5 size-5 shrink-0 text-amber-200" aria-hidden="true" />
+        <div>
+          <p className="text-sm font-medium">LumiStripe {status.release_status === "building" ? "update is being prepared" : "update is not ready"}</p>
+          <p className="text-xs text-muted-foreground">{releaseMessage}</p>
+        </div>
+      </section>
+    )
+  }
+
   return (
     <section className="mb-4 flex items-center gap-3 rounded-2xl border border-violet-300/20 bg-violet-400/10 px-4 py-3" aria-live="polite">
       {status.install_state === "failed" ? (
