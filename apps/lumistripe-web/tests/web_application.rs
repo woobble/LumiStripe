@@ -1064,8 +1064,21 @@ async fn simulated_multi_output_workflow_keeps_mock_outputs_and_persists_setting
         topology_update.body_text
     );
 
-    let state = request(&router, Method::GET, "/api/state", None, None, None).await;
-    assert_eq!(state.status, StatusCode::OK, "{}", state.body_text);
+    let state = timeout(Duration::from_secs(3), async {
+        loop {
+            let state = request(&router, Method::GET, "/api/state", None, None, None).await;
+            assert_eq!(state.status, StatusCode::OK, "{}", state.body_text);
+            if state.body["stripe_topology"]["outputs"]
+                .as_array()
+                .is_some_and(|outputs| outputs.len() == 2)
+            {
+                break state;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("dashboard state should publish the committed stripe topology");
     assert_eq!(state.body["runtime"], "simulation");
     assert_eq!(state.body["output_backend"], "simulation");
     assert_eq!(state.body["mode"], "dynamic");
