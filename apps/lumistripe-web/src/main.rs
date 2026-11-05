@@ -14,8 +14,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let options = CliOptions::parse();
     let simulate = options.simulate;
     let pairing_code = options.pairing_code.clone();
-    let (config, engine_binary, host, port) = options.into_config()?;
-    let app = WebApplication::start(config, engine_binary, pairing_code).await?;
+    let (config, host, port) = options.into_config()?;
+    let app = WebApplication::start(config, pairing_code).await?;
     if simulate {
         println!("LumiStripe simulator: http://{host}:{port}/?simulator=1");
     }

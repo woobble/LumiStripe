@@ -93,6 +93,7 @@ def test_docker_development_image_builds_rust_binaries_without_python() -> None:
     assert "--package lumistripe-cli" in dockerfile
     assert "--package lumistripe-deploy-helper" in dockerfile
     assert "--features bluez,pipewire" in dockerfile
+    assert "--engine-binary" not in dockerfile
     assert "arg lumi_soloist_fixture=0" in dockerfile
     assert "soloist-download" in dockerfile
     assert "python" not in dockerfile
@@ -113,6 +114,7 @@ def test_docker_development_image_builds_rust_binaries_without_python() -> None:
     assert 'profiles: ["spotify"]' in compose
     assert "depends_on:" not in compose
     assert "/var/lib/lumistripe/settings.json" in compose
+    assert "--engine-binary" not in compose
     assert ".docker-dev/data/soloist" in compose
     assert "/run/secrets/spotify_api_key" in compose
     assert "user: " in compose
@@ -187,8 +189,6 @@ def test_rust_docker_image_builds_and_starts_the_simulator(tmp_path: Path) -> No
                 "--simulate",
                 "--port",
                 str(port),
-                "--engine-binary",
-                "/usr/local/bin/lumistripe-engine",
                 "--static-dir",
                 "/opt/lumistripe/static",
                 "--settings-file",

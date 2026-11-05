@@ -1,10 +1,11 @@
 # Rust engine IPC
 
-The web application and CLI communicate with the engine over a local Unix-domain
-socket. JSON control messages are newline-delimited. The same socket accepts a
-persistent binary frame stream identified by its `LSF2` magic. This is local
-process IPC, not a network service; the engine socket is created with mode
-`0600`.
+The web application uses the in-process `EngineRuntime` and does not use this
+protocol. The standalone `lumistripe-engine` executable exposes the protocol
+for the Rust CLI and other local clients over a Unix-domain socket. JSON
+control messages are newline-delimited. The same socket accepts a persistent
+binary frame stream identified by its `LSF2` magic. This is local process IPC,
+not a network service; the engine socket is created with mode `0600`.
 
 The Rust types and runtime behavior are defined in
 [`lumistripe-engine-protocol`](../../crates/lumistripe-engine-protocol/src/lib.rs)

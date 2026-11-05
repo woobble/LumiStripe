@@ -2,7 +2,10 @@
 
 This directory contains the Rust Axum web server, React dashboard source, and
 generated static build. The REST contract is defined by the Rust application;
-the dashboard source is in `frontend/`.
+the dashboard source is in `frontend/`. The web server owns one in-process
+`EngineRuntime`; its output, render scheduler, and audio workers run on
+dedicated native threads. The separate `lumistripe-engine` executable and IPC
+protocol remain available to the Rust CLI and other local clients.
 
 ## Build the dashboard
 

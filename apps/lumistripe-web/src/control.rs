@@ -12,12 +12,13 @@ use crate::settings::{
 use crate::spotify::SpotifyProvider;
 use crate::state::{
     AUDIO_CALIBRATION_TIMEOUT, ActiveAudioCalibration, ActiveColorCalibration,
-    AudioCalibrationResult, COLOR_CALIBRATION_TIMEOUT, ControlModel, EngineDesiredState,
-    OutputControl, PlaybackMode,
+    AudioCalibrationResult, COLOR_CALIBRATION_TIMEOUT, ControlModel, OutputControl, PlaybackMode,
 };
 use lumistripe_engine_audio::{InputAudioDevice, recommend_audio_calibration};
-use lumistripe_engine_client::{EngineClient, EngineClientError};
+#[cfg(test)]
+use lumistripe_engine_client::EngineClient as IpcEngineClient;
 use lumistripe_engine_protocol::{EngineAudioStatus, RequestCommand, ResponseResult};
+use lumistripe_engine_runtime::{EngineError, EngineHandle};
 use serde_json::{Map, Value, json};
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -34,6 +35,97 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const IDENTITY_COMMAND_TIMEOUT: Duration = Duration::from_secs(35);
 const TOPOLOGY_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const AUTOMATIC_SPOTIFY_RETRY: Duration = Duration::from_secs(5);
+
+#[derive(Clone)]
+pub(crate) struct EngineAccess {
+    connection: EngineConnection,
+}
+
+#[derive(Clone)]
+enum EngineConnection {
+    Direct(EngineHandle),
+    #[cfg(test)]
+    Ipc(IpcEngineClient),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum EngineAccessError {
+    #[error("engine rejected the request ({code:?}): {message}")]
+    Engine {
+        code: lumistripe_engine_protocol::EngineErrorCode,
+        message: String,
+    },
+    #[error("engine is unavailable: {0}")]
+    Unavailable(String),
+}
+
+impl EngineAccess {
+    pub(crate) fn direct(handle: EngineHandle) -> Self {
+        Self {
+            connection: EngineConnection::Direct(handle),
+        }
+    }
+
+    #[cfg(test)]
+    fn new(socket: impl AsRef<std::path::Path>, timeout: Duration) -> Self {
+        Self {
+            connection: EngineConnection::Ipc(IpcEngineClient::new(socket, timeout)),
+        }
+    }
+
+    async fn request(&self, command: RequestCommand) -> Result<ResponseResult, EngineAccessError> {
+        match &self.connection {
+            EngineConnection::Direct(handle) => handle
+                .request(command)
+                .await
+                .map_err(EngineAccessError::from),
+            #[cfg(test)]
+            EngineConnection::Ipc(client) => client
+                .request(command)
+                .await
+                .map_err(EngineAccessError::from),
+        }
+    }
+
+    async fn configure(
+        &self,
+        config: lumistripe_engine_config::EngineConfig,
+    ) -> Result<ResponseResult, EngineAccessError> {
+        self.request(RequestCommand::Configure { config }).await
+    }
+
+    async fn update_scene(
+        &self,
+        update: lumistripe_engine_protocol::RenderSceneUpdate,
+    ) -> Result<ResponseResult, EngineAccessError> {
+        self.request(RequestCommand::SceneUpdate { update }).await
+    }
+
+    async fn audio_status(&self) -> Result<ResponseResult, EngineAccessError> {
+        self.request(RequestCommand::AudioStatus).await
+    }
+}
+
+impl From<EngineError> for EngineAccessError {
+    fn from(error: EngineError) -> Self {
+        match error {
+            EngineError::Engine { code, message } => Self::Engine { code, message },
+            error => Self::Unavailable(error.to_string()),
+        }
+    }
+}
+
+#[cfg(test)]
+impl From<lumistripe_engine_client::EngineClientError> for EngineAccessError {
+    fn from(error: lumistripe_engine_client::EngineClientError) -> Self {
+        match error {
+            lumistripe_engine_client::EngineClientError::Engine { code, message } => {
+                Self::Engine { code, message }
+            }
+            error => Self::Unavailable(error.to_string()),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 struct SpotifyDeviceNameHelper {
@@ -155,7 +247,7 @@ pub struct ControlPlane {
     state: watch::Receiver<Arc<Value>>,
     startup_settings: watch::Receiver<Arc<Value>>,
     application_settings: watch::Receiver<Arc<ApplicationSettingsSnapshot>>,
-    client: EngineClient,
+    client: EngineAccess,
 }
 
 enum ControlCommand {
@@ -274,8 +366,7 @@ impl ControlPlane {
     pub(crate) fn start(
         mut model: ControlModel,
         settings_store: SettingsStore,
-        desired_state: watch::Sender<EngineDesiredState>,
-        client: EngineClient,
+        client: EngineAccess,
         mut health: watch::Receiver<Option<Result<Arc<ResponseResult>, String>>>,
         mut audio: watch::Receiver<Option<Result<EngineAudioStatus, String>>>,
         bluetooth: Option<BluetoothService>,
@@ -323,7 +414,6 @@ impl ControlPlane {
                         let apply = apply_command(
                                 &mut model,
                                 &mut settings_store,
-                                &desired_state,
                                 &client,
                                 &mut audio_routing,
                                 bluetooth.as_ref(),
@@ -413,14 +503,13 @@ impl ControlPlane {
                         {
                             let _ = maintain_configured_audio_source(
                                 &mut model,
-                                &desired_state,
                                 &client,
                                 &mut audio_routing,
                                 bluetooth.as_ref(),
                                 spotify.as_deref(),
                             ).await;
                         }
-                        expire_color_calibration(&mut model, &client, &desired_state).await;
+                        expire_color_calibration(&mut model, &client, ).await;
                         if let Some(snapshot) = health.borrow().as_ref() {
                             model.set_engine_health(snapshot.as_ref().map(|value| (**value).clone()).map_err(|error| error.clone()));
                         }
@@ -940,8 +1029,7 @@ impl ControlPlane {
 async fn apply_command(
     model: &mut ControlModel,
     settings_store: &mut SettingsStore,
-    desired_state: &watch::Sender<EngineDesiredState>,
-    client: &EngineClient,
+    client: &EngineAccess,
     audio_routing: &mut AudioSourceRouting,
     bluetooth: Option<&BluetoothService>,
     spotify: Option<&dyn SpotifyProvider>,
@@ -962,16 +1050,14 @@ async fn apply_command(
     }
     let command = match command {
         ControlCommand::SetStripeTopology { topology } => {
-            return apply_stripe_topology(model, settings_store, desired_state, client, topology)
-                .await;
+            return apply_stripe_topology(model, settings_store, client, topology).await;
         }
         ControlCommand::TestStripe {
             stripe_id,
             pattern,
             topology,
         } => {
-            return run_stripe_test(model, desired_state, client, stripe_id, pattern, topology)
-                .await;
+            return run_stripe_test(model, client, stripe_id, pattern, topology).await;
         }
         ControlCommand::SelectAudioDevice { device } => {
             if model.calibration.is_some() {
@@ -983,7 +1069,6 @@ async fn apply_command(
             return select_audio_device(
                 model,
                 settings_store,
-                desired_state,
                 client,
                 audio_routing,
                 bluetooth,
@@ -998,15 +1083,7 @@ async fn apply_command(
                     "finish or cancel color calibration before changing the lights",
                 ));
             }
-            return apply_audio_settings(
-                model,
-                settings_store,
-                desired_state,
-                client,
-                &device,
-                profile,
-            )
-            .await;
+            return apply_audio_settings(model, settings_store, client, &device, profile).await;
         }
         ControlCommand::SetAudioSource { source } => {
             if model.calibration.is_some() {
@@ -1018,7 +1095,6 @@ async fn apply_command(
             return set_audio_source(
                 model,
                 settings_store,
-                desired_state,
                 client,
                 audio_routing,
                 bluetooth,
@@ -1061,7 +1137,6 @@ async fn apply_command(
             return finish_audio_calibration(
                 model,
                 settings_store,
-                desired_state,
                 client,
                 AudioCalibrationFinish {
                     session_id: &session_id,
@@ -1146,7 +1221,6 @@ async fn apply_command(
                         "auto" | "bluetooth" | "spotify" => {
                             maintain_configured_audio_source(
                                 model,
-                                desired_state,
                                 client,
                                 audio_routing,
                                 bluetooth,
@@ -1158,7 +1232,6 @@ async fn apply_command(
                             set_audio_source(
                                 model,
                                 settings_store,
-                                desired_state,
                                 client,
                                 audio_routing,
                                 bluetooth,
@@ -1711,19 +1784,12 @@ async fn apply_command(
                     return match rollback_result {
                         Ok(ResponseResult::SceneUpdated {
                             revision: received, ..
-                        }) if received == rollback_revision => {
-                            desired_state.send_replace(EngineDesiredState::for_model(
-                                model,
-                                model.config.engine_config(),
-                                rollback,
-                            ));
-                            Err(ApiError::new(
-                                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                                format!(
-                                    "settings were not saved; the previous engine state was restored: {error}"
-                                ),
-                            ))
-                        }
+                        }) if received == rollback_revision => Err(ApiError::new(
+                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                            format!(
+                                "settings were not saved; the previous engine state was restored: {error}"
+                            ),
+                        )),
                         rollback_result => {
                             model.engine_error = Some(format!(
                                 "settings persistence failed ({error}) and engine rollback was not acknowledged ({rollback_result:?})"
@@ -1736,11 +1802,6 @@ async fn apply_command(
                     };
                 }
             }
-            desired_state.send_replace(EngineDesiredState::for_model(
-                &candidate,
-                candidate.config.engine_config(),
-                update,
-            ));
             *model = candidate;
             Ok(())
         }
@@ -1758,8 +1819,7 @@ async fn apply_command(
 async fn apply_stripe_topology(
     model: &mut ControlModel,
     settings_store: &mut SettingsStore,
-    desired_state: &watch::Sender<EngineDesiredState>,
-    client: &EngineClient,
+    client: &EngineAccess,
     topology: StripeTopologySettings,
 ) -> Result<(), ApiError> {
     topology
@@ -1821,7 +1881,6 @@ async fn apply_stripe_topology(
                 return rollback_topology(
                     model,
                     client,
-                    desired_state,
                     revision,
                     reason,
                     axum::http::StatusCode::BAD_GATEWAY,
@@ -1850,7 +1909,6 @@ async fn apply_stripe_topology(
             return rollback_topology(
                 model,
                 client,
-                desired_state,
                 revision,
                 reason,
                 axum::http::StatusCode::BAD_GATEWAY,
@@ -1864,7 +1922,6 @@ async fn apply_stripe_topology(
         return rollback_topology(
             model,
             client,
-            desired_state,
             revision,
             format!("stripe topology was not saved: {error}"),
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
@@ -1872,34 +1929,21 @@ async fn apply_stripe_topology(
         )
         .await;
     }
-
-    desired_state.send_replace(EngineDesiredState::for_model(
-        &candidate,
-        proposed_config,
-        update,
-    ));
     *model = candidate;
     Ok(())
 }
 
 async fn rollback_topology(
     model: &mut ControlModel,
-    client: &EngineClient,
-    desired_state: &watch::Sender<EngineDesiredState>,
+    client: &EngineAccess,
     revision: u64,
     reason: String,
     status: axum::http::StatusCode,
     restore_engine_config: bool,
 ) -> Result<(), ApiError> {
     let rollback_revision = revision.saturating_add(1);
-    if let Err(rollback_error) = restore_engine_topology(
-        model,
-        client,
-        desired_state,
-        rollback_revision,
-        restore_engine_config,
-    )
-    .await
+    if let Err(rollback_error) =
+        restore_engine_topology(model, client, rollback_revision, restore_engine_config).await
     {
         let message =
             format!("{reason}; previous topology rollback was not acknowledged: {rollback_error}");
@@ -1917,8 +1961,7 @@ async fn rollback_topology(
 
 async fn run_stripe_test(
     model: &mut ControlModel,
-    desired_state: &watch::Sender<EngineDesiredState>,
-    client: &EngineClient,
+    client: &EngineAccess,
     stripe_id: String,
     pattern: String,
     topology: Option<StripeTopologySettings>,
@@ -2005,7 +2048,6 @@ async fn run_stripe_test(
                 return rollback_topology(
                     model,
                     client,
-                    desired_state,
                     test_revision,
                     reason,
                     axum::http::StatusCode::BAD_GATEWAY,
@@ -2029,7 +2071,6 @@ async fn run_stripe_test(
             return rollback_topology(
                 model,
                 client,
-                desired_state,
                 test_revision,
                 reason,
                 axum::http::StatusCode::BAD_GATEWAY,
@@ -2038,22 +2079,11 @@ async fn run_stripe_test(
             .await;
         }
     }
-    desired_state.send_replace(EngineDesiredState::for_model(
-        model,
-        test_engine_config,
-        test_scene,
-    ));
 
     tokio::time::sleep(Duration::from_secs(3)).await;
     let restore_revision = test_revision.saturating_add(1);
-    if let Err(error) = restore_engine_topology(
-        model,
-        client,
-        desired_state,
-        restore_revision,
-        engine_config_changed,
-    )
-    .await
+    if let Err(error) =
+        restore_engine_topology(model, client, restore_revision, engine_config_changed).await
     {
         let message = format!(
             "stripe test ended, but the previous output state could not be restored: {error}"
@@ -2069,8 +2099,7 @@ async fn run_stripe_test(
 
 async fn restore_engine_topology(
     model: &mut ControlModel,
-    client: &EngineClient,
-    desired_state: &watch::Sender<EngineDesiredState>,
+    client: &EngineAccess,
     revision: u64,
     restore_engine_config: bool,
 ) -> Result<(), String> {
@@ -2102,11 +2131,6 @@ async fn restore_engine_topology(
         }) if received == revision => {
             model.revision = revision;
             model.engine_error = None;
-            desired_state.send_replace(EngineDesiredState::for_model(
-                model,
-                model.config.engine_config(),
-                scene,
-            ));
             Ok(())
         }
         result => {
@@ -2158,11 +2182,7 @@ impl WithStripeId for OutputControl {
     }
 }
 
-async fn expire_color_calibration(
-    model: &mut ControlModel,
-    client: &EngineClient,
-    desired_state: &watch::Sender<EngineDesiredState>,
-) {
+async fn expire_color_calibration(model: &mut ControlModel, client: &EngineAccess) {
     let expired = model
         .calibration
         .as_ref()
@@ -2178,11 +2198,6 @@ async fn expire_color_calibration(
     let revision = model.revision.saturating_add(1);
     candidate.revision = revision;
     let update = candidate.render_scene(revision);
-    desired_state.send_replace(EngineDesiredState::for_model(
-        &candidate,
-        model.config.engine_config(),
-        update.clone(),
-    ));
 
     match client.update_scene(update).await {
         Ok(ResponseResult::SceneUpdated {
@@ -2406,7 +2421,7 @@ fn advance_audio_calibration(model: &mut ControlModel, status: &EngineAudioStatu
 
 async fn start_audio_calibration(
     model: &mut ControlModel,
-    client: &EngineClient,
+    client: &EngineAccess,
     session_id: String,
     requested_device: &str,
     duration_seconds: f64,
@@ -2547,8 +2562,7 @@ struct AudioCalibrationFinish<'a> {
 async fn finish_audio_calibration(
     model: &mut ControlModel,
     settings_store: &mut SettingsStore,
-    desired_state: &watch::Sender<EngineDesiredState>,
-    client: &EngineClient,
+    client: &EngineAccess,
     finish: AudioCalibrationFinish<'_>,
 ) -> Result<(), ApiError> {
     let AudioCalibrationFinish {
@@ -2617,15 +2631,7 @@ async fn finish_audio_calibration(
     if session.two_step {
         profile.input_noise_floor = result.recommended_input_noise_floor;
     }
-    apply_audio_settings(
-        model,
-        settings_store,
-        desired_state,
-        client,
-        &session.device_name,
-        profile,
-    )
-    .await?;
+    apply_audio_settings(model, settings_store, client, &session.device_name, profile).await?;
     model.audio_calibration = None;
     Ok(())
 }
@@ -2722,11 +2728,11 @@ fn percentile(values: &[f64], percentile_value: f64) -> f64 {
     ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower as f64)
 }
 
-async fn audio_devices(client: &EngineClient) -> Result<Vec<InputAudioDevice>, ApiError> {
+async fn audio_devices(client: &EngineAccess) -> Result<Vec<InputAudioDevice>, ApiError> {
     match client.request(RequestCommand::AudioDevices).await {
         Ok(ResponseResult::AudioDevices { devices }) => Ok(devices),
         Ok(ResponseResult::Error { code, message }) => {
-            Err(engine_api_error(EngineClientError::Engine {
+            Err(engine_api_error(EngineAccessError::Engine {
                 code,
                 message,
             }))
@@ -2847,8 +2853,7 @@ fn identity_settings_value(model: &ControlModel, spotify_restart_requested: bool
 async fn select_audio_device(
     model: &mut ControlModel,
     settings_store: &mut SettingsStore,
-    desired_state: &watch::Sender<EngineDesiredState>,
-    client: &EngineClient,
+    client: &EngineAccess,
     audio_routing: &mut AudioSourceRouting,
     bluetooth: Option<&BluetoothService>,
     requested_device: &str,
@@ -2907,7 +2912,7 @@ async fn select_audio_device(
             ));
         }
         Ok(ResponseResult::Error { code, message }) => {
-            return Err(engine_api_error(EngineClientError::Engine {
+            return Err(engine_api_error(EngineAccessError::Engine {
                 code,
                 message,
             }));
@@ -2959,14 +2964,7 @@ async fn select_audio_device(
         }) if received == revision => {}
         result => {
             let reason = format!("engine did not acknowledge the audio-device scene: {result:?}");
-            return rollback_audio_scene_and_capture(
-                model,
-                client,
-                desired_state,
-                revision,
-                Some(reason),
-            )
-            .await;
+            return rollback_audio_scene_and_capture(model, client, revision, Some(reason)).await;
         }
     }
 
@@ -2975,21 +2973,8 @@ async fn select_audio_device(
         ("audio_profiles".to_owned(), profiles),
     ]) {
         let reason = format!("audio device selection was not saved: {error}");
-        return rollback_audio_scene_and_capture(
-            model,
-            client,
-            desired_state,
-            revision,
-            Some(reason),
-        )
-        .await;
+        return rollback_audio_scene_and_capture(model, client, revision, Some(reason)).await;
     }
-
-    desired_state.send_replace(EngineDesiredState::for_model(
-        &candidate,
-        candidate.config.engine_config(),
-        update,
-    ));
     *model = candidate;
     Ok(())
 }
@@ -2997,8 +2982,7 @@ async fn select_audio_device(
 async fn apply_audio_settings(
     model: &mut ControlModel,
     settings_store: &mut SettingsStore,
-    desired_state: &watch::Sender<EngineDesiredState>,
-    client: &EngineClient,
+    client: &EngineAccess,
     requested_device: &str,
     mut profile: AudioTuningProfile,
 ) -> Result<(), ApiError> {
@@ -3098,7 +3082,6 @@ async fn apply_audio_settings(
                 return rollback_audio_profile_and_scene(
                     model,
                     client,
-                    desired_state,
                     revision,
                     &device_name,
                     &previous_config,
@@ -3106,7 +3089,7 @@ async fn apply_audio_settings(
                 )
                 .await;
             }
-            return rollback_scene_only(model, client, desired_state, revision, reason).await;
+            return rollback_scene_only(model, client, revision, reason).await;
         }
     }
 
@@ -3116,7 +3099,6 @@ async fn apply_audio_settings(
             return rollback_audio_profile_and_scene(
                 model,
                 client,
-                desired_state,
                 revision,
                 &device_name,
                 &previous_config,
@@ -3124,14 +3106,8 @@ async fn apply_audio_settings(
             )
             .await;
         }
-        return rollback_scene_only(model, client, desired_state, revision, reason).await;
+        return rollback_scene_only(model, client, revision, reason).await;
     }
-
-    desired_state.send_replace(EngineDesiredState::for_model(
-        &candidate,
-        candidate.config.engine_config(),
-        update,
-    ));
     *model = candidate;
     Ok(())
 }
@@ -3139,8 +3115,7 @@ async fn apply_audio_settings(
 async fn set_audio_source(
     model: &mut ControlModel,
     settings_store: &mut SettingsStore,
-    desired_state: &watch::Sender<EngineDesiredState>,
-    client: &EngineClient,
+    client: &EngineAccess,
     audio_routing: &mut AudioSourceRouting,
     bluetooth: Option<&BluetoothService>,
     spotify: Option<&dyn SpotifyProvider>,
@@ -3159,15 +3134,7 @@ async fn set_audio_source(
         "auto" => {
             model.audio_source = "auto".to_owned();
             audio_routing.spotify_retry_at = None;
-            maintain_configured_audio_source(
-                model,
-                desired_state,
-                client,
-                audio_routing,
-                bluetooth,
-                spotify,
-            )
-            .await
+            maintain_configured_audio_source(model, client, audio_routing, bluetooth, spotify).await
         }
         "off" => {
             if model
@@ -3185,7 +3152,6 @@ async fn set_audio_source(
             model.audio_source = "off".to_owned();
             model.active_audio_source = "off".to_owned();
             model.revision = model.revision.saturating_add(1);
-            desired_state.send_modify(|desired| desired.audio = model.desired_audio());
             Ok(())
         }
         "mic" => {
@@ -3226,7 +3192,6 @@ async fn set_audio_source(
             select_audio_device(
                 model,
                 settings_store,
-                desired_state,
                 client,
                 audio_routing,
                 bluetooth,
@@ -3236,7 +3201,6 @@ async fn set_audio_source(
             model.audio_source = "mic".to_owned();
             model.active_audio_source = "mic".to_owned();
             model.revision = model.revision.saturating_add(1);
-            desired_state.send_modify(|desired| desired.audio = model.desired_audio());
             Ok(())
         }
         "demo" => {
@@ -3269,13 +3233,12 @@ async fn set_audio_source(
                 }
                 return Err(error);
             }
-            commit_audio_source(model, desired_state, "demo".to_owned());
+            commit_audio_source(model, "demo".to_owned());
             Ok(())
         }
         "bluetooth" | "spotify" => {
             let result = activate_monitor_source(
                 model,
-                desired_state,
                 client,
                 audio_routing,
                 bluetooth,
@@ -3295,8 +3258,7 @@ async fn set_audio_source(
 
 async fn maintain_configured_audio_source(
     model: &mut ControlModel,
-    desired_state: &watch::Sender<EngineDesiredState>,
-    client: &EngineClient,
+    client: &EngineAccess,
     audio_routing: &mut AudioSourceRouting,
     bluetooth: Option<&BluetoothService>,
     spotify: Option<&dyn SpotifyProvider>,
@@ -3328,20 +3290,11 @@ async fn maintain_configured_audio_source(
         let mut last_error = None;
         for source in candidates {
             let result = if source == "mic" {
-                activate_microphone_capture(
-                    model,
-                    desired_state,
-                    client,
-                    audio_routing,
-                    bluetooth,
-                    None,
-                    "auto",
-                )
-                .await
+                activate_microphone_capture(model, client, audio_routing, bluetooth, None, "auto")
+                    .await
             } else {
                 activate_monitor_source(
                     model,
-                    desired_state,
                     client,
                     audio_routing,
                     bluetooth,
@@ -3378,16 +3331,7 @@ async fn maintain_configured_audio_source(
 
     match model.audio_source.as_str() {
         "auto" => {
-            activate_microphone_capture(
-                model,
-                desired_state,
-                client,
-                audio_routing,
-                bluetooth,
-                None,
-                "auto",
-            )
-            .await
+            activate_microphone_capture(model, client, audio_routing, bluetooth, None, "auto").await
         }
         "bluetooth" => match bluetooth.map(BluetoothService::status) {
             Some(status)
@@ -3397,7 +3341,6 @@ async fn maintain_configured_audio_source(
             {
                 activate_monitor_source(
                     model,
-                    desired_state,
                     client,
                     audio_routing,
                     bluetooth,
@@ -3410,7 +3353,6 @@ async fn maintain_configured_audio_source(
             _ => {
                 deactivate_unavailable_source(
                     model,
-                    desired_state,
                     client,
                     audio_routing,
                     bluetooth,
@@ -3428,7 +3370,6 @@ async fn maintain_configured_audio_source(
             {
                 activate_monitor_source(
                     model,
-                    desired_state,
                     client,
                     audio_routing,
                     bluetooth,
@@ -3440,7 +3381,6 @@ async fn maintain_configured_audio_source(
             } else {
                 deactivate_unavailable_source(
                     model,
-                    desired_state,
                     client,
                     audio_routing,
                     bluetooth,
@@ -3480,8 +3420,7 @@ fn automatic_spotify_retry_ready(now: Instant, retry_at: Option<Instant>) -> boo
 
 async fn activate_monitor_source(
     model: &mut ControlModel,
-    desired_state: &watch::Sender<EngineDesiredState>,
-    client: &EngineClient,
+    client: &EngineAccess,
     audio_routing: &mut AudioSourceRouting,
     bluetooth: Option<&BluetoothService>,
     spotify: Option<&dyn SpotifyProvider>,
@@ -3586,7 +3525,7 @@ async fn activate_monitor_source(
     let result = start_audio_capture(model, client, source, selector, &profile, false).await;
     if result.is_ok() {
         model.audio_started = true;
-        commit_audio_source(model, desired_state, configured_source.to_owned());
+        commit_audio_source(model, configured_source.to_owned());
     } else {
         restore_audio_source(audio_routing, Some(bluetooth)).await;
         if let Err(error) = restore_audio_capture(model, client).await {
@@ -3604,8 +3543,7 @@ async fn activate_monitor_source(
 
 async fn activate_microphone_capture(
     model: &mut ControlModel,
-    desired_state: &watch::Sender<EngineDesiredState>,
-    client: &EngineClient,
+    client: &EngineAccess,
     audio_routing: &mut AudioSourceRouting,
     bluetooth: Option<&BluetoothService>,
     requested_selector: Option<String>,
@@ -3680,13 +3618,13 @@ async fn activate_microphone_capture(
         return Err(error);
     }
     model.audio_started = true;
-    commit_audio_source(model, desired_state, configured_source.to_owned());
+    commit_audio_source(model, configured_source.to_owned());
     Ok(())
 }
 
 async fn start_audio_capture(
     model: &mut ControlModel,
-    client: &EngineClient,
+    client: &EngineAccess,
     source: &str,
     selector: Option<String>,
     profile: &AudioTuningProfile,
@@ -3708,7 +3646,7 @@ async fn start_audio_capture(
             ));
         }
         Ok(ResponseResult::Error { code, message }) => {
-            return Err(engine_api_error(EngineClientError::Engine {
+            return Err(engine_api_error(EngineAccessError::Engine {
                 code,
                 message,
             }));
@@ -3740,21 +3678,14 @@ async fn start_audio_capture(
     }
 }
 
-fn commit_audio_source(
-    model: &mut ControlModel,
-    desired_state: &watch::Sender<EngineDesiredState>,
-    configured_source: String,
-) {
+fn commit_audio_source(model: &mut ControlModel, configured_source: String) {
     model.audio_source = configured_source;
     model.revision = model.revision.saturating_add(1);
-    let audio = model.desired_audio();
-    desired_state.send_modify(|desired| desired.audio = audio);
 }
 
 async fn deactivate_unavailable_source(
     model: &mut ControlModel,
-    desired_state: &watch::Sender<EngineDesiredState>,
-    client: &EngineClient,
+    client: &EngineAccess,
     audio_routing: &mut AudioSourceRouting,
     bluetooth: Option<&BluetoothService>,
     source: &str,
@@ -3771,7 +3702,6 @@ async fn deactivate_unavailable_source(
     model.active_audio_source = source.to_owned();
     model.audio_started = false;
     model.set_audio_status(Err(error.to_owned()));
-    desired_state.send_modify(|desired| desired.audio = model.desired_audio());
     Ok(())
 }
 
@@ -3813,7 +3743,7 @@ fn bluetooth_control_error(error: BluetoothError) -> ApiError {
 
 async fn stop_audio_engine(
     model: &mut ControlModel,
-    client: &EngineClient,
+    client: &EngineAccess,
 ) -> Result<(), ApiError> {
     match client.request(RequestCommand::AudioStop).await {
         Ok(ResponseResult::AudioStopped) => {
@@ -3825,7 +3755,7 @@ async fn stop_audio_engine(
             Ok(())
         }
         Ok(ResponseResult::Error { code, message }) => {
-            Err(engine_api_error(EngineClientError::Engine {
+            Err(engine_api_error(EngineAccessError::Engine {
                 code,
                 message,
             }))
@@ -3841,7 +3771,7 @@ async fn stop_audio_engine(
 async fn reconcile_demo_audio_status(
     source: &str,
     snapshot: Result<EngineAudioStatus, String>,
-    client: &EngineClient,
+    client: &EngineAccess,
 ) -> Result<EngineAudioStatus, String> {
     if source != "demo" || snapshot.as_ref().is_ok_and(|status| status.active) {
         return snapshot;
@@ -3856,7 +3786,7 @@ async fn reconcile_demo_audio_status(
 
 async fn rollback_audio_capture(
     model: &mut ControlModel,
-    client: &EngineClient,
+    client: &EngineAccess,
     reason: String,
 ) -> Result<(), ApiError> {
     if let Err(error) = restore_audio_capture(model, client).await {
@@ -3871,8 +3801,7 @@ async fn rollback_audio_capture(
 
 async fn rollback_audio_scene_and_capture(
     model: &mut ControlModel,
-    client: &EngineClient,
-    desired_state: &watch::Sender<EngineDesiredState>,
+    client: &EngineAccess,
     revision: u64,
     reason: Option<String>,
 ) -> Result<(), ApiError> {
@@ -3880,7 +3809,7 @@ async fn rollback_audio_scene_and_capture(
     if let Err(error) = restore_audio_capture(model, client).await {
         failures.push(format!("audio capture rollback failed: {error}"));
     }
-    if let Err(error) = restore_scene(model, client, desired_state, revision).await {
+    if let Err(error) = restore_scene(model, client, revision).await {
         failures.push(format!("scene rollback failed: {error}"));
     }
     if !failures.is_empty() {
@@ -3898,8 +3827,7 @@ async fn rollback_audio_scene_and_capture(
 
 async fn rollback_audio_profile_and_scene(
     model: &mut ControlModel,
-    client: &EngineClient,
-    desired_state: &watch::Sender<EngineDesiredState>,
+    client: &EngineAccess,
     revision: u64,
     device_name: &str,
     previous_profile: &AudioTuningProfile,
@@ -3913,7 +3841,7 @@ async fn rollback_audio_profile_and_scene(
         audio_result,
         Ok(ResponseResult::AudioConfigured { active: true })
     );
-    let scene_rollback = restore_scene(model, client, desired_state, revision).await;
+    let scene_rollback = restore_scene(model, client, revision).await;
     if !audio_rollback || scene_rollback.is_err() {
         let audio_error = if audio_rollback {
             String::new()
@@ -3937,12 +3865,11 @@ async fn rollback_audio_profile_and_scene(
 
 async fn rollback_scene_only(
     model: &mut ControlModel,
-    client: &EngineClient,
-    desired_state: &watch::Sender<EngineDesiredState>,
+    client: &EngineAccess,
     revision: u64,
     reason: String,
 ) -> Result<(), ApiError> {
-    restore_scene(model, client, desired_state, revision)
+    restore_scene(model, client, revision)
         .await
         .map_err(|error| {
             model.engine_error = Some(format!("{reason}; {error}"));
@@ -3959,8 +3886,7 @@ async fn rollback_scene_only(
 
 async fn restore_scene(
     model: &mut ControlModel,
-    client: &EngineClient,
-    desired_state: &watch::Sender<EngineDesiredState>,
+    client: &EngineAccess,
     revision: u64,
 ) -> Result<(), String> {
     let rollback_revision = revision.saturating_add(1);
@@ -3970,11 +3896,6 @@ async fn restore_scene(
             revision: received, ..
         }) if received == rollback_revision => {
             model.revision = rollback_revision;
-            desired_state.send_replace(EngineDesiredState::for_model(
-                model,
-                model.config.engine_config(),
-                rollback,
-            ));
             Ok(())
         }
         result => Err(format!("previous scene was not restored: {result:?}")),
@@ -3983,7 +3904,7 @@ async fn restore_scene(
 
 async fn restore_audio_capture(
     model: &mut ControlModel,
-    client: &EngineClient,
+    client: &EngineAccess,
 ) -> Result<(), String> {
     let previous = model
         .audio_status
@@ -4042,7 +3963,7 @@ async fn restore_audio_capture(
 }
 
 async fn configure_audio(
-    client: &EngineClient,
+    client: &EngineAccess,
     config: lumistripe_engine_audio::AudioConfig,
 ) -> Result<(), ApiError> {
     config
@@ -4058,7 +3979,7 @@ async fn configure_audio(
             "Rust audio capture stopped while applying its configuration",
         )),
         Ok(ResponseResult::Error { code, message }) => {
-            Err(engine_api_error(EngineClientError::Engine {
+            Err(engine_api_error(EngineAccessError::Engine {
                 code,
                 message,
             }))
@@ -4073,7 +3994,7 @@ async fn configure_audio(
 
 async fn ensure_audio_active(
     model: &mut ControlModel,
-    client: &EngineClient,
+    client: &EngineAccess,
 ) -> Result<(), ApiError> {
     if model.audio_source == "off" {
         return Err(ApiError::new(
@@ -4132,7 +4053,7 @@ async fn ensure_audio_active(
             axum::http::StatusCode::CONFLICT,
             "dynamic mode requires an available microphone input",
         )),
-        Err(EngineClientError::Engine { message, .. }) => Err(ApiError::new(
+        Err(EngineAccessError::Engine { message, .. }) => Err(ApiError::new(
             axum::http::StatusCode::CONFLICT,
             format!("dynamic mode requires an available microphone input: {message}"),
         )),
@@ -4144,9 +4065,9 @@ async fn ensure_audio_active(
     }
 }
 
-fn engine_api_error(error: EngineClientError) -> ApiError {
+fn engine_api_error(error: EngineAccessError) -> ApiError {
     match error {
-        EngineClientError::Engine { code, message } => {
+        EngineAccessError::Engine { code, message } => {
             let status = match code {
                 lumistripe_engine_protocol::EngineErrorCode::InvalidConfig
                 | lumistripe_engine_protocol::EngineErrorCode::InvalidFrame
@@ -4165,11 +4086,7 @@ fn engine_api_error(error: EngineClientError) -> ApiError {
             };
             ApiError::new(status, message)
         }
-        EngineClientError::DeadlineExceeded => ApiError::new(
-            axum::http::StatusCode::GATEWAY_TIMEOUT,
-            "runtime command timed out",
-        ),
-        error => ApiError::new(
+        EngineAccessError::Unavailable(error) => ApiError::new(
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             format!("Rust engine is unavailable: {error}"),
         ),
@@ -4256,12 +4173,12 @@ impl TargetsMut for ControlModel {
 #[cfg(test)]
 mod tests {
     use super::{
-        AudioCalibrationFinish, AudioSourceRouting, ControlPlane, SpotifyDeviceNameHelper,
-        advance_audio_calibration, audio_calibration_value, automatic_audio_source_candidates,
-        automatic_spotify_retry_ready, begin_audio_calibration_music, expire_color_calibration,
-        finish_audio_calibration, maintain_configured_audio_source, microphone_calibration_result,
-        restore_audio_source, set_audio_source, set_identity_settings,
-        should_poll_automatic_audio_source,
+        AudioCalibrationFinish, AudioSourceRouting, ControlPlane, EngineAccess,
+        SpotifyDeviceNameHelper, advance_audio_calibration, audio_calibration_value,
+        automatic_audio_source_candidates, automatic_spotify_retry_ready,
+        begin_audio_calibration_music, expire_color_calibration, finish_audio_calibration,
+        maintain_configured_audio_source, microphone_calibration_result, restore_audio_source,
+        set_audio_source, set_identity_settings, should_poll_automatic_audio_source,
     };
     use crate::bluetooth::BluetoothService;
     use crate::bluetooth_models::BluetoothDevice;
@@ -4276,11 +4193,10 @@ mod tests {
     };
     use crate::state::{
         ActiveAudioCalibration, ActiveColorCalibration, AudioCalibrationResult,
-        COLOR_CALIBRATION_TIMEOUT, ControlModel, EngineDesiredState, PlaybackMode,
+        COLOR_CALIBRATION_TIMEOUT, ControlModel, PlaybackMode,
     };
     use futures_util::future::BoxFuture;
     use lumistripe_engine_audio::InputAudioDevice;
-    use lumistripe_engine_client::EngineClient;
     use lumistripe_engine_protocol::{
         EngineAudioStatus, EngineErrorCode, Request, RequestCommand, Response, ResponseResult,
     };
@@ -4995,18 +4911,12 @@ mod tests {
         config.runtime_kind = "hardware";
         let mut settings_store = SettingsStore::open(&config.settings_file).unwrap();
         let mut model = ControlModel::new(config.clone(), DashboardSettings::default());
-        let (desired_state, _) = watch::channel(EngineDesiredState {
-            config: config.engine_config(),
-            scene: model.initial_scene(),
-            audio: None,
-        });
-        let client = EngineClient::new(socket, Duration::from_secs(1));
+        let client = EngineAccess::new(socket, Duration::from_secs(1));
         let mut routing = AudioSourceRouting::default();
 
         set_audio_source(
             &mut model,
             &mut settings_store,
-            &desired_state,
             &client,
             &mut routing,
             Some(&bluetooth),
@@ -5066,18 +4976,12 @@ mod tests {
         config.runtime_kind = "hardware";
         let mut settings_store = SettingsStore::open(&config.settings_file).unwrap();
         let mut model = ControlModel::new(config.clone(), DashboardSettings::default());
-        let (desired_state, _) = watch::channel(EngineDesiredState {
-            config: config.engine_config(),
-            scene: model.initial_scene(),
-            audio: None,
-        });
-        let client = EngineClient::new(socket, Duration::from_secs(1));
+        let client = EngineAccess::new(socket, Duration::from_secs(1));
         let mut routing = AudioSourceRouting::default();
 
         set_audio_source(
             &mut model,
             &mut settings_store,
-            &desired_state,
             &client,
             &mut routing,
             Some(&bluetooth),
@@ -5141,17 +5045,11 @@ mod tests {
         config.runtime_kind = "hardware";
         let mut model = ControlModel::new(config.clone(), DashboardSettings::default());
         assert_eq!(model.audio_source, "auto");
-        let (desired_state, _) = watch::channel(EngineDesiredState {
-            config: config.engine_config(),
-            scene: model.initial_scene(),
-            audio: None,
-        });
-        let client = EngineClient::new(socket, Duration::from_secs(1));
+        let client = EngineAccess::new(socket, Duration::from_secs(1));
         let mut routing = AudioSourceRouting::default();
 
         maintain_configured_audio_source(
             &mut model,
-            &desired_state,
             &client,
             &mut routing,
             Some(&bluetooth),
@@ -5191,7 +5089,6 @@ mod tests {
         let command_count = commands.lock().unwrap().len();
         maintain_configured_audio_source(
             &mut model,
-            &desired_state,
             &client,
             &mut routing,
             Some(&bluetooth),
@@ -5229,24 +5126,12 @@ mod tests {
         let mut config = test_config(directory.path().join("settings.json"));
         config.runtime_kind = "hardware";
         let mut model = ControlModel::new(config.clone(), DashboardSettings::default());
-        let (desired_state, _) = watch::channel(EngineDesiredState {
-            config: config.engine_config(),
-            scene: model.initial_scene(),
-            audio: None,
-        });
-        let client = EngineClient::new(socket, Duration::from_secs(1));
+        let client = EngineAccess::new(socket, Duration::from_secs(1));
         let mut routing = AudioSourceRouting::default();
 
-        maintain_configured_audio_source(
-            &mut model,
-            &desired_state,
-            &client,
-            &mut routing,
-            Some(&bluetooth),
-            None,
-        )
-        .await
-        .unwrap();
+        maintain_configured_audio_source(&mut model, &client, &mut routing, Some(&bluetooth), None)
+            .await
+            .unwrap();
 
         assert_eq!(model.audio_source, "auto");
         assert_eq!(model.active_audio_source, "mic");
@@ -5322,17 +5207,11 @@ mod tests {
                 },
             );
         }
-        let (desired_state, _) = watch::channel(EngineDesiredState {
-            config: config.engine_config(),
-            scene: model.initial_scene(),
-            audio: None,
-        });
-        let client = EngineClient::new(socket, Duration::from_secs(1));
+        let client = EngineAccess::new(socket, Duration::from_secs(1));
         let mut routing = AudioSourceRouting::default();
 
         maintain_configured_audio_source(
             &mut model,
-            &desired_state,
             &client,
             &mut routing,
             Some(&bluetooth),
@@ -5354,7 +5233,6 @@ mod tests {
         *spotify_status.lock().unwrap() = spotify_status_for_handoff(false);
         maintain_configured_audio_source(
             &mut model,
-            &desired_state,
             &client,
             &mut routing,
             Some(&bluetooth),
@@ -5376,7 +5254,6 @@ mod tests {
         assert!(!bluetooth.refresh().await.streaming);
         maintain_configured_audio_source(
             &mut model,
-            &desired_state,
             &client,
             &mut routing,
             Some(&bluetooth),
@@ -5397,7 +5274,6 @@ mod tests {
         *spotify_status.lock().unwrap() = spotify_status_for_handoff(true);
         maintain_configured_audio_source(
             &mut model,
-            &desired_state,
             &client,
             &mut routing,
             Some(&bluetooth),
@@ -5409,7 +5285,6 @@ mod tests {
 
         maintain_configured_audio_source(
             &mut model,
-            &desired_state,
             &client,
             &mut routing,
             Some(&bluetooth),
@@ -5600,7 +5475,7 @@ mod tests {
                 .unwrap();
             write.write_all(b"\n").await.unwrap();
         });
-        let client = EngineClient::new(socket, Duration::from_secs(1));
+        let client = EngineAccess::new(socket, Duration::from_secs(1));
         let config = crate::config::AppConfig {
             outputs: vec![crate::config::EngineOutputOptions {
                 id: "main".to_owned(),
@@ -5632,11 +5507,6 @@ mod tests {
             config.clone(),
             crate::settings::DashboardSettings::default(),
         );
-        let (desired_state, _) = watch::channel(EngineDesiredState {
-            config: config.engine_config(),
-            scene: model.initial_scene(),
-            audio: None,
-        });
         let (snapshot_tx, snapshot) =
             watch::channel(Some(Ok(std::sync::Arc::new(ResponseResult::Health {
                 status: lumistripe_engine_protocol::EngineStatus::Ready,
@@ -5684,7 +5554,6 @@ mod tests {
         let (plane, task) = crate::control::ControlPlane::start(
             model,
             settings_store,
-            desired_state,
             client,
             snapshot,
             audio,
@@ -5715,19 +5584,13 @@ mod tests {
         let config = test_config(settings_path.clone());
         let settings_store = SettingsStore::open(&settings_path).unwrap();
         let model = ControlModel::new(config.clone(), DashboardSettings::default());
-        let (desired_state, desired_receiver) = watch::channel(EngineDesiredState {
-            config: config.engine_config(),
-            scene: model.initial_scene(),
-            audio: None,
-        });
         let (health_tx, health) = watch::channel(None);
         let (audio_tx, audio) = watch::channel(None);
         let cancellation = tokio_util::sync::CancellationToken::new();
         let (plane, worker) = ControlPlane::start(
             model,
             settings_store,
-            desired_state,
-            EngineClient::new(socket, Duration::from_secs(1)),
+            EngineAccess::new(socket, Duration::from_secs(1)),
             health,
             audio,
             None,
@@ -5738,10 +5601,6 @@ mod tests {
         let state = plane.set_stripe_topology(test_topology()).await.unwrap();
         assert_eq!(state["stripe_topology"]["layout"], "continuous");
         assert_eq!(state["stripe_topology"]["outputs"][0]["pixels"], 16);
-        let desired = desired_receiver.borrow();
-        assert_eq!(desired.config.outputs[0].id, "main");
-        assert_eq!(desired.config.outputs[0].pixel_count, 16);
-        assert_eq!(desired.scene.outputs.len(), 1);
         let persisted: Value =
             serde_json::from_slice(&std::fs::read(settings_path).unwrap()).unwrap();
         assert_eq!(persisted["stripes"]["layout"], "continuous");
@@ -5765,19 +5624,13 @@ mod tests {
         let settings_store = SettingsStore::open(&settings_path).unwrap();
         std::fs::create_dir(&settings_path).unwrap();
         let model = ControlModel::new(config.clone(), DashboardSettings::default());
-        let (desired_state, desired_receiver) = watch::channel(EngineDesiredState {
-            config: config.engine_config(),
-            scene: model.initial_scene(),
-            audio: None,
-        });
         let (health_tx, health) = watch::channel(None);
         let (audio_tx, audio) = watch::channel(None);
         let cancellation = tokio_util::sync::CancellationToken::new();
         let (plane, worker) = ControlPlane::start(
             model,
             settings_store,
-            desired_state,
-            EngineClient::new(socket, Duration::from_secs(1)),
+            EngineAccess::new(socket, Duration::from_secs(1)),
             health,
             audio,
             None,
@@ -5800,9 +5653,6 @@ mod tests {
                 .unwrap()
                 .contains("previous topology was restored")
         );
-        let desired = desired_receiver.borrow();
-        assert_eq!(desired.config.outputs[0].pixel_count, 8);
-        assert_eq!(desired.scene.revision, 3);
         let state = plane.state();
         assert_eq!(
             state.borrow()["stripe_topology"]["outputs"][0]["id"],
@@ -5843,25 +5693,16 @@ mod tests {
                 - Duration::from_secs(1),
             original_corrections,
         });
-        let (desired_state, desired_receiver) = watch::channel(EngineDesiredState {
-            config: config.engine_config(),
-            scene: model.render_scene(1),
-            audio: None,
-        });
 
         expire_color_calibration(
             &mut model,
-            &EngineClient::new(socket, Duration::from_secs(1)),
-            &desired_state,
+            &EngineAccess::new(socket, Duration::from_secs(1)),
         )
         .await;
 
         assert!(model.calibration.is_none());
         assert!(!model.settings.color_corrections.contains_key("main"));
         assert_eq!(model.snapshot(0)["calibration"]["active"], false);
-        let desired = desired_receiver.borrow();
-        assert_eq!(desired.scene.outputs[0].color_correction, [255, 255, 255]);
-        drop(desired);
         server.await.unwrap();
     }
 
@@ -5967,17 +5808,11 @@ mod tests {
         status.frame.fresh = true;
         status.frame.sequence = 1;
         model.audio_status = Some(status);
-        let (desired_state, _) = watch::channel(EngineDesiredState {
-            config: config.engine_config(),
-            scene: model.initial_scene(),
-            audio: None,
-        });
         let mut settings_store = store;
         finish_audio_calibration(
             &mut model,
             &mut settings_store,
-            &desired_state,
-            &EngineClient::new(socket, Duration::from_secs(1)),
+            &EngineAccess::new(socket, Duration::from_secs(1)),
             AudioCalibrationFinish {
                 session_id: "audio-session",
                 apply: true,
@@ -6008,16 +5843,10 @@ mod tests {
         let config = test_config(settings_path);
         let mut model = ControlModel::new(config.clone(), DashboardSettings::default());
         model.audio_calibration = Some(audio_calibration_session(true));
-        let (desired_state, _) = watch::channel(EngineDesiredState {
-            config: config.engine_config(),
-            scene: model.initial_scene(),
-            audio: None,
-        });
         finish_audio_calibration(
             &mut model,
             &mut settings_store,
-            &desired_state,
-            &EngineClient::new(
+            &EngineAccess::new(
                 directory.path().join("unused.sock"),
                 Duration::from_millis(50),
             ),
@@ -6041,17 +5870,11 @@ mod tests {
         let mut settings_store = SettingsStore::open(&settings_path).unwrap();
         let config = test_config(settings_path);
         let mut model = ControlModel::new(config.clone(), DashboardSettings::default());
-        let (desired_state, _) = watch::channel(EngineDesiredState {
-            config: config.engine_config(),
-            scene: model.initial_scene(),
-            audio: None,
-        });
 
         let error = finish_audio_calibration(
             &mut model,
             &mut settings_store,
-            &desired_state,
-            &EngineClient::new(
+            &EngineAccess::new(
                 directory.path().join("unused.sock"),
                 Duration::from_millis(50),
             ),
@@ -6092,7 +5915,7 @@ mod tests {
                 .unwrap();
             assert_eq!(read, 0);
         });
-        let client = EngineClient::new(&socket, Duration::from_secs(5));
+        let client = EngineAccess::new(&socket, Duration::from_secs(5));
         let config = crate::config::AppConfig {
             outputs: vec![crate::config::EngineOutputOptions {
                 id: "main".to_owned(),
@@ -6123,11 +5946,6 @@ mod tests {
             config.clone(),
             crate::settings::DashboardSettings::default(),
         );
-        let (desired_state, _) = watch::channel(EngineDesiredState {
-            config: config.engine_config(),
-            scene: model.initial_scene(),
-            audio: None,
-        });
         let (health_tx, health) =
             watch::channel::<Option<Result<std::sync::Arc<ResponseResult>, String>>>(None);
         let (audio_tx, audio) = watch::channel::<
@@ -6138,7 +5956,6 @@ mod tests {
         let (plane, worker) = crate::control::ControlPlane::start(
             model,
             settings_store,
-            desired_state,
             client,
             health,
             audio,

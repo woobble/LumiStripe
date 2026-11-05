@@ -117,11 +117,13 @@ configuration remains untouched; an administrator must set
 `LUMI_WEB_BACKEND=rust` manually, then rerun the installer or updater.
 Existing settings are migrated and preserved by the Rust application.
 
-The installer and updater build the web server, engine, CLI, and deployment
-helper from one source commit. They stage a complete release and atomically
-activate it. The web launcher and engine restarts use binaries from that same
-release. The updater checks the service health after restart and attempts to
-restore the previous release if the check fails.
+The installer and updater build the web server, standalone engine, CLI, and
+deployment helper from one source commit. They stage a complete release and
+atomically activate it. The web server owns its engine in process and does not
+need an engine binary or Unix socket to start; the standalone engine remains
+deployed for the CLI and other IPC clients. Systemd restarts the complete web
+and engine owner if a native worker fails. The updater checks service health
+after restart and attempts to restore the previous release if the check fails.
 
 Run the installed CLI as the service user, for example:
 

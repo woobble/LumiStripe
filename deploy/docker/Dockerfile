@@ -122,7 +122,7 @@ WORKDIR /opt/lumistripe
 USER 10001:10001
 
 ENTRYPOINT ["/usr/local/bin/lumistripe-web"]
-CMD ["--simulate", "--host", "127.0.0.1", "--port", "8000", "--engine-binary", "/usr/local/bin/lumistripe-engine", "--static-dir", "/opt/lumistripe/static", "--settings-file", "/var/lib/lumistripe/settings.json"]
+CMD ["--simulate", "--host", "127.0.0.1", "--port", "8000", "--static-dir", "/opt/lumistripe/static", "--settings-file", "/var/lib/lumistripe/settings.json"]
 
 HEALTHCHECK --interval=10s --timeout=5s --retries=12 --start-period=30s \
     CMD curl --fail --silent http://127.0.0.1:8000/api/health >/dev/null || exit 1

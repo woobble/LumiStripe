@@ -11,12 +11,15 @@ use lumistripe_engine_protocol::{
     RenderBeatEvent, RenderEffectFeatures, RenderSelectorFeatures, RenderStructureEvent,
 };
 use std::collections::VecDeque;
-use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
+use std::io;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 const AUDIO_CONTROL_TIMEOUT: Duration = Duration::from_secs(4);
+const AUDIO_COMMAND_CAPACITY: usize = 16;
 const AUDIO_WORKER_POLL_INTERVAL: Duration = Duration::from_millis(4);
 const AUDIO_EVENT_HISTORY_CAPACITY: usize = 256;
 const AUDIO_STALL_TIMEOUT_NS: u64 = 1_500_000_000;
@@ -44,25 +47,24 @@ enum AudioCommand {
 
 /// Control-plane handle for the independent Rust audio worker.
 pub(super) struct NativeAudioWorker {
-    commands: Sender<AudioCommand>,
+    commands: SyncSender<AudioCommand>,
     status: Arc<Mutex<EngineAudioStatus>>,
     thread: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl NativeAudioWorker {
-    pub(super) fn new(output: OutputAudioHandle) -> Self {
-        let (commands, receiver) = mpsc::channel();
+    pub(super) fn new(output: OutputAudioHandle) -> io::Result<Self> {
+        let (commands, receiver) = mpsc::sync_channel(AUDIO_COMMAND_CAPACITY);
         let status = Arc::new(Mutex::new(EngineAudioStatus::default()));
         let worker_status = Arc::clone(&status);
         let thread = thread::Builder::new()
             .name("lumistripe-rust-audio".into())
-            .spawn(move || audio_worker_loop(receiver, output, worker_status))
-            .expect("Rust audio worker thread could not be created");
-        Self {
+            .spawn(move || audio_worker_loop(receiver, output, worker_status))?;
+        Ok(Self {
             commands,
             status,
             thread: Mutex::new(Some(thread)),
-        }
+        })
     }
 
     pub(super) fn start(
@@ -116,6 +118,24 @@ impl NativeAudioWorker {
             .clone()
     }
 
+    pub(super) fn worker_failure(&self) -> Option<String> {
+        let stopped = self
+            .thread
+            .lock()
+            .expect("Rust audio thread lock poisoned")
+            .as_ref()
+            .is_some_and(JoinHandle::is_finished);
+        stopped.then(|| "audio capture and DSP worker terminated unexpectedly".to_owned())
+    }
+
+    #[cfg(test)]
+    pub(super) fn is_stopped(&self) -> bool {
+        self.thread
+            .lock()
+            .expect("Rust audio thread lock poisoned")
+            .is_none()
+    }
+
     pub(super) fn shutdown(&self) {
         let Some(thread) = self
             .thread
@@ -134,7 +154,18 @@ impl NativeAudioWorker {
 
 impl Drop for NativeAudioWorker {
     fn drop(&mut self) {
-        self.shutdown();
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| self.shutdown())) {
+            let message = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| {
+                    payload
+                        .downcast_ref::<&'static str>()
+                        .map(|message| (*message).to_owned())
+                })
+                .unwrap_or_else(|| "unknown panic".to_owned());
+            eprintln!("Rust audio worker cleanup panicked: {message}");
+        }
     }
 }
 

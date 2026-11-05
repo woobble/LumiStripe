@@ -5,7 +5,7 @@ mock LED outputs. It serves the production React dashboard and uses the same
 Rust engine as the appliance.
 
 From the repository root, install and build the frontend, then build the Rust
-web server and engine:
+web server:
 
 ```bash
 cd apps/lumistripe-web/frontend
@@ -13,7 +13,7 @@ bun install --frozen-lockfile
 bun run build
 cd ../../../
 cargo build --locked \
-  -p lumistripe-engine -p lumistripe-web
+  -p lumistripe-web
 ```
 
 Launch one or two simulated outputs:
@@ -21,7 +21,6 @@ Launch one or two simulated outputs:
 ```bash
 cargo run --locked -p lumistripe-web -- \
   --simulate --pixels 80 --pixels-2 24 \
-  --engine-binary target/debug/lumistripe-engine \
   --static-dir apps/lumistripe-web/static
 ```
 

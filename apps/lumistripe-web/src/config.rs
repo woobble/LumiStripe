@@ -15,8 +15,6 @@ pub struct CliOptions {
     /// Run the interactive dashboard against mock LED outputs on localhost.
     #[arg(long)]
     pub simulate: bool,
-    #[arg(long, env = "LUMISTRIPE_ENGINE_BINARY")]
-    pub engine_binary: Option<PathBuf>,
     #[arg(long, default_value_t = 80)]
     pub pixels: usize,
     #[arg(long, value_enum, default_value_t = OutputBackendArg::Mock)]
@@ -109,7 +107,7 @@ pub struct AppConfig {
 }
 
 impl CliOptions {
-    pub fn into_config(mut self) -> Result<(AppConfig, PathBuf, String, u16), String> {
+    pub fn into_config(mut self) -> Result<(AppConfig, String, u16), String> {
         if self.bluetooth_max_inputs == 0 || self.bluetooth_max_outputs == 0 {
             return Err("Bluetooth connection limits must be at least one".to_owned());
         }
@@ -226,7 +224,6 @@ impl CliOptions {
         } else {
             None
         };
-        let engine_binary = self.engine_binary.unwrap_or_else(default_engine_binary);
         Ok((
             AppConfig {
                 outputs,
@@ -243,7 +240,6 @@ impl CliOptions {
                 static_dir: self.static_dir,
                 settings_file,
             },
-            engine_binary,
             host,
             self.port,
         ))
@@ -367,16 +363,6 @@ fn output_device_name(output: &EngineOutputOptions) -> String {
     }
 }
 
-fn default_engine_binary() -> PathBuf {
-    if let Some(path) = option_env!("LUMISTRIPE_ENGINE_BINARY") {
-        return PathBuf::from(path);
-    }
-    std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(|parent| parent.join("lumistripe-engine")))
-        .unwrap_or_else(|| PathBuf::from("lumistripe-engine"))
-}
-
 fn default_settings_file() -> PathBuf {
     if let Some(path) = std::env::var_os("HOME").filter(|path| !path.is_empty()) {
         return PathBuf::from(path).join(".config/lumistripe/settings.json");
@@ -481,7 +467,7 @@ mod tests {
             "2",
         ])
         .unwrap();
-        let (config, _, _, _) = options.into_config().unwrap();
+        let (config, _, _) = options.into_config().unwrap();
         assert_eq!(config.bluetooth_max_inputs, 3);
         assert_eq!(config.bluetooth_max_outputs, 2);
 
@@ -506,7 +492,7 @@ mod tests {
             "--enable-spotify",
         ])
         .unwrap();
-        let (config, _, _, _) = options.into_config().unwrap();
+        let (config, _, _) = options.into_config().unwrap();
         assert_eq!(config.spotify_ws_uri, "ws://127.0.0.1:9123");
         assert!(config.spotify_provider_enabled);
     }
@@ -524,7 +510,7 @@ mod tests {
             "24",
         ])
         .unwrap();
-        let (config, _, host, _) = options.into_config().unwrap();
+        let (config, host, _) = options.into_config().unwrap();
 
         assert_eq!(host, "127.0.0.1");
         assert_eq!(config.runtime_kind, "simulation");
@@ -554,6 +540,18 @@ mod tests {
                 .into_config()
                 .unwrap_err()
                 .contains("always uses mock outputs")
+        );
+    }
+
+    #[test]
+    fn web_cli_does_not_accept_a_standalone_engine_binary() {
+        assert!(
+            CliOptions::try_parse_from([
+                "lumistripe-web",
+                "--engine-binary",
+                "/usr/local/bin/lumistripe-engine",
+            ])
+            .is_err()
         );
     }
 }

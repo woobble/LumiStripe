@@ -570,6 +570,9 @@ def test_rust_update_build_promotes_a_complete_commit_matched_release(
             subprocess.run([interpreter], env=launcher_env, check=False)
 
     launcher = Path(__file__).parents[1] / "lumistripe-web-launcher.sh"
+    engine_binary = release / "lumistripe-engine"
+    engine_contents = engine_binary.read_text(encoding="utf-8")
+    engine_binary.unlink()
     launched = subprocess.run(
         ["/bin/bash", str(launcher)],
         check=False,
@@ -578,12 +581,14 @@ def test_rust_update_build_promotes_a_complete_commit_matched_release(
         text=True,
         timeout=10,
     )
+    engine_binary.write_text(engine_contents, encoding="utf-8")
+    engine_binary.chmod(0o755)
     assert launched.returncode == 0, launched.stderr
     launch_lines = launch_log.read_text(encoding="utf-8").splitlines()
     assert launch_lines[0] == "first:lumistripe-web"
-    assert "--engine-binary" in launch_lines[1]
-    assert f"{release}/lumistripe-engine" in launch_lines[1]
-    assert f"{current}/lumistripe-engine" not in launch_lines[1]
+    assert "--engine-binary" not in launch_lines[1]
+    assert str(release / "lumistripe-engine") not in launch_lines[1]
+    assert engine_binary.is_file()
 
     second_commit = _commit(project, "second.txt")
     stale_launch = subprocess.run(

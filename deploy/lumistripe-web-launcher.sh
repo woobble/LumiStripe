@@ -27,16 +27,16 @@ if [[ "$RUST_DEPLOY_RELEASE" != "$EXPECTED_RELEASE" ]]; then
   echo "Rust release pointer resolves outside the expected commit-matched release: $RUST_DEPLOY_CURRENT" >&2
   exit 127
 fi
-for binary in lumistripe-web lumistripe-engine lumistripe-deploy-helper lumistripe; do
+for binary in lumistripe-web lumistripe-deploy-helper lumistripe; do
   if [[ ! -f "$RUST_DEPLOY_RELEASE/$binary" || -L "$RUST_DEPLOY_RELEASE/$binary" || ! -x "$RUST_DEPLOY_RELEASE/$binary" ]]; then
     echo "Rust release $PROJECT_COMMIT is incomplete: missing executable $RUST_DEPLOY_RELEASE/$binary. Run deploy/update.sh to rebuild it." >&2
     exit 127
   fi
 done
 
-# Pin the web process and every supervised engine restart to this release.
+# Pin the web process to this release. The standalone engine binary remains in
+# the release for the CLI and other IPC clients; the web runtime embeds it.
 WEB_BIN="$RUST_DEPLOY_RELEASE/lumistripe-web"
-ENGINE_BIN="$RUST_DEPLOY_RELEASE/lumistripe-engine"
 STATIC_DIR="$PROJECT_DIR/apps/lumistripe-web/static"
 SETTINGS_FILE="${LUMISTRIPE_SETTINGS_FILE:-${HOME:?HOME must be set}/.config/lumistripe/settings.json}"
 OUTPUT_BACKEND="${LUMI_RUST_OUTPUT_BACKEND:-spi}"
@@ -52,7 +52,6 @@ esac
 exec "$WEB_BIN" \
   --host 127.0.0.1 \
   --port 8000 \
-  --engine-binary "$ENGINE_BIN" \
   --output-backend "$OUTPUT_BACKEND" \
   --static-dir "$STATIC_DIR" \
   --settings-file "$SETTINGS_FILE" \

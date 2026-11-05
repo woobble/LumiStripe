@@ -30,8 +30,6 @@ services:
       - --port
       - "8000"
       - --enable-spotify
-      - --engine-binary
-      - /usr/local/bin/lumistripe-engine
       - --static-dir
       - /opt/lumistripe/static
       - --settings-file

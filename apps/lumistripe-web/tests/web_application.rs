@@ -720,16 +720,6 @@ async fn simulator_cli_starts_native_web_stack_with_python_unavailable() {
     .unwrap();
     let settings_file = temporary.path().join("simulator-settings.json");
     let log_path = temporary.path().join("simulator-web.log");
-    let engine_binary = std::env::var_os("LUMISTRIPE_ENGINE_TEST_BINARY")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/lumistripe-engine")
-        });
-    assert!(
-        engine_binary.is_file(),
-        "build the engine binary before this integration test: {}",
-        engine_binary.display()
-    );
     let port_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = port_listener.local_addr().unwrap().port();
     drop(port_listener);
@@ -747,9 +737,7 @@ async fn simulator_cli_starts_native_web_stack_with_python_unavailable() {
             "8",
             "--pixels-2",
             "4",
-            "--engine-binary",
         ])
-        .arg(&engine_binary)
         .arg("--static-dir")
         .arg(&static_dir)
         .arg("--settings-file")
@@ -907,22 +895,12 @@ async fn simulated_multi_output_workflow_keeps_mock_outputs_and_persists_setting
         "<!doctype html><title>simulator fixture</title>",
     )
     .unwrap();
-    let engine_binary = std::env::var_os("LUMISTRIPE_ENGINE_TEST_BINARY")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/lumistripe-engine")
-        });
-    assert!(
-        engine_binary.is_file(),
-        "build the engine binary before this integration test: {}",
-        engine_binary.display()
-    );
 
     let config = app_config(static_dir.path().to_path_buf());
     let settings_file = config.settings_file.clone();
-    let mut app = WebApplication::start(config.clone(), engine_binary.clone(), None)
+    let mut app = WebApplication::start(config.clone(), None)
         .await
-        .expect("simulator should start the Rust engine with mock outputs");
+        .expect("simulator should start its in-process engine with mock outputs");
     let router = app.router();
     let origin = "http://localhost";
 
@@ -1140,7 +1118,7 @@ async fn simulated_multi_output_workflow_keeps_mock_outputs_and_persists_setting
     let persisted = fs::read_to_string(&settings_file).unwrap();
     assert!(persisted.contains("secondary"));
 
-    let mut restarted = WebApplication::start(config, engine_binary, None)
+    let mut restarted = WebApplication::start(config, None)
         .await
         .expect("simulator should restore persisted settings on restart");
     let restored = request(
@@ -1179,7 +1157,7 @@ async fn simulated_multi_output_workflow_keeps_mock_outputs_and_persists_setting
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn serves_compatible_http_websockets_and_supervises_the_engine_process() {
+async fn serves_compatible_http_websockets_with_an_in_process_engine() {
     let _guard = WEB_APPLICATION_TEST_LOCK.lock().await;
     let static_dir = TempDir::new().unwrap();
     fs::write(
@@ -1192,23 +1170,13 @@ async fn serves_compatible_http_websockets_and_supervises_the_engine_process() {
         r#"{"version":12,"future_feature":{"keep":true},"music_idle":{"shared":{"mode":"off","future_idle":{"keep":true}}},"transition_settings":{"enabled":true,"duration_ms":300,"effect":"crossfade","future_option":{"keep":true}}}"#,
     )
     .unwrap();
-    let engine_binary = std::env::var_os("LUMISTRIPE_ENGINE_TEST_BINARY")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/lumistripe-engine")
-        });
-    assert!(
-        engine_binary.is_file(),
-        "build the engine binary before this integration test: {}",
-        engine_binary.display()
-    );
     let mut app = WebApplication::start(
         app_config(static_dir.path().to_path_buf()),
-        engine_binary,
         Some("1234".to_owned()),
     )
     .await
-    .expect("web application should start the real mock-output engine");
+    .expect("web application should start its mock-output engine in process");
+    assert!(direct_engine_children(std::process::id()).is_empty());
     let router = app.router();
     let server = TestServer::start(router.clone()).await;
     let origin = "http://localhost";
@@ -2781,33 +2749,6 @@ async fn serves_compatible_http_websockets_and_supervises_the_engine_process() {
     );
     assert_eq!(demo_audio.body["source"], "demo");
 
-    // Kill only the direct engine child owned by this test. The supervisor must
-    // restart it, reapply the scene and audio configuration, and restore health.
-    let child_pids = direct_engine_children(std::process::id());
-    assert_eq!(
-        child_pids.len(),
-        1,
-        "one engine child should own the mock output"
-    );
-    let restart_started = Instant::now();
-    assert_eq!(unsafe { libc::kill(child_pids[0], libc::SIGKILL) }, 0);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(12);
-    let mut recovered = false;
-    while tokio::time::Instant::now() < deadline {
-        let status = request(&router, Method::GET, "/api/health", None, None, None).await;
-        if status.status == StatusCode::OK {
-            let children = direct_engine_children(std::process::id());
-            if children.len() == 1 && children[0] != child_pids[0] {
-                recovered = true;
-                break;
-            }
-        }
-        sleep(Duration::from_millis(100)).await;
-    }
-    assert!(
-        recovered,
-        "engine supervisor should restart and reconfigure the child"
-    );
     let restored_audio = request(
         &router,
         Method::GET,
@@ -2823,11 +2764,7 @@ async fn serves_compatible_http_websockets_and_supervises_the_engine_process() {
         restored_audio.body["audio_status"],
         "Using the internal demo beat."
     );
-    eprintln!(
-        "mock engine crash recovery and scene reapply: {:.1} ms",
-        restart_started.elapsed().as_secs_f64() * 1000.0
-    );
-    let after_restart = request(
+    let after_direct_update = request(
         &router,
         Method::PUT,
         "/api/brightness",
@@ -2836,8 +2773,8 @@ async fn serves_compatible_http_websockets_and_supervises_the_engine_process() {
         Some(&origin),
     )
     .await;
-    assert_eq!(after_restart.status, StatusCode::OK);
-    assert_eq!(after_restart.body["brightness"], 0.25);
+    assert_eq!(after_direct_update.status, StatusCode::OK);
+    assert_eq!(after_direct_update.body["brightness"], 0.25);
 
     let logged_out = request(
         &router,
@@ -2872,18 +2809,9 @@ async fn serves_compatible_http_websockets_and_supervises_the_engine_process() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn spotify_playback_survives_engine_restart_and_stops_on_application_shutdown() {
+async fn spotify_playback_and_application_shutdown_release_engine_resources() {
     let _guard = WEB_APPLICATION_TEST_LOCK.lock().await;
     let static_dir = TempDir::new().unwrap();
-    let engine_binary = std::env::var_os("LUMISTRIPE_ENGINE_TEST_BINARY")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/lumistripe-engine")
-        });
-    assert!(
-        engine_binary.is_file(),
-        "engine binary should be built first"
-    );
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let spotify_uri = format!("ws://{}", listener.local_addr().unwrap());
@@ -2934,7 +2862,7 @@ async fn spotify_playback_survives_engine_restart_and_stops_on_application_shutd
     let mut config = app_config(static_dir.path().to_path_buf());
     config.spotify_ws_uri = spotify_uri;
     config.spotify_provider_enabled = true;
-    let mut app = WebApplication::start(config, engine_binary, Some("1234".to_owned()))
+    let mut app = WebApplication::start(config, Some("1234".to_owned()))
         .await
         .expect("web application should start with the injected Soloist endpoint");
     let router = app.router();
@@ -2998,29 +2926,7 @@ async fn spotify_playback_survives_engine_restart_and_stops_on_application_shutd
     .await;
     assert_eq!(brightness.status, StatusCode::OK);
 
-    let child_pids = direct_engine_children(std::process::id());
-    assert_eq!(
-        child_pids.len(),
-        1,
-        "one engine child should own the mock output"
-    );
-    assert_eq!(unsafe { libc::kill(child_pids[0], libc::SIGKILL) }, 0);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(12);
-    let mut recovered = false;
-    while tokio::time::Instant::now() < deadline {
-        let children = direct_engine_children(std::process::id());
-        if children.len() == 1 && children[0] != child_pids[0] {
-            recovered = true;
-            break;
-        }
-        sleep(Duration::from_millis(50)).await;
-    }
-    assert!(
-        recovered,
-        "engine supervisor should restart the child process"
-    );
-
-    let after_restart = request(
+    let after_update = request(
         &router,
         Method::GET,
         "/api/state",
@@ -3029,11 +2935,11 @@ async fn spotify_playback_survives_engine_restart_and_stops_on_application_shutd
         None,
     )
     .await;
-    assert_eq!(after_restart.status, StatusCode::OK);
-    assert_eq!(after_restart.body["brightness"], 0.35);
-    assert_eq!(after_restart.body["spotify"]["status"], "playing");
+    assert_eq!(after_update.status, StatusCode::OK);
+    assert_eq!(after_update.body["brightness"], 0.35);
+    assert_eq!(after_update.body["spotify"]["status"], "playing");
     assert_eq!(
-        after_restart.body["spotify"]["track"]["name"],
+        after_update.body["spotify"]["track"]["name"],
         "Restart fixture"
     );
 

@@ -10,8 +10,8 @@ use axum::response::{IntoResponse, Response};
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use lumistripe_engine_audio::MusicStructurePhase;
-use lumistripe_engine_client::EngineClient;
 use lumistripe_engine_protocol::{EngineAudioStatus, ResponseResult};
+use lumistripe_engine_runtime::EngineHandle;
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -26,7 +26,7 @@ pub type AudioTelemetryReceiver = watch::Receiver<Option<Result<Arc<Value>, Stri
 pub type PreviewReceiver = watch::Receiver<Option<Result<Arc<Vec<u8>>, String>>>;
 
 pub fn spawn_health_publisher(
-    client: EngineClient,
+    client: EngineHandle,
     cancellation: CancellationToken,
     publisher: watch::Sender<Option<Result<Arc<ResponseResult>, String>>>,
 ) -> JoinHandle<()> {
@@ -61,8 +61,29 @@ pub fn spawn_health_publisher(
     })
 }
 
+pub fn spawn_engine_failure_monitor(
+    mut health: EngineHealthReceiver,
+    cancellation: CancellationToken,
+    failure: watch::Sender<Option<String>>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            let snapshot = { health.borrow_and_update().clone() };
+            if let Some(Err(error)) = snapshot {
+                tracing::error!(error = %error, "in-process Rust engine failed; stopping web process");
+                failure.send_replace(Some(error));
+                break;
+            }
+            tokio::select! {
+                _ = cancellation.cancelled() => break,
+                changed = health.changed() => if changed.is_err() { break; },
+            }
+        }
+    })
+}
+
 pub fn spawn_audio_telemetry_publisher(
-    client: EngineClient,
+    client: EngineHandle,
     health: EngineHealthReceiver,
     control: ControlPlane,
     cancellation: CancellationToken,
@@ -657,11 +678,39 @@ async fn send_state_watch(
 
 #[cfg(test)]
 mod tests {
-    use super::{audio_telemetry, estimated_noise_floor, record_noise_sample};
+    use super::{
+        audio_telemetry, estimated_noise_floor, record_noise_sample, spawn_engine_failure_monitor,
+    };
     use crate::audio::AudioStreamContext;
     use lumistripe_engine_audio::{AudioFrame, AudioProcessorStats};
     use lumistripe_engine_protocol::EngineAudioStatus;
     use std::collections::VecDeque;
+    use std::sync::Arc;
+    use tokio::sync::watch;
+    use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn engine_failure_monitor_publishes_a_terminal_health_error() {
+        let (health_sender, health) = watch::channel::<
+            Option<Result<Arc<lumistripe_engine_protocol::ResponseResult>, String>>,
+        >(None);
+        let (failure_sender, mut failure) = watch::channel(None);
+        let cancellation = CancellationToken::new();
+        let monitor = spawn_engine_failure_monitor(health, cancellation.clone(), failure_sender);
+
+        health_sender.send_replace(Some(Err("output worker terminated".to_owned())));
+        tokio::time::timeout(std::time::Duration::from_secs(1), failure.changed())
+            .await
+            .expect("failure monitor should publish promptly")
+            .expect("failure snapshot should remain connected");
+        assert_eq!(
+            failure.borrow().as_deref(),
+            Some("output worker terminated")
+        );
+
+        cancellation.cancel();
+        monitor.await.unwrap();
+    }
 
     fn status(sequence: u64, fresh: bool, input_rms: f32) -> EngineAudioStatus {
         EngineAudioStatus {

@@ -79,11 +79,9 @@ cd apps/lumistripe-web/frontend
 bun install --frozen-lockfile
 bun run build
 cd ../../..
-cargo build --locked \
-  -p lumistripe-engine -p lumistripe-web
+cargo build --locked -p lumistripe-web
 cargo run --locked -p lumistripe-web -- \
   --simulate --pixels 80 --pixels-2 24 \
-  --engine-binary target/debug/lumistripe-engine \
   --static-dir apps/lumistripe-web/static
 ```
 

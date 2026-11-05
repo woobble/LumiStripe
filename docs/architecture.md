@@ -15,11 +15,19 @@ crates/                    Shared engine, protocol, audio, and output libraries
 tests/fixtures/             Shared protocol and regression fixtures
 ```
 
-The web server owns HTTP and WebSocket handling, pairing, settings, and
-application coordination. It sends typed commands to the engine over a local
-Unix socket. The engine process owns playback scheduling, rendering, audio
-capture and DSP, and configured output devices. Web handlers enqueue commands
-and read published snapshots; they do not drive hardware directly.
+The web process owns HTTP and WebSocket handling, pairing, settings,
+application coordination, and one in-process `EngineRuntime`. The runtime
+exposes a cloneable typed `EngineHandle` with a bounded command queue. Web
+handlers enqueue typed commands and read health and audio snapshots; they do
+not drive hardware directly.
+
+Rendering, scheduling, audio capture, DSP, and configured output devices remain
+on dedicated native threads. Tokio handles application and network work only.
+The runtime owns these workers and shuts them down in order, including output
+blackout. A terminal worker failure marks the runtime unhealthy, rejects new
+commands, attempts cleanup, and exits the web process so systemd can restart
+the complete hardware owner. A native crash affects the web application too;
+the engine is no longer isolated in a child process.
 
 ## Rendering and output
 
@@ -32,9 +40,13 @@ passes features to playback. SPI and GPIO integrations are optional. Mock
 outputs support the browser simulator and software tests without physical
 devices.
 
-The Rust CLI controls the same engine over IPC. The deployment helper exposes
-narrow operations for NetworkManager, update state, and related privileged
-tasks; it does not own playback or settings policy.
+The standalone `lumistripe-engine` executable and versioned Unix-socket IPC
+adapter remain available for the Rust CLI and other local tools. The adapter
+translates the existing protocol into the same `EngineRuntime` operations used
+by the web application; it does not contain a separate renderer or audio
+implementation. The deployment helper exposes narrow operations for
+NetworkManager, update state, and related privileged tasks; it does not own
+playback or settings policy.
 
 ## Web and frontend contracts
 
@@ -52,10 +64,12 @@ from `apps/lumistripe-web/static` by default; the frontend source and build
 configuration live beside the Rust application under
 `apps/lumistripe-web/frontend`.
 
-The installer and updater stage the web server, engine, CLI, and deployment
-helper together under `target/rust-deploy/releases/<commit>/`. A release is
-activated only after its binaries are validated and share the same source
-commit. The active release pointer and previous release support rollback.
+The installer and updater stage the web server, standalone engine, CLI, and
+deployment helper together under `target/rust-deploy/releases/<commit>/`. The
+web server embeds its runtime; the standalone engine executable remains in the
+release for CLI and IPC compatibility. A release is activated only after its
+binaries are validated and share the same source commit. The active release
+pointer and previous release support rollback.
 Installations using the former `rust/target/rust-deploy` layout are migrated
 by copying and validating release state before the new updater uses it. Settings
 and application data remain outside the release tree.

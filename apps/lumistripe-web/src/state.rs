@@ -16,33 +16,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::time::Instant;
 
-#[derive(Clone, Debug)]
-pub(crate) struct EngineDesiredState {
-    pub config: lumistripe_engine_config::EngineConfig,
-    pub scene: RenderSceneUpdate,
-    pub audio: Option<EngineDesiredAudio>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct EngineDesiredAudio {
-    pub selector: Option<String>,
-    pub config: lumistripe_engine_audio::AudioConfig,
-}
-
-impl EngineDesiredState {
-    pub(crate) fn for_model(
-        model: &ControlModel,
-        config: lumistripe_engine_config::EngineConfig,
-        scene: RenderSceneUpdate,
-    ) -> Self {
-        Self {
-            config,
-            scene,
-            audio: model.desired_audio(),
-        }
-    }
-}
-
 pub(crate) const COLOR_CALIBRATION_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(300);
 
@@ -673,41 +646,6 @@ impl ControlModel {
                 }
             }
         }
-    }
-
-    pub(crate) fn desired_audio(&self) -> Option<EngineDesiredAudio> {
-        let status = self.audio_status.as_ref().filter(|status| status.active);
-        if !self.audio_started && status.is_none() {
-            return None;
-        }
-
-        let device = status.and_then(|status| status.device.as_ref());
-        let device_name = device
-            .map(|device| device.name.as_str())
-            .or(self.settings.selected_audio_device.as_deref());
-        let profile_name = match self.active_audio_source.as_str() {
-            "bluetooth" | "spotify" => Some(self.active_audio_source.as_str()),
-            _ => device_name,
-        };
-        let profile = profile_name
-            .and_then(|name| self.settings.audio_profiles.get(name))
-            .cloned()
-            .unwrap_or_default();
-        let is_demo = self.active_audio_source == "demo";
-        let microphone = matches!(self.active_audio_source.as_str(), "mic" | "auto");
-        let selector = if is_demo {
-            Some("demo".to_owned())
-        } else {
-            device
-                .map(|device| device.selector.clone())
-                .or_else(|| self.config.audio_device.clone())
-                .or_else(|| self.settings.selected_audio_device.clone())
-        };
-
-        Some(EngineDesiredAudio {
-            selector,
-            config: crate::audio::engine_config(&profile, microphone && !is_demo),
-        })
     }
 
     pub fn set_revision(&mut self, revision: u64) {

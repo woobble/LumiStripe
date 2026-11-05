@@ -41,7 +41,7 @@ ExecStart=/bin/bash "@LUMI_PROJECT_DIR@/deploy/lumistripe-web-launcher.sh"
 
 Restart=on-failure
 RestartSec=3
-# The runtime exits after cleaning up when its renderer fails or stalls.
+# The runtime exits after controlled cleanup when a native engine worker fails.
 # Restart=on-failure brings the complete hardware owner back in that case.
 TimeoutStartSec=300
 TimeoutStopSec=30

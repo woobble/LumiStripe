@@ -26,9 +26,9 @@ futures-util.workspace = true
 libc.workspace = true
 lumistripe-engine-audio.workspace = true
 lumistripe-engine-animation-definitions.workspace = true
-lumistripe-engine-client.workspace = true
 lumistripe-engine-config.workspace = true
 lumistripe-engine-protocol.workspace = true
+lumistripe-engine-runtime.workspace = true
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -52,4 +52,5 @@ pipewire = { workspace = true, optional = true }
 
 [dev-dependencies]
 http-body-util.workspace = true
+lumistripe-engine-client.workspace = true
 tower.workspace = true

@@ -17,6 +17,10 @@ JSON object of shared Rust `AudioConfig` fields for tuning capture and DSP.
 Use `--engine-binary` or `LUMISTRIPE_ENGINE_BINARY` when the engine executable
 is not next to the CLI.
 
+The web application uses the same engine runtime in process. The standalone
+engine executable and versioned IPC described here remain the CLI's control
+path and are still included in deployment releases.
+
 Run the examples from the repository root. Cargo discovers the root workspace
 and preserves the established `lumistripe` executable name.
 

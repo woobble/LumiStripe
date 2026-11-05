@@ -16,7 +16,7 @@ use crate::bluetooth_models::{
 use crate::bluetooth_process::BluetoothError;
 use crate::bluetooth_providers::{BlueZProvider, PipeWireProvider};
 use crate::config::AppConfig;
-use crate::control::ControlPlane;
+use crate::control::{ControlPlane, EngineAccess};
 use crate::error::ApiError;
 use crate::network::{
     NetworkError, NetworkManagerService, NetworkStatusResponse, WifiConnectRequest,
@@ -31,11 +31,11 @@ use crate::settings::{
     StripeTopologySettings, SwitchQuantization, TransitionEffect, TransitionSettings, ZonePattern,
 };
 use crate::spotify::{SoloistBackend, SpotifyControlAction, SpotifyProvider, SpotifyStatus};
-use crate::state::{ControlModel, EngineDesiredState, PlaybackMode, animation_list};
+use crate::state::{ControlModel, PlaybackMode, animation_list};
 use crate::streams::{
     AudioTelemetryReceiver, PreviewReceiver, spawn_audio_telemetry_publisher,
-    spawn_health_publisher, spawn_preview_publisher, websocket_audio, websocket_preview,
-    websocket_state,
+    spawn_engine_failure_monitor, spawn_health_publisher, spawn_preview_publisher, websocket_audio,
+    websocket_preview, websocket_state,
 };
 use crate::system_stats::{SystemStats, spawn_system_stats_publisher};
 use crate::updates::{SystemUpdateService, UpdateError, UpdateStatus};
@@ -49,34 +49,21 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post, put};
 use axum::{Router, middleware as axum_middleware};
 use lumistripe_engine_animation_definitions::catalog;
-use lumistripe_engine_client::EngineClient;
 use lumistripe_engine_protocol::{RequestCommand, ResponseResult};
+use lumistripe_engine_runtime::{EngineHandle, EngineRuntime};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value, json};
 use std::path::PathBuf;
-use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
-use tempfile::TempDir;
 use tokio::net::TcpListener;
-use tokio::process::{Child, Command};
-use tokio::sync::{oneshot, watch};
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, timeout};
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use url::Url;
-
-const ENGINE_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
-
-struct EngineSupervisor {
-    binary: PathBuf,
-    socket_path: PathBuf,
-    client: EngineClient,
-    health: watch::Sender<Option<Result<Arc<ResponseResult>, String>>>,
-    cancellation: CancellationToken,
-}
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -212,42 +199,29 @@ pub struct WebApplication {
     router: Router,
     cancellation: CancellationToken,
     spotify: Arc<dyn SpotifyProvider>,
-    engine_manager: Option<JoinHandle<()>>,
+    engine: Option<EngineRuntime>,
+    engine_failure: watch::Receiver<Option<String>>,
     tasks: Vec<JoinHandle<()>>,
-    _engine_directory: TempDir,
 }
 
 impl WebApplication {
-    pub async fn start(
-        config: AppConfig,
-        engine_binary: PathBuf,
-        pairing_code: Option<String>,
-    ) -> Result<Self, String> {
-        Self::start_inner(config, engine_binary, pairing_code, None, None).await
+    pub async fn start(config: AppConfig, pairing_code: Option<String>) -> Result<Self, String> {
+        Self::start_inner(config, pairing_code, None, None).await
     }
 
     #[cfg(test)]
     async fn start_with_bluetooth_providers(
         config: AppConfig,
-        engine_binary: PathBuf,
         pairing_code: Option<String>,
         bluez: Arc<dyn BlueZProvider>,
         pipewire: Arc<dyn PipeWireProvider>,
         network: Option<NetworkManagerService>,
     ) -> Result<Self, String> {
-        Self::start_inner(
-            config,
-            engine_binary,
-            pairing_code,
-            Some((bluez, pipewire)),
-            network,
-        )
-        .await
+        Self::start_inner(config, pairing_code, Some((bluez, pipewire)), network).await
     }
 
     async fn start_inner(
         mut config: AppConfig,
-        engine_binary: PathBuf,
         pairing_code: Option<String>,
         bluetooth_providers: Option<(Arc<dyn BlueZProvider>, Arc<dyn PipeWireProvider>)>,
         network_service: Option<NetworkManagerService>,
@@ -262,55 +236,41 @@ impl WebApplication {
             config.audio_device = settings.selected_audio_device.clone();
         }
         let access = PairingAuth::new(pairing_code)?;
-        let engine_directory = TempDir::new()
-            .map_err(|error| format!("create private engine socket directory: {error}"))?;
-        let socket_path = engine_directory.path().join("engine.sock");
-        let client = EngineClient::new(&socket_path, Duration::from_secs(2));
+        let engine = EngineRuntime::start().map_err(|error| error.to_string())?;
+        let client = engine.handle();
+        let control_client = EngineAccess::direct(client.clone());
         let cancellation = CancellationToken::new();
         let model = ControlModel::new(config.clone(), settings);
         let initial_scene = model.initial_scene();
-        let (desired_state, desired_state_receiver) = watch::channel(EngineDesiredState {
-            config: config.engine_config(),
-            scene: initial_scene,
-            audio: None,
-        });
-        let (health_sender, health) = watch::channel(None);
-        let (audio_sender, audio) = watch::channel(None);
-        let (preview_sender, preview) = watch::channel(None);
-        let (ready_sender, ready_receiver) = oneshot::channel();
-        let engine_manager = tokio::spawn(supervise_engine(
-            EngineSupervisor {
-                binary: engine_binary,
-                socket_path,
-                client: client.clone(),
-                health: health_sender.clone(),
-                cancellation: cancellation.clone(),
-            },
-            desired_state_receiver,
-            ready_sender,
-        ));
-
-        match timeout(
-            ENGINE_STARTUP_TIMEOUT + Duration::from_secs(6),
-            ready_receiver,
-        )
-        .await
+        match client
+            .configure(config.engine_config())
+            .await
+            .map_err(|error| error.to_string())?
         {
-            Ok(Ok(Ok(()))) => {}
-            Ok(Ok(Err(error))) => {
-                cancellation.cancel();
-                let _ = engine_manager.await;
-                return Err(error);
-            }
-            Ok(Err(_)) => return Err("Rust engine supervisor stopped during startup".to_owned()),
-            Err(_) => {
-                cancellation.cancel();
-                engine_manager.abort();
-                return Err(
-                    "Rust engine did not become ready before the startup deadline".to_owned(),
-                );
+            ResponseResult::Configured { .. } => {}
+            other => {
+                return Err(format!(
+                    "Rust engine returned an unexpected configure acknowledgement: {other:?}"
+                ));
             }
         }
+        match client
+            .update_scene(initial_scene)
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            ResponseResult::SceneUpdated { .. } => {}
+            other => {
+                return Err(format!(
+                    "Rust engine returned an unexpected initial scene acknowledgement: {other:?}"
+                ));
+            }
+        }
+        let health_response = client.health().await.map_err(|error| error.to_string())?;
+        let (health_sender, health) = watch::channel(Some(Ok(Arc::new(health_response))));
+        let (engine_failure_sender, engine_failure) = watch::channel(None);
+        let (audio_sender, audio) = watch::channel(None);
+        let (preview_sender, preview) = watch::channel(None);
 
         let mut model = model;
         if let Some(Ok(health_result)) = health.borrow().as_ref() {
@@ -339,8 +299,6 @@ impl WebApplication {
                 Ok(ResponseResult::AudioConfigured { active: true }) => {
                     model.audio_started = true;
                     model.active_audio_source = "mic".to_owned();
-                    let audio = model.desired_audio();
-                    desired_state.send_modify(|desired| desired.audio = audio);
                     match client.audio_status().await {
                         Ok(ResponseResult::AudioStatus { status }) => {
                             model.set_audio_status(Ok(status));
@@ -395,8 +353,7 @@ impl WebApplication {
         let (control, control_task) = ControlPlane::start(
             model,
             settings_store,
-            desired_state,
-            client.clone(),
+            control_client,
             health.clone(),
             audio.clone(),
             Some(bluetooth.clone()),
@@ -435,15 +392,13 @@ impl WebApplication {
         let tasks = vec![
             control_task,
             dashboard_state_task,
-            spawn_health_publisher(client, cancellation.clone(), health_sender),
-            spawn_audio_status_publisher(
-                EngineClient::new(
-                    engine_directory.path().join("engine.sock"),
-                    Duration::from_secs(2),
-                ),
+            spawn_health_publisher(client.clone(), cancellation.clone(), health_sender),
+            spawn_engine_failure_monitor(
+                health.clone(),
                 cancellation.clone(),
-                audio_sender,
+                engine_failure_sender,
             ),
+            spawn_audio_status_publisher(client.clone(), cancellation.clone(), audio_sender),
             spawn_preview_publisher(health, cancellation.clone(), preview_sender),
             telemetry_task,
             system_stats_task,
@@ -454,9 +409,9 @@ impl WebApplication {
             router,
             cancellation,
             spotify,
-            engine_manager: Some(engine_manager),
+            engine: Some(engine),
+            engine_failure,
             tasks,
-            _engine_directory: engine_directory,
         })
     }
 
@@ -465,6 +420,11 @@ impl WebApplication {
     }
 
     pub async fn serve(mut self, host: &str, port: u16) -> Result<(), String> {
+        let startup_failure = { self.engine_failure.borrow().clone() };
+        if let Some(error) = startup_failure {
+            self.shutdown().await;
+            return Err(format!("in-process Rust engine failed: {error}"));
+        }
         let listener = TcpListener::bind((host, port))
             .await
             .map_err(|error| format!("bind LumiStripe web listener: {error}"))?;
@@ -473,28 +433,38 @@ impl WebApplication {
             .map_err(|error| format!("read LumiStripe web listener address: {error}"))?;
         tracing::info!(address = %local_address, "LumiStripe Rust web server is listening");
         let cancellation = self.cancellation.clone();
+        let mut engine_failure_signal = self.engine_failure.clone();
         let serve_result = axum::serve(listener, self.router.clone())
             .with_graceful_shutdown(async move {
-                shutdown_signal().await;
+                tokio::select! {
+                    _ = shutdown_signal() => {}
+                    _ = engine_failure_signal.changed() => {}
+                }
                 cancellation.cancel();
             })
             .await;
+        let engine_failure = self.engine_failure.borrow().clone();
         self.shutdown().await;
+        if let Some(error) = engine_failure {
+            return Err(format!("in-process Rust engine failed: {error}"));
+        }
         serve_result.map_err(|error| format!("LumiStripe web server failed: {error}"))
     }
 
     pub async fn shutdown(&mut self) {
         self.cancellation.cancel();
-        if let Some(manager) = self.engine_manager.take() {
-            if timeout(Duration::from_secs(7), manager).await.is_err() {
-                tracing::warn!("Rust engine supervisor did not stop before the shutdown deadline");
-            }
-        }
         for task in self.tasks.drain(..) {
             if timeout(Duration::from_secs(3), task).await.is_err() {
                 tracing::warn!(
                     "Rust web background task did not stop before the shutdown deadline"
                 );
+            }
+        }
+        if let Some(mut engine) = self.engine.take() {
+            match tokio::task::spawn_blocking(move || engine.shutdown()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => tracing::error!(error = %error, "Rust engine shutdown failed"),
+                Err(error) => tracing::error!(error = %error, "Rust engine shutdown task failed"),
             }
         }
     }
@@ -3509,193 +3479,8 @@ async fn shutdown_signal() {
     }
 }
 
-async fn supervise_engine(
-    supervisor: EngineSupervisor,
-    mut desired_state: watch::Receiver<EngineDesiredState>,
-    ready: oneshot::Sender<Result<(), String>>,
-) {
-    let EngineSupervisor {
-        binary,
-        socket_path,
-        client,
-        health,
-        cancellation,
-    } = supervisor;
-    let mut ready = Some(ready);
-    let mut backoff = Duration::from_millis(250);
-    loop {
-        if cancellation.is_cancelled() {
-            break;
-        }
-        let desired = desired_state.borrow_and_update().clone();
-        let mut child = match Command::new(&binary)
-            .arg("--socket")
-            .arg(&socket_path)
-            .arg("--owner-pid")
-            .arg(std::process::id().to_string())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
-        {
-            Ok(child) => child,
-            Err(error) => {
-                let message = format!("could not start Rust engine {}: {error}", binary.display());
-                if let Some(ready) = ready.take() {
-                    let _ = ready.send(Err(message));
-                    return;
-                }
-                health.send_replace(Some(Err(message.clone())));
-                tracing::error!(error = %message, "Rust engine restart failed");
-                sleep(backoff).await;
-                backoff = (backoff * 2).min(Duration::from_secs(5));
-                continue;
-            }
-        };
-        let startup = async {
-            wait_for_engine_ready(&client, &mut child).await?;
-            match client
-                .configure(desired.config.clone())
-                .await
-                .map_err(|error| error.to_string())?
-            {
-                ResponseResult::Configured { .. } => {}
-                _ => {
-                    return Err(
-                        "Rust engine returned an unexpected configure acknowledgement".to_owned(),
-                    );
-                }
-            }
-            match client
-                .update_scene(desired.scene)
-                .await
-                .map_err(|error| error.to_string())?
-            {
-                ResponseResult::SceneUpdated { .. } => {}
-                _ => {
-                    return Err(
-                        "Rust engine returned an unexpected scene acknowledgement".to_owned()
-                    );
-                }
-            }
-            if let Some(audio) = desired.audio {
-                let restore = client
-                    .request(RequestCommand::AudioStart {
-                        selector: audio.selector,
-                        config: audio.config,
-                    })
-                    .await;
-                match restore {
-                    Ok(ResponseResult::AudioConfigured { active: true }) => {
-                        tracing::info!("Rust engine restored acknowledged audio configuration");
-                    }
-                    Ok(other) => {
-                        tracing::warn!(
-                            response = ?other,
-                            "Rust engine restarted without restoring acknowledged audio configuration"
-                        );
-                    }
-                    Err(error) => {
-                        tracing::warn!(
-                            error = %error,
-                            "Rust engine restarted without restoring acknowledged audio configuration"
-                        );
-                    }
-                }
-            }
-            Ok::<(), String>(())
-        };
-        let startup_result = timeout(ENGINE_STARTUP_TIMEOUT, startup).await;
-        let setup_error = match startup_result {
-            Ok(Ok(())) => None,
-            Ok(Err(error)) => Some(error),
-            Err(_) => Some("Rust engine startup exceeded its deadline".to_owned()),
-        };
-        if let Some(error) = setup_error {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-            if let Some(ready) = ready.take() {
-                let _ = ready.send(Err(error));
-                return;
-            }
-            health.send_replace(Some(Err(error.clone())));
-            tracing::error!(error = %error, "Rust engine failed to restart");
-            tokio::select! {
-                _ = cancellation.cancelled() => break,
-                _ = sleep(backoff) => {}
-            }
-            backoff = (backoff * 2).min(Duration::from_secs(5));
-            continue;
-        }
-
-        backoff = Duration::from_millis(250);
-        if let Ok(result @ ResponseResult::Health { .. }) = client.health().await {
-            health.send_replace(Some(Ok(Arc::new(result))));
-        }
-        if let Some(ready) = ready.take() {
-            let _ = ready.send(Ok(()));
-            tracing::info!("Rust engine started and owns configured outputs");
-        } else {
-            tracing::info!("Rust engine restarted and reapplied the latest desired state");
-        }
-
-        tokio::select! {
-            _ = cancellation.cancelled() => {
-                match client.shutdown().await {
-                    Ok(ResponseResult::Shutdown) => {}
-                    Ok(_) => tracing::warn!("Rust engine returned an unexpected shutdown response"),
-                    Err(error) => tracing::debug!(error = %error, "Rust engine was already unavailable during shutdown"),
-                }
-                if timeout(Duration::from_secs(5), child.wait()).await.is_err() {
-                    let _ = child.kill().await;
-                    let _ = child.wait().await;
-                }
-                break;
-            }
-            result = child.wait() => {
-                let message = match result {
-                    Ok(status) => format!("Rust engine exited with {status}"),
-                    Err(error) => format!("Rust engine wait failed: {error}"),
-                };
-                health.send_replace(Some(Err(message.clone())));
-                tracing::error!(error = %message, "Rust engine stopped; restarting it");
-                tokio::select! {
-                    _ = cancellation.cancelled() => break,
-                    _ = sleep(backoff) => {}
-                }
-                backoff = (backoff * 2).min(Duration::from_secs(5));
-            }
-        }
-    }
-}
-
-async fn wait_for_engine_ready(client: &EngineClient, child: &mut Child) -> Result<(), String> {
-    let deadline = tokio::time::Instant::now() + ENGINE_STARTUP_TIMEOUT;
-    loop {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|error| format!("check Rust engine process: {error}"))?
-        {
-            return Err(format!("Rust engine exited during startup with {status}"));
-        }
-        match client.health().await {
-            Ok(ResponseResult::Health {
-                status: lumistripe_engine_protocol::EngineStatus::Ready,
-                ..
-            }) => return Ok(()),
-            Ok(_) => {}
-            Err(_) => {}
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err("Rust engine did not become ready before the startup deadline".to_owned());
-        }
-        sleep(Duration::from_millis(50)).await;
-    }
-}
-
 fn spawn_audio_status_publisher(
-    client: EngineClient,
+    client: EngineHandle,
     cancellation: CancellationToken,
     publisher: watch::Sender<Option<Result<lumistripe_engine_protocol::EngineAudioStatus, String>>>,
 ) -> JoinHandle<()> {
@@ -4314,17 +4099,6 @@ mod tests {
             commands: command_sender,
             operation_dropped: operation_dropped.clone(),
         });
-        let engine_binary = std::env::var_os("LUMISTRIPE_ENGINE_TEST_BINARY")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../target/debug/lumistripe-engine")
-            });
-        assert!(
-            engine_binary.is_file(),
-            "build the engine binary before this test: {}",
-            engine_binary.display()
-        );
         let config = AppConfig {
             outputs: vec![EngineOutputOptions {
                 id: "main".to_owned(),
@@ -4353,7 +4127,6 @@ mod tests {
         };
         let mut app = WebApplication::start_with_bluetooth_providers(
             config,
-            engine_binary,
             None,
             bluez,
             Arc::new(EmptyPipeWire),
@@ -4400,17 +4173,6 @@ mod tests {
     #[ignore = "requires a live BlueZ adapter and PipeWire user daemon"]
     async fn live_native_audio_status_uses_system_providers_with_mock_outputs() {
         let directory = tempdir().unwrap();
-        let engine_binary = std::env::var_os("LUMISTRIPE_ENGINE_TEST_BINARY")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../target/debug/lumistripe-engine")
-            });
-        assert!(
-            engine_binary.is_file(),
-            "build the engine binary before this test: {}",
-            engine_binary.display()
-        );
         let config = AppConfig {
             outputs: vec![EngineOutputOptions {
                 id: "main".to_owned(),
@@ -4437,7 +4199,7 @@ mod tests {
             static_dir: None,
             settings_file: directory.path().join("settings.json"),
         };
-        let mut app = WebApplication::start(config, engine_binary, None)
+        let mut app = WebApplication::start(config, None)
             .await
             .expect("web application should start with mock outputs and system providers");
 
@@ -4485,17 +4247,6 @@ mod tests {
     #[ignore = "requires the installed NetworkManager wrapper and service-user sudo rule"]
     async fn live_networkmanager_status_route_uses_installed_restricted_wrapper() {
         let directory = tempdir().unwrap();
-        let engine_binary = std::env::var_os("LUMISTRIPE_ENGINE_TEST_BINARY")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../target/debug/lumistripe-engine")
-            });
-        assert!(
-            engine_binary.is_file(),
-            "build the engine binary before this test: {}",
-            engine_binary.display()
-        );
         let config = AppConfig {
             outputs: vec![EngineOutputOptions {
                 id: "main".to_owned(),
@@ -4524,7 +4275,6 @@ mod tests {
         };
         let mut app = WebApplication::start_with_bluetooth_providers(
             config,
-            engine_binary,
             None,
             Arc::new(EmptyBlueZ),
             Arc::new(EmptyPipeWire),
@@ -4560,17 +4310,6 @@ mod tests {
     #[ignore = "requires initialized updater state and outbound GitHub access"]
     async fn live_update_check_route_refreshes_status_without_python() {
         let directory = tempdir().unwrap();
-        let engine_binary = std::env::var_os("LUMISTRIPE_ENGINE_TEST_BINARY")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../target/debug/lumistripe-engine")
-            });
-        assert!(
-            engine_binary.is_file(),
-            "build the engine binary before this test: {}",
-            engine_binary.display()
-        );
         let config = AppConfig {
             outputs: vec![EngineOutputOptions {
                 id: "main".to_owned(),
@@ -4599,7 +4338,6 @@ mod tests {
         };
         let mut app = WebApplication::start_with_bluetooth_providers(
             config,
-            engine_binary,
             None,
             Arc::new(EmptyBlueZ),
             Arc::new(EmptyPipeWire),
@@ -4710,17 +4448,6 @@ esac
             std::iter::empty::<String>(),
             Duration::from_secs(2),
         );
-        let engine_binary = std::env::var_os("LUMISTRIPE_ENGINE_TEST_BINARY")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../target/debug/lumistripe-engine")
-            });
-        assert!(
-            engine_binary.is_file(),
-            "build the engine binary before this test: {}",
-            engine_binary.display()
-        );
         let config = AppConfig {
             outputs: vec![EngineOutputOptions {
                 id: "main".to_owned(),
@@ -4749,7 +4476,6 @@ esac
         };
         let mut app = WebApplication::start_with_bluetooth_providers(
             config,
-            engine_binary,
             None,
             bluez,
             pipewire,

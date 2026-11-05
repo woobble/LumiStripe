@@ -50,6 +50,7 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, SyncSender};
@@ -58,6 +59,8 @@ use std::sync::{Arc, Mutex};
 use std::sync::{Condvar as QueueCondvar, Mutex as QueueMutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use thiserror::Error;
+use tokio::sync::oneshot;
 
 const CONFIGURE_TIMEOUT: Duration = Duration::from_secs(10);
 const FRAME_LATENCY_SAMPLE_COUNT: usize = 128;
@@ -68,6 +71,452 @@ const SOCKET_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_IPC_CONNECTIONS: usize = 16;
 const MAX_RENDER_PREVIEW_PIXELS: usize = 128;
 const MAX_RENDER_PREVIEW_BYTES: usize = MAX_RENDER_PREVIEW_PIXELS * 4;
+const ENGINE_COMMAND_CAPACITY: usize = 64;
+
+/// Owns the native engine workers and their control dispatcher.
+///
+/// The render scheduler, output, audio capture, and DSP continue to run on
+/// their dedicated native threads. Dropping the runtime attempts a graceful
+/// shutdown and blackout.
+pub struct EngineRuntime {
+    handle: EngineHandle,
+    dispatcher: Option<JoinHandle<()>>,
+}
+
+/// Cloneable typed access to one engine runtime. Cloning this value never
+/// creates another renderer or hardware owner.
+#[derive(Clone)]
+pub struct EngineHandle {
+    inner: Arc<EngineHandleInner>,
+}
+
+struct EngineHandleInner {
+    server: Arc<EngineServer>,
+    sender: SyncSender<EngineCommand>,
+    accepting: Arc<AtomicBool>,
+    shutdown_requested: Arc<AtomicBool>,
+    terminal_failure: Arc<Mutex<Option<String>>>,
+    next_request_id: AtomicU64,
+}
+
+enum EngineCommand {
+    Request(Request, oneshot::Sender<Result<Response, EngineError>>),
+    Legacy(
+        LegacyRequest,
+        oneshot::Sender<Result<LegacyResponse, EngineError>>,
+    ),
+}
+
+#[derive(Debug, Error)]
+pub enum EngineError {
+    #[error("engine command queue is full")]
+    CommandQueueFull,
+    #[error("engine is shutting down or unavailable")]
+    Stopped,
+    #[error("engine worker failed: {0}")]
+    WorkerFailed(String),
+    #[error("engine rejected the request ({code:?}): {message}")]
+    Engine {
+        code: EngineErrorCode,
+        message: String,
+    },
+}
+
+impl EngineRuntime {
+    pub fn start() -> Result<Self, EngineError> {
+        let server = Arc::new(EngineServer::new()?);
+        let accepting = Arc::new(AtomicBool::new(true));
+        let shutdown_requested = Arc::new(AtomicBool::new(false));
+        let terminal_failure = Arc::new(Mutex::new(None));
+        let (sender, receiver) = mpsc::sync_channel(ENGINE_COMMAND_CAPACITY);
+        let dispatcher_server = Arc::clone(&server);
+        let dispatcher_accepting = Arc::clone(&accepting);
+        let dispatcher_shutdown = Arc::clone(&shutdown_requested);
+        let dispatcher_failure = Arc::clone(&terminal_failure);
+        let dispatcher = thread::Builder::new()
+            .name("lumistripe-engine-control".into())
+            .spawn(move || {
+                let failure_server = Arc::clone(&dispatcher_server);
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    engine_command_loop(
+                        receiver,
+                        dispatcher_server,
+                        Arc::clone(&dispatcher_accepting),
+                        Arc::clone(&dispatcher_shutdown),
+                        Arc::clone(&dispatcher_failure),
+                    )
+                }));
+                if let Err(payload) = result {
+                    dispatcher_accepting.store(false, Ordering::Release);
+                    let message =
+                        format!("command dispatcher panicked: {}", panic_message(payload));
+                    *dispatcher_failure
+                        .lock()
+                        .expect("engine failure state poisoned") = Some(message);
+                    let _ = catch_unwind(AssertUnwindSafe(|| failure_server.shutdown_workers()));
+                }
+            })
+            .map_err(|error| {
+                EngineError::WorkerFailed(format!("start command dispatcher: {error}"))
+            })?;
+        Ok(Self {
+            handle: EngineHandle {
+                inner: Arc::new(EngineHandleInner {
+                    server,
+                    sender,
+                    accepting,
+                    shutdown_requested,
+                    terminal_failure,
+                    next_request_id: AtomicU64::new(1),
+                }),
+            },
+            dispatcher: Some(dispatcher),
+        })
+    }
+
+    pub fn handle(&self) -> EngineHandle {
+        self.handle.clone()
+    }
+
+    pub fn shutdown(&mut self) -> Result<(), EngineError> {
+        let was_accepting = self.handle.is_accepting();
+        let result = if self.handle.is_accepting() {
+            self.handle.request_blocking(RequestCommand::Shutdown)
+        } else {
+            self.handle
+                .inner
+                .shutdown_requested
+                .store(true, Ordering::Release);
+            Ok(ResponseResult::Shutdown)
+        };
+        if result.is_err() {
+            self.handle
+                .inner
+                .shutdown_requested
+                .store(true, Ordering::Release);
+        }
+        if let Some(dispatcher) = self.dispatcher.take() {
+            if let Err(error) = dispatcher.join() {
+                self.handle.inner.accepting.store(false, Ordering::Release);
+                return Err(EngineError::WorkerFailed(format!(
+                    "command dispatcher panicked: {}",
+                    panic_message(error)
+                )));
+            }
+        }
+        if !was_accepting
+            && let Some(message) = self
+                .handle
+                .inner
+                .terminal_failure
+                .lock()
+                .expect("engine failure state poisoned")
+                .clone()
+        {
+            return Err(EngineError::WorkerFailed(message));
+        }
+        match result? {
+            ResponseResult::Shutdown => Ok(()),
+            other => Err(EngineError::WorkerFailed(format!(
+                "unexpected shutdown acknowledgement: {other:?}"
+            ))),
+        }
+    }
+}
+
+impl Drop for EngineRuntime {
+    fn drop(&mut self) {
+        if self.dispatcher.is_none() {
+            return;
+        }
+        self.handle.inner.accepting.store(false, Ordering::Release);
+        self.handle
+            .inner
+            .shutdown_requested
+            .store(true, Ordering::Release);
+    }
+}
+
+impl EngineHandle {
+    pub async fn request(&self, command: RequestCommand) -> Result<ResponseResult, EngineError> {
+        match command {
+            RequestCommand::Health => self.health().await,
+            RequestCommand::AudioStatus => self.audio_status().await,
+            command => {
+                self.ensure_accepting()?;
+                let request_id = format!(
+                    "direct-{}",
+                    self.inner.next_request_id.fetch_add(1, Ordering::Relaxed)
+                );
+                let request = Request::new(request_id, command);
+                let (reply, receive) = oneshot::channel();
+                self.inner
+                    .sender
+                    .try_send(EngineCommand::Request(request, reply))
+                    .map_err(map_send_error)?;
+                let response = receive.await.map_err(|_| {
+                    EngineError::WorkerFailed("command dispatcher stopped before replying".into())
+                })??;
+                response_result(response)
+            }
+        }
+    }
+
+    pub async fn health(&self) -> Result<ResponseResult, EngineError> {
+        self.ensure_accepting()?;
+        self.check_workers()?;
+        Ok(self.inner.server.output.health_response())
+    }
+
+    pub async fn configure(&self, config: EngineConfig) -> Result<ResponseResult, EngineError> {
+        self.request(RequestCommand::Configure { config }).await
+    }
+
+    pub async fn render_capabilities(&self) -> Result<ResponseResult, EngineError> {
+        self.request(RequestCommand::RenderCapabilities).await
+    }
+
+    pub async fn update_scene(
+        &self,
+        update: RenderSceneUpdate,
+    ) -> Result<ResponseResult, EngineError> {
+        self.request(RequestCommand::SceneUpdate { update }).await
+    }
+
+    pub async fn audio_status(&self) -> Result<ResponseResult, EngineError> {
+        self.ensure_accepting()?;
+        self.check_workers()?;
+        Ok(ResponseResult::AudioStatus {
+            status: self.inner.server.audio.status(),
+        })
+    }
+
+    pub async fn shutdown(&self) -> Result<ResponseResult, EngineError> {
+        self.request(RequestCommand::Shutdown).await
+    }
+
+    pub fn is_accepting(&self) -> bool {
+        self.inner.accepting.load(Ordering::Acquire)
+    }
+
+    fn poll_worker_health(&self) -> bool {
+        self.check_workers().is_ok()
+    }
+
+    fn ensure_accepting(&self) -> Result<(), EngineError> {
+        if !self.is_accepting() {
+            return Err(EngineError::Stopped);
+        }
+        self.check_workers()
+    }
+
+    fn check_workers(&self) -> Result<(), EngineError> {
+        if let Some(reason) = self.inner.server.worker_failure() {
+            self.inner.accepting.store(false, Ordering::Release);
+            *self
+                .inner
+                .terminal_failure
+                .lock()
+                .expect("engine failure state poisoned") = Some(reason.clone());
+            return Err(EngineError::WorkerFailed(reason));
+        }
+        Ok(())
+    }
+
+    fn request_blocking(&self, command: RequestCommand) -> Result<ResponseResult, EngineError> {
+        if matches!(command, RequestCommand::Health) {
+            return Ok(self.inner.server.output.health_response());
+        }
+        if matches!(command, RequestCommand::AudioStatus) {
+            return Ok(ResponseResult::AudioStatus {
+                status: self.inner.server.audio.status(),
+            });
+        }
+        self.ensure_accepting()?;
+        let request_id = format!(
+            "ipc-{}",
+            self.inner.next_request_id.fetch_add(1, Ordering::Relaxed)
+        );
+        let request = Request::new(request_id, command);
+        response_result(self.request_ipc_blocking(request)?)
+    }
+
+    fn request_ipc_blocking(&self, request: Request) -> Result<Response, EngineError> {
+        self.ensure_accepting()?;
+        let (reply, receive) = oneshot::channel();
+        self.inner
+            .sender
+            .send(EngineCommand::Request(request, reply))
+            .map_err(|_| EngineError::Stopped)?;
+        receive.blocking_recv().map_err(|_| {
+            EngineError::WorkerFailed("command dispatcher stopped before replying".into())
+        })?
+    }
+
+    fn legacy_request_blocking(
+        &self,
+        request: LegacyRequest,
+    ) -> Result<LegacyResponse, EngineError> {
+        self.ensure_accepting()?;
+        let (reply, receive) = oneshot::channel();
+        self.inner
+            .sender
+            .send(EngineCommand::Legacy(request, reply))
+            .map_err(|_| EngineError::Stopped)?;
+        receive.blocking_recv().map_err(|_| {
+            EngineError::WorkerFailed("command dispatcher stopped before replying".into())
+        })?
+    }
+
+    fn frame_dimensions(&self) -> (usize, usize) {
+        self.inner.server.output.frame_dimensions()
+    }
+
+    fn dropped_frames(&self) -> u64 {
+        self.inner.server.output.dropped_frames()
+    }
+
+    fn submit_frame(&self, sequence: u64, payload: &[u8]) -> Result<(), FrameAckStatus> {
+        if !self.is_accepting() {
+            return Err(FrameAckStatus::ShuttingDown);
+        }
+        self.inner.server.output.submit_frame(sequence, payload)
+    }
+}
+
+fn map_send_error(error: mpsc::TrySendError<EngineCommand>) -> EngineError {
+    match error {
+        mpsc::TrySendError::Full(_) => EngineError::CommandQueueFull,
+        mpsc::TrySendError::Disconnected(_) => EngineError::Stopped,
+    }
+}
+
+fn response_result(response: Response) -> Result<ResponseResult, EngineError> {
+    match response.result {
+        ResponseResult::Error { code, message } => Err(EngineError::Engine { code, message }),
+        result => Ok(result),
+    }
+}
+
+fn engine_command_loop(
+    commands: mpsc::Receiver<EngineCommand>,
+    server: Arc<EngineServer>,
+    accepting: Arc<AtomicBool>,
+    shutdown_requested: Arc<AtomicBool>,
+    terminal_failure: Arc<Mutex<Option<String>>>,
+) {
+    loop {
+        if shutdown_requested.load(Ordering::Acquire) {
+            accepting.store(false, Ordering::Release);
+            let _ = catch_unwind(AssertUnwindSafe(|| server.shutdown_workers()));
+            break;
+        }
+        let command = match commands.recv_timeout(Duration::from_millis(25)) {
+            Ok(command) => command,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if let Some(reason) = server.worker_failure() {
+                    accepting.store(false, Ordering::Release);
+                    *terminal_failure
+                        .lock()
+                        .expect("engine failure state poisoned") = Some(reason);
+                    let _ = catch_unwind(AssertUnwindSafe(|| server.shutdown_workers()));
+                    break;
+                }
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                accepting.store(false, Ordering::Release);
+                let _ = catch_unwind(AssertUnwindSafe(|| server.shutdown_workers()));
+                break;
+            }
+        };
+        if !accepting.load(Ordering::Acquire) {
+            match command {
+                EngineCommand::Request(_, reply) => {
+                    let _ = reply.send(Err(EngineError::Stopped));
+                }
+                EngineCommand::Legacy(_, reply) => {
+                    let _ = reply.send(Err(EngineError::Stopped));
+                }
+            }
+            continue;
+        }
+        if let Some(reason) = server.worker_failure() {
+            accepting.store(false, Ordering::Release);
+            *terminal_failure
+                .lock()
+                .expect("engine failure state poisoned") = Some(reason.clone());
+            match command {
+                EngineCommand::Request(_, reply) => {
+                    let _ = reply.send(Err(EngineError::WorkerFailed(reason)));
+                }
+                EngineCommand::Legacy(_, reply) => {
+                    let _ = reply.send(Err(EngineError::WorkerFailed(reason)));
+                }
+            }
+            let _ = catch_unwind(AssertUnwindSafe(|| server.shutdown_workers()));
+            break;
+        }
+        match command {
+            EngineCommand::Request(request, reply) => {
+                match catch_unwind(AssertUnwindSafe(|| dispatch(request, &server))) {
+                    Ok((response, should_stop)) => {
+                        if should_stop {
+                            accepting.store(false, Ordering::Release);
+                        }
+                        let _ = reply.send(Ok(response));
+                        if should_stop {
+                            break;
+                        }
+                    }
+                    Err(payload) => {
+                        accepting.store(false, Ordering::Release);
+                        let message = panic_message(payload);
+                        *terminal_failure
+                            .lock()
+                            .expect("engine failure state poisoned") = Some(message.clone());
+                        let _ = reply.send(Err(EngineError::WorkerFailed(message)));
+                        let _ = catch_unwind(AssertUnwindSafe(|| server.shutdown_workers()));
+                        break;
+                    }
+                }
+            }
+            EngineCommand::Legacy(request, reply) => {
+                match catch_unwind(AssertUnwindSafe(|| dispatch_legacy(request, &server))) {
+                    Ok((response, should_stop)) => {
+                        if should_stop {
+                            accepting.store(false, Ordering::Release);
+                        }
+                        let _ = reply.send(Ok(response));
+                        if should_stop {
+                            break;
+                        }
+                    }
+                    Err(payload) => {
+                        accepting.store(false, Ordering::Release);
+                        let message = panic_message(payload);
+                        *terminal_failure
+                            .lock()
+                            .expect("engine failure state poisoned") = Some(message.clone());
+                        let _ = reply.send(Err(EngineError::WorkerFailed(message)));
+                        let _ = catch_unwind(AssertUnwindSafe(|| server.shutdown_workers()));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else if let Some(message) = payload.downcast_ref::<&'static str>() {
+        (*message).to_owned()
+    } else {
+        "unknown panic".to_owned()
+    }
+}
 
 pub fn serve(socket_path: impl AsRef<Path>) -> io::Result<()> {
     serve_with_owner(socket_path, unsafe { libc::getppid() })
@@ -87,12 +536,12 @@ pub fn serve_with_owner(socket_path: impl AsRef<Path>, owner_pid: libc::pid_t) -
     fs::set_permissions(socket_path, fs::Permissions::from_mode(0o600))?;
     listener.set_nonblocking(true)?;
 
-    let server = Arc::new(EngineServer::new());
+    let mut runtime = EngineRuntime::start().map_err(engine_start_io_error)?;
+    let handle = runtime.handle();
     let mut connections = Vec::new();
-    while !server.stopping.load(Ordering::Acquire) {
+    while handle.is_accepting() && handle.poll_worker_health() {
         if unsafe { libc::getppid() } != owner_pid {
-            server.stopping.store(true, Ordering::Release);
-            if let Err(error) = server.output.shutdown() {
+            if let Err(error) = runtime.shutdown() {
                 eprintln!("engine owner exited before output blackout completed: {error}");
             }
             break;
@@ -105,9 +554,9 @@ pub fn serve_with_owner(socket_path: impl AsRef<Path>, owner_pid: libc::pid_t) -
                     continue;
                 }
                 stream.set_write_timeout(Some(SOCKET_WRITE_TIMEOUT))?;
-                let server = Arc::clone(&server);
+                let handle = handle.clone();
                 connections.push(thread::spawn(move || {
-                    if let Err(error) = handle_connection(stream, server) {
+                    if let Err(error) = handle_connection(stream, handle) {
                         eprintln!("engine IPC request failed: {error}");
                     }
                 }));
@@ -124,7 +573,16 @@ pub fn serve_with_owner(socket_path: impl AsRef<Path>, owner_pid: libc::pid_t) -
             eprintln!("engine IPC connection thread panicked: {error:?}");
         }
     }
+    runtime.shutdown().map_err(engine_shutdown_io_error)?;
     Ok(())
+}
+
+fn engine_start_io_error(error: EngineError) -> io::Error {
+    io::Error::other(error.to_string())
+}
+
+fn engine_shutdown_io_error(error: EngineError) -> io::Error {
+    io::Error::other(error.to_string())
 }
 
 fn reap_finished_connections(connections: &mut Vec<JoinHandle<()>>) {
@@ -144,28 +602,39 @@ fn reap_finished_connections(connections: &mut Vec<JoinHandle<()>>) {
 struct EngineServer {
     audio: NativeAudioWorker,
     output: OutputWorker,
-    stopping: AtomicBool,
     legacy_commands: Mutex<()>,
     legacy_pixel_count: Mutex<Option<usize>>,
     legacy_frame_index: AtomicU64,
 }
 
 impl EngineServer {
-    fn new() -> Self {
-        let output = OutputWorker::new();
-        let audio = NativeAudioWorker::new(output.audio_handle());
-        Self {
+    fn new() -> Result<Self, EngineError> {
+        let output = OutputWorker::new()?;
+        let audio = NativeAudioWorker::new(output.audio_handle()).map_err(|error| {
+            EngineError::WorkerFailed(format!("start native audio worker: {error}"))
+        })?;
+        Ok(Self {
             audio,
             output,
-            stopping: AtomicBool::new(false),
             legacy_commands: Mutex::new(()),
             legacy_pixel_count: Mutex::new(None),
             legacy_frame_index: AtomicU64::new(0),
-        }
+        })
+    }
+
+    fn worker_failure(&self) -> Option<String> {
+        self.output
+            .worker_failure()
+            .or_else(|| self.audio.worker_failure())
+    }
+
+    fn shutdown_workers(&self) -> Result<(), String> {
+        self.audio.shutdown();
+        self.output.shutdown()
     }
 }
 
-fn handle_connection(mut stream: UnixStream, server: Arc<EngineServer>) -> io::Result<()> {
+fn handle_connection(mut stream: UnixStream, handle: EngineHandle) -> io::Result<()> {
     let mut prefix = [0u8; 4];
     read_exact_until(
         &mut stream,
@@ -173,7 +642,7 @@ fn handle_connection(mut stream: UnixStream, server: Arc<EngineServer>) -> io::R
         Instant::now() + CONTROL_REQUEST_TIMEOUT,
     )?;
     if prefix == lumistripe_engine_protocol::FRAME_MAGIC {
-        return handle_frame_stream(stream, prefix, &server);
+        return handle_frame_stream(stream, prefix, &handle);
     }
 
     let mut bytes = Vec::with_capacity(1024);
@@ -208,14 +677,13 @@ fn handle_connection(mut stream: UnixStream, server: Arc<EngineServer>) -> io::R
         let request = decode_legacy_request(&bytes)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         validate_request_id(&request.request_id)?;
-        let (response, should_stop) = dispatch_legacy(request, &server);
+        let response = handle
+            .legacy_request_blocking(request)
+            .map_err(engine_request_io_error)?;
         let encoded = encode_legacy_response(&response)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         stream.write_all(&encoded)?;
         stream.flush()?;
-        if should_stop {
-            server.stopping.store(true, Ordering::Release);
-        }
         return Ok(());
     }
 
@@ -223,7 +691,9 @@ fn handle_connection(mut stream: UnixStream, server: Arc<EngineServer>) -> io::R
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     validate_request_id(&request.request_id)?;
     let request_protocol_version = request.protocol_version;
-    let (mut response, should_stop) = dispatch(request, &server);
+    let mut response = handle
+        .request_ipc_blocking(request)
+        .map_err(engine_request_io_error)?;
     if matches!(
         request_protocol_version,
         PREVIOUS_PROTOCOL_VERSION | PROTOCOL_VERSION
@@ -234,10 +704,11 @@ fn handle_connection(mut stream: UnixStream, server: Arc<EngineServer>) -> io::R
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     stream.write_all(&encoded)?;
     stream.flush()?;
-    if should_stop {
-        server.stopping.store(true, Ordering::Release);
-    }
     Ok(())
+}
+
+fn engine_request_io_error(error: EngineError) -> io::Error {
+    io::Error::other(error.to_string())
 }
 
 #[derive(Deserialize)]
@@ -258,14 +729,14 @@ fn validate_request_id(request_id: &str) -> io::Result<()> {
 fn handle_frame_stream(
     mut stream: UnixStream,
     mut next_magic: [u8; 4],
-    server: &EngineServer,
+    handle: &EngineHandle,
 ) -> io::Result<()> {
     let mut payload = Vec::new();
     loop {
-        let output = &server.output;
+        let (output_count, output_bytes) = handle.frame_dimensions();
         let mut header_bytes = [0u8; FRAME_HEADER_BYTES];
         if next_magic != lumistripe_engine_protocol::FRAME_MAGIC {
-            write_frame_ack(&mut stream, output, 0, FrameAckStatus::InvalidFrame)?;
+            write_frame_ack(handle, &mut stream, 0, FrameAckStatus::InvalidFrame)?;
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "frame packet has an invalid magic value",
@@ -280,15 +751,15 @@ fn handle_frame_stream(
                 let _ = stream.write_all(&encode_frame_ack(FrameAck {
                     status: FrameAckStatus::InvalidFrame,
                     sequence: 0,
-                    dropped_frames: output.dropped_frames(),
+                    dropped_frames: handle.dropped_frames(),
                 }));
                 return Err(io::Error::new(io::ErrorKind::InvalidData, error));
             }
         };
         if header.payload_bytes as usize > MAX_FRAME_BYTES {
             write_frame_ack(
+                handle,
                 &mut stream,
-                output,
                 header.sequence,
                 FrameAckStatus::InvalidFrame,
             )?;
@@ -297,11 +768,11 @@ fn handle_frame_stream(
                 "frame payload exceeds the configured protocol limit",
             ));
         }
-        let (expected_output_count, expected_bytes) = output.frame_dimensions();
+        let (expected_output_count, expected_bytes) = (output_count, output_bytes);
         if expected_output_count == 0 {
             write_frame_ack(
+                handle,
                 &mut stream,
-                output,
                 header.sequence,
                 FrameAckStatus::NotConfigured,
             )?;
@@ -311,8 +782,8 @@ fn handle_frame_stream(
             || header.payload_bytes as usize != expected_bytes
         {
             write_frame_ack(
+                handle,
                 &mut stream,
-                output,
                 header.sequence,
                 FrameAckStatus::InvalidFrame,
             )?;
@@ -321,12 +792,12 @@ fn handle_frame_stream(
 
         payload.resize(expected_bytes, 0);
         read_exact_until(&mut stream, &mut payload, packet_deadline)?;
-        let status = match output.submit_frame(header.sequence, &payload) {
+        let status = match handle.submit_frame(header.sequence, &payload) {
             Ok(()) => FrameAckStatus::Accepted,
             Err(status) => status,
         };
-        write_frame_ack(&mut stream, output, header.sequence, status)?;
-        match read_next_frame_magic(&mut stream, &server.stopping)? {
+        write_frame_ack(handle, &mut stream, header.sequence, status)?;
+        match read_next_frame_magic(&mut stream, handle)? {
             Some(magic) => next_magic = magic,
             None => return Ok(()),
         }
@@ -335,13 +806,13 @@ fn handle_frame_stream(
 
 fn read_next_frame_magic(
     stream: &mut UnixStream,
-    stopping: &AtomicBool,
+    handle: &EngineHandle,
 ) -> io::Result<Option<[u8; 4]>> {
     let mut magic = [0u8; 4];
     let mut filled = 0usize;
     let mut packet_deadline: Option<Instant> = None;
     while filled < magic.len() {
-        if filled == 0 && stopping.load(Ordering::Acquire) {
+        if filled == 0 && !handle.is_accepting() {
             return Ok(None);
         }
         let timeout = if filled == 0 {
@@ -428,15 +899,15 @@ fn read_with_deadline(
 }
 
 fn write_frame_ack(
+    handle: &EngineHandle,
     stream: &mut UnixStream,
-    output: &OutputWorker,
     sequence: u64,
     status: FrameAckStatus,
 ) -> io::Result<()> {
     let ack = FrameAck {
         status,
         sequence,
-        dropped_frames: output.dropped_frames(),
+        dropped_frames: handle.dropped_frames(),
     };
     let bytes: [u8; FRAME_ACK_BYTES] = encode_frame_ack(ack);
     stream.write_all(&bytes)
@@ -715,22 +1186,19 @@ fn dispatch(request: Request, server: &EngineServer) -> (Response, bool) {
                 false,
             )
         }
-        RequestCommand::Shutdown => {
-            server.audio.shutdown();
-            match server.output.shutdown() {
-                Ok(()) => (Response::new(request_id, ResponseResult::Shutdown), true),
-                Err(message) => (
-                    Response::new(
-                        request_id,
-                        ResponseResult::Error {
-                            code: EngineErrorCode::OutputFailure,
-                            message,
-                        },
-                    ),
-                    true,
+        RequestCommand::Shutdown => match server.shutdown_workers() {
+            Ok(()) => (Response::new(request_id, ResponseResult::Shutdown), true),
+            Err(message) => (
+                Response::new(
+                    request_id,
+                    ResponseResult::Error {
+                        code: EngineErrorCode::OutputFailure,
+                        message,
+                    },
                 ),
-            }
-        }
+                true,
+            ),
+        },
     }
 }
 
@@ -940,7 +1408,7 @@ fn dispatch_legacy(request: LegacyRequest, server: &EngineServer) -> (LegacyResp
                 ),
             }
         }
-        LegacyRequestCommand::Shutdown => match server.output.shutdown() {
+        LegacyRequestCommand::Shutdown => match server.shutdown_workers() {
             Ok(()) => (
                 LegacyResponse::new(request_id, LegacyResponseResult::Shutdown),
                 true,
@@ -2057,7 +2525,7 @@ struct OutputWorker {
 }
 
 impl OutputWorker {
-    fn new() -> Self {
+    fn new() -> Result<Self, EngineError> {
         let shared = Arc::new(OutputWorkerShared {
             queue: QueueMutex::new(WorkQueue::default()),
             scheduler_ready: QueueCondvar::new(),
@@ -2068,18 +2536,33 @@ impl OutputWorker {
         let thread = thread::Builder::new()
             .name("lumistripe-rust-output".into())
             .spawn(move || output_worker_loop(worker_shared))
-            .expect("Rust output worker thread could not be created");
+            .map_err(|error| {
+                EngineError::WorkerFailed(format!("start LED output worker: {error}"))
+            })?;
         let scheduler_shared = Arc::clone(&shared);
-        let scheduler_thread = thread::Builder::new()
+        let scheduler_thread = match thread::Builder::new()
             .name("lumistripe-rust-frame-scheduler".into())
             .spawn(move || frame_scheduler_loop(scheduler_shared))
-            .expect("Rust frame scheduler thread could not be created");
-        Self {
+        {
+            Ok(thread) => thread,
+            Err(error) => {
+                {
+                    let mut queue = shared.queue.lock().expect("output queue poisoned");
+                    queue.closed = true;
+                }
+                shared.notify_queue_changed();
+                let _ = thread.join();
+                return Err(EngineError::WorkerFailed(format!(
+                    "start render scheduler: {error}"
+                )));
+            }
+        };
+        Ok(Self {
             shared,
             command_order: Arc::new(Mutex::new(())),
             thread: Mutex::new(Some(thread)),
             scheduler_thread: Mutex::new(Some(scheduler_thread)),
-        }
+        })
     }
 
     fn configure(&self, config: EngineConfig) -> Result<(usize, usize), String> {
@@ -2634,6 +3117,35 @@ impl OutputWorker {
             .dropped_frames
     }
 
+    fn worker_failure(&self) -> Option<String> {
+        let output_stopped = self
+            .thread
+            .lock()
+            .expect("output worker handle poisoned")
+            .as_ref()
+            .is_some_and(JoinHandle::is_finished);
+        if output_stopped {
+            return Some("LED output worker terminated unexpectedly".to_owned());
+        }
+        let scheduler_stopped = self
+            .scheduler_thread
+            .lock()
+            .expect("scheduler worker handle poisoned")
+            .as_ref()
+            .is_some_and(JoinHandle::is_finished);
+        scheduler_stopped.then(|| "render scheduler terminated unexpectedly".to_owned())
+    }
+
+    #[cfg(test)]
+    fn stop_workers_for_test(&self) {
+        self.shared
+            .queue
+            .lock()
+            .expect("output queue poisoned")
+            .closed = true;
+        self.shared.notify_queue_changed();
+    }
+
     fn health_response(&self) -> ResponseResult {
         let selector_sources: Vec<(
             usize,
@@ -2773,8 +3285,10 @@ impl OutputWorker {
 
 impl Drop for OutputWorker {
     fn drop(&mut self) {
-        if let Err(error) = self.shutdown() {
-            eprintln!("engine output cleanup failed: {error}");
+        match catch_unwind(AssertUnwindSafe(|| self.shutdown())) {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => eprintln!("engine output cleanup failed: {error}"),
+            Err(payload) => eprintln!("engine output cleanup panicked: {}", panic_message(payload)),
         }
     }
 }
@@ -4335,11 +4849,12 @@ impl Drop for SocketPathGuard {
 mod tests {
     use super::SequenceCoordinator;
     use super::{
-        AnimationInstance, BeatClockTracker, EngineServer, FrameSet, MAX_RENDER_PREVIEW_PIXELS,
-        PythonRandom, RenderingInput, RuntimeHealth, SelectorRuntimeState, TransitionMode,
-        WorkQueue, advance_frame_deadline, apply_transition, audio_feature_to_led_latency_ms,
-        finalize_render_frames, next_cycling_choice, remove_stale_socket, render_frame_request,
-        render_frame_request_at, select_dynamic_choice, serve, update_dynamic_output,
+        AnimationInstance, BeatClockTracker, EngineCommand, EngineError, EngineRuntime,
+        EngineServer, FrameSet, MAX_RENDER_PREVIEW_PIXELS, PythonRandom, RenderingInput,
+        RuntimeHealth, SelectorRuntimeState, TransitionMode, WorkQueue, advance_frame_deadline,
+        apply_transition, audio_feature_to_led_latency_ms, finalize_render_frames, map_send_error,
+        next_cycling_choice, remove_stale_socket, render_frame_request, render_frame_request_at,
+        select_dynamic_choice, serve, update_dynamic_output,
     };
     use lumistripe_engine_config::{EngineConfig, OutputBackend, OutputConfig};
     use lumistripe_engine_protocol::{
@@ -4359,6 +4874,7 @@ mod tests {
     use std::io::{Read, Write};
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::PathBuf;
+    use std::sync::mpsc;
     use std::thread;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -6970,7 +7486,7 @@ mod tests {
 
     #[test]
     fn health_is_available_before_configuration() {
-        let server = EngineServer::new();
+        let server = EngineServer::new().unwrap();
         assert!(matches!(
             server.output.health_response(),
             ResponseResult::Health {
@@ -6980,6 +7496,192 @@ mod tests {
             }
         ));
         server.output.shutdown().unwrap();
+    }
+
+    #[test]
+    fn bounded_engine_command_queue_reports_full_without_growing() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let (first_reply, _) = tokio::sync::oneshot::channel();
+        assert!(
+            sender
+                .try_send(EngineCommand::Request(
+                    Request::new("queued", RequestCommand::Health),
+                    first_reply,
+                ))
+                .is_ok()
+        );
+        let (second_reply, _) = tokio::sync::oneshot::channel();
+        let error = match sender.try_send(EngineCommand::Request(
+            Request::new("full", RequestCommand::Health),
+            second_reply,
+        )) {
+            Ok(()) => panic!("the one-slot command queue should be full"),
+            Err(error) => map_send_error(error),
+        };
+        assert!(matches!(error, EngineError::CommandQueueFull));
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(EngineCommand::Request(_, _))
+        ));
+    }
+
+    #[tokio::test]
+    async fn in_process_runtime_shares_typed_commands_and_snapshots_across_cloned_handles() {
+        let runtime = EngineRuntime::start().unwrap();
+        let handle = runtime.handle();
+        let clone = handle.clone();
+        assert!(matches!(
+            clone.health().await.unwrap(),
+            ResponseResult::Health {
+                configured: false,
+                output_count: 0,
+                ..
+            }
+        ));
+
+        assert!(matches!(
+            handle.configure(mock_config(&[8])).await.unwrap(),
+            ResponseResult::Configured {
+                output_count: 1,
+                total_pixels: 8
+            }
+        ));
+        let scene = |revision, timestamp_ns| RenderSceneUpdate {
+            revision,
+            timestamp_ns,
+            brightness: 1.0,
+            power: Default::default(),
+            outputs: vec![RenderOutput {
+                animation: "rainbow".into(),
+                ..RenderOutput::default()
+            }],
+            scheduler: RenderSchedulerConfig { max_fps: 60 },
+        };
+        assert!(matches!(
+            handle.update_scene(scene(1, 1_000_000_000)).await.unwrap(),
+            ResponseResult::SceneUpdated {
+                revision: 1,
+                replaced: false
+            }
+        ));
+        assert!(matches!(
+            clone.update_scene(scene(2, 1_010_000_000)).await.unwrap(),
+            ResponseResult::SceneUpdated {
+                revision: 2,
+                replaced: true
+            }
+        ));
+        assert!(matches!(
+            clone.health().await.unwrap(),
+            ResponseResult::Health {
+                configured: true,
+                scene_control_revision: Some(2),
+                ..
+            }
+        ));
+        assert!(matches!(
+            handle.audio_status().await.unwrap(),
+            ResponseResult::AudioStatus { .. }
+        ));
+
+        let mut callers = tokio::task::JoinSet::new();
+        for _ in 0..16 {
+            let concurrent_handle = handle.clone();
+            callers.spawn(async move { concurrent_handle.render_capabilities().await });
+        }
+        while let Some(result) = callers.join_next().await {
+            assert!(matches!(
+                result.unwrap().unwrap(),
+                ResponseResult::RenderCapabilities { .. }
+            ));
+        }
+
+        tokio::task::spawn_blocking(move || {
+            let mut runtime = runtime;
+            runtime.shutdown().unwrap();
+        })
+        .await
+        .unwrap();
+        assert!(matches!(handle.health().await, Err(EngineError::Stopped)));
+    }
+
+    #[tokio::test]
+    async fn in_process_runtime_can_be_started_and_stopped_repeatedly() {
+        for _ in 0..3 {
+            let runtime = EngineRuntime::start().unwrap();
+            assert!(matches!(
+                runtime.handle().health().await.unwrap(),
+                ResponseResult::Health { .. }
+            ));
+            tokio::task::spawn_blocking(move || {
+                let mut runtime = runtime;
+                runtime.shutdown().unwrap();
+            })
+            .await
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn dropping_runtime_releases_all_native_workers() {
+        let runtime = EngineRuntime::start().unwrap();
+        let handle = runtime.handle();
+        let server = std::sync::Arc::clone(&handle.inner.server);
+        drop(runtime);
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let output_stopped = server
+                    .output
+                    .thread
+                    .lock()
+                    .expect("output worker handle poisoned")
+                    .is_none();
+                let scheduler_stopped = server
+                    .output
+                    .scheduler_thread
+                    .lock()
+                    .expect("scheduler worker handle poisoned")
+                    .is_none();
+                let audio_stopped = server.audio.is_stopped();
+                if output_stopped && scheduler_stopped && audio_stopped {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("dropping the runtime should stop its workers");
+        assert!(matches!(handle.health().await, Err(EngineError::Stopped)));
+    }
+
+    #[tokio::test]
+    async fn terminal_worker_failure_rejects_commands_and_shutdown_reports_failure() {
+        let mut runtime = EngineRuntime::start().unwrap();
+        let handle = runtime.handle();
+        runtime.handle.inner.server.output.stop_workers_for_test();
+
+        let failure = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                match handle.health().await {
+                    Err(error @ EngineError::WorkerFailed(_)) => break error,
+                    Ok(_) => tokio::time::sleep(Duration::from_millis(5)).await,
+                    Err(error) => panic!("unexpected engine health error: {error}"),
+                }
+            }
+        })
+        .await
+        .expect("worker failure should be detected promptly");
+        assert!(matches!(failure, EngineError::WorkerFailed(_)));
+        assert!(matches!(
+            handle.render_capabilities().await,
+            Err(EngineError::Stopped | EngineError::WorkerFailed(_))
+        ));
+
+        let shutdown = tokio::task::spawn_blocking(move || runtime.shutdown())
+            .await
+            .unwrap();
+        assert!(matches!(shutdown, Err(EngineError::WorkerFailed(_))));
     }
 
     #[test]
