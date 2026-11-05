@@ -4,10 +4,13 @@ Thanks for helping improve LumiStripe. Changes are welcome through pull requests
 
 ## Development setup
 
-You need Python 3.12 or newer, [uv](https://docs.astral.sh/uv/), and the Bun
-version in `.bun-version` (currently 1.4.4). Hardware is not required for the
-normal test suite; the in-memory stripe and simulator paths are used for
-development.
+The repository currently has Python compatibility/reference packages and a
+native Rust application. The Python suite needs Python 3.12 or newer and
+[uv](https://docs.astral.sh/uv/); frontend work needs the Bun version in
+`.bun-version` (currently 1.4.4). The Rust workspace requires Rust 1.88; the
+deployment profile installs Rust 1.88.0. Hardware is not required for mock
+tests, but Raspberry Pi GPIO, SPI, Bluetooth, and PipeWire behavior must be
+validated on the device.
 
 Clone the repository with its native dependency submodule:
 
@@ -38,7 +41,6 @@ uv run ruff check .
 uv run mypy \
   packages/lumistripe-core/src/lumistripe \
   apps/lumistripe-cli/src/lumistripe_cli \
-  apps/lumistripe-sim/src/lumistripe_sim \
   apps/lumistripe-web/src/lumistripe_web \
   packages/lumistripe-app-support/src/lumistripe_app_support
 uv run python -m pytest -q
@@ -55,11 +57,12 @@ uv build --all-packages --out-dir dist
 
 The frontend build writes generated static assets under the web package's ignored `static` directory. Do not commit generated build output. Keep `uv.lock` and `apps/lumistripe-web/frontend/bun.lock` in sync whenever dependency declarations change.
 
-## Optional Rust engine workspace
+## Native Rust application workspace
 
-The experimental engine has a separate Cargo workspace. Its default build does
-not change the Python runtime; use these commands to validate the Rust crates
-and standalone process:
+The Rust applications, shared crates, and real-time engine live in the Cargo
+workspace under `rust/`. The Rust web server can run in simulator mode with
+mock outputs; this browser simulator is the only supported simulator. The CLI
+uses the same engine and IPC protocol. Validate the workspace with:
 
 ```bash
 cargo fmt --manifest-path rust/Cargo.toml --all -- --check
@@ -67,8 +70,14 @@ cargo test --locked --manifest-path rust/Cargo.toml --workspace
 cargo build --locked --manifest-path rust/Cargo.toml --workspace
 ```
 
-For the live Python/Rust socket integration test, build the binary first and
-then run:
+The Python web backend remains available for rollback and differential tests;
+new installations keep it selected until the Raspberry Pi cutover gates pass.
+See [the deployment guide](deploy/README.md) for the Rust-only installation
+profile and [the migration inventory](docs/migrations/python-retirement-inventory.md)
+for remaining parity and hardware checks.
+
+For Python/Rust engine adapter tests that still exercise the compatibility
+runtime, build the engine binary first and then run:
 
 ```bash
 LUMISTRIPE_ENGINE_BINARY="$PWD/rust/target/debug/lumistripe-engine" \
@@ -76,8 +85,9 @@ LUMISTRIPE_ENGINE_BINARY="$PWD/rust/target/debug/lumistripe-engine" \
   apps/lumistripe-web/tests/test_rust_engine_adapter.py
 ```
 
-See [the Rust engine migration guide](docs/migrations/rust-engine.md) for the
-feature parity matrix, opt-in command, IPC details, and benchmark script.
+See [the Rust engine migration guide](docs/migrations/rust-engine.md) and
+[the Rust web migration guide](docs/migrations/rust-web.md) for process
+ownership, IPC, API parity, and current migration status.
 
 ## Pull requests
 

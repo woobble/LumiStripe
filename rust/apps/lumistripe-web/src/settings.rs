@@ -545,7 +545,10 @@ impl Default for StripeTopologySettings {
 impl StripeTopologySettings {
     pub fn validate(&self) -> Result<(), String> {
         self.validate_at(Path::new("<stripe topology>"))
-            .map_err(|error| error.to_string())
+            .map_err(|error| match error {
+                SettingsError::Invalid { message, .. } => message,
+                error => error.to_string(),
+            })
     }
 
     fn validate_at(&self, path: &Path) -> Result<(), SettingsError> {
@@ -568,7 +571,7 @@ impl StripeTopologySettings {
         for (index, output) in self.outputs.iter().enumerate() {
             output.validate(path, index)?;
             if !ids.insert(output.id.as_str()) {
-                return invalid(path, "stripe IDs must be unique");
+                return invalid(path, "stripe ids must be unique");
             }
             match output.backend {
                 StripeBackend::Spi if !spi_devices.insert(output.spi_device.as_str()) => {
@@ -578,7 +581,7 @@ impl StripeTopologySettings {
                     if !gpio_pins.insert((output.chip.as_str(), output.data_pin))
                         || !gpio_pins.insert((output.chip.as_str(), output.clock_pin))
                     {
-                        return invalid(path, "GPIO pins must be unique per chip");
+                        return invalid(path, "GPIO pins must be unique");
                     }
                 }
                 StripeBackend::Spi => {}

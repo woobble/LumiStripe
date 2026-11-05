@@ -243,6 +243,25 @@ output, 2,000 measured frames, 250 warmup frames, and audio input. The p95
 frame-tick time was 2,953,074 ns for Python and 19,437 ns for Rust release
 (LLVM); Rust reported zero allocations across all three outputs per frame.
 
+On 2026-11-04, the current worktree was measured on an AMD Ryzen 9 9900X,
+Linux x86-64 (kernel 7.2.14), and Python 3.12.16. A 300-pixel `rainbow` run
+with 2,000 measured frames, 250 warmup frames, and audio input reported p95
+direct-renderer times of 975,725 ns for Python, 11,862 ns for native C, and
+6,162 ns for the Rust release build. Rust reported zero allocations and zero
+allocated bytes per frame. The C extension reported that its optional NEON
+path was disabled. Reproduce it with:
+
+```bash
+uv run python scripts/benchmark_rust_renderers.py \
+  --animation rainbow --pixels 300 --frames 2000 --warmup 250 --audio \
+  --python --native-c \
+  --rust-binary release=rust/target/release/examples/benchmark_render
+```
+
+This is a local renderer microbenchmark. It does not measure scheduler or IPC
+overhead, process RSS, or physical GPIO/SPI output timing, and it does not
+establish Raspberry Pi performance.
+
 An allocation sweep on that x86-64 host covered 54 animations and 19 individual
 effect layers with audio, 32 measured frames, and 8 warmup frames. Both the
 default LLVM and scalar Rust builds reported zero allocations and zero

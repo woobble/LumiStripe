@@ -6,7 +6,7 @@ use crate::config::EngineOutputOptions;
 use crate::error::ApiError;
 use crate::settings::{
     AudioTuningProfile, ColorCorrection, DashboardSettings, MAX_SAVED_ANIMATION_SEQUENCES,
-    MusicIdleSettings, PersistedPlaybackMode, SavedAnimationSequence, SettingsStore,
+    MusicIdleMode, MusicIdleSettings, PersistedPlaybackMode, SavedAnimationSequence, SettingsStore,
     StripeTopologySettings, SwitchQuantization, TransitionSettings,
 };
 use crate::spotify::SpotifyProvider;
@@ -15,7 +15,7 @@ use crate::state::{
     AudioCalibrationResult, COLOR_CALIBRATION_TIMEOUT, ControlModel, EngineDesiredState,
     OutputControl, PlaybackMode,
 };
-use lumistripe_engine_audio::InputAudioDevice;
+use lumistripe_engine_audio::{InputAudioDevice, recommend_audio_calibration};
 use lumistripe_engine_client::{EngineClient, EngineClientError};
 use lumistripe_engine_protocol::{EngineAudioStatus, RequestCommand, ResponseResult};
 use serde_json::{Map, Value, json};
@@ -46,7 +46,11 @@ impl Default for SpotifyDeviceNameHelper {
     fn default() -> Self {
         Self {
             sudo_path: PathBuf::from("/usr/bin/sudo"),
-            helper_path: PathBuf::from("/usr/local/sbin/lumistripe-spotify-device-name"),
+            helper_path: std::env::var_os("LUMI_DEPLOY_HELPER")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    PathBuf::from("/usr/local/libexec/lumistripe/deploy/lumistripe-deploy-helper")
+                }),
             timeout: Duration::from_secs(30),
         }
     }
@@ -58,21 +62,20 @@ impl SpotifyDeviceNameHelper {
             return Ok(false);
         }
 
-        let mut command = Command::new(&self.sudo_path);
-        command
-            .arg("-n")
-            .arg(&self.helper_path)
+        let mut update_name = Command::new(&self.helper_path);
+        update_name
+            .arg("spotify-device-name")
             .arg(spotify_device_name)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .kill_on_drop(true);
-        let status = tokio::time::timeout(self.timeout, command.status())
+        let status = tokio::time::timeout(self.timeout, update_name.status())
             .await
             .map_err(|_| {
                 ApiError::new(
                     axum::http::StatusCode::CONFLICT,
-                    "Could not apply Spotify player name: helper timed out",
+                    "Could not apply Spotify player name: configuration helper timed out",
                 )
             })?
             .map_err(|error| {
@@ -84,7 +87,43 @@ impl SpotifyDeviceNameHelper {
         if !status.success() {
             return Err(ApiError::new(
                 axum::http::StatusCode::CONFLICT,
-                format!("Could not apply Spotify player name: helper exited with {status}"),
+                format!(
+                    "Could not apply Spotify player name: configuration helper exited with {status}"
+                ),
+            ));
+        }
+
+        let mut restart = Command::new(&self.sudo_path);
+        restart
+            .arg("-n")
+            .arg("/usr/bin/systemctl")
+            .arg("restart")
+            .arg("--no-block")
+            .arg("lumistripe-spotify.service")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let status = tokio::time::timeout(self.timeout, restart.status())
+            .await
+            .map_err(|_| {
+                ApiError::new(
+                    axum::http::StatusCode::CONFLICT,
+                    "Could not apply Spotify player name: service restart timed out",
+                )
+            })?
+            .map_err(|error| {
+                ApiError::new(
+                    axum::http::StatusCode::CONFLICT,
+                    format!("Could not apply Spotify player name: {error}"),
+                )
+            })?;
+        if !status.success() {
+            return Err(ApiError::new(
+                axum::http::StatusCode::CONFLICT,
+                format!(
+                    "Could not apply Spotify player name: service restart exited with {status}"
+                ),
             ));
         }
         Ok(true)
@@ -1200,6 +1239,22 @@ async fn apply_command(
             settings,
             stripe_id,
         } => {
+            if !settings.animation.is_empty()
+                && lumistripe_engine_animation_definitions::catalog()
+                    .animation(&settings.animation)
+                    .is_none()
+            {
+                return Err(ApiError::new(
+                    axum::http::StatusCode::CONFLICT,
+                    "unknown music idle animation",
+                ));
+            }
+            if settings.mode == MusicIdleMode::Animation && settings.animation.is_empty() {
+                return Err(ApiError::new(
+                    axum::http::StatusCode::CONFLICT,
+                    "music idle animation is required",
+                ));
+            }
             let independent = candidate
                 .settings
                 .stripe_topology
@@ -1208,15 +1263,20 @@ async fn apply_command(
                     topology.layout == crate::settings::StripeLayout::Independent
                 });
             let scopes = if let Some(stripe_id) = stripe_id {
-                if !independent
-                    || !candidate
-                        .outputs
-                        .iter()
-                        .any(|item| item.stripe_id == stripe_id)
+                if !independent {
+                    return Err(ApiError::new(
+                        axum::http::StatusCode::CONFLICT,
+                        "a stripe target is only available in independent layout",
+                    ));
+                }
+                if !candidate
+                    .outputs
+                    .iter()
+                    .any(|item| item.stripe_id == stripe_id)
                 {
                     return Err(ApiError::new(
-                        axum::http::StatusCode::UNPROCESSABLE_ENTITY,
-                        format!("unknown or unsupported stripe: {stripe_id}"),
+                        axum::http::StatusCode::CONFLICT,
+                        format!("unknown stripe: {stripe_id}"),
                     ));
                 }
                 vec![stripe_id]
@@ -1900,7 +1960,7 @@ async fn run_stripe_test(
         .any(|output| output.id == stripe_id)
     {
         return Err(ApiError::new(
-            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            axum::http::StatusCode::CONFLICT,
             format!("unknown stripe: {stripe_id}"),
         ));
     }
@@ -2374,7 +2434,7 @@ async fn start_audio_calibration(
     let current_device = status.device.as_ref().ok_or_else(|| {
         ApiError::new(
             axum::http::StatusCode::CONFLICT,
-            "microphone input device is unavailable",
+            "microphone input is unavailable",
         )
     })?;
     let resolved =
@@ -2438,8 +2498,8 @@ fn begin_audio_calibration_music(
         .cloned();
     let Some(session) = &mut model.audio_calibration else {
         return Err(ApiError::new(
-            axum::http::StatusCode::NOT_FOUND,
-            "audio calibration session not found",
+            axum::http::StatusCode::CONFLICT,
+            "calibration is not waiting for music",
         ));
     };
     if session.session_id != session_id
@@ -2501,7 +2561,7 @@ async fn finish_audio_calibration(
         .cloned()
         .ok_or_else(|| {
             ApiError::new(
-                axum::http::StatusCode::NOT_FOUND,
+                axum::http::StatusCode::CONFLICT,
                 "audio calibration session not found",
             )
         })?;
@@ -2570,39 +2630,20 @@ async fn finish_audio_calibration(
 fn audio_calibration_result(
     session: &ActiveAudioCalibration,
 ) -> Result<AudioCalibrationResult, String> {
-    if session.frame_rms.is_empty() {
-        return Err("audio calibration requires at least one frame".to_owned());
-    }
-    let rms = session
-        .frame_rms
-        .iter()
-        .map(|value| value.clamp(0.0, 1.0))
-        .collect::<Vec<_>>();
-    let energy = session
-        .energy
-        .iter()
-        .map(|value| value.clamp(0.0, 1.0))
-        .collect::<Vec<_>>();
-    let floor = percentile(&rms, 20.0);
-    let peak = rms.iter().chain(energy.iter()).copied().fold(0.0, f64::max);
-    let active = energy
-        .iter()
-        .copied()
-        .filter(|value| *value >= (floor * 1.8).max(0.01))
-        .collect::<Vec<_>>();
-    let active_levels = if active.is_empty() { &energy } else { &active };
-    let active_level = percentile(active_levels, 80.0);
-    let noise_floor = (floor * 1.6 + 0.004).clamp(0.003, 0.12);
-    let target_level = (active_level * 1.25).max(0.24).clamp(0.24, 0.62);
+    let recommendation = recommend_audio_calibration(
+        &session.frame_rms,
+        &session.energy,
+        session.duration_seconds,
+    )?;
     Ok(AudioCalibrationResult {
-        duration_seconds: session.duration_seconds,
-        samples: rms.len(),
-        measured_floor: floor,
-        measured_peak: peak,
-        recommended_noise_floor: noise_floor,
-        recommended_target_level: target_level,
+        duration_seconds: recommendation.duration_seconds,
+        samples: recommendation.samples,
+        measured_floor: recommendation.measured_floor,
+        measured_peak: recommendation.measured_peak,
+        recommended_noise_floor: recommendation.recommended_noise_floor,
+        recommended_target_level: recommendation.recommended_target_level,
         recommended_hardware_gain: None,
-        recommended_idle_threshold_scale: (noise_floor / 0.015).max(0.5).clamp(0.5, 4.0),
+        recommended_idle_threshold_scale: recommendation.recommended_idle_threshold_scale,
         recommended_input_noise_floor: 0.003,
         measured_music_level: 0.0,
         clipping_fraction: 0.0,
@@ -4180,7 +4221,7 @@ impl TargetsMut for ControlModel {
                 })
             {
                 return Err(ApiError::new(
-                    axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+                    axum::http::StatusCode::CONFLICT,
                     "a stripe target is only available in independent layout",
                 ));
             }
@@ -4190,7 +4231,7 @@ impl TargetsMut for ControlModel {
                 .position(|output| output.stripe_id == stripe_id)
                 .ok_or_else(|| {
                     ApiError::new(
-                        axum::http::StatusCode::NOT_FOUND,
+                        axum::http::StatusCode::CONFLICT,
                         format!("unknown stripe: {stripe_id}"),
                     )
                 })?;
@@ -4206,9 +4247,9 @@ mod tests {
     use super::{
         AudioCalibrationFinish, AudioSourceRouting, ControlPlane, SpotifyDeviceNameHelper,
         advance_audio_calibration, audio_calibration_value, automatic_audio_source_candidates,
-        automatic_spotify_retry_ready, expire_color_calibration, finish_audio_calibration,
-        maintain_configured_audio_source, microphone_calibration_result, restore_audio_source,
-        set_audio_source, set_identity_settings,
+        automatic_spotify_retry_ready, begin_audio_calibration_music, expire_color_calibration,
+        finish_audio_calibration, maintain_configured_audio_source, microphone_calibration_result,
+        restore_audio_source, set_audio_source, set_identity_settings,
     };
     use crate::bluetooth::BluetoothService;
     use crate::bluetooth_models::BluetoothDevice;
@@ -4248,17 +4289,20 @@ mod tests {
 
     fn spotify_name_helper_fixture(
         directory: &std::path::Path,
-        script: &str,
+        helper_script: &str,
+        sudo_script: &str,
         timeout: Duration,
     ) -> SpotifyDeviceNameHelper {
         let sudo_path = directory.join("fake-sudo");
-        fs::write(&sudo_path, format!("#!/bin/sh\n{script}\n")).unwrap();
-        let mut permissions = fs::metadata(&sudo_path).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&sudo_path, permissions).unwrap();
+        fs::write(&sudo_path, format!("#!/bin/sh\n{sudo_script}\n")).unwrap();
+        fs::set_permissions(&sudo_path, fs::Permissions::from_mode(0o755)).unwrap();
 
         let helper_path = directory.join("installed-helper");
-        fs::write(&helper_path, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::write(&helper_path, format!("#!/bin/sh\n{helper_script}\n")).unwrap();
+        let mut permissions = fs::metadata(&helper_path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&helper_path, permissions).unwrap();
+
         SpotifyDeviceNameHelper {
             sudo_path,
             helper_path,
@@ -4271,7 +4315,8 @@ mod tests {
         let directory = tempdir().unwrap();
         let helper = spotify_name_helper_fixture(
             directory.path(),
-            "[ \"$1\" = \"-n\" ] || exit 91\n[ -f \"$2\" ] || exit 92\n[ \"$3\" = \"Studio player\" ] || exit 93\nexit 0",
+            "[ \"$1\" = \"spotify-device-name\" ] || exit 91\n[ \"$2\" = \"Studio player\" ] || exit 92\nexit 0",
+            "[ \"$1\" = \"-n\" ] || exit 93\n[ \"$2\" = \"/usr/bin/systemctl\" ] || exit 94\n[ \"$3\" = \"restart\" ] || exit 95\n[ \"$4\" = \"--no-block\" ] || exit 96\n[ \"$5\" = \"lumistripe-spotify.service\" ] || exit 97\nexit 0",
             Duration::from_secs(1),
         );
         let mut config = test_config(directory.path().join("settings.json"));
@@ -4300,8 +4345,12 @@ mod tests {
     #[tokio::test]
     async fn failed_spotify_name_helper_keeps_identity_settings_unchanged() {
         let directory = tempdir().unwrap();
-        let helper =
-            spotify_name_helper_fixture(directory.path(), "exit 17", Duration::from_secs(1));
+        let helper = spotify_name_helper_fixture(
+            directory.path(),
+            "exit 17",
+            "exit 0",
+            Duration::from_secs(1),
+        );
         let mut config = test_config(directory.path().join("settings.json"));
         config.runtime_kind = "hardware";
         let mut settings_store = SettingsStore::open(&config.settings_file).unwrap();
@@ -4326,8 +4375,12 @@ mod tests {
     #[tokio::test]
     async fn software_identity_update_skips_spotify_name_helper() {
         let directory = tempdir().unwrap();
-        let helper =
-            spotify_name_helper_fixture(directory.path(), "exit 17", Duration::from_secs(1));
+        let helper = spotify_name_helper_fixture(
+            directory.path(),
+            "exit 17",
+            "exit 0",
+            Duration::from_secs(1),
+        );
         let config = test_config(directory.path().join("settings.json"));
         let mut settings_store = SettingsStore::open(&config.settings_file).unwrap();
         let mut model = ControlModel::new(config, DashboardSettings::default());
@@ -4376,8 +4429,12 @@ mod tests {
     #[tokio::test]
     async fn unchanged_hardware_spotify_name_does_not_call_the_helper() {
         let directory = tempdir().unwrap();
-        let helper =
-            spotify_name_helper_fixture(directory.path(), "exit 17", Duration::from_secs(1));
+        let helper = spotify_name_helper_fixture(
+            directory.path(),
+            "exit 17",
+            "exit 0",
+            Duration::from_secs(1),
+        );
         let mut config = test_config(directory.path().join("settings.json"));
         config.runtime_kind = "hardware";
         let mut settings_store = SettingsStore::open(&config.settings_file).unwrap();
@@ -5577,6 +5634,7 @@ mod tests {
                 structure_event_sequences: vec![0],
                 cycling_active: vec![false],
                 dynamic_gate_states: vec!["calm".into()],
+                selector_diagnostics: vec![],
                 beat_clocks: vec![],
                 sequence_playback: vec![],
                 effect_schedulers: vec![],
@@ -5814,6 +5872,20 @@ mod tests {
     }
 
     #[test]
+    fn beginning_music_without_a_calibration_session_returns_python_compatible_conflict() {
+        let config = test_config(std::path::PathBuf::from("/tmp/lumistripe-audio-test.json"));
+        let mut model = ControlModel::new(config, DashboardSettings::default());
+
+        let error = begin_audio_calibration_music(&mut model, "missing-session").unwrap_err();
+
+        assert_eq!(error.status(), axum::http::StatusCode::CONFLICT);
+        assert_eq!(
+            error.detail(),
+            &Value::String("calibration is not waiting for music".to_owned())
+        );
+    }
+
+    #[test]
     fn two_step_audio_calibration_requires_usable_quiet_and_music_levels() {
         let mut session = audio_calibration_session(true);
         session.phase = "music".to_owned();
@@ -5941,6 +6013,44 @@ mod tests {
         .unwrap();
         assert!(model.audio_calibration.is_none());
         assert!(settings_store.settings().audio_profiles.is_empty());
+    }
+
+    #[tokio::test]
+    async fn finishing_a_missing_audio_calibration_session_returns_python_compatible_conflict() {
+        let directory = tempdir().unwrap();
+        let settings_path = directory.path().join("settings.json");
+        let mut settings_store = SettingsStore::open(&settings_path).unwrap();
+        let config = test_config(settings_path);
+        let mut model = ControlModel::new(config.clone(), DashboardSettings::default());
+        let (desired_state, _) = watch::channel(EngineDesiredState {
+            config: config.engine_config(),
+            scene: model.initial_scene(),
+            audio: None,
+        });
+
+        let error = finish_audio_calibration(
+            &mut model,
+            &mut settings_store,
+            &desired_state,
+            &EngineClient::new(
+                directory.path().join("unused.sock"),
+                Duration::from_millis(50),
+            ),
+            AudioCalibrationFinish {
+                session_id: "missing-session",
+                apply: false,
+                target_level: None,
+                noise_floor: None,
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.status(), axum::http::StatusCode::CONFLICT);
+        assert_eq!(
+            error.detail(),
+            &Value::String("audio calibration session not found".to_owned())
+        );
     }
 
     #[tokio::test]

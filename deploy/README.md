@@ -68,13 +68,17 @@ For unattended installation, provide `LUMI_PAIRING_CODE` and the optional
 Spotify key through the provisioning process environment. Keep their values
 out of shell history and command arguments.
 
-The installer provisions the complete appliance: Debian/Raspberry Pi OS
-packages and native build tools, D-Bus and PipeWire development headers, the
-service user and GPIO/SPI/audio permissions, Raspberry Pi SPI, Rust 1.88.0,
-uv 0.13.0 or newer with managed Python 3.12, native audio/GPIO/SPI extensions,
-Bun, NetworkManager and Wi-Fi adapter tools, locked Python and frontend
-dependencies, the frontend production build, and Bluetooth/WirePlumber
-configuration. It installs the Spotify Soloist
+The installer provisions the appliance: Debian/Raspberry Pi OS packages and
+native build tools, D-Bus and PipeWire development headers, the service user
+and GPIO/SPI/audio permissions, Raspberry Pi SPI, Rust 1.88.0, Bun,
+NetworkManager and Wi-Fi adapter tools, the frontend production build, and
+Bluetooth/WirePlumber configuration. The default Python backend also installs
+uv, managed Python 3.12, and Python native extensions. Set
+`LUMI_WEB_BACKEND=rust` for the Rust-only installation profile; it skips uv,
+Python packages, and Python native extensions. It builds the commit-matched
+Rust web, engine, CLI, and deployment helper binaries. Python remains the
+default until the Pi cutover gates pass. The installer also installs the
+Spotify Soloist
 binary under the non-root service account when configured, plus a local mkcert
 CA and HTTPS certificate, Nginx, and the required systemd services. Without a
 Spotify key the Spotify service remains disabled. Existing
@@ -86,9 +90,11 @@ permits HTTPS-only redirects, validates that it contains one regular
 `soloist` file, and installs it under the service user's `.local/bin`; it does
 not install the downloaded binary with root ownership.
 
-The systemd service uses the same Python version selected by the installer and
-syncs only production dependencies. Set `LUMI_PYTHON_VERSION` when installing
-or updating to choose a different supported interpreter version.
+The Python systemd service uses the same Python version selected by the
+installer and syncs only production dependencies. Set `LUMI_PYTHON_VERSION`
+when installing or updating to choose a different supported interpreter
+version. The Rust-only profile does not require uv or a Python interpreter for
+installation, normal service operation, or update and rollback.
 
 The installer uses the non-root account that invoked `sudo` (or the checkout
 owner when run from a root shell). To install for another account, set
@@ -115,10 +121,28 @@ command-line arguments.
 
 ## Select the Rust web backend
 
-Python remains the default and rollback backend. The installer provisions Rust
-1.88.0 and the `libdbus-1-dev` and `libpipewire-0.3-dev` headers for the
-non-root service account. From a clean checkout, build the commit-matched web
-and engine binaries as that account:
+Python remains the installer default until the Raspberry Pi validation gates
+pass. To exercise a fresh Rust-only installation, select the backend in the
+installer environment:
+
+```bash
+sudo env LUMI_SERVICE_USER=woobb \
+  LUMI_PROJECT_DIR=/opt/lumistripe-install \
+  LUMI_WEB_BACKEND=rust \
+  /opt/lumistripe-install/deploy/install.sh
+```
+
+This profile provisions Rust 1.88.0 and the `libdbus-1-dev` and
+`libpipewire-0.3-dev` headers, then builds the commit-matched Rust web, engine,
+CLI, and deployment helper release with the React frontend. It does not install
+uv, Python application packages, or Python native extensions. The updater uses
+the same setting from `/etc/lumistripe/lumistripe-web.env`; Rust-only updates
+and rollback build matching Rust releases without Python.
+
+For an existing Python installation, Rust can be staged without changing the
+selected backend. The installer provisions Rust 1.88.0 and the native
+provider headers. From a clean checkout, build the commit-matched binaries as
+the service account:
 
 ```bash
 sudo -H -u pi env \
@@ -139,8 +163,8 @@ previous release active. Keep the Python backend available for rollback.
 On Trixie the installer selects `libgpiod3`; older supported Debian-based Pi
 images are handled with `libgpiod2` when that is the available runtime package.
 
-The installer needs internet access for apt, Rustup, uv, Bun, mkcert, and
-package downloads. After installation the runtime checkout is service-user-writable,
+The installer needs internet access for apt, Rustup, Bun, mkcert, and package
+downloads. The Python profile also needs uv access. After installation the runtime checkout is service-user-writable,
 so it is no longer a trusted source for another root installer run. For a
 repair or reinstall, provide a fresh reviewed checkout under an
 administrator-controlled path; existing pairing and complete TLS files are

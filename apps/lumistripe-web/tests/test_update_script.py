@@ -135,6 +135,30 @@ def _write_soloist_archive(
             archive.addfile(extra, io.BytesIO(b"x"))
 
 
+def _write_rust_soloist_helper(project_dir: Path) -> Path:
+    helper = project_dir / "rust/target/rust-deploy/current/lumistripe-deploy-helper"
+    helper.parent.mkdir(parents=True)
+    helper.write_text(
+        "#!/bin/sh\n"
+        "case \"$1\" in\n"
+        "  soloist-download)\n"
+        "    [ \"$2\" = --url ] && [ \"$4\" = --archive ] && "
+        "[ \"$6\" = --destination ] || exit 2\n"
+        "    cp -- \"$FAKE_ARCHIVE\" \"$5\"\n"
+        "    exec \"$PYTHON_EXECUTABLE\" \"$PYTHON_EXTRACTOR_SCRIPT\" \"$5\" \"$7\"\n"
+        "    ;;\n"
+        "  soloist-check)\n"
+        "    [ \"$2\" = --binary ] || exit 2\n"
+        "    exec \"$PYTHON_EXECUTABLE\" \"$PYTHON_DIAGNOSTICS_SCRIPT\" --binary \"$3\"\n"
+        "    ;;\n"
+        "  *) exit 2 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    helper.chmod(0o755)
+    return helper
+
+
 def test_soloist_extractor_accepts_only_one_regular_executable(tmp_path: Path) -> None:
     archive = tmp_path / "soloist.tar.gz"
     destination = tmp_path / "soloist"
@@ -360,20 +384,15 @@ def test_soloist_download_and_install_run_through_service_user_boundary(
     ).encode()
     _write_soloist_archive(archive, payload=payload)
     service_home = tmp_path / "service home"
+    project_dir = tmp_path / "project"
+    _write_rust_soloist_helper(project_dir)
     calls = tmp_path / "service-user-calls"
     script = """
 set -Eeuo pipefail
 SCRIPT_DIR="${SOLOIST_SCRIPT%/*}"
 as_user() {
   printf '%s\\n' "$*" >> "$CALL_LOG"
-  if [[ "$1" == /usr/bin/python3 && "$3" == --download ]]; then
-    cp -- "$FAKE_ARCHIVE" "$5"
-    "$PYTHON_EXECUTABLE" "$2" "$5" "$6"
-  elif [[ "$1" == /usr/bin/env && "$2" == -u ]]; then
-    "$PYTHON_EXECUTABLE" "$5" "${@:6}"
-  else
-    "$@"
-  fi
+  "$@"
 }
 source "$SCRIPT_DIR/soloist.sh"
 install_spotify_soloist "$SERVICE_HOME"
@@ -383,7 +402,12 @@ install_spotify_soloist "$SERVICE_HOME"
         env={
             **os.environ,
             "FAKE_ARCHIVE": str(archive),
+            "PROJECT_DIR": str(project_dir),
             "PYTHON_EXECUTABLE": sys.executable,
+            "PYTHON_DIAGNOSTICS_SCRIPT": str(
+                UPDATE_SCRIPT.with_name("soloist_diagnostics.py")
+            ),
+            "PYTHON_EXTRACTOR_SCRIPT": str(EXTRACT_SOLOIST_SCRIPT),
             "SERVICE_HOME": str(service_home),
             "SOLOIST_SCRIPT": str(SOLOIST_SCRIPT),
             "CALL_LOG": str(calls),
@@ -398,8 +422,9 @@ install_spotify_soloist "$SERVICE_HOME"
     assert installed.read_bytes() == payload
     assert stat.S_IMODE(installed.stat().st_mode) == 0o755
     logged_commands = calls.read_text(encoding="utf-8")
-    assert "/usr/bin/python3" in logged_commands
-    assert "--download https://soloist-builds.spotifycdn.com/soloist_release_x86_64.tar.gz" in logged_commands
+    assert "soloist-download" in logged_commands
+    assert "--url https://soloist-builds.spotifycdn.com/soloist_release_x86_64.tar.gz" in logged_commands
+    assert "/usr/bin/python3" not in logged_commands
     assert "install -m 755" in logged_commands
     assert "install -o root" not in logged_commands
 
@@ -416,6 +441,8 @@ def test_soloist_install_keeps_existing_binary_when_download_is_expired(
     )
     _write_soloist_archive(archive, payload=expired_payload)
     service_home = tmp_path / "service home"
+    project_dir = tmp_path / "project"
+    _write_rust_soloist_helper(project_dir)
     installed = service_home / ".local/bin/soloist"
     installed.parent.mkdir(parents=True)
     installed.write_bytes(b"existing build")
@@ -423,16 +450,7 @@ def test_soloist_install_keeps_existing_binary_when_download_is_expired(
 set -Eeuo pipefail
 SCRIPT_DIR="${SOLOIST_SCRIPT%/*}"
 as_user() {
-  if [[ "$1" == /usr/bin/python3 && "$3" == --download ]]; then
-    cp -- "$FAKE_ARCHIVE" "$5"
-    "$PYTHON_EXECUTABLE" "$2" "$5" "$6"
-  elif [[ "$1" == /usr/bin/env && "$2" == -u ]]; then
-    "$PYTHON_EXECUTABLE" "$5" "${@:6}"
-  elif [[ "$1" == /usr/bin/python3 ]]; then
-    "$PYTHON_EXECUTABLE" "$2" "${@:3}"
-  else
-    "$@"
-  fi
+  "$@"
 }
 source "$SCRIPT_DIR/soloist.sh"
 install_spotify_soloist "$SERVICE_HOME"
@@ -443,7 +461,12 @@ install_spotify_soloist "$SERVICE_HOME"
         env={
             **os.environ,
             "FAKE_ARCHIVE": str(archive),
+            "PROJECT_DIR": str(project_dir),
             "PYTHON_EXECUTABLE": sys.executable,
+            "PYTHON_DIAGNOSTICS_SCRIPT": str(
+                UPDATE_SCRIPT.with_name("soloist_diagnostics.py")
+            ),
+            "PYTHON_EXTRACTOR_SCRIPT": str(EXTRACT_SOLOIST_SCRIPT),
             "SERVICE_HOME": str(service_home),
             "SOLOIST_SCRIPT": str(SOLOIST_SCRIPT),
         },
@@ -485,20 +508,43 @@ systemctl() {{ printf '%s\\n' "$*" >> "$CALL_LOG"; }}
     ]
 
 
-def test_root_updater_snapshots_soloist_validation_helpers() -> None:
+def test_root_updater_uses_the_version_matched_soloist_helper() -> None:
     updater = UPDATE_SCRIPT.read_text(encoding="utf-8")
     support = UPDATE_SCRIPT.with_name("update-support.sh").read_text(encoding="utf-8")
     service = UPDATE_SCRIPT.with_name("lumistripe-spotify.service").read_text(
         encoding="utf-8"
     )
+    web_service = UPDATE_SCRIPT.with_name("lumistripe-web.service").read_text(
+        encoding="utf-8"
+    )
 
     assert 'source "$SCRIPT_DIR/soloist.sh"' in updater
-    assert "soloist.sh extract_soloist.py" in support
-    assert "soloist_diagnostics.py" in support
-    assert "/usr/local/libexec/lumistripe/deploy/soloist_diagnostics.py" in service
+    assert "extract_soloist.py" not in support
+    assert "soloist_diagnostics.py" not in support
+    assert "spotify_device_name.py" not in support
+    assert '"$PROJECT_DIR/deploy/lumistripe-spotify-device-name"' not in support
+    assert "rm -f -- /usr/local/sbin/lumistripe-spotify-device-name" in support
+    assert "lumistripe-spotify-service.sudoers" in support
+    assert "rust/target/rust-deploy/current/lumistripe-deploy-helper" in service
     assert "ExecStartPre=/usr/bin/env -u LUMI_SPOTIFY_API_KEY" in service
-    assert "--binary @LUMI_HOME@/.local/bin/soloist" in service
+    assert '--binary "@LUMI_HOME@/.local/bin/soloist"' in service
+    assert "EnvironmentFile=-@LUMI_HOME@/.config/lumistripe/spotify-device-name.env" in service
+    assert (
+        "Environment=LUMI_DEPLOY_HELPER=@LUMI_PROJECT_DIR@/rust/target/rust-deploy/current/"
+        "lumistripe-deploy-helper"
+    ) in web_service
     assert "exec soloist --device-name" in service
+
+
+def test_spotify_name_sudoers_only_allows_its_service_restart() -> None:
+    sudoers = UPDATE_SCRIPT.with_name("lumistripe-spotify-service.sudoers").read_text(
+        encoding="utf-8"
+    )
+
+    assert sudoers.strip() == (
+        "@LUMI_SERVICE_USER@ ALL=(root) NOPASSWD: "
+        "/usr/bin/systemctl restart --no-block lumistripe-spotify.service"
+    )
 
 
 @pytest.mark.parametrize(
@@ -524,6 +570,7 @@ def test_update_steps_report_failure_even_in_conditional_context(
     script = f"""
 set -Eeuo pipefail
 step=0
+web_backend_requires_python() {{ [[ "$1" == python ]]; }}
 as_user() {{
   step=$((step + 1))
   printf '%s\\n' "$step" >> "$CALL_LOG"
@@ -538,6 +585,7 @@ if {function}; then exit 0; else exit 42; fi
         env={
             **os.environ,
             "PROJECT_DIR": str(tmp_path),
+            "WEB_BACKEND": "python",
             "UV_BIN": "uv",
             "BUN_BIN": "bun",
             "PYTHON_VERSION": "3.12",
@@ -550,6 +598,196 @@ if {function}; then exit 0; else exit 42; fi
     )
     assert result.returncode == 42, result.stderr
     assert len(log.read_text(encoding="utf-8").splitlines()) == expected_steps
+
+
+@pytest.mark.parametrize(
+    ("spotify_configured", "failure_step", "return_code"),
+    [(False, "", 0), (True, "", 0), (False, "build_rust_backend", 42)],
+)
+def test_update_rollback_checks_out_previous_revision_and_rebuilds_services(
+    tmp_path: Path, spotify_configured: bool, failure_step: str, return_code: int
+) -> None:
+    source = UPDATE_SCRIPT.read_text(encoding="utf-8")
+    rollback = source[source.index("rollback() {"):source.index("record_update_state() {")]
+    project_dir = tmp_path / "project"
+    deploy_dir = project_dir / "deploy"
+    deploy_dir.mkdir(parents=True)
+    (deploy_dir / "update-support.sh").write_text(
+        UPDATE_SUPPORT_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    call_log = tmp_path / "calls"
+    script = f"""
+set -Eeuo pipefail
+PREVIOUS_REF=previous-rust-commit
+ROLLING_BACK=0
+git_user() {{
+  printf 'git %s\\n' "$*" >> "$CALL_LOG"
+  if [[ "$1" == switch ]]; then [[ "$3" == "$PREVIOUS_REF" ]] || return 1; fi
+  return 0
+}}
+rollback_step() {{
+  printf '%s\\n' "$1" >> "$CALL_LOG"
+  [[ "$FAIL_ROLLBACK_STEP" != "$1" ]]
+}}
+sync_dependencies() {{ rollback_step sync_dependencies; }}
+build_rust_backend() {{ rollback_step build_rust_backend; }}
+build_frontend() {{ rollback_step build_frontend; }}
+refresh_deployment_files() {{ rollback_step refresh_deployment_files; }}
+systemctl() {{ printf 'systemctl %s\\n' "$*" >> "$CALL_LOG"; }}
+wait_for_web_service_health() {{ printf 'health_check\\n' >> "$CALL_LOG"; [[ "$ROLLBACK_HEALTHY" == 1 ]]; }}
+spotify_environment_ready() {{ [[ "$SPOTIFY_CONFIGURED" == 1 ]]; }}
+{rollback}
+if rollback; then exit 0; else exit 42; fi
+"""
+    result = subprocess.run(
+        ["bash", "-c", script],
+        env={
+            **os.environ,
+            "PROJECT_DIR": str(project_dir),
+            "CALL_LOG": str(call_log),
+            "FAIL_ROLLBACK_STEP": failure_step,
+            "SPOTIFY_CONFIGURED": str(int(spotify_configured)),
+            "ROLLBACK_HEALTHY": "1",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == return_code, result.stderr
+    calls = call_log.read_text(encoding="utf-8").splitlines()
+    assert calls[:2] == [
+        "git switch --detach previous-rust-commit",
+        "git submodule update --init --recursive",
+    ]
+    assert calls[2:6] == [
+        "sync_dependencies",
+        "build_rust_backend",
+        "build_frontend",
+        "refresh_deployment_files",
+    ]
+    assert "systemctl restart lumistripe-web.service" in calls
+    assert ("systemctl restart lumistripe-spotify.service" in calls) is spotify_configured
+    if failure_step:
+        assert "Rollback failed; manual recovery is required." in result.stderr
+    else:
+        assert "Rollback failed" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("restart_succeeds", "service_active", "healthy", "return_code", "probes"),
+    [
+        (True, True, True, 0, 1),
+        (True, True, False, 42, 60),
+        (True, False, True, 42, 0),
+        (False, True, True, 42, 0),
+    ],
+)
+def test_rust_rollback_skips_python_and_verifies_restored_web_health(
+    tmp_path: Path,
+    restart_succeeds: bool,
+    service_active: bool,
+    healthy: bool,
+    return_code: int,
+    probes: int,
+) -> None:
+    source = UPDATE_SCRIPT.read_text(encoding="utf-8")
+    health = source[
+        source.index("wait_for_web_service_health() {"):
+        source.index("rollback() {")
+    ]
+    rollback = source[source.index("rollback() {"):source.index("record_update_state() {")]
+    sync = source[source.index("sync_dependencies() ("):source.index("build_frontend() (")]
+    build = source[
+        source.index("build_rust_backend() {"):
+        source.index("prune_rust_backend_releases() {")
+    ]
+    project_dir = tmp_path / "project"
+    deploy_dir = project_dir / "deploy"
+    deploy_dir.mkdir(parents=True)
+    (deploy_dir / "update-support.sh").write_text(
+        UPDATE_SUPPORT_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    builder = deploy_dir / "build-rust-backend.sh"
+    builder.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    builder.chmod(0o755)
+    empty_path = tmp_path / "empty-path"
+    empty_path.mkdir()
+    call_log = tmp_path / "calls"
+
+    script = f"""
+set -Eeuo pipefail
+PREVIOUS_REF=previous-rust-commit
+ROLLING_BACK=0
+PROJECT_DIR="$PROJECT_DIR"
+PROJECT_HOME="$PROJECT_HOME"
+WEB_BACKEND=rust
+as_user() {{ printf 'unexpected as_user %s\\n' "$*" >> "$CALL_LOG"; return 95; }}
+as_user_with_env() {{ printf 'rust_build %s\\n' "$*" >> "$CALL_LOG"; }}
+git_user() {{ printf 'git %s\\n' "$*" >> "$CALL_LOG"; }}
+configured_web_backend() {{ printf '%s\\n' "$WEB_BACKEND"; }}
+build_frontend() {{ printf 'build_frontend\\n' >> "$CALL_LOG"; }}
+refresh_deployment_files() {{ printf 'refresh_deployment_files\\n' >> "$CALL_LOG"; }}
+systemctl() {{
+  printf 'systemctl %s\\n' "$*" >> "$CALL_LOG"
+  if [[ "$*" == 'restart lumistripe-web.service' ]]; then
+    [[ "$RESTART_SUCCEEDS" == 1 ]]
+  elif [[ "$*" == 'is-active --quiet lumistripe-web.service' ]]; then
+    [[ "$SERVICE_ACTIVE" == 1 ]]
+  else
+    return 0
+  fi
+}}
+curl() {{ printf 'curl %s\\n' "$*" >> "$CALL_LOG"; [[ "$WEB_HEALTHY" == 1 ]]; }}
+sleep() {{ :; }}
+spotify_environment_ready() {{ return 1; }}
+{sync}
+{build}
+{health}
+{rollback}
+if rollback; then exit 0; else exit 42; fi
+"""
+    environment = {
+        "PATH": str(empty_path),
+        "PROJECT_DIR": str(project_dir),
+        "PROJECT_HOME": str(tmp_path / "service-home"),
+        "CALL_LOG": str(call_log),
+        "RESTART_SUCCEEDS": str(int(restart_succeeds)),
+        "SERVICE_ACTIVE": str(int(service_active)),
+        "WEB_HEALTHY": str(int(healthy)),
+    }
+    for interpreter in ("python", "python3"):
+        with pytest.raises(FileNotFoundError):
+            subprocess.run([interpreter], env=environment, check=False)
+
+    result = subprocess.run(
+        ["/bin/bash", "-c", script],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert result.returncode == return_code, result.stderr
+    calls = call_log.read_text(encoding="utf-8").splitlines()
+    assert calls[:2] == [
+        "git switch --detach previous-rust-commit",
+        "git submodule update --init --recursive",
+    ]
+    assert any(
+        line.startswith("rust_build RUSTUP_HOME=")
+        and "build-rust-backend.sh" in line
+        and str(project_dir) in line
+        for line in calls
+    )
+    assert "build_frontend" in calls
+    assert "refresh_deployment_files" in calls
+    assert not any(line.startswith("unexpected as_user ") for line in calls)
+    assert not any("python" in line.lower() or "uv" in line.lower() for line in calls)
+    health_probes = [line for line in calls if line.startswith("curl ")]
+    assert len(health_probes) == probes
+    assert all("--max-time 0.25" in line for line in health_probes)
+    if return_code == 42:
+        assert "Rollback failed; manual recovery is required." in result.stderr
 
 
 def test_update_uses_installed_deployment_templates(tmp_path: Path) -> None:
@@ -632,14 +870,25 @@ record_update_state install-start
         check=True,
     )
     assert log.read_text(encoding="utf-8").splitlines() == [
-        "/usr/bin/python3",
-        str(tmp_path / "installed/update_state.py"),
+        str(tmp_path / "checkout/rust/target/rust-deploy/current/lumistripe-deploy-helper"),
+        "update-state",
         "install-start",
         "--project-dir",
         str(tmp_path / "checkout"),
         "--state-file",
         str(tmp_path / "status.json"),
     ]
+
+
+def test_periodic_update_check_uses_rust_deploy_helper() -> None:
+    service = UPDATE_SCRIPT.with_name("lumistripe-update-check.service").read_text(
+        encoding="utf-8"
+    )
+    support = UPDATE_SCRIPT.with_name("update-support.sh").read_text(encoding="utf-8")
+
+    assert "rust/target/rust-deploy/current/lumistripe-deploy-helper" in service
+    assert "update-state check" in service
+    assert "update_state.py" not in support
 
 
 def test_update_rejects_missing_tls_before_reconfiguring_services(tmp_path: Path) -> None:
@@ -662,7 +911,7 @@ def test_update_rejects_missing_tls_before_reconfiguring_services(tmp_path: Path
     assert "TLS certificate or key missing" in result.stderr
 
 
-def test_refresh_uses_installed_nginx_file_and_keeps_updater_snapshot(tmp_path: Path) -> None:
+def test_refresh_installs_network_helper_before_updater_snapshot(tmp_path: Path) -> None:
     source = UPDATE_SCRIPT.read_text(encoding="utf-8")
     definition = source[
         source.index("refresh_deployment_files() {"):source.index("rollback() {")
@@ -677,7 +926,8 @@ set -Eeuo pipefail
 install_wireplumber_config() {{ :; }}
 render_service_unit() {{ :; }}
 render_spotify_service_unit() {{ :; }}
-install_update_support() {{ exit 99; }}
+install_privileged_network_helper() {{ printf 'network-helper\\n' >> "$CALL_LOG"; }}
+install_update_support() {{ printf 'update-support\\n' >> "$CALL_LOG"; }}
 install() {{ printf '%s\\n' "$*" >> "$CALL_LOG"; }}
 systemctl() {{ :; }}
 ln() {{ :; }}
@@ -698,8 +948,10 @@ refresh_deployment_files
         },
         check=True,
     )
-    assert str(tmp_path / "installed/nginx/led-controller.conf") in log.read_text(
-        encoding="utf-8"
+    calls = log.read_text(encoding="utf-8").splitlines()
+    assert calls.index("network-helper") < calls.index("update-support")
+    assert any(
+        str(tmp_path / "installed/nginx/led-controller.conf") in call for call in calls
     )
 
 

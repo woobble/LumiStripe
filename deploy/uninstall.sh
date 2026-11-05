@@ -23,6 +23,7 @@ UPDATE_SUDOERS_FILE=/etc/sudoers.d/lumistripe-update
 UPDATE_TRIGGER_FILE=/usr/local/sbin/lumistripe-update-trigger
 UPDATE_LIBEXEC_DIR=/usr/local/libexec/lumistripe/deploy
 NETWORK_SUDOERS_FILE=/etc/sudoers.d/lumistripe-network
+SPOTIFY_SERVICE_SUDOERS_FILE=/etc/sudoers.d/lumistripe-spotify-service
 NETWORK_HELPER_FILE=/usr/local/sbin/lumistripe-network
 NETWORK_LIBEXEC_DIR=/usr/local/libexec/lumistripe/network
 LEGACY_SOLOIST_BIN=/usr/local/bin/soloist
@@ -203,6 +204,9 @@ remove_file "$UPDATE_CHECK_TIMER_FILE"
 remove_file "$UPDATE_SUDOERS_FILE"
 remove_file "$UPDATE_TRIGGER_FILE"
 remove_file "$NETWORK_SUDOERS_FILE"
+remove_file "$SPOTIFY_SERVICE_SUDOERS_FILE"
+remove_file /etc/sudoers.d/lumistripe-spotify-name
+remove_file /usr/local/sbin/lumistripe-spotify-device-name
 remove_file "$NETWORK_HELPER_FILE"
 remove_directory "$UPDATE_LIBEXEC_DIR"
 remove_directory "$NETWORK_LIBEXEC_DIR"
@@ -252,6 +256,7 @@ remove_directory "$PROJECT_STATIC_DIR"
 remove_file "$STATE_FILE"
 remove_directory /var/lib/lumistripe/update
 rm -f -- /var/lib/lumistripe/spotify-device-name.env
+rm -f -- "$SERVICE_HOME/.config/lumistripe/spotify-device-name.env"
 remove_empty_directory "$STATE_DIR"
 remove_empty_directory /var/backups/lumistripe
 

@@ -6,4 +6,4 @@ if [ "$#" -ne 0 ]; then
   exit 2
 fi
 
-exec /usr/bin/python3 /usr/local/libexec/lumistripe/network/lumistripe_network.py
+exec /usr/local/libexec/lumistripe/network/lumistripe-network-helper network

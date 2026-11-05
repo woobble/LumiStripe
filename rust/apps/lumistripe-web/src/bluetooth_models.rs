@@ -1,5 +1,6 @@
 //! Typed BlueZ, PipeWire, and HTTP contract models.
 
+use crate::request_validation::deserialize_pydantic_bool;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, utoipa::ToSchema)]
@@ -117,6 +118,7 @@ pub(crate) struct BluetoothStatus {
 
 #[derive(Clone, Debug, Deserialize, utoipa::ToSchema)]
 pub(crate) struct BluetoothPowerRequest {
+    #[serde(deserialize_with = "deserialize_pydantic_bool")]
     pub powered: bool,
 }
 
@@ -169,6 +171,7 @@ pub(crate) struct AudioOutputVolumeRequest {
 pub(crate) struct AudioOutputMuteRequest {
     #[schema(min_length = 1, max_length = 256)]
     pub selector: String,
+    #[serde(deserialize_with = "deserialize_pydantic_bool")]
     pub muted: bool,
 }
 

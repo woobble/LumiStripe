@@ -11,6 +11,7 @@ install_spotify_soloist() (
   local work_dir
   local archive_file
   local executable_file
+  local deploy_helper
 
   architecture="$(uname -m)"
   case "$architecture" in
@@ -29,13 +30,16 @@ install_spotify_soloist() (
   work_dir="$(as_user mktemp -d "$service_home/.cache/lumistripe/soloist.XXXXXX")"
   archive_file="$work_dir/soloist.tar.gz"
   executable_file="$work_dir/soloist"
+  deploy_helper="$PROJECT_DIR/rust/target/rust-deploy/current/lumistripe-deploy-helper"
   trap 'as_user rm -rf -- "$work_dir" || true' EXIT
 
   echo "Downloading Spotify Soloist for $architecture as the service user..."
-  as_user /usr/bin/python3 "$SCRIPT_DIR/extract_soloist.py" \
-    --download "$archive_url" "$archive_file" "$executable_file"
+  as_user "$deploy_helper" soloist-download \
+    --url "$archive_url" \
+    --archive "$archive_file" \
+    --destination "$executable_file"
   as_user test -s "$executable_file"
-  as_user /usr/bin/env -u LUMI_SPOTIFY_API_KEY /usr/bin/python3 \
-    "$SCRIPT_DIR/soloist_diagnostics.py" --binary "$executable_file"
+  as_user test -x "$deploy_helper"
+  as_user "$deploy_helper" soloist-check --binary "$executable_file"
   as_user install -m 755 "$executable_file" "$service_home/.local/bin/soloist"
 )

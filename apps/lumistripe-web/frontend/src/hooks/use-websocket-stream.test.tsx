@@ -2,6 +2,7 @@ import { act, renderHook } from "@testing-library/react"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 
 import { useWebSocketStream } from "@/hooks/use-websocket-stream"
+import { ACCESS_REVOKED_EVENT } from "@/lib/api"
 
 class MockWebSocket {
   static instances: MockWebSocket[] = []
@@ -86,4 +87,28 @@ it("does not apply pending data after a parse failure starts closing the socket"
   expect(socket.close).toHaveBeenCalledOnce()
   await act(async () => { pending.resolve("stale"); await pending.promise })
   expect(result.current.data).toBeNull()
+})
+
+it("signals revoked access instead of reconnecting after a 4401 close", () => {
+  vi.useFakeTimers()
+  const onAccessRevoked = vi.fn()
+  window.addEventListener(ACCESS_REVOKED_EVENT, onAccessRevoked)
+  const { unmount } = renderHook(() =>
+    useWebSocketStream({ url: "ws://test", parse: (data) => data }),
+  )
+
+  try {
+    act(() => {
+      MockWebSocket.instances[0]?.onclose?.(
+        new CloseEvent("close", { code: 4401, reason: "pairing required" }),
+      )
+    })
+    act(() => vi.advanceTimersByTime(10_000))
+
+    expect(onAccessRevoked).toHaveBeenCalledOnce()
+    expect(MockWebSocket.instances).toHaveLength(1)
+  } finally {
+    unmount()
+    window.removeEventListener(ACCESS_REVOKED_EVENT, onAccessRevoked)
+  }
 })

@@ -192,7 +192,14 @@ def test_update_install_rejects_dirty_checkout_and_check_starts_helper(
         encoding="utf-8",
     )
     project_dir = tmp_path / "project"
-    helper = project_dir / "deploy" / "update_state.py"
+    helper = (
+        project_dir
+        / "rust"
+        / "target"
+        / "rust-deploy"
+        / "current"
+        / "lumistripe-deploy-helper"
+    )
     helper.parent.mkdir(parents=True)
     helper.write_text("", encoding="utf-8")
     app = create_app(
@@ -215,7 +222,15 @@ def test_update_install_rejects_dirty_checkout_and_check_starts_helper(
         checked = client.post("/api/system/update/check")
         assert checked.status_code == 202
 
-    assert launched and launched[0][0][1] == str(helper)
+    assert launched and launched[0][0] == [
+        str(helper),
+        "update-state",
+        "check",
+        "--project-dir",
+        str(project_dir),
+        "--state-file",
+        str(state_file),
+    ]
     assert launched[0][1]["start_new_session"] is True
 
 
@@ -275,7 +290,14 @@ def test_update_checker_and_installer_launch_failures_are_redacted(
         assert missing_checker.status_code == 503
         assert missing_checker.json() == {"detail": "The update checker is unavailable."}
 
-        checker = project_dir / "deploy" / "update_state.py"
+        checker = (
+            project_dir
+            / "rust"
+            / "target"
+            / "rust-deploy"
+            / "current"
+            / "lumistripe-deploy-helper"
+        )
         checker.parent.mkdir(parents=True)
         checker.write_text("", encoding="utf-8")
 

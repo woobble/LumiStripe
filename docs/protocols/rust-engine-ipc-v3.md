@@ -12,6 +12,16 @@ timeouts, request validation, and private-socket lifecycle are unchanged; see
 the [v2 protocol](rust-engine-ipc-v2.md) for render, scheduler, and binary frame
 details.
 
+Dynamic scheduled render health may also include `selector_diagnostics`, one
+entry for each output with a Rust-owned Dynamic selector. Each entry identifies
+the current animation, best candidate, selected animation, whether the
+selector proposes a switch, and the decision reason. `scores` contains up to
+five ranked candidates with their total score and contributing factors. Timing
+fields report elapsed time since the last selection, remaining minimum and
+maximum durations, switch cooldown, drop cooldown, and recent animation
+history. Entries include `output_index` and remain additive to health responses;
+clients that do not use selector diagnostics can ignore the field.
+
 ## Audio commands
 
 ### Start capture and processing

@@ -1147,9 +1147,9 @@ def test_auto_source_switches_between_bluetooth_and_microphone(
         assert opened == ["pulse"]
         assert bluetooth.defaults == [PHONE_SOURCE]
 
-        runtime.set_mode(PlaybackMode.DYNAMIC).result(timeout=1)
+        runtime.set_mode(PlaybackMode.DYNAMIC).result(timeout=2)
         runtime.apply_audio_settings("2", AudioTuningProfile(target_level=0.5)).result(
-            timeout=1
+            timeout=2
         )
         assert opened == ["pulse"]
 

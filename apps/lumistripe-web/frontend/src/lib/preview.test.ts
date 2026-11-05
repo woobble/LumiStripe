@@ -5,6 +5,7 @@ import {
   decodePreviewFrame,
   isNewerPreviewSequence,
   previewSampleIndex,
+  shouldEnableSimulatorPreview,
 } from "@/lib/preview"
 import { initialState } from "@/test/fixtures"
 
@@ -28,6 +29,12 @@ function packet(sequence: number, outputs: Uint8Array[], flags = 0, version = 1)
 }
 
 describe("preview protocol and layout", () => {
+  it("enables live preview for the dedicated simulator URL", () => {
+    expect(shouldEnableSimulatorPreview("?simulator=1")).toBe(true)
+    expect(shouldEnableSimulatorPreview("?simulator=0")).toBe(false)
+    expect(shouldEnableSimulatorPreview("?other=simulator")).toBe(false)
+  })
+
   it("decodes a binary RGBA frame", async () => {
     const first = new Uint8Array([255, 0, 1, 255])
     const second = new Uint8Array([2, 3, 4, 128, 9, 8, 7, 0])

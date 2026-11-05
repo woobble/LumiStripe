@@ -122,6 +122,26 @@ const sequencePlaybackSchema = z.object({
   waiting_for_clock: z.boolean(),
   next_transition_in_s: z.number().nonnegative().nullable(),
 }).strict()
+const dynamicSelectorScoreSchema = z.object({
+  animation: z.string(),
+  score: z.number(),
+  reasons: z.array(z.string()).optional().default([]),
+}).strict()
+const dynamicSelectorDiagnosticsSchema = z.object({
+  output_index: z.number().int().nonnegative(),
+  current_animation: z.string(),
+  candidate_animation: z.string().nullable().optional().default(null),
+  selected_animation: z.string(),
+  should_switch: z.boolean(),
+  reason: z.string(),
+  scores: z.array(dynamicSelectorScoreSchema).optional().default([]),
+  elapsed_ns: z.number().nonnegative(),
+  min_duration_remaining_ns: z.number().nonnegative(),
+  max_duration_remaining_ns: z.number().nonnegative(),
+  switch_cooldown_remaining_ns: z.number().nonnegative(),
+  drop_cooldown_remaining_ns: z.number().nonnegative(),
+  recent_names: z.array(z.string()).optional().default([]),
+}).strict()
 const sequenceLibrarySummarySchema = z.object({
   sequences: z.array(z.object({ id: z.string(), name: z.string() }).strict()),
   active_sequence_id: z.string().nullable(),
@@ -266,6 +286,7 @@ const dashboardStateSchema = z.object({
   active_audio_source: z.string().nullable().optional(),
   audio_monitoring: z.boolean().nullable().optional(),
   active_effects: z.array(z.string()),
+  selector_diagnostics: z.array(dynamicSelectorDiagnosticsSchema).optional().default([]),
   uptime_seconds: z.number(),
   frame_rate: z.number(),
   render_time_ms: z.number().nonnegative(),

@@ -494,6 +494,35 @@ pub struct RenderEffectSchedulerState {
     pub beat_lateness_p95_ns: u64,
 }
 
+/// One animation's current Dynamic selector score and contributing factors.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct RenderSelectorScore {
+    pub animation: String,
+    pub score: f64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reasons: Vec<String>,
+}
+
+/// Latest Dynamic selector decision and timing state for one output.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct RenderSelectorDiagnostics {
+    pub output_index: usize,
+    pub current_animation: String,
+    pub candidate_animation: Option<String>,
+    pub selected_animation: String,
+    pub should_switch: bool,
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scores: Vec<RenderSelectorScore>,
+    pub elapsed_ns: u64,
+    pub min_duration_remaining_ns: u64,
+    pub max_duration_remaining_ns: u64,
+    pub switch_cooldown_remaining_ns: u64,
+    pub drop_cooldown_remaining_ns: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_names: Vec<String>,
+}
+
 impl Default for RenderEffectSchedulerState {
     fn default() -> Self {
         Self {
@@ -923,6 +952,8 @@ pub enum ResponseResult {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         dynamic_gate_states: Vec<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        selector_diagnostics: Vec<RenderSelectorDiagnostics>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         beat_clocks: Vec<RenderBeatClockState>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         sequence_playback: Vec<RenderSequencePlaybackState>,
@@ -1257,6 +1288,7 @@ mod tests {
                 structure_event_sequences: Vec::new(),
                 cycling_active: Vec::new(),
                 dynamic_gate_states: Vec::new(),
+                selector_diagnostics: Vec::new(),
                 beat_clocks: Vec::new(),
                 sequence_playback: Vec::new(),
                 effect_schedulers: Vec::new(),

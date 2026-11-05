@@ -3,13 +3,18 @@
 [![CI](https://github.com/woobble/LumiStripe/actions/workflows/ci.yml/badge.svg)](https://github.com/woobble/LumiStripe/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/github/woobble/LumiStripe/graph/badge.svg?token=2ZJDBFMOOW)](https://codecov.io/github/woobble/LumiStripe)
 
-**Python-powered LED animation engine with audio-reactive lighting.**
+**Native Rust LED application with audio-reactive lighting and a React dashboard.**
+
+The Rust web server, shared playback and audio engine, and CLI are LumiStripe's
+primary application target. Python CLI and web implementations remain for
+compatibility and rollback; the installer keeps Python selected until the
+Raspberry Pi cutover gates pass.
 
 LumiStripe drives 2-wire addressable LED strips from a Raspberry Pi or other
 Linux single-board computer via GPIO bit-banging, and provides a rich animation
 engine with **54 catalogued animations**, real-time **FFT audio analysis**,
-**music-driven animation selection**, and a cross-platform **Tkinter GUI
-simulator**.
+**music-driven animation selection**, and a browser simulator powered by the
+Rust engine and React dashboard.
 
 ## Features
 
@@ -17,9 +22,9 @@ simulator**.
 - **54 Animations** — Fire, Rainbow, Confetti, Aurora, LightningStrike, PlasmaRave, and many more, with `tick` and `tick_audio` modes
 - **Audio Reactive** — Real-time FFT analysis with 8 frequency bands, beat detection, BPM estimation, and onset/transient detection
 - **Layered Dynamic Selection** — Selects a smooth base animation and independently schedules up to two compatible beat/drop effects from live music features
-- **Three Playback Modes** — Static, Cycling, and music-driven Dynamic playback in both the CLI and simulator
-- **CLI** — Run headless GPIO playback with `lumistripe-cli` (also available as `lumistripe`)
-- **Simulator** — Launch the Tkinter GUI with `lumistripe-sim`
+- **Three Playback Modes** — Static, Cycling, and music-driven Dynamic playback in both the CLI and web simulator
+- **CLI** — Run the shared Rust engine headlessly with `lumistripe-cli`; the Python `lumistripe` command remains available during migration
+- **Simulator** — Run the Rust engine and React dashboard with mock outputs on x86_64 Linux or Raspberry Pi
 
 ## Raspberry Pi party appliance
 
@@ -156,26 +161,16 @@ use an estimated 4/4 alignment anchored to the first observed beat.
 
 ## Simulator
 
-Launch the Tkinter GUI simulator:
+The browser simulator runs the shared Rust engine with mock LED outputs, live
+preview, demo or microphone audio, animation effects, topology, and power
+limits. It runs without Raspberry Pi hardware. See the
+[simulator guide](docs/simulator.md) for setup and launch instructions.
 
 ```bash
-lumistripe
-```
-
-Keyboard shortcuts:
-- `←` / `→` — Previous / next animation
-- `s` — Static mode
-- `c` — Cycling mode
-- `d` — Dynamic mode
-- `k` — Calibrate microphone levels
-- `Escape` — Quit
-
-Audio source is configured independently from playback mode:
-
-```bash
-lumistripe-sim --mode cycling --audio-source demo
-lumistripe-sim --mode static --audio-source mic
-lumistripe-sim --mode dynamic                    # microphone by default
+cargo run --locked --manifest-path rust/Cargo.toml -p lumistripe-web -- \
+  --simulate --pixels 80 --pixels-2 24 \
+  --engine-binary rust/target/debug/lumistripe-engine \
+  --static-dir apps/lumistripe-web/src/lumistripe_web/static
 ```
 
 ## Audio Calibration
@@ -191,7 +186,6 @@ Apply calibration automatically before starting Dynamic mode:
 ```bash
 lumistripe --mode dynamic --auto-calibrate-audio 3
 lumistripe --audio-debug --auto-calibrate-audio 3
-lumistripe-sim --mode dynamic --auto-calibrate-audio 3
 ```
 
 For live base-animation, effect-layer, selector, and scheduler diagnostics:
@@ -218,7 +212,6 @@ uv run ruff check .
 uv run mypy \
   packages/lumistripe-core/src/lumistripe \
   apps/lumistripe-cli/src/lumistripe_cli \
-  apps/lumistripe-sim/src/lumistripe_sim \
   apps/lumistripe-web/src/lumistripe_web \
   packages/lumistripe-app-support/src/lumistripe_app_support
 

@@ -67,8 +67,14 @@ NGINX_AVAILABLE=/etc/nginx/sites-available/led-controller
 command -v runuser >/dev/null || { echo "runuser is required" >&2; exit 1; }
 command -v flock >/dev/null || { echo "flock is required (install util-linux)" >&2; exit 1; }
 command -v curl >/dev/null || { echo "curl is required" >&2; exit 1; }
-[[ -x "$UV_BIN" ]] || { echo "uv is missing at $UV_BIN; run deploy/install.sh first." >&2; exit 1; }
 [[ -x "$BUN_BIN" ]] || { echo "Bun is missing at $BUN_BIN; run deploy/install.sh first." >&2; exit 1; }
+WEB_BACKEND="$(resolve_web_backend "" "$WEB_ENV_FILE")" || exit 1
+if web_backend_requires_python "$WEB_BACKEND"; then
+  [[ -x "$UV_BIN" ]] || {
+    echo "uv is missing at $UV_BIN; run deploy/install.sh first." >&2
+    exit 1
+  }
+fi
 
 install -d -o root -g root -m 755 "$LOCK_DIR"
 exec 9>"$LOCK_FILE"
@@ -159,33 +165,26 @@ spotify_environment_ready() {
 git_user() { as_user git -C "$PROJECT_DIR" "$@"; }
 
 configured_web_backend() {
-  local backend
-  backend="$(read_web_backend "$WEB_ENV_FILE")" || return 1
-  [[ -n "$backend" ]] || backend=python
-  case "$backend" in
-    python|rust) printf '%s\n' "$backend" ;;
-    *) echo "Unsupported LUMI_WEB_BACKEND in $WEB_ENV_FILE: $backend" >&2; return 1 ;;
-  esac
+  printf '%s\n' "$WEB_BACKEND"
 }
 
 build_rust_backend() {
-  local backend
-  backend="$(configured_web_backend)" || return 1
-  [[ "$backend" == rust ]] || return 0
-  [[ -x "$SCRIPT_DIR/build-rust-backend.sh" ]] || {
-    echo "Rust deployment builder is missing from $SCRIPT_DIR." >&2
+  configured_web_backend >/dev/null || return 1
+  [[ -x "$PROJECT_DIR/deploy/build-rust-backend.sh" ]] || {
+    echo "Rust deployment builder is missing from $PROJECT_DIR/deploy." >&2
     return 1
   }
+  # Keep a complete, commit-matched Rust release available even while an
+  # installation is using the Python rollback backend. The Spotify service
+  # preflight uses the deploy helper from this same atomic release.
   as_user_with_env \
     RUSTUP_HOME="$PROJECT_HOME/.rustup" \
     CARGO_HOME="$PROJECT_HOME/.cargo" \
-    "$SCRIPT_DIR/build-rust-backend.sh" "$PROJECT_DIR"
+    "$PROJECT_DIR/deploy/build-rust-backend.sh" "$PROJECT_DIR"
 }
 
 prune_rust_backend_releases() {
-  local backend active_commit release_commit release_dir
-  backend="$(configured_web_backend)" || return 1
-  [[ "$backend" == rust ]] || return 0
+  local active_commit release_commit release_dir
   local releases_dir="$PROJECT_DIR/rust/target/rust-deploy/releases"
   [[ -d "$releases_dir" ]] || return 0
   active_commit="$(git_user rev-parse --verify HEAD)" || return 1
@@ -198,6 +197,8 @@ prune_rust_backend_releases() {
     as_user rm -f -- \
       "$release_dir/lumistripe-web" \
       "$release_dir/lumistripe-engine" \
+      "$release_dir/lumistripe-deploy-helper" \
+      "$release_dir/lumistripe" \
       "$release_dir/source-commit" || return 1
     as_user rmdir -- "$release_dir" || return 1
   done
@@ -205,6 +206,7 @@ prune_rust_backend_releases() {
 
 sync_dependencies() (
   cd "$PROJECT_DIR" || return 1
+  web_backend_requires_python "$WEB_BACKEND" || return 0
   as_user "$UV_BIN" python install "$PYTHON_VERSION" || return 1
   as_user_with_env \
     LUMISTRIPE_BUILD_EXTENSIONS=all \
@@ -313,6 +315,8 @@ refresh_deployment_files() {
     return 1
   fi
 
+  install_privileged_network_helper || return 1
+  install_update_support || return 1
   install_wireplumber_config || return 1
   render_service_unit || return 1
   render_spotify_service_unit || return 1
@@ -334,6 +338,20 @@ refresh_deployment_files() {
   fi
 }
 
+wait_for_web_service_health() {
+  local attempt
+  for attempt in {1..60}; do
+    if curl --disable --fail --silent --show-error --max-time 0.25 \
+      http://127.0.0.1:8000/api/health >/dev/null; then
+      return 0
+    fi
+    if (( attempt < 60 )); then
+      sleep 0.25
+    fi
+  done
+  return 1
+}
+
 rollback() {
   [[ -n "$PREVIOUS_REF" && "$ROLLING_BACK" -eq 0 ]] || return 0
   ROLLING_BACK=1
@@ -347,11 +365,25 @@ rollback() {
     echo "Rollback could not restore submodules; manual recovery is required." >&2
     return 1
   fi
+  source "$PROJECT_DIR/deploy/update-support.sh"
   sync_dependencies || failed=1
   build_rust_backend || failed=1
   build_frontend || failed=1
   refresh_deployment_files || failed=1
-  systemctl restart lumistripe-web.service || failed=1
+  if systemctl restart lumistripe-web.service; then
+    if systemctl is-active --quiet lumistripe-web.service; then
+      if ! wait_for_web_service_health; then
+        echo "Rolled-back web service did not become healthy in time." >&2
+        failed=1
+      fi
+    else
+      echo "Rolled-back web service is not active." >&2
+      failed=1
+    fi
+  else
+    echo "Could not restart the rolled-back web service." >&2
+    failed=1
+  fi
   if spotify_environment_ready; then
     systemctl restart lumistripe-spotify.service || failed=1
   fi
@@ -362,7 +394,8 @@ rollback() {
 }
 
 record_update_state() {
-  as_user /usr/bin/python3 "$SCRIPT_DIR/update_state.py" "$1" \
+  as_user "$PROJECT_DIR/rust/target/rust-deploy/current/lumistripe-deploy-helper" \
+    update-state "$1" \
     --project-dir "$PROJECT_DIR" \
     --state-file "$UPDATE_STATE_FILE" || true
 }
@@ -379,7 +412,9 @@ trap handle_update_error ERR
 STATUS=$(git_user status --porcelain)
 [[ -z "$STATUS" ]] || { echo "Working tree is dirty; commit or stash changes before updating." >&2; exit 1; }
 record_update_state install-start
-ensure_uv_version
+if web_backend_requires_python "$WEB_BACKEND"; then
+  ensure_uv_version
+fi
 PREVIOUS_REF=$(git_user rev-parse HEAD)
 git_user -c core.hooksPath=/dev/null fetch --prune \
   https://github.com/woobble/LumiStripe.git \
@@ -387,17 +422,19 @@ git_user -c core.hooksPath=/dev/null fetch --prune \
 TARGET_COMMIT=$(git_user rev-parse --verify "${TARGET_REF}^{commit}")
 git_user -c core.hooksPath=/dev/null switch --detach "$TARGET_COMMIT"
 git_user submodule update --init --recursive
+source "$PROJECT_DIR/deploy/update-support.sh"
 
 install_audio_bridge_packages
 create_spotify_environment_file
-if spotify_environment_ready; then
-  install_spotify_soloist "$PROJECT_HOME"
-else
+if ! spotify_environment_ready; then
   systemctl disable --now lumistripe-spotify.service >/dev/null 2>&1 || true
 fi
 sync_dependencies
 build_rust_backend
 build_frontend
+if spotify_environment_ready; then
+  install_spotify_soloist "$PROJECT_HOME"
+fi
 refresh_deployment_files
 if spotify_environment_ready; then
   systemctl enable lumistripe-spotify.service
@@ -406,15 +443,12 @@ fi
 systemctl restart lumistripe-web.service
 systemctl is-active --quiet lumistripe-web.service
 
-for _ in {1..30}; do
-  if curl --disable --fail --silent --show-error http://127.0.0.1:8000/api/health >/dev/null; then
-    echo "LumiStripe updated to $(git_user rev-parse --short HEAD)."
-    prune_rust_backend_releases || echo "Could not prune old Rust release binaries." >&2
-    record_update_state install-succeeded
-    trap - ERR
-    exit 0
-  fi
-  sleep 1
-done
+if wait_for_web_service_health; then
+  echo "LumiStripe updated to $(git_user rev-parse --short HEAD)."
+  prune_rust_backend_releases || echo "Could not prune old Rust release binaries." >&2
+  record_update_state install-succeeded
+  trap - ERR
+  exit 0
+fi
 echo "Service did not become healthy in time." >&2
 false

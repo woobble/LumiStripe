@@ -12,6 +12,9 @@ pub struct CliOptions {
     pub host: String,
     #[arg(long, default_value_t = 8000)]
     pub port: u16,
+    /// Run the interactive dashboard against mock LED outputs on localhost.
+    #[arg(long)]
+    pub simulate: bool,
     #[arg(long, env = "LUMISTRIPE_ENGINE_BINARY")]
     pub engine_binary: Option<PathBuf>,
     #[arg(long, default_value_t = 80)]
@@ -106,7 +109,7 @@ pub struct AppConfig {
 }
 
 impl CliOptions {
-    pub fn into_config(self) -> Result<(AppConfig, PathBuf, String, u16), String> {
+    pub fn into_config(mut self) -> Result<(AppConfig, PathBuf, String, u16), String> {
         if self.bluetooth_max_inputs == 0 || self.bluetooth_max_outputs == 0 {
             return Err("Bluetooth connection limits must be at least one".to_owned());
         }
@@ -131,41 +134,66 @@ impl CliOptions {
         if self.spi_speed_hz_2 == Some(0) {
             return Err("--spi-speed-hz-2 must be greater than zero".to_owned());
         }
+        if self.simulate && self.output_backend != OutputBackendArg::Mock {
+            return Err("--simulate always uses mock outputs; remove --output-backend".to_owned());
+        }
 
-        let (runtime_kind, output_backend, primary_backend, secondary_backend) = match self
-            .output_backend
-        {
-            OutputBackendArg::Mock => ("simulation", "simulation", OutputBackend::Mock, None),
-            OutputBackendArg::MockSpi => ("simulation", "mock_spi", OutputBackend::MockSpi, None),
-            OutputBackendArg::Spi => (
-                "hardware",
-                "spi",
-                OutputBackend::Spi {
-                    device: self.spi_device.clone(),
-                    speed_hz: self.spi_speed_hz,
-                },
-                self.pixels_2.map(|_| OutputBackend::Spi {
-                    device: self
-                        .spi_device_2
-                        .clone()
-                        .unwrap_or_else(|| "/dev/spidev0.1".to_owned()),
-                    speed_hz: self.spi_speed_hz_2.unwrap_or(self.spi_speed_hz),
-                }),
-            ),
-            OutputBackendArg::Gpio => {
-                let primary = OutputBackend::Gpio {
-                    chip: self.chip.clone(),
-                    data_pin: self.data_pin,
-                    clock_pin: self.clock_pin,
-                };
-                let secondary = self.pixels_2.map(|_| OutputBackend::Gpio {
-                    chip: self.chip.clone(),
-                    data_pin: self.data_pin_2.unwrap_or(17),
-                    clock_pin: self.clock_pin_2.unwrap_or(18),
-                });
-                ("hardware", "gpio", primary, secondary)
-            }
+        let host = if self.simulate {
+            "127.0.0.1".to_owned()
+        } else {
+            self.host.clone()
         };
+        let settings_file = self.settings_file.take().unwrap_or_else(|| {
+            if self.simulate {
+                default_simulator_settings_file()
+            } else {
+                default_settings_file()
+            }
+        });
+
+        let (runtime_kind, output_backend, primary_backend, secondary_backend) =
+            match self.output_backend {
+                OutputBackendArg::Mock => (
+                    "simulation",
+                    "simulation",
+                    OutputBackend::Mock,
+                    self.pixels_2.map(|_| OutputBackend::Mock),
+                ),
+                OutputBackendArg::MockSpi => (
+                    "simulation",
+                    "mock_spi",
+                    OutputBackend::MockSpi,
+                    self.pixels_2.map(|_| OutputBackend::MockSpi),
+                ),
+                OutputBackendArg::Spi => (
+                    "hardware",
+                    "spi",
+                    OutputBackend::Spi {
+                        device: self.spi_device.clone(),
+                        speed_hz: self.spi_speed_hz,
+                    },
+                    self.pixels_2.map(|_| OutputBackend::Spi {
+                        device: self
+                            .spi_device_2
+                            .clone()
+                            .unwrap_or_else(|| "/dev/spidev0.1".to_owned()),
+                        speed_hz: self.spi_speed_hz_2.unwrap_or(self.spi_speed_hz),
+                    }),
+                ),
+                OutputBackendArg::Gpio => {
+                    let primary = OutputBackend::Gpio {
+                        chip: self.chip.clone(),
+                        data_pin: self.data_pin,
+                        clock_pin: self.clock_pin,
+                    };
+                    let secondary = self.pixels_2.map(|_| OutputBackend::Gpio {
+                        chip: self.chip.clone(),
+                        data_pin: self.data_pin_2.unwrap_or(17),
+                        clock_pin: self.clock_pin_2.unwrap_or(18),
+                    });
+                    ("hardware", "gpio", primary, secondary)
+                }
+            };
         let mut outputs = vec![EngineOutputOptions {
             id: "primary".to_owned(),
             name: "Primary".to_owned(),
@@ -213,10 +241,10 @@ impl CliOptions {
                 bluetooth_max_outputs: self.bluetooth_max_outputs,
                 secure_cookie: self.secure_cookie,
                 static_dir: self.static_dir,
-                settings_file: self.settings_file.unwrap_or_else(default_settings_file),
+                settings_file,
             },
             engine_binary,
-            self.host,
+            host,
             self.port,
         ))
     }
@@ -356,6 +384,16 @@ fn default_settings_file() -> PathBuf {
     PathBuf::from(".config/lumistripe/settings.json")
 }
 
+fn default_simulator_settings_file() -> PathBuf {
+    if let Some(path) = std::env::var_os("XDG_CONFIG_HOME").filter(|path| !path.is_empty()) {
+        return PathBuf::from(path).join("lumistripe/simulator-settings.json");
+    }
+    if let Some(path) = std::env::var_os("HOME").filter(|path| !path.is_empty()) {
+        return PathBuf::from(path).join(".config/lumistripe/simulator-settings.json");
+    }
+    PathBuf::from(".config/lumistripe/simulator-settings.json")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{AppConfig, CliOptions, EngineOutputOptions};
@@ -471,5 +509,51 @@ mod tests {
         let (config, _, _, _) = options.into_config().unwrap();
         assert_eq!(config.spotify_ws_uri, "ws://127.0.0.1:9123");
         assert!(config.spotify_provider_enabled);
+    }
+
+    #[test]
+    fn simulator_mode_is_loopback_mock_and_keeps_settings_separate() {
+        let options = CliOptions::try_parse_from([
+            "lumistripe-web",
+            "--simulate",
+            "--host",
+            "0.0.0.0",
+            "--pixels",
+            "80",
+            "--pixels-2",
+            "24",
+        ])
+        .unwrap();
+        let (config, _, host, _) = options.into_config().unwrap();
+
+        assert_eq!(host, "127.0.0.1");
+        assert_eq!(config.runtime_kind, "simulation");
+        assert_eq!(config.output_backend, "simulation");
+        assert_eq!(config.engine_config().pixel_counts(), vec![80, 24]);
+        assert!(
+            config
+                .engine_config()
+                .outputs
+                .iter()
+                .all(|output| matches!(output.backend, OutputBackend::Mock))
+        );
+        assert!(
+            config
+                .settings_file
+                .ends_with("lumistripe/simulator-settings.json")
+        );
+    }
+
+    #[test]
+    fn simulator_mode_rejects_hardware_output_selection() {
+        let options =
+            CliOptions::try_parse_from(["lumistripe-web", "--simulate", "--output-backend", "spi"])
+                .unwrap();
+        assert!(
+            options
+                .into_config()
+                .unwrap_err()
+                .contains("always uses mock outputs")
+        );
     }
 }

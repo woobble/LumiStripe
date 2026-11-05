@@ -62,7 +62,8 @@ activate_release() {
 
 if [[ -d "$RELEASE_DIR" ]]; then
   if [[ "$(cat "$RELEASE_DIR/source-commit" 2>/dev/null || true)" == "$COMMIT" && \
-    -x "$RELEASE_DIR/lumistripe-web" && -x "$RELEASE_DIR/lumistripe-engine" ]]; then
+    -x "$RELEASE_DIR/lumistripe-web" && -x "$RELEASE_DIR/lumistripe-engine" && \
+    -x "$RELEASE_DIR/lumistripe-deploy-helper" && -x "$RELEASE_DIR/lumistripe" ]]; then
     activate_release
     echo "Reusing Rust binaries for $COMMIT."
     exit 0
@@ -84,11 +85,17 @@ run_cargo build --locked --release --manifest-path "$PROJECT_DIR/rust/Cargo.toml
   --package lumistripe-engine --bin lumistripe-engine
 run_cargo build --locked --release --manifest-path "$PROJECT_DIR/rust/Cargo.toml" \
   --package lumistripe-web --bin lumistripe-web --features bluez,pipewire
+run_cargo build --locked --release --manifest-path "$PROJECT_DIR/rust/Cargo.toml" \
+  --package lumistripe-deploy-helper --bin lumistripe-deploy-helper
+run_cargo build --locked --release --manifest-path "$PROJECT_DIR/rust/Cargo.toml" \
+  --package lumistripe-cli --bin lumistripe
 
 BUILT_ENGINE="$BUILD_DIR/release/lumistripe-engine"
 BUILT_WEB="$BUILD_DIR/release/lumistripe-web"
-[[ -x "$BUILT_ENGINE" && -x "$BUILT_WEB" ]] || {
-  echo "Cargo completed without producing both Rust service binaries." >&2
+BUILT_DEPLOY_HELPER="$BUILD_DIR/release/lumistripe-deploy-helper"
+BUILT_CLI="$BUILD_DIR/release/lumistripe"
+[[ -x "$BUILT_ENGINE" && -x "$BUILT_WEB" && -x "$BUILT_DEPLOY_HELPER" && -x "$BUILT_CLI" ]] || {
+  echo "Cargo completed without producing all version-matched Rust release binaries." >&2
   exit 1
 }
 
@@ -96,6 +103,7 @@ STAGE_DIR="$(mktemp -d "$RELEASES_DIR/.stage.$COMMIT.XXXXXX")"
 cleanup() {
   if [[ -n "${STAGE_DIR:-}" && -d "$STAGE_DIR" ]]; then
     rm -f -- "$STAGE_DIR/lumistripe-web" "$STAGE_DIR/lumistripe-engine" \
+      "$STAGE_DIR/lumistripe-deploy-helper" "$STAGE_DIR/lumistripe" \
       "$STAGE_DIR/source-commit"
     rmdir -- "$STAGE_DIR" 2>/dev/null || true
   fi
@@ -103,8 +111,10 @@ cleanup() {
 trap cleanup EXIT
 install -m 755 -- "$BUILT_ENGINE" "$STAGE_DIR/lumistripe-engine"
 install -m 755 -- "$BUILT_WEB" "$STAGE_DIR/lumistripe-web"
+install -m 755 -- "$BUILT_DEPLOY_HELPER" "$STAGE_DIR/lumistripe-deploy-helper"
+install -m 755 -- "$BUILT_CLI" "$STAGE_DIR/lumistripe"
 printf '%s\n' "$COMMIT" > "$STAGE_DIR/source-commit"
 mv -- "$STAGE_DIR" "$RELEASE_DIR"
 STAGE_DIR=
 activate_release
-echo "Activated Rust web and engine binaries for $COMMIT."
+echo "Activated version-matched Rust application and deployment binaries for $COMMIT."

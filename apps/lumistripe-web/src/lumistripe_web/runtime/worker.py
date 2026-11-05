@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import queue
 import subprocess
 import threading
@@ -4138,11 +4139,30 @@ profile.audio_config(microphone=True),
 
         spotify_restart_requested = False
         if spotify_device_name != self._spotify_device_name and self.settings.hardware:
-            helper = Path("/usr/local/sbin/lumistripe-spotify-device-name")
+            helper = Path(
+                os.environ.get(
+                    "LUMI_DEPLOY_HELPER",
+                    "/usr/local/libexec/lumistripe/deploy/lumistripe-deploy-helper",
+                )
+            )
             if helper.is_file():
                 try:
                     subprocess.run(
-                        ["/usr/bin/sudo", "-n", str(helper), spotify_device_name],
+                        [str(helper), "spotify-device-name", spotify_device_name],
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                    )
+                    subprocess.run(
+                        [
+                            "/usr/bin/sudo",
+                            "-n",
+                            "/usr/bin/systemctl",
+                            "restart",
+                            "--no-block",
+                            "lumistripe-spotify.service",
+                        ],
                         check=True,
                         capture_output=True,
                         text=True,

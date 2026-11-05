@@ -365,6 +365,7 @@ impl ControlModel {
                 limiting_output_index,
                 selected_animations,
                 dynamic_gate_states,
+                selector_diagnostics,
                 effect_schedulers,
                 ..
             }) => {
@@ -396,6 +397,7 @@ impl ControlModel {
                         "limiting_output_index": limiting_output_index,
                         "selected_animations": selected_animations,
                         "dynamic_gate_states": dynamic_gate_states,
+                        "selector_diagnostics": selector_diagnostics,
                         "effect_schedulers": effect_schedulers,
                         "beat_clocks": beat_clocks,
                     }),
@@ -559,6 +561,7 @@ impl ControlModel {
             "active_audio_source": self.active_audio_source,
             "audio_monitoring": audio_monitoring,
             "active_effects": active_effects,
+            "selector_diagnostics": output_stats.get("selector_diagnostics").cloned().unwrap_or_else(|| json!([])),
             "uptime_seconds": self.started_at.elapsed().as_secs_f64(),
             "frame_rate": output_stats.get("output_rate").and_then(Value::as_f64).unwrap_or(0.0),
             "render_time_ms": output_stats.get("render_time_ms").and_then(Value::as_f64).unwrap_or(0.0),
@@ -1268,7 +1271,9 @@ fn epoch_millis_to_rfc3339(epoch_ms: u64) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ControlModel, PlaybackMode, animation_list, epoch_millis_to_rfc3339};
+    use super::{
+        ControlModel, PlaybackMode, ResponseResult, animation_list, epoch_millis_to_rfc3339,
+    };
     use crate::config::{AppConfig, EngineOutputOptions};
     use crate::settings::{
         ColorCorrection, DashboardSettings, MusicIdleMode, MusicIdleSettings,
@@ -1344,6 +1349,7 @@ mod tests {
             "music_gate",
             "bpm",
             "audio_status",
+            "selector_diagnostics",
             "active_effects",
             "uptime_seconds",
             "frame_rate",
@@ -1369,6 +1375,89 @@ mod tests {
         }
         assert_eq!(state["mode"], "static");
         assert_eq!(model.outputs[0].mode, PlaybackMode::Static);
+    }
+
+    #[test]
+    fn snapshot_preserves_engine_dynamic_selector_diagnostics() {
+        use lumistripe_engine_protocol::{
+            EngineStatus, RenderSelectorDiagnostics, RenderSelectorScore,
+        };
+
+        let mut model = test_model();
+        model.engine_health = Some(ResponseResult::Health {
+            status: EngineStatus::Ready,
+            configured: true,
+            output_count: 1,
+            pixel_counts: vec![8],
+            frames_rendered: 12,
+            last_sequence: Some(12),
+            dropped_frames: 0,
+            failed_frames: 0,
+            scheduler_missed_deadlines: 0,
+            selected_animations: vec!["aurora_wave".to_owned()],
+            scene_revisions: vec![1],
+            structure_event_sequences: vec![0],
+            cycling_active: vec![false],
+            dynamic_gate_states: vec!["music".to_owned()],
+            selector_diagnostics: vec![RenderSelectorDiagnostics {
+                output_index: 0,
+                current_animation: "aurora_wave".to_owned(),
+                candidate_animation: Some("bass_pulse".to_owned()),
+                selected_animation: "aurora_wave".to_owned(),
+                should_switch: false,
+                reason: "minimum_duration".to_owned(),
+                scores: vec![RenderSelectorScore {
+                    animation: "bass_pulse".to_owned(),
+                    score: 0.87,
+                    reasons: vec!["bass_energy".to_owned()],
+                }],
+                elapsed_ns: 2_000_000_000,
+                min_duration_remaining_ns: 500_000_000,
+                max_duration_remaining_ns: 8_000_000_000,
+                switch_cooldown_remaining_ns: 0,
+                drop_cooldown_remaining_ns: 0,
+                recent_names: vec!["aurora_wave".to_owned(), "color_waves".to_owned()],
+            }],
+            beat_clocks: vec![],
+            sequence_playback: vec![],
+            effect_schedulers: vec![],
+            last_error: None,
+            output_rate: 60.0,
+            frame_latency_ms: None,
+            queue_latency_ms: None,
+            transmission_ms: None,
+            frame_latency_p50_ms: None,
+            frame_latency_p95_ms: None,
+            frame_latency_p99_ms: None,
+            audio_feature_to_led_latency_ms: None,
+            audio_feature_to_led_p50_ms: None,
+            audio_feature_to_led_p95_ms: None,
+            audio_feature_to_led_p99_ms: None,
+            sequential_skew_ms: None,
+            last_successful_update_epoch_ms: None,
+            render_time_ms: None,
+            scene_control_revision: Some(1),
+            audio_update_sequence: None,
+            estimated_power_watts: None,
+            applied_power_scale: None,
+            output_power_watts: None,
+            limiting_output_index: None,
+            preview_outputs: None,
+        });
+
+        let snapshot = model.snapshot(0);
+        assert_eq!(
+            snapshot["selector_diagnostics"][0]["reason"],
+            "minimum_duration"
+        );
+        assert_eq!(
+            snapshot["selector_diagnostics"][0]["scores"][0]["score"],
+            0.87
+        );
+        assert_eq!(
+            snapshot["selector_diagnostics"][0]["recent_names"][1],
+            "color_waves"
+        );
     }
 
     #[test]

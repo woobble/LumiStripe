@@ -20,6 +20,7 @@ mod network;
 #[cfg(all(feature = "pipewire", target_os = "linux"))]
 mod pipewire_bindings;
 mod preview;
+mod request_validation;
 mod settings;
 mod spotify;
 mod state;

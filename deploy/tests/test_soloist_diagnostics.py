@@ -101,3 +101,25 @@ def test_rejects_version_command_failure_and_timeout(tmp_path: Path) -> None:
     hanging.chmod(0o755)
     with pytest.raises(DIAGNOSTICS.SoloistDiagnosticError, match="did not finish"):
         DIAGNOSTICS.validate_soloist_binary(hanging, timeout_seconds=0.01)
+
+
+def test_spotify_service_uses_the_version_matched_rust_preflight() -> None:
+    service = (Path(__file__).parents[1] / "lumistripe-spotify.service").read_text(
+        encoding="utf-8"
+    )
+
+    preflight = next(line for line in service.splitlines() if line.startswith("ExecStartPre="))
+    assert "/usr/bin/env -u LUMI_SPOTIFY_API_KEY" in preflight
+    assert "rust/target/rust-deploy/current/lumistripe-deploy-helper" in preflight
+    assert "soloist-check --binary" in preflight
+    assert "python" not in preflight
+
+
+def test_soloist_installer_uses_the_rust_preflight() -> None:
+    installer = (Path(__file__).parents[1] / "soloist.sh").read_text(encoding="utf-8")
+
+    assert "current/lumistripe-deploy-helper" in installer
+    assert "soloist-download" in installer
+    assert 'soloist-check --binary "$executable_file"' in installer
+    assert "soloist_diagnostics.py" not in installer
+    assert "/usr/bin/python3" not in installer

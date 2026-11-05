@@ -60,8 +60,8 @@ effect-layer state, audio meters, music-gate health, transitions, and blend
 budget. Redirected output uses timestamped `STATE`, `BASE`, `GATE`, `FX_START`,
 and `FX_END` records without ANSI control codes.
 
-Enable selector scores plus effect thresholds, cooldowns, and trigger or
-suppression reasons with:
+Enable selector scores, contributing factors, switch reasons and timing, plus
+effect thresholds, cooldowns, and trigger or suppression reasons with:
 
 ```bash
 lumistripe-cli --mode dynamic --debug-selector

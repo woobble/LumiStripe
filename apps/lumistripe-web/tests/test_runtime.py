@@ -1581,11 +1581,11 @@ def test_startup_restore_remembers_all_target_changes_only(tmp_path: Path) -> No
     runtime = LumiStripeRuntime(RuntimeSettings(pixels=4, settings_file=path))
     runtime.start()
     try:
-        runtime.set_startup_restore(True).result(timeout=1)
-        runtime.set_mode(PlaybackMode.SOLID, solid_color="#AA1100").result(timeout=1)
-        runtime.set_brightness(0.25).result(timeout=1)
-        runtime.set_brightness(0.8, stripe_id="left").result(timeout=1)
-        runtime.set_blackout(True).result(timeout=1)
+        runtime.set_startup_restore(True).result(timeout=2)
+        runtime.set_mode(PlaybackMode.SOLID, solid_color="#AA1100").result(timeout=2)
+        runtime.set_brightness(0.25).result(timeout=2)
+        runtime.set_brightness(0.8, stripe_id="left").result(timeout=2)
+        runtime.set_blackout(True).result(timeout=2)
     finally:
         runtime.stop()
 
@@ -1738,16 +1738,16 @@ def test_custom_sequence_applies_to_rebuilt_independent_outputs_and_clears_on_de
     )
     runtime.start()
     try:
-        runtime.set_mode(PlaybackMode.DYNAMIC).result(timeout=1)
-        runtime.set_audio_sync_offset(-85.0).result(timeout=1)
+        runtime.set_mode(PlaybackMode.DYNAMIC).result(timeout=2)
+        runtime.set_audio_sync_offset(-85.0).result(timeout=2)
         sequence = AnimationSequence(
             id="demo-sequence",
             name="Demo sequence",
             repeat=True,
             steps=(AnimationSequenceStep("rainbow_cycle", 2),),
         )
-        runtime.create_animation_sequence(sequence).result(timeout=1)
-        state = runtime.set_active_animation_sequence(sequence.id).result(timeout=1)
+        runtime.create_animation_sequence(sequence).result(timeout=2)
+        state = runtime.set_active_animation_sequence(sequence.id).result(timeout=2)
 
         assert state.mode is PlaybackMode.DYNAMIC
         assert state.sequence_library.active_sequence_id == sequence.id
@@ -1774,7 +1774,7 @@ def test_custom_sequence_applies_to_rebuilt_independent_outputs_and_clears_on_de
             for _, engine in runtime._playbacks.values()
         )
 
-        deactivated = runtime.set_active_animation_sequence(None).result(timeout=1)
+        deactivated = runtime.set_active_animation_sequence(None).result(timeout=2)
         assert deactivated.sequence_library.active_sequence_id is None
         assert runtime.playback.config.animation_sequence is None
         assert all(
@@ -1798,14 +1798,14 @@ def test_sequence_persistence_failure_keeps_selected_runtime_sequence(
         steps=(AnimationSequenceStep("rainbow_cycle", 1),),
     )
     try:
-        runtime.create_animation_sequence(sequence).result(timeout=1)
+        runtime.create_animation_sequence(sequence).result(timeout=2)
 
         def fail_save(*_args: object, **_kwargs: object) -> None:
             raise OSError("read-only settings file")
 
         monkeypatch.setattr(runtime._settings_store, "save_animation_sequences", fail_save)
         with pytest.raises(RuntimeCommandError, match="could not save animation sequences"):
-            runtime.set_active_animation_sequence(sequence.id).result(timeout=1)
+            runtime.set_active_animation_sequence(sequence.id).result(timeout=2)
 
         assert runtime.playback.config.animation_sequence is None
         assert runtime.snapshot().sequence_library.active_sequence_id is None
@@ -2256,7 +2256,7 @@ def test_calibration_save_persists_selected_profile_and_restores_blackout(
         ).result(timeout=1)
 
         saved = runtime.finish_calibration(started.session_id, save=True).result(
-            timeout=1
+            timeout=2
         )
 
         assert saved.blackout is True

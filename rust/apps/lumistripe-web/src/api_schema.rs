@@ -367,6 +367,37 @@ pub(crate) struct SequencePlaybackDiagnostics {
 }
 
 #[derive(Clone, Debug, ToSchema)]
+pub(crate) struct DynamicSelectorScore {
+    pub animation: String,
+    pub score: f64,
+    #[serde(default)]
+    #[schema(required = false)]
+    pub reasons: Vec<String>,
+}
+
+#[derive(Clone, Debug, ToSchema)]
+pub(crate) struct DynamicSelectorDiagnostics {
+    pub output_index: usize,
+    pub current_animation: String,
+    #[serde(default)]
+    pub candidate_animation: Option<String>,
+    pub selected_animation: String,
+    pub should_switch: bool,
+    pub reason: String,
+    #[serde(default)]
+    #[schema(required = false)]
+    pub scores: Vec<DynamicSelectorScore>,
+    pub elapsed_ns: u64,
+    pub min_duration_remaining_ns: u64,
+    pub max_duration_remaining_ns: u64,
+    pub switch_cooldown_remaining_ns: u64,
+    pub drop_cooldown_remaining_ns: u64,
+    #[serde(default)]
+    #[schema(required = false)]
+    pub recent_names: Vec<String>,
+}
+
+#[derive(Clone, Debug, ToSchema)]
 #[schema(as = StripePlaybackState)]
 pub(crate) struct StripePlaybackStateSchema {
     #[schema(required = true)]
@@ -442,6 +473,9 @@ pub(crate) struct DashboardStateSchema {
     pub audio_monitoring: Option<bool>,
     #[schema(required = false, default = json!([]))]
     pub active_effects: Vec<String>,
+    #[serde(default)]
+    #[schema(required = false)]
+    pub selector_diagnostics: Vec<DynamicSelectorDiagnostics>,
     #[schema(required = false, default = 0.0)]
     pub uptime_seconds: f64,
     #[schema(required = false, default = 0.0)]

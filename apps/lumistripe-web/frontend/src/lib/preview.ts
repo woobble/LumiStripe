@@ -27,6 +27,10 @@ export interface PreviewLayout {
   strips: PreviewStripLayout[]
 }
 
+export function shouldEnableSimulatorPreview(search: string): boolean {
+  return new URLSearchParams(search).get("simulator") === "1"
+}
+
 export function isNewerPreviewSequence(sequence: number, previous: number): boolean {
   if (previous < 0) return true
   const distance = (sequence - previous) >>> 0

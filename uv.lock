@@ -11,7 +11,6 @@ members = [
     "lumistripe-app-support",
     "lumistripe-cli",
     "lumistripe-core",
-    "lumistripe-sim",
     "lumistripe-web",
 ]
 
@@ -686,21 +685,6 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.16" },
 ]
 provides-extras = ["audio", "hardware-gain", "gpio", "spi"]
-
-[[package]]
-name = "lumistripe-sim"
-version = "0.1.0"
-source = { editable = "apps/lumistripe-sim" }
-dependencies = [
-    { name = "lumistripe-app-support" },
-    { name = "lumistripe-core", extra = ["audio"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "lumistripe-app-support", editable = "packages/lumistripe-app-support" },
-    { name = "lumistripe-core", extras = ["audio"], editable = "packages/lumistripe-core" },
-]
 
 [[package]]
 name = "lumistripe-web"

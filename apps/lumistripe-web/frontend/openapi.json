@@ -3874,6 +3874,12 @@
             ],
             "format": "double"
           },
+          "selector_diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DynamicSelectorDiagnostics"
+            }
+          },
           "sequence_library": {
             "$ref": "#/components/schemas/SequenceLibrarySummary"
           },
@@ -3950,6 +3956,104 @@
           },
           "title": {
             "type": "string"
+          }
+        }
+      },
+      "DynamicSelectorDiagnostics": {
+        "type": "object",
+        "required": [
+          "output_index",
+          "current_animation",
+          "selected_animation",
+          "should_switch",
+          "reason",
+          "elapsed_ns",
+          "min_duration_remaining_ns",
+          "max_duration_remaining_ns",
+          "switch_cooldown_remaining_ns",
+          "drop_cooldown_remaining_ns"
+        ],
+        "properties": {
+          "candidate_animation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "current_animation": {
+            "type": "string"
+          },
+          "drop_cooldown_remaining_ns": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "elapsed_ns": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "max_duration_remaining_ns": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "min_duration_remaining_ns": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "output_index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reason": {
+            "type": "string"
+          },
+          "recent_names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scores": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DynamicSelectorScore"
+            }
+          },
+          "selected_animation": {
+            "type": "string"
+          },
+          "should_switch": {
+            "type": "boolean"
+          },
+          "switch_cooldown_remaining_ns": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "DynamicSelectorScore": {
+        "type": "object",
+        "required": [
+          "animation",
+          "score"
+        ],
+        "properties": {
+          "animation": {
+            "type": "string"
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "score": {
+            "type": "number",
+            "format": "double"
           }
         }
       },

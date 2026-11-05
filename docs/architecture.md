@@ -1,35 +1,50 @@
 # LumiStripe architecture
 
-LumiStripe is a Python workspace with hardware-focused libraries in
-`packages/` and user-facing applications in `apps/`.
+LumiStripe's primary application target is native Rust with the existing React
+and TypeScript dashboard. The Rust workspace contains the Axum web server,
+real-time engine, CLI, browser simulator mode, and restricted deployment
+helper. Python remains for compatibility, the currently installed CLI, and the
+web rollback backend. There is no standalone simulator; the supported
+simulator is the Rust web application running with mock outputs. New
+installations still default to Python until the Raspberry Pi cutover gates in
+the [Python retirement inventory](migrations/python-retirement-inventory.md)
+pass.
 
 ## Dependency direction
 
 ```text
-lumistripe-core
-        |
-lumistripe-app-support
-        |
-  +-----+------------------+
-  |                        |
- CLI                    Simulator
-  |
- Web backend ---- Frontend
+React / TypeScript frontend
+            |
+        Rust Axum web ---- engine IPC ---- Rust real-time engine
+            |                                  |
+     deployment helper                  mock / SPI / GPIO
+                                               |
+                                         Rust CLI
+
+Python FastAPI + Python core ---- compatibility and rollback path
+Browser simulator --------------- React frontend + Rust web + mock outputs
+Python CLI ---------------------- installed CLI until production cutover
 ```
 
-`lumistripe-core` owns pixel buffers, controllers, animations, effects,
-playback, audio processing, and hardware adapters. It must not depend on
-FastAPI, browser code, or application-specific configuration.
+The Rust engine owns pixel rendering, audio processing, playback scheduling,
+and configured hardware output. The Rust web app and CLI share it over the
+versioned engine IPC protocol; simulator mode uses mock outputs and the same
+dashboard. The deployment helper provides narrowly scoped update-state,
+NetworkManager, Spotify device-name, and Soloist operations.
 
-`lumistripe-app-support` contains UI-agnostic configuration builders and
-policies shared by the CLI, simulator, and web runtime. It may depend on core,
-but not on any application.
+The Python `lumistripe-core` and `lumistripe-app-support` packages continue to
+serve the FastAPI rollback path, the installed Python CLI, and migration tests.
+They must not depend on browser code or application-specific web configuration.
+Rust REST models are the source for generated frontend contracts.
 
-The web backend owns HTTP contracts, authentication, Bluetooth and Spotify
-providers, runtime lifecycle, and state projection. The frontend consumes the
-backend contract and never reaches into Python implementation details.
+The frontend consumes the REST and WebSocket contracts and does not depend on
+either backend's implementation language. See the
+[Rust web migration](migrations/rust-web.md),
+[Rust engine migration](migrations/rust-engine.md), and
+[Python retirement inventory](migrations/python-retirement-inventory.md) for
+the current feature and cutover status.
 
-## Runtime ownership
+## Python compatibility runtime ownership
 
 `LumiStripeRuntime` is the web façade. Commands enter through its queue and
 are executed by one worker, which owns mutable playback, controller, audio,
@@ -90,7 +105,7 @@ heartbeat telemetry continues to describe completed render steps. Commands can
 still delay rendering during their execution; a command that exceeds the
 deadline requests the same process recovery as a stalled renderer.
 
-## Core boundaries
+## Python core boundaries
 
 The core package keeps compatibility exports in `lumistripe.__init__`, while
 new integrations should use narrower modules:
@@ -124,16 +139,17 @@ remain available in the pure-Python profile.
 
 These modules are the intended seams for future implementation moves.
 
-### Optional Rust rendering engine
+### Native Rust application and engine
 
-The opt-in Rust process boundary and renderer parity are documented in
-[the incremental Rust engine migration guide](migrations/rust-engine.md) and
-[the renderer migration status](rust-renderer-migration.md). Python remains the
-default and rollback renderer. With Rust selected, Python retains playback,
-sequencer, audio, and application policy while Rust renders supported animation
-scenes and effects into reusable frame buffers, finalizes them, and owns mock,
-SPI, or GPIO output devices. Hosted and mock tests do not replace Raspberry Pi
-4/5 renderer benchmarks or physical GPIO/SPI validation.
+The Rust engine, web server, CLI, deployment helper, and web simulator mode are
+documented in [the Rust engine migration guide](migrations/rust-engine.md),
+[the Rust web migration guide](migrations/rust-web.md), and
+[the Python retirement inventory](migrations/python-retirement-inventory.md).
+The Rust-only web profile can run without Python. The Rust CLI and web
+simulator mode use the shared engine. The Python web backend remains the
+installer's default and rollback path until Raspberry Pi 4/5 installation,
+service, audio, Bluetooth, Wi-Fi, and physical output checks pass. Hosted and
+mock tests do not replace those hardware checks.
 
 ## Physical stripe zones
 

@@ -33,6 +33,52 @@ uv_version_at_least() {
   [[ "$(printf '%s\n' "$minimum_version" "$installed_version" | sort -V | tail -n 1)" == "$installed_version" ]]
 }
 
+install_privileged_network_helper() {
+  local deploy_root="$PROJECT_DIR/rust/target/rust-deploy"
+  local current="$deploy_root/current"
+  local release_dir
+  local release_commit
+  local source_commit
+  local checkout_commit
+  local source_binary
+  local temporary
+
+  [[ -L "$current" ]] || {
+    echo "The commit-matched Rust deployment helper is missing." >&2
+    return 1
+  }
+  release_dir="$(readlink -f -- "$current")" || return 1
+  case "$release_dir" in
+    "$deploy_root"/releases/*) ;;
+    *)
+      echo "The Rust deployment helper is outside the release directory." >&2
+      return 1
+      ;;
+  esac
+  release_commit="${release_dir##*/}"
+  [[ -f "$release_dir/source-commit" && ! -L "$release_dir/source-commit" ]] || {
+    echo "The Rust deployment release marker is missing." >&2
+    return 1
+  }
+  source_commit="$(cat -- "$release_dir/source-commit")" || return 1
+  checkout_commit="$(git -C "$PROJECT_DIR" rev-parse --verify HEAD 2>/dev/null)" || return 1
+  source_binary="$release_dir/lumistripe-deploy-helper"
+  if [[ ! "$release_commit" =~ ^[0-9a-f]{40}$ || "$source_commit" != "$release_commit" ||
+        "$checkout_commit" != "$release_commit" || ! -f "$source_binary" ||
+        -L "$source_binary" || ! -x "$source_binary" ]]; then
+    echo "The Rust NetworkManager helper does not match the checked-out commit." >&2
+    return 1
+  fi
+
+  install -d -o root -g root -m 755 "$NETWORK_LIBEXEC_DIR"
+  temporary="$(mktemp "$NETWORK_LIBEXEC_DIR/.lumistripe-network-helper.XXXXXX")" || return 1
+  if ! install -o root -g root -m 755 "$source_binary" "$temporary" ||
+     ! mv -fT -- "$temporary" "$NETWORK_LIBEXEC_DIR/lumistripe-network-helper"; then
+    rm -f -- "$temporary"
+    return 1
+  fi
+}
+
 read_web_backend() {
   local env_file="${1:-/etc/lumistripe/lumistripe-web.env}"
   [[ -r "$env_file" ]] || {
@@ -60,6 +106,44 @@ read_web_backend() {
   ' "$env_file"
 }
 
+resolve_web_backend() {
+  local requested="${1:-}"
+  local env_file="${2:-/etc/lumistripe/lumistripe-web.env}"
+  local backend="$requested"
+  if [[ -z "$backend" && -r "$env_file" ]]; then
+    backend="$(read_web_backend "$env_file")" || return 1
+  fi
+  [[ -n "$backend" ]] || backend=python
+  case "$backend" in
+    python|rust) printf '%s\n' "$backend" ;;
+    *) echo "Unsupported LUMI_WEB_BACKEND: $backend" >&2; return 1 ;;
+  esac
+}
+
+web_backend_requires_python() {
+  [[ "${1:-}" == python ]]
+}
+
+migrate_spotify_device_name_override() {
+  local old_file=/var/lib/lumistripe/spotify-device-name.env
+  local new_directory="$SERVICE_HOME/.config/lumistripe"
+  local new_file="$new_directory/spotify-device-name.env"
+
+  if [[ -L "$old_file" || ( -e "$old_file" && ! -f "$old_file" ) ]]; then
+    echo "Spotify device-name state must be a regular file: $old_file" >&2
+    return 1
+  fi
+  if [[ -L "$new_file" || ( -e "$new_file" && ! -f "$new_file" ) ]]; then
+    echo "Spotify device-name state must be a regular file: $new_file" >&2
+    return 1
+  fi
+
+  as_user install -d -m 755 "$new_directory"
+  if [[ -f "$old_file" && ! -e "$new_file" ]]; then
+    as_user install -m 644 "$old_file" "$new_file"
+  fi
+}
+
 install_update_support() {
   local rendered_dir
   local rendered_file
@@ -73,8 +157,8 @@ install_update_support() {
     echo "visudo is required to install the LumiStripe update permission." >&2
     return 1
   }
-  [[ -x /usr/bin/python3 && -x /usr/bin/systemctl && -x /usr/bin/sudo ]] || {
-    echo "python3, systemctl, and sudo are required for the LumiStripe updater." >&2
+  [[ -x /usr/bin/systemctl && -x /usr/bin/sudo ]] || {
+    echo "systemctl and sudo are required for the LumiStripe updater." >&2
     return 1
   }
 
@@ -86,11 +170,11 @@ install_update_support() {
 
   install -d -o root -g root -m 755 "$UPDATE_LIBEXEC_DIR"
   install -d -o root -g root -m 755 "$NETWORK_LIBEXEC_DIR"
+  rm -f -- "$NETWORK_LIBEXEC_DIR/lumistripe_network.py"
   for template in \
-    update.sh update_state.py update-support.sh tls.sh soloist.sh extract_soloist.py \
-    soloist_diagnostics.py \
+    update.sh update-support.sh tls.sh soloist.sh \
     build-rust-backend.sh \
-    spotify_device_name.py lumistripe-spotify-name.sudoers lumistripe-spotify-device-name \
+    lumistripe-spotify-service.sudoers \
     90-lumistripe-bluetooth.conf 90-lumistripe-spotify.conf \
     lumistripe-spotify.env.example \
     lumistripe-web.service lumistripe-spotify.service \
@@ -99,7 +183,7 @@ install_update_support() {
     lumistripe-update-trigger; do
     local mode=644
     case "$template" in
-      update.sh|update_state.py|build-rust-backend.sh|lumistripe-update-trigger|lumistripe-spotify-device-name) mode=755 ;;
+      update.sh|build-rust-backend.sh|lumistripe-update-trigger) mode=755 ;;
     esac
     install -o root -g root -m "$mode" \
       "$PROJECT_DIR/deploy/$template" "$UPDATE_LIBEXEC_DIR/$template"
@@ -109,28 +193,22 @@ install_update_support() {
   install -o root -g root -m 644 \
     "$PROJECT_DIR/deploy/nginx/led-controller.conf" "$UPDATE_LIBEXEC_DIR/nginx/led-controller.conf"
 
-  install -o root -g root -m 644 \
-    "$PROJECT_DIR/deploy/lumistripe_network.py" \
-    "$NETWORK_LIBEXEC_DIR/lumistripe_network.py"
   install -o root -g root -m 755 \
     "$PROJECT_DIR/deploy/lumistripe-network" \
     /usr/local/sbin/lumistripe-network
-  install -o root -g root -m 755 \
-    "$PROJECT_DIR/deploy/lumistripe-spotify-device-name" \
-    /usr/local/sbin/lumistripe-spotify-device-name
   sed \
     -e "s|@LUMI_SERVICE_USER@|$user_replacement|g" \
-    "$PROJECT_DIR/deploy/lumistripe-spotify-name.sudoers" \
-    > "$rendered_dir/lumistripe-spotify-name.sudoers"
-  chmod 440 "$rendered_dir/lumistripe-spotify-name.sudoers"
-  if ! visudo -cf "$rendered_dir/lumistripe-spotify-name.sudoers" >/dev/null; then
+    "$PROJECT_DIR/deploy/lumistripe-spotify-service.sudoers" \
+    > "$rendered_dir/lumistripe-spotify-service.sudoers"
+  chmod 440 "$rendered_dir/lumistripe-spotify-service.sudoers"
+  if ! visudo -cf "$rendered_dir/lumistripe-spotify-service.sudoers" >/dev/null; then
     rm -rf -- "$rendered_dir"
-    echo "The Spotify player-name permission did not pass visudo validation." >&2
+    echo "The Spotify service restart permission did not pass visudo validation." >&2
     return 1
   fi
   install -o root -g root -m 440 \
-    "$rendered_dir/lumistripe-spotify-name.sudoers" \
-    /etc/sudoers.d/lumistripe-spotify-name
+    "$rendered_dir/lumistripe-spotify-service.sudoers" \
+    /etc/sudoers.d/lumistripe-spotify-service
   sed \
     -e "s|@LUMI_SERVICE_USER@|$user_replacement|g" \
     "$PROJECT_DIR/deploy/lumistripe-network.sudoers" \
@@ -161,16 +239,13 @@ install_update_support() {
     install -o root -g root -m 644 "$rendered_file" "/etc/systemd/system/$template"
   done
 
+  migrate_spotify_device_name_override
+
   install -o root -g root -m 644 \
     "$PROJECT_DIR/deploy/lumistripe-update-check.timer" \
     /etc/systemd/system/lumistripe-update-check.timer
   install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 755 \
     /var/lib/lumistripe/update
-  if [[ ! -f /var/lib/lumistripe/update/status.json ]]; then
-    /usr/bin/python3 "$UPDATE_LIBEXEC_DIR/update_state.py" initialize \
-      --project-dir "$PROJECT_DIR" \
-      --state-file /var/lib/lumistripe/update/status.json
-  fi
   for state_path in \
     /var/lib/lumistripe/update/status.json \
     /var/lib/lumistripe/update/update-check.lock; do
@@ -204,5 +279,7 @@ install_update_support() {
     "$rendered_dir/lumistripe-update.sudoers" \
     /etc/sudoers.d/lumistripe-update
   rm -rf -- "$rendered_dir"
+  rm -f -- /etc/sudoers.d/lumistripe-spotify-name
+  rm -f -- /usr/local/sbin/lumistripe-spotify-device-name
 }
 

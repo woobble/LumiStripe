@@ -19,6 +19,7 @@ Environment=PATH=@LUMI_HOME@/.bun/bin:@LUMI_HOME@/.local/bin:/usr/local/bin:/usr
 Environment=PYTHONUNBUFFERED=1
 Environment=HOME=@LUMI_HOME@
 Environment=LUMI_PROJECT_DIR=@LUMI_PROJECT_DIR@
+Environment=LUMI_DEPLOY_HELPER=@LUMI_PROJECT_DIR@/rust/target/rust-deploy/current/lumistripe-deploy-helper
 Environment=LUMI_PYTHON_VERSION=@LUMI_PYTHON_VERSION@
 Environment=LUMI_UPDATE_STATE_FILE=/var/lib/lumistripe/update/status.json
 # System services do not inherit the user's PipeWire runtime environment.

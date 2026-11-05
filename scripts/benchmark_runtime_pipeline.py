@@ -397,6 +397,7 @@ def _run_case(
     start_rss = _rss_mb()
     settings_file: Path | None = None
     runtime: LumiStripeRuntime | None = None
+    runtime_startup_ms: float | None = None
     try:
         with tempfile.TemporaryDirectory(prefix="lumistripe-benchmark-") as directory:
             settings_file = Path(directory) / "settings.json"
@@ -413,6 +414,7 @@ def _run_case(
                     output_count=output_count,
                 )
             )
+            runtime_startup_started_ns = time.perf_counter_ns()
             runtime = LumiStripeRuntime(
                 RuntimeSettings(
                     pixels=led_count,
@@ -437,6 +439,9 @@ def _run_case(
             runtime.start()
             if mode == "dynamic":
                 runtime.set_mode(PlaybackMode.DYNAMIC).result(timeout=5.0)
+            runtime_startup_ms = (
+                time.perf_counter_ns() - runtime_startup_started_ns
+            ) / 1_000_000.0
             time.sleep(warmup_s)
 
             python_audio_input = (
@@ -574,6 +579,7 @@ def _run_case(
                 "power_limit_enabled": power_limit,
                 "power_budget_watts": power_budget_watts if power_limit else None,
                 "hardware_output_enabled": hardware,
+                "runtime_startup_ms": runtime_startup_ms,
                 "duration_seconds": elapsed,
                 "frames": measured_frames,
                 "effective_fps": measured_frames / max(elapsed, 1e-9),

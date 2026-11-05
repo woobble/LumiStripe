@@ -1,0 +1,1 @@
+@LUMI_SERVICE_USER@ ALL=(root) NOPASSWD: /usr/bin/systemctl restart --no-block lumistripe-spotify.service

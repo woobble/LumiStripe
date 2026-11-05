@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -86,7 +85,14 @@ def check_for_updates(request: Request) -> UpdateStatus | JSONResponse:
     # The checker exits while an update holds its lock and reconciles stale
     # "running" states after the updater stops.
     project_dir: Path = request.app.state.update_project_dir
-    helper = project_dir / "deploy" / "update_state.py"
+    helper = (
+        project_dir
+        / "rust"
+        / "target"
+        / "rust-deploy"
+        / "current"
+        / "lumistripe-deploy-helper"
+    )
     if not helper.is_file():
         return JSONResponse(
             {"detail": "The update checker is unavailable."},
@@ -95,8 +101,8 @@ def check_for_updates(request: Request) -> UpdateStatus | JSONResponse:
     try:
         subprocess.Popen(
             [
-                sys.executable,
                 str(helper),
+                "update-state",
                 "check",
                 "--project-dir",
                 str(project_dir),

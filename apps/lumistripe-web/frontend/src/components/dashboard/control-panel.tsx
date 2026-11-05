@@ -11,6 +11,7 @@ import { Toggle } from "@/components/ui/toggle"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { PreviewStreamProvider } from "@/hooks/preview-stream-provider"
 import { usePreviewStreamContext } from "@/hooks/preview-stream-context"
+import { shouldEnableSimulatorPreview } from "@/lib/preview"
 import type { DashboardController } from "@/hooks/use-dashboard"
 import type { DashboardState, PlaybackMode } from "@/lib/api"
 
@@ -69,7 +70,9 @@ export function ControlPanel({
 }) {
   const { state, animations, pendingCommand } = controller
   const [brightnessDraft, setBrightnessDraft] = useState<number | null>(null)
-  const [previewEnabled, setPreviewEnabled] = useState(false)
+  const [previewEnabled, setPreviewEnabled] = useState(() =>
+    typeof window !== "undefined" && shouldEnableSimulatorPreview(window.location.search),
+  )
   const [animationEditorVisible, setAnimationEditorVisible] = useState(false)
 
   if (!state) return null

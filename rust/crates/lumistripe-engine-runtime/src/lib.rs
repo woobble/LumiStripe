@@ -36,10 +36,10 @@ use lumistripe_engine_protocol::{
     RenderBeatClockState, RenderCycleOrder, RenderCycleTiming, RenderCycling,
     RenderDynamicIdleMode, RenderDynamicSelector, RenderEffect, RenderEffectSchedulerState,
     RenderFrameRequest, RenderMusicStructure, RenderOutput, RenderPowerConfig, RenderSceneUpdate,
-    RenderSchedulerConfig, RenderSelectorFeatures, RenderSequencePlaybackState,
-    RenderStructureEvent, RenderTransition, Request, RequestCommand, Response, ResponseResult,
-    decode_frame_header, decode_legacy_request, decode_request, encode_frame_ack,
-    encode_legacy_response, encode_response,
+    RenderSchedulerConfig, RenderSelectorDiagnostics, RenderSelectorFeatures, RenderSelectorScore,
+    RenderSequencePlaybackState, RenderStructureEvent, RenderTransition, Request, RequestCommand,
+    Response, ResponseResult, decode_frame_header, decode_legacy_request, decode_request,
+    encode_frame_ack, encode_legacy_response, encode_response,
 };
 use lumistripe_engine_render_primitives::{AudioInput, FrameBuffer, Rgba, ZoneMapping, alpha_byte};
 use quantized_switch::QuantizedSwitchState;
@@ -1834,7 +1834,25 @@ struct SelectorRuntimeState {
     displayed_gate_state: Option<MusicGateState>,
     active_choice: Option<RenderAnimationChoice>,
     active_template: Option<RenderOutput>,
+    score_context: Option<SelectorScoreContext>,
+    last_decision: SelectorDecisionSnapshot,
     base_scene_changed: bool,
+}
+
+#[derive(Clone)]
+struct SelectorScoreContext {
+    features: RenderSelectorFeatures,
+    random_state: PythonRandom,
+    recent_names: VecDeque<String>,
+}
+
+#[derive(Clone, Default)]
+struct SelectorDecisionSnapshot {
+    current_animation: String,
+    candidate_animation: Option<String>,
+    selected_animation: String,
+    should_switch: bool,
+    reason: String,
 }
 
 impl SelectorRuntimeState {
@@ -1869,6 +1887,13 @@ impl SelectorRuntimeState {
                 settings: output.settings.clone(),
             }),
             active_template: selector.map(|_| output.clone()),
+            score_context: None,
+            last_decision: SelectorDecisionSnapshot {
+                current_animation: output.animation.clone(),
+                selected_animation: output.animation.clone(),
+                reason: "not_started".to_owned(),
+                ..SelectorDecisionSnapshot::default()
+            },
             base_scene_changed: false,
         }
     }
@@ -2610,6 +2635,39 @@ impl OutputWorker {
     }
 
     fn health_response(&self) -> ResponseResult {
+        let selector_sources: Vec<(
+            usize,
+            RenderCycling,
+            RenderDynamicSelector,
+            SelectorRuntimeState,
+        )> = {
+            let queue = self.shared.queue.lock().expect("output queue poisoned");
+            queue
+                .scheduled_render
+                .as_ref()
+                .map(|scheduled| {
+                    scheduled
+                        .request
+                        .outputs
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, output)| {
+                            let cycling = output.cycling.as_ref()?;
+                            let selector = cycling.selector?;
+                            let state = scheduled.selector_states.get(index)?;
+                            Some((index, cycling.clone(), selector, state.clone()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let now = Instant::now();
+        let selector_diagnostics = selector_sources
+            .into_iter()
+            .map(|(index, cycling, selector, state)| {
+                selector_diagnostics(index, &cycling, selector, &state, now)
+            })
+            .collect();
         let health = self.shared.health.lock().expect("output health poisoned");
         ResponseResult::Health {
             status: EngineStatus::Ready,
@@ -2625,6 +2683,7 @@ impl OutputWorker {
             scene_revisions: health.scene_revisions.clone(),
             cycling_active: health.cycling_active.clone(),
             dynamic_gate_states: health.dynamic_gate_states.clone(),
+            selector_diagnostics,
             beat_clocks: health.beat_clocks.clone(),
             structure_event_sequences: health.structure_event_sequences.clone(),
             sequence_playback: health.sequence_playback.clone(),
@@ -3039,36 +3098,57 @@ fn select_dynamic_choice<'a>(
         state.last_feature_sequence = Some(feature_sequence);
     }
 
-    let mut best_choice = None;
+    let score_random_state = state.random_state.clone();
+    state.score_context = Some(SelectorScoreContext {
+        features: *features,
+        random_state: score_random_state,
+        recent_names: state.recent_names.clone(),
+    });
+    let mut best_index = None;
     let mut best_score = f64::NEG_INFINITY;
     let mut current_score = None;
-    for choice in &cycling.choices {
-        let score = score_dynamic_choice(
+    for (index, choice) in cycling.choices.iter().enumerate() {
+        let (score, _) = score_dynamic_choice(
             choice,
             features,
             current,
             &state.recent_names,
             selector.randomness,
             &mut state.random_state,
+            false,
         );
         if choice.animation == current {
             current_score = Some(score);
         }
         if score > best_score {
-            best_choice = Some(choice);
+            best_index = Some(index);
             best_score = score;
         }
     }
-    let Some(best_choice) = best_choice else {
+    let Some(best_index) = best_index else {
         state.initialized = true;
+        state.last_decision = SelectorDecisionSnapshot {
+            current_animation: current.to_owned(),
+            selected_animation: current.to_owned(),
+            reason: "no_candidates".to_owned(),
+            ..SelectorDecisionSnapshot::default()
+        };
         return None;
     };
+    let best_choice = &cycling.choices[best_index];
 
-    let selected = if !state.initialized {
-        state.initialized = true;
-        Some(best_choice)
+    let was_initialized = state.initialized;
+    let (should_switch, reason) = if !was_initialized {
+        (
+            best_choice.animation != current,
+            if best_choice.animation == current {
+                "initial_hold".to_owned()
+            } else {
+                "initial".to_owned()
+            },
+        )
     } else if best_choice.animation == current {
-        None
+        (false, "best_is_current".to_owned())
     } else {
         let elapsed_ns = now
             .saturating_duration_since(state.last_switch_at)
@@ -3077,23 +3157,41 @@ fn select_dynamic_choice<'a>(
         let min_ready = elapsed_ns >= u128::from(selector.min_duration_ns);
         let max_due = elapsed_ns >= u128::from(selector.max_duration_ns);
         let score_gap = best_score - current_score.unwrap_or(0.0);
-        let switch = if features.drop_detected {
-            false
+        if features.drop_detected {
+            (false, "drop_hold".to_owned())
         } else if features.section_change
             && min_ready
             && cooldown_ready
             && score_gap >= selector.switch_margin * 0.5
         {
-            true
+            (true, "section_change".to_owned())
         } else if max_due && cooldown_ready {
-            true
+            (true, "max_duration".to_owned())
+        } else if min_ready && cooldown_ready && score_gap >= selector.switch_margin {
+            (true, format!("score_gap={score_gap:.2}"))
         } else {
-            min_ready && cooldown_ready && score_gap >= selector.switch_margin
-        };
-        switch.then_some(best_choice)
+            (false, "hold".to_owned())
+        }
+    };
+    state.initialized = true;
+    let selected_animation = if should_switch {
+        best_choice.animation.clone()
+    } else {
+        current.to_owned()
+    };
+    state.last_decision = SelectorDecisionSnapshot {
+        current_animation: current.to_owned(),
+        candidate_animation: Some(best_choice.animation.clone()),
+        selected_animation,
+        should_switch,
+        reason,
     };
 
-    selected
+    if !was_initialized || should_switch {
+        Some(best_choice)
+    } else {
+        None
+    }
 }
 
 fn score_dynamic_choice(
@@ -3103,9 +3201,10 @@ fn score_dynamic_choice(
     recent_names: &VecDeque<String>,
     randomness: f64,
     random_state: &mut PythonRandom,
-) -> f64 {
+    include_reasons: bool,
+) -> (f64, Vec<String>) {
     let Some(definition) = catalog().animation(&choice.animation) else {
-        return f64::NEG_INFINITY;
+        return (f64::NEG_INFINITY, Vec::new());
     };
     let metadata = &definition.dynamic_metadata;
     let energy = first_nonzero_clamped(&[features.energy_level, features.energy, features.volume]);
@@ -3116,6 +3215,10 @@ fn score_dynamic_choice(
     let bpm = features.bpm.max(0.0);
 
     let mut score = metadata_number(metadata, "weight", 1.0);
+    let mut reasons = Vec::new();
+    if include_reasons {
+        reasons.push(format!("weight={score:.2}"));
+    }
     let energy_fit = range_fit(
         energy,
         metadata_number(metadata, "energy_min", 0.0),
@@ -3123,6 +3226,9 @@ fn score_dynamic_choice(
         0.25,
     );
     score += energy_fit * 0.85;
+    if include_reasons {
+        reasons.push(format!("energy={energy_fit:.2}"));
+    }
     let bpm_fit = range_fit(
         bpm,
         metadata_number(metadata, "bpm_min", 0.0),
@@ -3130,6 +3236,9 @@ fn score_dynamic_choice(
         60.0,
     );
     score += bpm_fit * 0.35;
+    if include_reasons {
+        reasons.push(format!("bpm={bpm_fit:.2}"));
+    }
     let prefers_bass = metadata_number(metadata, "prefers_bass", 0.0);
     let prefers_mid = metadata_number(metadata, "prefers_mid", 0.0);
     let prefers_treble = metadata_number(metadata, "prefers_treble", 0.0);
@@ -3137,6 +3246,9 @@ fn score_dynamic_choice(
         + (1.0 - (prefers_mid - mid).abs()) * prefers_mid
         + (1.0 - (prefers_treble - treble).abs()) * prefers_treble;
     score += spectrum_fit * 0.55;
+    if include_reasons && spectrum_fit > 0.0 {
+        reasons.push(format!("spectrum={spectrum_fit:.2}"));
+    }
 
     if metadata_boolean(metadata, "supports_beats", true) {
         score += beat_confidence * 0.28;
@@ -3146,6 +3258,9 @@ fn score_dynamic_choice(
     if features.drop_detected {
         if metadata_boolean(metadata, "supports_drops", false) {
             score += 1.1;
+            if include_reasons {
+                reasons.push("drop".to_owned());
+            }
         } else {
             score -= 0.18;
         }
@@ -3153,25 +3268,96 @@ fn score_dynamic_choice(
     if features.silence {
         if metadata_boolean(metadata, "supports_silence", false) {
             score += 0.9;
+            if include_reasons {
+                reasons.push("silence".to_owned());
+            }
         } else {
             score -= 0.65;
         }
     }
-    score += (1.0 - (metadata_number(metadata, "intensity", 0.5) - energy).abs()).max(0.0) * 0.28;
+    let intensity_fit = 1.0 - (metadata_number(metadata, "intensity", 0.5) - energy).abs();
+    score += intensity_fit.max(0.0) * 0.28;
+    if include_reasons {
+        reasons.push(format!("intensity={intensity_fit:.2}"));
+    }
     if choice.animation == current {
         score += 0.18;
+        if include_reasons {
+            reasons.push("current".to_owned());
+        }
     }
     if let Some(distance) = recent_names
         .iter()
         .position(|name| name == &choice.animation)
         .map(|index| recent_names.len() - index)
     {
-        score -= 0.18 + 0.12 * distance as f64;
+        let penalty = 0.18 + 0.12 * distance as f64;
+        score -= penalty;
+        if include_reasons {
+            reasons.push(format!("fatigue=-{penalty:.2}"));
+        }
     }
     if randomness > 0.0 {
-        score += random_state.uniform(-randomness, randomness);
+        let jitter = random_state.uniform(-randomness, randomness);
+        score += jitter;
+        if include_reasons && jitter != 0.0 {
+            reasons.push(format!("random={jitter:.2}"));
+        }
     }
-    score
+    (score, reasons)
+}
+
+fn selector_diagnostics(
+    output_index: usize,
+    cycling: &RenderCycling,
+    selector: RenderDynamicSelector,
+    state: &SelectorRuntimeState,
+    now: Instant,
+) -> RenderSelectorDiagnostics {
+    let elapsed_ns = now
+        .saturating_duration_since(state.last_switch_at)
+        .as_nanos()
+        .min(u128::from(u64::MAX)) as u64;
+    let decision = &state.last_decision;
+    let mut scores = Vec::new();
+    if let Some(context) = state.score_context.as_ref() {
+        let mut random_state = context.random_state.clone();
+        for choice in &cycling.choices {
+            let (score, reasons) = score_dynamic_choice(
+                choice,
+                &context.features,
+                &decision.current_animation,
+                &context.recent_names,
+                selector.randomness,
+                &mut random_state,
+                true,
+            );
+            if score.is_finite() {
+                scores.push(RenderSelectorScore {
+                    animation: choice.animation.clone(),
+                    score,
+                    reasons,
+                });
+            }
+        }
+        scores.sort_by(|left, right| right.score.total_cmp(&left.score));
+        scores.truncate(5);
+    }
+    RenderSelectorDiagnostics {
+        output_index,
+        current_animation: decision.current_animation.clone(),
+        candidate_animation: decision.candidate_animation.clone(),
+        selected_animation: decision.selected_animation.clone(),
+        should_switch: decision.should_switch,
+        reason: decision.reason.clone(),
+        scores,
+        elapsed_ns,
+        min_duration_remaining_ns: selector.min_duration_ns.saturating_sub(elapsed_ns),
+        max_duration_remaining_ns: selector.max_duration_ns.saturating_sub(elapsed_ns),
+        switch_cooldown_remaining_ns: selector.switch_cooldown_ns.saturating_sub(elapsed_ns),
+        drop_cooldown_remaining_ns: 0,
+        recent_names: state.recent_names.iter().cloned().collect(),
+    }
 }
 
 fn remember_dynamic_name(history: &mut VecDeque<String>, name: &str, limit: usize) {

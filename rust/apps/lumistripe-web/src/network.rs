@@ -14,6 +14,9 @@ use tokio::time::timeout;
 
 const MAX_REQUEST_BYTES: usize = 8 * 1024;
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+
+#[cfg(test)]
+static TEST_HELPER_PROCESS_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const HELPER_TIMEOUT: Duration = Duration::from_secs(55);
 
 #[derive(Clone, Debug, Deserialize, Serialize, utoipa::ToSchema)]
@@ -216,6 +219,9 @@ impl NetworkManagerService {
                 "The network request is too large.",
             ));
         }
+
+        #[cfg(test)]
+        let _test_helper_process_guard = TEST_HELPER_PROCESS_LOCK.lock().await;
 
         let mut child = Command::new(&self.program)
             .args(&self.arguments)
@@ -427,17 +433,10 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
-    #[ignore = "requires active NetworkManager and the checked-in helper"]
+    #[ignore = "requires active NetworkManager and the installed Rust helper"]
     async fn live_networkmanager_status_decodes_read_only_helper_snapshot() {
-        let helper = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../deploy/lumistripe_network.py")
-            .canonicalize()
-            .expect("checked-in NetworkManager helper should exist");
-        let service = NetworkManagerService::new(
-            "/usr/bin/python3",
-            [helper.to_string_lossy().into_owned()],
-            Duration::from_secs(10),
-        );
+        let helper = Path::new("/usr/local/libexec/lumistripe/network/lumistripe-network-helper");
+        let service = NetworkManagerService::new(helper, ["network"], Duration::from_secs(10));
 
         let status = service
             .status()
@@ -576,17 +575,18 @@ mod tests {
             NetworkManagerService::new("/bin/sh", ["-c", script.as_str()], Duration::from_secs(30));
         let request = tokio::spawn(async move { service.status().await });
 
-        timeout(Duration::from_secs(2), async {
-            while !pid_file.exists() {
+        let pid = timeout(Duration::from_secs(2), async {
+            loop {
+                if let Ok(contents) = fs::read_to_string(&pid_file)
+                    && let Ok(pid) = contents.parse::<u32>()
+                {
+                    break pid;
+                }
                 sleep(Duration::from_millis(5)).await;
             }
         })
         .await
-        .expect("helper should start before the request is cancelled");
-        let pid = fs::read_to_string(&pid_file)
-            .unwrap()
-            .parse::<u32>()
-            .unwrap();
+        .expect("helper should write its PID before the request is cancelled");
 
         request.abort();
         assert!(request.await.unwrap_err().is_cancelled());

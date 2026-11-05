@@ -8,8 +8,10 @@ use lumistripe_web::{ApiDoc, AppConfig, EngineOutputOptions, WebApplication};
 use serde_json::{Value, json};
 use std::fs;
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
@@ -17,6 +19,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, accept_async, connect_async};
 use tokio_util::sync::CancellationToken;
 use utoipa::OpenApi;
@@ -97,6 +100,65 @@ async fn request(
         headers,
         body,
         body_text,
+    }
+}
+
+async fn process_http_request(
+    address: std::net::SocketAddr,
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+) -> Result<(u16, String), String> {
+    let mut stream = TcpStream::connect(address)
+        .await
+        .map_err(|error| error.to_string())?;
+    let body = body.unwrap_or_default();
+    stream
+        .write_all(
+            format!(
+                "{method} {path} HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut response = Vec::new();
+    timeout(Duration::from_secs(3), stream.read_to_end(&mut response))
+        .await
+        .map_err(|_| "HTTP response timed out".to_owned())?
+        .map_err(|error| error.to_string())?;
+    let response = String::from_utf8_lossy(&response);
+    let (headers, body) = response
+        .split_once("\r\n\r\n")
+        .ok_or_else(|| "HTTP response did not include headers".to_owned())?;
+    let status = headers
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|value| value.parse::<u16>().ok())
+        .ok_or_else(|| "HTTP response did not include a valid status".to_owned())?;
+    Ok((status, body.to_owned()))
+}
+
+async fn process_http_get(
+    address: std::net::SocketAddr,
+    path: &str,
+) -> Result<(u16, String), String> {
+    process_http_request(address, "GET", path, None).await
+}
+
+#[cfg(unix)]
+struct ProcessGroupGuard(std::process::Child);
+
+#[cfg(unix)]
+impl Drop for ProcessGroupGuard {
+    fn drop(&mut self) {
+        let process_group = -(self.0.id() as libc::pid_t);
+        unsafe {
+            libc::kill(process_group, libc::SIGKILL);
+        }
+        let _ = self.0.wait();
     }
 }
 
@@ -642,6 +704,482 @@ fn app_config(static_dir: PathBuf) -> AppConfig {
     }
 }
 
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn simulator_cli_starts_native_web_stack_with_python_unavailable() {
+    use std::os::unix::process::CommandExt as _;
+
+    let _guard = WEB_APPLICATION_TEST_LOCK.lock().await;
+    let temporary = TempDir::new().unwrap();
+    let home = temporary.path().join("home");
+    let static_dir = temporary.path().join("static");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&static_dir).unwrap();
+    fs::write(
+        static_dir.join("index.html"),
+        "<!doctype html><title>simulator process fixture</title>",
+    )
+    .unwrap();
+    let settings_file = temporary.path().join("simulator-settings.json");
+    let log_path = temporary.path().join("simulator-web.log");
+    let engine_binary = std::env::var_os("LUMISTRIPE_ENGINE_TEST_BINARY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/lumistripe-engine")
+        });
+    assert!(
+        engine_binary.is_file(),
+        "build the engine binary before this integration test: {}",
+        engine_binary.display()
+    );
+    let port_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = port_listener.local_addr().unwrap().port();
+    drop(port_listener);
+
+    let output = fs::File::create(&log_path).unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_lumistripe-web"));
+    command
+        .args([
+            "--simulate",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            &port.to_string(),
+            "--pixels",
+            "8",
+            "--pixels-2",
+            "4",
+            "--engine-binary",
+        ])
+        .arg(&engine_binary)
+        .arg("--static-dir")
+        .arg(&static_dir)
+        .arg("--settings-file")
+        .arg(&settings_file)
+        .env("PATH", "/lumistripe-test-path-without-python")
+        .env("HOME", &home)
+        .env("LUMI_PROJECT_DIR", temporary.path())
+        .env(
+            "LUMI_UPDATE_STATE_FILE",
+            temporary.path().join("update-status.json"),
+        )
+        .env("LUMISTRIPE_ENABLE_SPOTIFY", "false")
+        .env_remove("LUMI_PAIRING_CODE")
+        .env_remove("LUMI_WEB_BACKEND")
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(output.try_clone().unwrap()))
+        .stderr(Stdio::from(output));
+    command.process_group(0);
+    let mut process = ProcessGroupGuard(command.spawn().unwrap());
+    let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut ready = false;
+    while Instant::now() < deadline {
+        if let Some(status) = process.0.try_wait().unwrap() {
+            panic!(
+                "simulator CLI exited before serving requests ({status}):\n{}",
+                fs::read_to_string(&log_path).unwrap_or_default()
+            );
+        }
+        if matches!(process_http_get(address, "/api/health").await, Ok((200, body)) if body.contains("\"status\":\"ok\""))
+        {
+            ready = true;
+            break;
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        ready,
+        "simulator CLI did not become ready:\n{}",
+        fs::read_to_string(&log_path).unwrap_or_default()
+    );
+
+    let (state_status, state_body) = process_http_get(address, "/api/state")
+        .await
+        .expect("simulator state request should succeed");
+    assert_eq!(state_status, 200, "{state_body}");
+    assert!(
+        state_body.contains("\"runtime\":\"simulation\""),
+        "{state_body}"
+    );
+    assert!(
+        state_body.contains("\"output_backend\":\"simulation\""),
+        "{state_body}"
+    );
+
+    let (demo_status, demo_body) = process_http_request(
+        address,
+        "PUT",
+        "/api/audio/source",
+        Some(r#"{"source":"demo"}"#),
+    )
+    .await
+    .expect("simulator demo-audio request should succeed");
+    assert_eq!(demo_status, 200, "{demo_body}");
+    assert!(
+        demo_body.contains("\"active_source\":\"demo\""),
+        "{demo_body}"
+    );
+
+    let (dynamic_status, dynamic_body) =
+        process_http_request(address, "PUT", "/api/mode", Some(r#"{"mode":"dynamic"}"#))
+            .await
+            .expect("simulator dynamic-mode request should succeed with demo audio");
+    assert_eq!(dynamic_status, 200, "{dynamic_body}");
+    assert!(
+        dynamic_body.contains("\"mode\":\"dynamic\""),
+        "{dynamic_body}"
+    );
+
+    let (calibration_status, calibration_body) = process_http_request(
+        address,
+        "POST",
+        "/api/audio/calibration/session",
+        Some(r#"{"device":"USB microphone"}"#),
+    )
+    .await
+    .expect("simulator microphone-calibration request should complete");
+    assert_eq!(calibration_status, 409, "{calibration_body}");
+    assert!(
+        calibration_body.contains("microphone input is unavailable"),
+        "{calibration_body}"
+    );
+
+    let (frontend_status, frontend_body) = process_http_get(address, "/")
+        .await
+        .expect("simulator frontend request should succeed");
+    assert_eq!(frontend_status, 200, "{frontend_body}");
+    assert!(frontend_body.contains("simulator process fixture"));
+
+    unsafe {
+        libc::kill(process.0.id() as libc::pid_t, libc::SIGTERM);
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = process.0.try_wait().unwrap() {
+            assert!(
+                status.success(),
+                "simulator CLI did not shut down cleanly:\n{}",
+                fs::read_to_string(&log_path).unwrap_or_default()
+            );
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "simulator CLI did not stop on SIGTERM"
+        );
+        sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn simulated_multi_output_workflow_keeps_mock_outputs_and_persists_settings() {
+    if std::env::var_os("LUMISTRIPE_PYTHON_UNAVAILABLE_TEST_CHILD").is_none() {
+        let output = Command::new(std::env::current_exe().expect("test executable path"))
+            .args([
+                "--exact",
+                "simulated_multi_output_workflow_keeps_mock_outputs_and_persists_settings",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("PATH", "/lumistripe-test-path-without-python")
+            .env("LUMISTRIPE_PYTHON_UNAVAILABLE_TEST_CHILD", "1")
+            .output()
+            .expect("run simulator integration workflow without Python in PATH");
+        assert!(
+            output.status.success(),
+            "Python-free simulator integration failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    for interpreter in ["python", "python3"] {
+        let error = Command::new(interpreter)
+            .output()
+            .expect_err("Python must be unavailable to the simulator process");
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    let _guard = WEB_APPLICATION_TEST_LOCK.lock().await;
+    let static_dir = TempDir::new().unwrap();
+    fs::write(
+        static_dir.path().join("index.html"),
+        "<!doctype html><title>simulator fixture</title>",
+    )
+    .unwrap();
+    let engine_binary = std::env::var_os("LUMISTRIPE_ENGINE_TEST_BINARY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/lumistripe-engine")
+        });
+    assert!(
+        engine_binary.is_file(),
+        "build the engine binary before this integration test: {}",
+        engine_binary.display()
+    );
+
+    let config = app_config(static_dir.path().to_path_buf());
+    let settings_file = config.settings_file.clone();
+    let mut app = WebApplication::start(config.clone(), engine_binary.clone(), None)
+        .await
+        .expect("simulator should start the Rust engine with mock outputs");
+    let router = app.router();
+    let origin = "http://localhost";
+
+    let startup = request(
+        &router,
+        Method::PUT,
+        "/api/startup",
+        Some(json!({"restore_last_state": true})),
+        None,
+        Some(origin),
+    )
+    .await;
+    assert_eq!(startup.status, StatusCode::OK, "{}", startup.body_text);
+    assert!(startup.body["restore_last_state"].as_bool().unwrap());
+
+    let selected_animation = request(
+        &router,
+        Method::PUT,
+        "/api/animation",
+        Some(json!({"name": "rainbow"})),
+        None,
+        Some(origin),
+    )
+    .await;
+    assert_eq!(selected_animation.status, StatusCode::OK);
+    let demo_audio = request(
+        &router,
+        Method::PUT,
+        "/api/audio/source",
+        Some(json!({"source": "demo"})),
+        None,
+        Some(origin),
+    )
+    .await;
+    assert_eq!(
+        demo_audio.status,
+        StatusCode::OK,
+        "{}",
+        demo_audio.body_text
+    );
+    let cycling_mode = request(
+        &router,
+        Method::PUT,
+        "/api/mode",
+        Some(json!({"mode": "cycling"})),
+        None,
+        Some(origin),
+    )
+    .await;
+    assert_eq!(
+        cycling_mode.status,
+        StatusCode::OK,
+        "{}",
+        cycling_mode.body_text
+    );
+    assert_eq!(cycling_mode.body["mode"], "cycling");
+    let static_mode = request(
+        &router,
+        Method::PUT,
+        "/api/mode",
+        Some(json!({"mode": "static"})),
+        None,
+        Some(origin),
+    )
+    .await;
+    assert_eq!(
+        static_mode.status,
+        StatusCode::OK,
+        "{}",
+        static_mode.body_text
+    );
+    assert_eq!(static_mode.body["mode"], "static");
+    let dynamic_mode = request(
+        &router,
+        Method::PUT,
+        "/api/mode",
+        Some(json!({"mode": "dynamic", "music_recognition_enabled": true})),
+        None,
+        Some(origin),
+    )
+    .await;
+    assert_eq!(
+        dynamic_mode.status,
+        StatusCode::OK,
+        "{}",
+        dynamic_mode.body_text
+    );
+    let brightness = request(
+        &router,
+        Method::PUT,
+        "/api/brightness",
+        Some(json!({"brightness": 0.4})),
+        None,
+        Some(origin),
+    )
+    .await;
+    assert_eq!(
+        brightness.status,
+        StatusCode::OK,
+        "{}",
+        brightness.body_text
+    );
+
+    let topology = json!({
+        "layout": "independent",
+        "outputs": [
+            {
+                "id": "main",
+                "name": "Main stripe",
+                "pixels": 8,
+                "backend": "spi",
+                "reversed": false,
+                "zone_count": 2,
+                "zone_pattern": "repeat",
+                "spi_device": "/dev/spidev0.0",
+                "spi_speed_hz": 1000000,
+                "chip": "/dev/gpiochip0",
+                "data_pin": 14,
+                "clock_pin": 15,
+                "voltage_v": 5.0,
+                "full_white_current_a": 0.06,
+                "power_limit_watts": null
+            },
+            {
+                "id": "secondary",
+                "name": "Secondary stripe",
+                "pixels": 12,
+                "backend": "spi",
+                "reversed": false,
+                "zone_count": 3,
+                "zone_pattern": "repeat",
+                "spi_device": "/dev/spidev0.1",
+                "spi_speed_hz": 1000000,
+                "chip": "/dev/gpiochip0",
+                "data_pin": 14,
+                "clock_pin": 15,
+                "voltage_v": 5.0,
+                "full_white_current_a": 0.06,
+                "power_limit_watts": null
+            }
+        ],
+        "power_budget_enabled": true,
+        "power_budget_watts": 15.0,
+        "shared_supply_enabled": true,
+        "supply_capacity_watts": 200.0,
+        "pi_reserve_watts": 15.0
+    });
+    let topology_update = request(
+        &router,
+        Method::PUT,
+        "/api/stripes",
+        Some(topology),
+        None,
+        Some(origin),
+    )
+    .await;
+    assert_eq!(
+        topology_update.status,
+        StatusCode::OK,
+        "{}",
+        topology_update.body_text
+    );
+
+    let state = request(&router, Method::GET, "/api/state", None, None, None).await;
+    assert_eq!(state.status, StatusCode::OK, "{}", state.body_text);
+    assert_eq!(state.body["runtime"], "simulation");
+    assert_eq!(state.body["output_backend"], "simulation");
+    assert_eq!(state.body["mode"], "dynamic");
+    assert_eq!(state.body["animation"], "rainbow");
+    assert_eq!(state.body["active_audio_source"], "demo");
+    assert_eq!(state.body["output_failure_count"], 0);
+    assert_eq!(
+        state.body["stripe_topology"]["outputs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(state.body["stripe_topology"]["outputs"][0]["zone_count"], 2);
+    assert_eq!(state.body["stripe_topology"]["outputs"][1]["zone_count"], 3);
+    assert!(state.body["power_budget"]["enabled"].as_bool().unwrap());
+
+    let server = TestServer::start(router).await;
+    let preview = websocket_request(
+        server.address,
+        "/ws/preview",
+        None,
+        &format!("http://{}", server.address),
+    );
+    let (mut preview_socket, _) = timeout(Duration::from_secs(3), connect_async(preview))
+        .await
+        .expect("simulator preview should connect")
+        .expect("simulator preview WebSocket should accept the client");
+    let preview_message = timeout(Duration::from_secs(3), preview_socket.next())
+        .await
+        .expect("simulator should publish a preview frame")
+        .unwrap()
+        .unwrap();
+    match preview_message {
+        Message::Binary(packet) => {
+            assert!(packet.len() > 12);
+            assert_eq!(&packet[..4], b"LSFP");
+            assert_eq!(packet[4], 1);
+        }
+        message => panic!("simulator preview sent an unexpected message: {message:?}"),
+    }
+    preview_socket.close(None).await.unwrap();
+    server.stop().await;
+    app.shutdown().await;
+
+    assert!(
+        settings_file.is_file(),
+        "simulator should persist its settings"
+    );
+    let persisted = fs::read_to_string(&settings_file).unwrap();
+    assert!(persisted.contains("secondary"));
+
+    let mut restarted = WebApplication::start(config, engine_binary, None)
+        .await
+        .expect("simulator should restore persisted settings on restart");
+    let restored = request(
+        &restarted.router(),
+        Method::GET,
+        "/api/state",
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(restored.status, StatusCode::OK, "{}", restored.body_text);
+    assert_eq!(restored.body["runtime"], "simulation");
+    assert_eq!(restored.body["output_backend"], "simulation");
+    assert_eq!(restored.body["mode"], "dynamic");
+    assert_eq!(restored.body["animation"], "rainbow");
+    assert_eq!(restored.body["brightness"], 0.4);
+    assert_eq!(restored.body["output_failure_count"], 0);
+    assert_eq!(
+        restored.body["stripe_topology"]["outputs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        restored.body["stripe_topology"]["outputs"][0]["zone_count"],
+        2
+    );
+    assert_eq!(
+        restored.body["stripe_topology"]["outputs"][1]["zone_count"],
+        3
+    );
+    assert!(restored.body["power_budget"]["enabled"].as_bool().unwrap());
+    restarted.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn serves_compatible_http_websockets_and_supervises_the_engine_process() {
     let _guard = WEB_APPLICATION_TEST_LOCK.lock().await;
@@ -948,7 +1486,7 @@ async fn serves_compatible_http_websockets_and_supervises_the_engine_process() {
     assert!(cookie_attributes.contains("SameSite=Strict"));
     assert!(cookie_attributes.contains("Max-Age=2592000"));
 
-    let rejected = timeout(
+    let (mut unauthenticated, response) = timeout(
         Duration::from_secs(3),
         connect_async(websocket_request(
             server.address,
@@ -958,13 +1496,21 @@ async fn serves_compatible_http_websockets_and_supervises_the_engine_process() {
         )),
     )
     .await
-    .expect("unauthenticated WebSocket should reject promptly");
+    .expect("unauthenticated WebSocket should close promptly")
+    .expect("unauthenticated WebSocket should complete the upgrade");
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    let close = timeout(Duration::from_secs(3), unauthenticated.next())
+        .await
+        .expect("unauthenticated WebSocket should send a pairing close")
+        .expect("WebSocket should return the server close frame")
+        .expect("WebSocket should close without a transport error");
     assert!(matches!(
-        rejected,
-        Err(tokio_tungstenite::tungstenite::Error::Http(response))
-            if response.status() == StatusCode::FORBIDDEN
+        close,
+        Message::Close(Some(frame))
+            if frame.code == CloseCode::from(4401)
+                && frame.reason == "pairing required"
     ));
-    let rejected_origin = timeout(
+    let (mut invalid_origin_socket, response) = timeout(
         Duration::from_secs(3),
         connect_async(websocket_request(
             server.address,
@@ -974,11 +1520,19 @@ async fn serves_compatible_http_websockets_and_supervises_the_engine_process() {
         )),
     )
     .await
-    .expect("cross-origin WebSocket should reject promptly");
+    .expect("cross-origin WebSocket should close promptly")
+    .expect("cross-origin WebSocket should complete the upgrade");
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    let close = timeout(Duration::from_secs(3), invalid_origin_socket.next())
+        .await
+        .expect("cross-origin WebSocket should send a policy close")
+        .expect("WebSocket should return the server close frame")
+        .expect("WebSocket should close without a transport error");
     assert!(matches!(
-        rejected_origin,
-        Err(tokio_tungstenite::tungstenite::Error::Http(response))
-            if response.status() == StatusCode::FORBIDDEN
+        close,
+        Message::Close(Some(frame))
+            if frame.code == CloseCode::from(1008)
+                && frame.reason == "invalid origin"
     ));
 
     let initial = request(
@@ -1826,6 +2380,7 @@ async fn serves_compatible_http_websockets_and_supervises_the_engine_process() {
             "active_audio_source",
             "audio_monitoring",
             "active_effects",
+            "selector_diagnostics",
             "uptime_seconds",
             "frame_rate",
             "render_time_ms",
@@ -2025,6 +2580,7 @@ async fn serves_compatible_http_websockets_and_supervises_the_engine_process() {
     assert!(root.body_text.contains("<title>fixture</title>"));
 
     let mut state_socket = websocket(server.address, "/ws/state", &cookie).await;
+    let mut second_state_socket = websocket(server.address, "/ws/state", &cookie).await;
     let state_message = timeout(Duration::from_secs(3), state_socket.next())
         .await
         .expect("state stream should send its latest snapshot")
@@ -2034,11 +2590,58 @@ async fn serves_compatible_http_websockets_and_supervises_the_engine_process() {
         Message::Text(text) => serde_json::from_str(text.as_str()).unwrap(),
         message => panic!("state stream sent unexpected message: {message:?}"),
     };
+    let second_state_message = timeout(Duration::from_secs(3), second_state_socket.next())
+        .await
+        .expect("second state client should receive its latest snapshot")
+        .unwrap()
+        .unwrap();
+    let second_state_json: Value = match second_state_message {
+        Message::Text(text) => serde_json::from_str(text.as_str()).unwrap(),
+        message => panic!("second state stream sent unexpected message: {message:?}"),
+    };
+    assert_eq!(state_json, second_state_json);
     assert_eq!(state_json["running"], true);
     assert!(state_json.get("revision").is_some());
     assert_eq!(state_json["spotify"]["configured"], false);
     assert_eq!(state_json["bluetooth"]["capabilities"]["max_outputs"], 1);
+
+    let shared_state_update = request(
+        &router,
+        Method::PUT,
+        "/api/brightness",
+        Some(json!({"brightness": 0.63})),
+        Some(&cookie),
+        Some(&origin),
+    )
+    .await;
+    assert_eq!(shared_state_update.status, StatusCode::OK);
+    let (state_update, second_state_update) = tokio::join!(
+        timeout(Duration::from_secs(3), state_socket.next()),
+        timeout(Duration::from_secs(3), second_state_socket.next()),
+    );
+    let state_update = state_update
+        .expect("first state client should receive the shared update")
+        .unwrap()
+        .unwrap();
+    let second_state_update = second_state_update
+        .expect("second state client should receive the shared update")
+        .unwrap()
+        .unwrap();
+    let state_update_json: Value = match state_update {
+        Message::Text(text) => serde_json::from_str(text.as_str()).unwrap(),
+        message => panic!("first state stream sent unexpected message: {message:?}"),
+    };
+    let second_state_update_json: Value = match second_state_update {
+        Message::Text(text) => serde_json::from_str(text.as_str()).unwrap(),
+        message => panic!("second state stream sent unexpected message: {message:?}"),
+    };
+    assert_eq!(state_update_json, second_state_update_json);
+    assert_eq!(state_update_json["brightness"], 0.63);
+    assert!(
+        state_update_json["revision"].as_u64().unwrap() > state_json["revision"].as_u64().unwrap()
+    );
     state_socket.close(None).await.unwrap();
+    second_state_socket.close(None).await.unwrap();
 
     let mut audio_socket = websocket(server.address, "/ws/audio", &cookie).await;
     let audio_message = timeout(Duration::from_secs(3), audio_socket.next())

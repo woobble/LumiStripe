@@ -1,10 +1,12 @@
 //! Real-time audio processing and music-structure analysis for the Rust engine.
 
+mod calibration;
 mod capture;
 mod config;
 mod dsp;
 mod structure;
 
+pub use calibration::{AudioCalibrationRecommendation, recommend_audio_calibration};
 pub use capture::{
     AudioCapture, AudioCaptureError, AudioCaptureStats, CapturedAudioBatch, InputAudioDevice,
     enumerate_input_devices, monotonic_time_ns,

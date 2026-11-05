@@ -1450,6 +1450,7 @@ export interface components {
             runtime: components["schemas"]["RuntimeKind"];
             /** Format: double */
             scheduler_time_ms?: number | null;
+            selector_diagnostics?: components["schemas"]["DynamicSelectorDiagnostics"][];
             sequence_library?: components["schemas"]["SequenceLibrarySummary"];
             sequencer_settings?: components["schemas"]["SequencerSettingsResponse"];
             /** @default #7C3AED */
@@ -1484,6 +1485,32 @@ export interface components {
             message: string;
             severity: string;
             title: string;
+        };
+        DynamicSelectorDiagnostics: {
+            candidate_animation?: string | null;
+            current_animation: string;
+            /** Format: int64 */
+            drop_cooldown_remaining_ns: number;
+            /** Format: int64 */
+            elapsed_ns: number;
+            /** Format: int64 */
+            max_duration_remaining_ns: number;
+            /** Format: int64 */
+            min_duration_remaining_ns: number;
+            output_index: number;
+            reason: string;
+            recent_names?: string[];
+            scores?: components["schemas"]["DynamicSelectorScore"][];
+            selected_animation: string;
+            should_switch: boolean;
+            /** Format: int64 */
+            switch_cooldown_remaining_ns: number;
+        };
+        DynamicSelectorScore: {
+            animation: string;
+            reasons?: string[];
+            /** Format: double */
+            score: number;
         };
         ErrorResponse: {
             detail: string;

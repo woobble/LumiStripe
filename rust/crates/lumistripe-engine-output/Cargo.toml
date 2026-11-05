@@ -7,7 +7,6 @@ rust-version.workspace = true
 
 [dependencies]
 lumistripe-engine-config.workspace = true
-lumistripe-engine-protocol.workspace = true
 gpio-cdev.workspace = true
 libc.workspace = true
 spidev.workspace = true

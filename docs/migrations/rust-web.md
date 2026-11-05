@@ -118,29 +118,39 @@ The deployment validates the downloaded Soloist `--version` build timestamp
 before replacing an installed binary, and the systemd service checks that the
 binary exists and is within Spotify's 90-day build lifetime before startup.
 The diagnostic command does not inherit the Spotify API key; missing, invalid,
-and expired builds produce an administrator-facing journal message. This
-pre-start diagnostic is a small Python deployment helper; it is outside the
-Rust web process.
+and expired builds produce an administrator-facing journal message. The
+pre-start check runs `lumistripe-deploy-helper soloist-check` from the active,
+commit-matched Rust release. Its child process receives a cleared environment,
+bounded output, and a five-second deadline. The installer and updater build the
+web server, engine, and deployment helper into the same release directory.
 Automatic source selection retries a failed Spotify route after five seconds,
 then keeps the configured priority of Spotify, Bluetooth input, and microphone.
 Spotify activity changes trigger route reconciliation so a resumed stream uses
 the current PipeWire default output.
 
-Wi-Fi operations still use the installed root-owned NetworkManager helper. Its
-`lumistripe-network` wrapper invokes the Python
-`lumistripe_network.py` helper through `/usr/bin/python3`; the Rust web process
-uses only its fixed stdin/stdout JSON interface and does not embed Python. The
-Rust update routes read and atomically refresh the existing status file, run
-bounded Git checks directly, and start installation through the fixed sudo
-trigger. The separate periodic systemd updater still uses the Python
-`deploy/update_state.py` deployment helper and shares the status and lock files;
-it is not required for the Rust web API to check or report updates. These
+Wi-Fi operations use the installed root-owned Rust NetworkManager helper. Its
+`lumistripe-network` wrapper invokes `network` in a root-owned copy of the
+commit-matched `lumistripe-deploy-helper`; the Rust web process uses only its
+fixed stdin/stdout JSON interface. The Python `deploy/lumistripe_network.py`
+remains as a differential reference and is no longer installed. The Rust
+helper keeps NetworkManager access behind the fixed wrapper and sudoers rule,
+validates SSIDs and security modes, writes connection profiles atomically with
+mode `0600`, and bounds child output and runtime. The Rust update routes read
+and atomically refresh the existing status file, run bounded Git checks
+directly, and start installation through the fixed sudo trigger. The periodic
+systemd updater and install lifecycle transitions use
+the `update-state` subcommand in the commit-matched deployment helper. The
+Python `deploy/update_state.py` remains as a differential reference. These
 privileged helpers do not give the web process general root access. The Rust
-web process can start and serve its APIs without Python, but hardware Wi-Fi,
-Soloist pre-start diagnostics, and periodic privileged updates still use the
-documented Python helpers. Rust can be selected for the systemd web service
-after building the release binaries, but Python remains the default and
-immediate rollback backend. Neither backend is cut over by this migration.
+web process can start and serve its APIs without Python. Soloist download and
+extraction use the Rust deployment helper. The active Python rollback
+installation path and Docker development image still use Python.
+Spotify device names are written to a service-user-owned EnvironmentFile by
+the Rust deploy helper; sudoers permits only a nonblocking restart of the
+Spotify service.
+Rust release binaries are built on installation and update; Python remains
+the default web backend and immediate rollback path until the remaining
+cutover gates pass.
 
 `frontend/openapi.json` and `src/generated/api.ts` are generated from the Rust
 Axum routes and Utoipa schemas. The Rust document covers all 64 REST operations
@@ -169,12 +179,16 @@ document; shared fixtures compare those runtime error responses. A local Soloist
 WebSocket fixture compares connected playback metadata and status, then verifies
 successful play/pause, skip, seek, volume, shuffle, and repeat commands through
 both APIs, including Soloist `command_result` acknowledgements and matching
-validation errors for invalid control values. Rust unit tests also verify
-provider rejection, an ambiguous acknowledgement timeout, and that playback
-state remains event-driven. Preview checks compare v1 framing and rendered
-pixel payloads after selecting a settled solid color. Broader service
-mutation/error comparisons and parity for captured microphone, Bluetooth, and
-Spotify audio streams remain cutover requirements.
+validation errors for invalid control values. The HTTP differential matrix
+also submits malformed bodies across playback, startup, transitions, sequence
+settings, topology, calibration, audio, network, and Bluetooth routes. Rust
+preserves Pydantic's non-strict boolean coercions on startup, topology, and
+audio sync-calibration requests; focused tests cover accepted and rejected JSON
+boolean forms. Rust unit tests also verify provider rejection, an ambiguous
+acknowledgement timeout, and that playback state remains event-driven. Preview
+checks compare v1 framing and rendered pixel payloads after selecting a settled
+solid color. Exhaustive business-error comparisons and parity for captured
+microphone, Bluetooth, and Spotify audio streams remain cutover requirements.
 
 The Rust workspace requires Rust 1.88. Cargo resolver 3 selects dependency
 versions compatible with that declared minimum. The hosted x86_64 and ARM64 CI
@@ -204,8 +218,9 @@ Its Python 3.12 job had one failure: the three-minute Rust adapter fixture could
 generate beat timestamps before the boot-relative monotonic clock reached zero.
 The fixture now offsets its synthetic timeline and all 36 tests in
 `test_rust_engine_adapter.py` pass locally. The Raspberry Pi job stopped before
-native compilation because the runner lacks `pkg-config` and `sudo`; provision
-the native packages on that runner before its next run. No Pi native tests ran.
+native compilation because the runner lacks `pkg-config` and `sudo`; the current
+worktree adds a signed, job-local apt package overlay for that non-root case.
+No Pi native tests have run against that provisioning change yet.
 The feature-enabled Rust release web server and mock engine also started with
 an empty `PATH` containing no `python3`. A direct smoke returned HTTP 200 for
 health, system statistics, update status, Spotify status, and Bluetooth status.
@@ -215,6 +230,27 @@ update check accepted a request and recorded the bounded Git failure itself.
 This confirms that Rust API startup and these status paths do not invoke the
 Python application; Wi-Fi operations still require the documented privileged
 helper.
+
+On 2026-11-04, the current x86-64 release binaries were smoke-tested with
+`lumistripe-web --simulate`, an isolated settings file, and mock outputs. The
+server served its frontend and health endpoint; API requests selected Rainbow,
+Dynamic mode, and demo audio, then applied an independent two-output topology
+with 2/3 zones and a 15 W shared power budget. The preview WebSocket emitted a
+binary frame, and a graceful restart restored the saved topology and power
+settings with no output failures. This checked the HTTP/IPC simulation path and
+frontend serving. Microphone capture and physical outputs remain separate
+acceptance items.
+The Rust `web_application` integration suite now repeats the two-output,
+Dynamic/demo-audio, preview, and restart-persistence path with a real engine
+child, with `python` and `python3` absent from the test process `PATH`. It also
+asserts that persisted SPI settings remain mapped to mock outputs in simulation
+mode.
+
+The dashboard state also carries the engine's per-output Dynamic selector
+decision, reason, top scores with contributing factors, timing, and recent
+animation history. The Diagnostics page renders these values. The OpenAPI
+field remains optional and the strict frontend parser defaults it to an empty
+array so older Python rollback responses remain compatible.
 
 The Rust native Bluetooth and PipeWire providers are opt-in build features.
 The Raspberry Pi installer provisions Rust 1.88.0 and the
@@ -242,11 +278,11 @@ Set `LUMI_WEB_BACKEND=rust` in the service environment to select those
 binaries. The updater reads that setting and rebuilds both services with Rust
 1.88.0 and the `bluez,pipewire` features before restarting the web service.
 It builds into a staging target and atomically activates a commit-matched
-binary pair; a failed build leaves the previous pair active for rollback. The
-launcher rejects a staged pair when its source commit does not match the
+application release; a failed build leaves the previous release
+active for rollback. The launcher rejects a staged release when its source commit does not match the
 checkout. The installer provisions the Rust toolchain and native development
-headers but does not build Rust binaries; the Python backend remains the
-default.
+headers, then builds the commit-matched web, engine, CLI, and deployment helper
+release. The Python backend remains the default.
 
 ## Remaining Python responsibilities and Rust replacements
 
@@ -259,9 +295,10 @@ default.
 | Topology and persistence | Python topology/settings remain available in the fallback. Rust has validated settings persistence, topology, startup preferences, identity, sequences, audio profiles, and calibration persistence. | Keep versioned settings migrations, atomic writes, validation before replacing live outputs, and rollback on persistence or device failure. |
 | Bluetooth and PipeWire | Python remains the complete fallback. Rust uses `bluer` for Linux BlueZ operations when built with `bluez`, and `pipewire-rs` for audio node enumeration and default route selection when built with `pipewire`. | Keep provider injection and partial service availability. BlueZ operations use bounded asynchronous D-Bus calls; PipeWire graph work runs on a dedicated thread with a bounded wait. `pactl` remains for Pulse compatibility controls and existing stream/module operations. Raspberry Pi checks must cover pairing, device roles, route selection, volume/mute, disconnect, and partial daemon availability. |
 | Spotify Soloist | Python remains the complete fallback and the local Soloist service remains external. Rust has the local Soloist WebSocket client, bounded command queue, reconnect loop, immutable playback snapshot, position clock, and control acknowledgements. | Preserve one socket writer, bounded commands, reconnect policy, command deadlines, event validation, and track/status semantics. Do not couple Spotify transport to audio capture or output scheduling. |
-| Networking and host services | Python remains the complete fallback. Rust has Wi-Fi routes, system statistics, bounded Git update checks, update status/install routes, and uses the root-owned NetworkManager helper plus the restricted sudo install trigger. The network wrapper invokes Python `lumistripe_network.py`; the Soloist service pre-start check and periodic updater also use Python deployment helpers. | Keep fixed helper paths, serialized bounded operations, typed responses, credential-free process arguments, and the privilege boundary. Validate networking and update recovery on the Pi; do not add broad privileged shell access. |
+| Networking and host services | Python remains the complete fallback. Rust has Wi-Fi routes, system statistics, bounded Git update checks, update status/install routes, and uses the root-owned Rust NetworkManager helper plus restricted sudo commands for updater and Spotify service restarts. Soloist archive extraction, periodic update-state checks, Spotify device-name updates, and Soloist pre-start validation use the version-matched Rust deployment helper. | Keep fixed helper paths, serialized bounded operations, typed responses, credential-free process arguments, and the privilege boundary. Validate networking and update recovery on the Pi; do not add broad privileged shell access. |
 | WebSockets and preview | `runtime/preview.py`, `runtime/cadence.py`, and `api/routes/websocket.py` publish immutable state/audio snapshots and the versioned binary frame. | Keep latest-wins delivery, per-client failure isolation, auth refresh, cadence, binary fixture, and strict payload validation. Do not serialize full snapshots more often than the protocol needs. |
-| CLI and simulator | `apps/lumistripe-cli` provides terminal playback and output encoding; `apps/lumistripe-sim` provides the Tkinter simulator. `lumistripe-app-support` shares UI-independent configuration policy. | Port only after core engine and settings contracts stabilize. Preserve portable mock output, headless CLI use, configuration precedence, and simulator interaction. Keep app-support policy independent from Axum and hardware details. |
+| Rust CLI | `rust/apps/lumistripe-cli` starts the Rust engine and supports Static, Cycling, and Dynamic playback over IPC, one or two mock/SPI/GPIO outputs, animation settings, brightness and power budgets. It also exposes health, capabilities, audio devices, microphone calibration/profiles, engine-backed JSONL audio diagnostics/recording/analysis, performance reports, selector diagnostics, and GPIO encoder controls. | Validate remaining Rust CLI hardware behavior on Pi. |
+| Browser simulator mode | `lumistripe-web --simulate` runs the shared web application and Rust engine with mock outputs, loopback binding, and isolated settings. It serves the existing React dashboard and exercises the same web controls and engine path. Python-free integration coverage checks launch, mock playback, frontend serving, and clean shutdown. The obsolete Tkinter app's UI, feature list, or diagnostics do not need to be reproduced; no standalone simulator is planned. | Keep this portable mock-output mode available as a web-application smoke/demo path. Its acceptance follows the web app and engine requirements, not Tkinter feature parity. Real microphone capture/calibration is a separate hardware validation item. |
 | Core package | `lumistripe-core` provides Python compatibility exports, animation/effect definitions, audio models and capture, playback policy, pixel buffers, render kernels, output controllers, power limits, and optional native C/GPIO/SPI extensions. | Continue replacing only bounded, well-tested primitives with workspace crates. Preserve optional native profiles, generated catalog ownership, portable defaults, typed Python boundary values during coexistence, and no FastAPI dependency in core crates. |
 | Contracts and tests | Rust-generated `frontend/openapi.json`, generated `src/generated/api.ts`, strict Zod parsers, Python route/runtime tests, and preview fixtures define the compatibility surface. | The differential test recursively compares request constraints, nested response types, required fields, array items, and enums across all 64 operations, with separate mock-output processes for runtime parity. Keep FastAPI available for rollback; captured microphone, Bluetooth, and Spotify audio parity remains open. |
 
@@ -277,8 +314,8 @@ default.
 2. **System operations — implemented:** Rust serves system statistics and
    update status/check/install routes. The web update check now runs bounded
    Git commands in Rust; the restricted privileged install trigger and
-   periodic Python deployment helper remain. Process RSS and thread count are
-   included in the explicit system-stat contract extension.
+   periodic state checks now use the Rust deployment helper. Process RSS and
+   thread count are included in the explicit system-stat contract extension.
 3. **Parity and cutover evidence — in progress:** Rust integration checks
    confirm every FastAPI-documented API path is mounted without invoking
    service operations, and Rust generates the checked-in OpenAPI document for
@@ -288,6 +325,24 @@ default.
    preview packet framing; a Soloist fixture now covers connected playback
    metadata, all playback controls, and matching invalid-value errors. The test
    also matches fresh demo audio levels and bands to the shared fixture.
+   The process differential submits a malformed top-level JSON body to all 39
+   REST operations that declare request bodies and confirms the exact 422
+   validation response matches across both backends. The invalid-contract
+   matrix also compares complete validation bodies, including error kinds,
+   field paths, inputs, and contexts. Wi-Fi password validation responses are
+   checked not to echo the credential. Successful behavior remains
+   scenario-based for host-dependent providers, with injected-provider tests
+   covering those paths.
+   It also compares the animation catalog and reset path, pairing authentication
+   across both processes, dashboard snapshots, audio-settings reads, and missing
+   audio calibration-session errors. The pairing comparison checks invalid and
+   valid codes, active cookie attributes, protected-route access, logout
+   revocation, and the five-failure rate limit. An unauthenticated WebSocket
+   closes with the same 4401 pairing code in both backends, and cross-origin
+   WebSockets close with policy code 1008 in both. The comparison also exposed
+   and fixed two Rust error-status differences: beginning a missing calibration
+   session's music phase and finishing a missing session now match FastAPI's
+   HTTP 409 responses.
    Python and Rust network API tests cover helper-backed scans, connections,
    and credential failures. The Axum test injects a temporary restricted
    helper and checks successful status, scan, and connect responses, failed
@@ -404,7 +459,9 @@ live installation and recovery were not tested.
 A second isolated launcher check called `GET /api/network/status` as
 `www-data` with Python absent from the Rust process `PATH`; the restricted
 helper returned `manager_available=true`. The response, including any SSID,
-was not printed. The privileged helper itself remains Python-backed by design.
+was not printed. That probe used the Python helper installed at the time; the
+current installer installs the commit-matched Rust helper and removes the
+legacy helper from the privileged directory.
 The pre-install read-only probe confirmed that the Pi lacked
 `lumistripe-spotify.service`, `/usr/local/bin/soloist`, and the Spotify
 environment file; its PipeWire graph also has no `lumistripe_spotify` sink or
@@ -590,3 +647,66 @@ Bluetooth pairing and routing changes, PipeWire capture, and live microphone
 latency still require trusted Raspberry Pi checks. Run Rust and Python servers
 against independent mock outputs for differential tests; never bind both to a
 physical strip.
+
+### Current x86 runtime error differential (2026-11-05)
+
+The Python/Rust process differential now compares duplicate and missing
+animation/sequence resources, the saved-sequence cap, unknown and ineligible
+Dynamic sequence animations, and semantic topology validation for zones, power
+limits, supply capacity, duplicate stripe IDs, SPI devices, and GPIO pins. It
+caught Rust returning a settings validation error for an invalid Dynamic
+sequence and differences in topology validation details. Rust now validates
+sequence animation eligibility before the settings operation and returns
+Python-compatible 422 responses for the tested topology constraints. The
+process differential passes all 3 tests. `cargo test --locked -p lumistripe-web`
+passes 106 unit tests and 5 web integration tests; 5 live-service tests are
+ignored because their host services are unavailable. The control differential
+also compares unknown stripe IDs; stripe-scoped brightness, blackout,
+animation, and music-idle errors across mirrored and independent layouts;
+control changes during color calibration; stale calibration completion; and
+missing or unknown music-idle animations. It caught additional status and
+detail mismatches, which Rust now matches. All 3 process differential tests
+and the 106-unit/5-integration web suite pass. Broader runtime and business-
+error comparisons remain incomplete.
+
+### Current Pi 5 ARM64 build and simulator check (2026-11-04)
+
+A fresh snapshot of the current worktree was staged outside `/opt/lumistripe`
+and built with the locked Rust 1.88.0 toolchain. Release builds passed for the
+engine, web app with `bluez,pipewire`, deployment helper, and CLI; `file`
+confirmed all four outputs are ARM aarch64 ELF binaries. The full Rust web
+crate suite passed on the Pi: 103 unit tests and 4 integration tests passed;
+9 live-service tests were ignored because their hardware or installed-service
+prerequisites were unavailable. The integration target covers checked-in
+OpenAPI, HTTP/authentication and WebSocket compatibility, engine supervision,
+the simulator workflow, and Spotify fixture playback across restart and
+shutdown.
+The simulator test runs with Python and Python 3 absent from the test process
+`PATH`, mock outputs, demo audio, two-output topology, and remembered settings
+across restart.
+
+The release web binary also ran directly in `--simulate` mode on
+`127.0.0.1:18768` with the test-only `PATH` that cannot resolve Python. Its
+`/api/health` response was `{"status":"ok"}` and `/api/state` returned `200`.
+The temporary process was stopped after the requests.
+
+The current Rust snapshot also passed the ignored live PipeWire registry
+snapshot and BlueZ adapter snapshot tests, plus the live audio-status API test
+with the system providers and mock LED output. The audio-status test verified
+provider availability and response selectors without performing a route
+change. The PipeWire session exposed `lumistripe_spotify.monitor` and HDMI
+cards, but no physical microphone source; microphone capture and calibration
+remain unverified.
+
+The Rust CLI's Python-free process tests passed on the Pi (2 passed), covering
+mock playback and Dynamic demo-audio diagnostics. The deployment-helper
+Python-free process tests also passed (4 passed), covering network status,
+Soloist preflight, Spotify device-name configuration, and update-state setup.
+
+The temporary build and test did not modify or restart the installed service.
+`lumistripe-web.service` remained active on its Python rollback backend and
+`/api/health` returned `{"status":"ok"}`. This confirms an ARM64 build and
+mock simulator workflow on this Pi 5; physical LED output, microphone capture
+and calibration, Bluetooth audio routing, live Spotify playback, update activation
+and rollback, and long-duration operation remain unverified. The Pi 4 is not
+available in this validation environment.

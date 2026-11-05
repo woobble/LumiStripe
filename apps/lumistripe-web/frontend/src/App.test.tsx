@@ -313,6 +313,7 @@ describe("App", () => {
 
   beforeEach(() => {
     MockWebSocket.instances = []
+    window.history.replaceState({}, "", "/")
     window.__lumistripeReloadLatestPwa = undefined
     pendingBrightnessResponse = null
     pendingSpotifyControlResponse = null
@@ -383,6 +384,14 @@ describe("App", () => {
 
     await user.click(screen.getByRole("button", { name: "Hide live preview" }))
     await waitFor(() => expect(screen.queryByTestId("live-preview")).not.toBeInTheDocument())
+  })
+
+  it("automatically enables live preview for simulator mode", async () => {
+    window.history.replaceState({}, "", "/?simulator=1")
+    render(<App />, { wrapper: Router })
+
+    expect(await screen.findByTestId("live-preview")).toBeInTheDocument()
+    expect(MockWebSocket.instances.some((socket) => socket.url.endsWith("/ws/preview"))).toBe(true)
   })
 
   it("keeps transitions and sequences off the main controls but one step away", async () => {

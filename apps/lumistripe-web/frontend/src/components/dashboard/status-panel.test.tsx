@@ -25,12 +25,13 @@ const systemStats: SystemStats = {
 function renderStatus(
   runtime: DashboardState["runtime"],
   powerBudget = initialState.power_budget,
+  selectorDiagnostics: DashboardState["selector_diagnostics"] = [],
 ) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: Infinity } },
   })
   const controller = {
-    state: { ...initialState, runtime, power_budget: powerBudget },
+    state: { ...initialState, runtime, power_budget: powerBudget, selector_diagnostics: selectorDiagnostics },
     connection: "connected",
   } as DashboardController
   return render(
@@ -112,5 +113,31 @@ describe("StatusPanel system resources", () => {
       await Promise.resolve()
     })
     expect(getSystemStats).not.toHaveBeenCalled()
+  })
+
+  it("shows Dynamic selector decisions, scores, reasons, and recent history", () => {
+    renderStatus("simulation", initialState.power_budget, [{
+      output_index: 0,
+      current_animation: "aurora_wave",
+      candidate_animation: "bass_pulse",
+      selected_animation: "aurora_wave",
+      should_switch: false,
+      reason: "minimum_duration",
+      scores: [{ animation: "bass_pulse", score: 0.87, reasons: ["bass_energy"] }],
+      elapsed_ns: 2_000_000_000,
+      min_duration_remaining_ns: 500_000_000,
+      max_duration_remaining_ns: 8_000_000_000,
+      switch_cooldown_remaining_ns: 0,
+      drop_cooldown_remaining_ns: 0,
+      recent_names: ["aurora_wave", "color_waves"],
+    }])
+    fireEvent.click(screen.getByText("Technical details"))
+
+    expect(screen.getByText("Dynamic selector")).toBeInTheDocument()
+    expect(screen.getByText("Primary · minimum duration")).toBeInTheDocument()
+    expect(screen.getAllByText("bass_pulse")).toHaveLength(2)
+    expect(screen.getByText("0.87")).toBeInTheDocument()
+    expect(screen.getByText("bass_energy")).toBeInTheDocument()
+    expect(screen.getByText(/Recent animations: aurora_wave → color_waves/)).toBeInTheDocument()
   })
 })

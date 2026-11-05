@@ -22,6 +22,9 @@ use crate::network::{
     NetworkError, NetworkManagerService, NetworkStatusResponse, WifiConnectRequest,
     WifiConnectResponse, WifiScanRequest, WifiScanResponse, remove_secret_from_message,
 };
+use crate::request_validation::{
+    deserialize_optional_pydantic_bool, deserialize_pydantic_bool, pydantic_bool_error,
+};
 use crate::settings::{
     AudioTuningProfile, ColorCorrection, MusicIdleMode, MusicIdleSettings, SavedAnimationSequence,
     SavedAnimationSequenceStep, SettingsStore, StripeBackend, StripeLayout, StripeOutputSettings,
@@ -45,6 +48,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post, put};
 use axum::{Router, middleware as axum_middleware};
+use lumistripe_engine_animation_definitions::catalog;
 use lumistripe_engine_client::EngineClient;
 use lumistripe_engine_protocol::{RequestCommand, ResponseResult};
 use serde::{Deserialize, Deserializer};
@@ -1132,31 +1136,56 @@ fn validate_body_string_length(
     minimum: usize,
     maximum: usize,
 ) -> Result<(), ApiError> {
+    validate_body_string_length_with_input(value, field, minimum, maximum, true)
+}
+
+fn validate_body_string_length_without_input(
+    value: &str,
+    field: &str,
+    minimum: usize,
+    maximum: usize,
+) -> Result<(), ApiError> {
+    validate_body_string_length_with_input(value, field, minimum, maximum, false)
+}
+
+fn validate_body_string_length_with_input(
+    value: &str,
+    field: &str,
+    minimum: usize,
+    maximum: usize,
+    include_input: bool,
+) -> Result<(), ApiError> {
     let length = value.chars().count();
     if length >= minimum && length <= maximum {
         return Ok(());
     }
     let too_short = length < minimum;
-    let limit = if too_short { minimum } else { maximum };
-    let detail = if too_short {
-        json!([{
-            "type": "string_too_short",
-            "loc": ["body", field],
-            "msg": format!("String should have at least {minimum} character{}", if minimum == 1 { "" } else { "s" }),
-            "input": value,
-            "ctx": {"min_length": minimum},
-        }])
+    let (error_type, message, context) = if too_short {
+        (
+            "string_too_short",
+            format!(
+                "String should have at least {minimum} character{}",
+                if minimum == 1 { "" } else { "s" }
+            ),
+            json!({"min_length": minimum}),
+        )
     } else {
-        json!([{
-            "type": "string_too_long",
-            "loc": ["body", field],
-            "msg": format!("String should have at most {maximum} characters"),
-            "input": value,
-            "ctx": {"max_length": maximum},
-        }])
+        (
+            "string_too_long",
+            format!("String should have at most {maximum} characters"),
+            json!({"max_length": maximum}),
+        )
     };
-    let _ = limit;
-    Err(ApiError::validation(detail))
+    let mut detail = json!({
+        "type": error_type,
+        "loc": ["body", field],
+        "msg": message,
+        "ctx": context,
+    });
+    if include_input {
+        detail["input"] = json!(value);
+    }
+    Err(ApiError::validation(json!([detail])))
 }
 
 fn bluetooth_api_error(error: BluetoothError) -> ApiError {
@@ -1194,9 +1223,11 @@ async fn network_scan(
     State(state): State<AppState>,
     body: Result<JsonExtractor<WifiScanRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<WifiScanResponse>, ApiError> {
+    let request = body.map_err(json_rejection)?.0;
+    validate_body_string_length(&request.interface, "interface", 1, 15)?;
     state
         .network
-        .scan(body.map_err(json_rejection)?.0)
+        .scan(request)
         .await
         .map(Json)
         .map_err(network_api_error)
@@ -1217,6 +1248,24 @@ async fn network_connect(
     body: Result<JsonExtractor<WifiConnectRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<WifiConnectResponse>, ApiError> {
     let request = body.map_err(json_rejection)?.0;
+    validate_body_string_length_without_input(&request.interface, "interface", 1, 15)?;
+    validate_body_string_length_without_input(&request.ssid, "ssid", 1, 32)?;
+    let password_length = request.password.chars().count();
+    if password_length > 63 {
+        return Err(ApiError::validation(json!([{
+            "type": "too_long",
+            "loc": ["body", "password"],
+            "msg": format!(
+                "Value should have at most 63 items after validation, not {password_length}"
+            ),
+            // Do not echo a credential in a validation response.
+            "ctx": {
+                "field_type": "Value",
+                "max_length": 63,
+                "actual_length": password_length,
+            },
+        }])));
+    }
     let password = request.password.clone();
     state
         .network
@@ -1275,13 +1324,13 @@ struct StripeTopologyRequest {
     #[schema(max_items = 2)]
     outputs: Vec<StripeOutputRequest>,
     #[schema(default = false)]
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_pydantic_bool")]
     power_budget_enabled: bool,
     #[schema(exclusive_minimum = 0.0)]
     #[serde(default)]
     power_budget_watts: Option<f64>,
     #[schema(default = false)]
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_pydantic_bool")]
     shared_supply_enabled: bool,
     #[schema(exclusive_minimum = 0.0, default = 200.0)]
     #[serde(default = "default_supply_capacity")]
@@ -1303,8 +1352,8 @@ pub(crate) struct StripeOutputRequest {
     #[serde(default)]
     #[schema(schema_with = crate::api_schema::stripe_backend_schema)]
     backend: StripeBackend,
-    #[serde(default)]
     #[schema(default = false)]
+    #[serde(default, deserialize_with = "deserialize_pydantic_bool")]
     reversed: bool,
     #[serde(default = "default_zone_count")]
     #[schema(minimum = 1, maximum = 4096, default = 1)]
@@ -1427,9 +1476,10 @@ async fn test_stripe(
 ) -> Result<Json<Value>, ApiError> {
     let body = body.map_err(json_rejection)?.0;
     if !["identify", "red", "green", "blue", "white"].contains(&body.pattern.as_str()) {
-        return Err(ApiError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            format!("unknown test pattern: {}", body.pattern),
+        return Err(literal_validation_error(
+            "pattern",
+            "'identify', 'red', 'green', 'blue' or 'white'",
+            json!(body.pattern),
         ));
     }
     let topology = body.topology.map(StripeTopologySettings::from);
@@ -1460,6 +1510,7 @@ struct CalibrationUpdateRequest {
 
 #[derive(Deserialize, utoipa::ToSchema)]
 struct CalibrationFinishRequest {
+    #[serde(deserialize_with = "deserialize_pydantic_bool")]
     save: bool,
 }
 
@@ -1576,6 +1627,7 @@ struct AudioSourceRequest {
 
 #[derive(Deserialize, utoipa::ToSchema)]
 struct AudioSyncCalibrationRequest {
+    #[serde(deserialize_with = "deserialize_pydantic_bool")]
     active: bool,
 }
 
@@ -1591,12 +1643,13 @@ struct AudioCalibrationStartRequest {
     #[serde(default = "default_audio_calibration_duration")]
     duration_seconds: f64,
     #[schema(default = false)]
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_pydantic_bool")]
     two_step: bool,
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
 struct AudioCalibrationFinishRequest {
+    #[serde(deserialize_with = "deserialize_pydantic_bool")]
     apply: bool,
     #[schema(minimum = 0.1, maximum = 0.8)]
     target_level: Option<f64>,
@@ -1670,12 +1723,7 @@ async fn select_audio_device(
     body: Result<JsonExtractor<AudioDeviceRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let body = body.map_err(json_rejection)?.0;
-    if body.device.is_empty() {
-        return Err(ApiError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "device must contain at least one character",
-        ));
-    }
+    validate_body_string_length(&body.device, "device", 1, usize::MAX)?;
     state
         .control
         .select_audio_device(body.device)
@@ -1698,12 +1746,7 @@ async fn put_audio_settings(
     body: Result<JsonExtractor<AudioSettingsRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let body = body.map_err(json_rejection)?.0;
-    if body.device.is_empty() {
-        return Err(ApiError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "device must contain at least one character",
-        ));
-    }
+    validate_body_string_length(&body.device, "device", 1, usize::MAX)?;
     state
         .control
         .apply_audio_settings(body.device, body.settings)
@@ -1726,12 +1769,7 @@ async fn reset_audio_settings(
     body: Result<JsonExtractor<AudioDeviceRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let body = body.map_err(json_rejection)?.0;
-    if body.device.is_empty() {
-        return Err(ApiError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "device must contain at least one character",
-        ));
-    }
+    validate_body_string_length(&body.device, "device", 1, usize::MAX)?;
     state
         .control
         .reset_audio_settings(body.device)
@@ -1754,6 +1792,24 @@ async fn set_audio_sync_offset(
     body: Result<JsonExtractor<AudioSyncOffsetRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let body = body.map_err(json_rejection)?.0;
+    if body.offset_ms > 500.0 {
+        return Err(ApiError::validation(json!([{
+            "type": "less_than_equal",
+            "loc": ["body", "offset_ms"],
+            "msg": "Input should be less than or equal to 500",
+            "input": body.offset_ms,
+            "ctx": {"le": 500.0},
+        }])));
+    }
+    if body.offset_ms < -500.0 {
+        return Err(ApiError::validation(json!([{
+            "type": "greater_than_equal",
+            "loc": ["body", "offset_ms"],
+            "msg": "Input should be greater than or equal to -500",
+            "input": body.offset_ms,
+            "ctx": {"ge": -500.0},
+        }])));
+    }
     state
         .control
         .set_audio_sync_offset(body.offset_ms)
@@ -1776,6 +1832,13 @@ async fn select_audio_source(
     body: Result<JsonExtractor<AudioSourceRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let body = body.map_err(json_rejection)?.0;
+    if !["auto", "off", "demo", "mic", "bluetooth", "spotify"].contains(&body.source.as_str()) {
+        return Err(literal_validation_error(
+            "source",
+            "'auto', 'off', 'demo', 'mic', 'bluetooth' or 'spotify'",
+            json!(body.source),
+        ));
+    }
     state
         .control
         .set_audio_source(body.source)
@@ -1833,12 +1896,7 @@ async fn start_audio_calibration(
     >,
 ) -> Result<Json<Value>, ApiError> {
     let body = body.map_err(json_rejection)?.0;
-    if body.device.is_empty() {
-        return Err(ApiError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "device must contain at least one character",
-        ));
-    }
+    validate_body_string_length(&body.device, "device", 1, usize::MAX)?;
     state
         .control
         .start_audio_calibration(body.device, body.duration_seconds, body.two_step)
@@ -2114,7 +2172,7 @@ struct ModeRequest {
     color: Option<String>,
     #[serde(default)]
     stripe_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_pydantic_bool")]
     music_recognition_enabled: Option<bool>,
 }
 
@@ -2154,6 +2212,7 @@ struct AnimationRequest {
 
 #[derive(Deserialize, utoipa::ToSchema)]
 struct BlackoutRequest {
+    #[serde(deserialize_with = "deserialize_pydantic_bool")]
     enabled: bool,
     #[serde(default)]
     stripe_id: Option<String>,
@@ -2333,6 +2392,7 @@ async fn set_music_idle(
 
 #[derive(Deserialize, utoipa::ToSchema)]
 struct StartupSettingsRequest {
+    #[serde(deserialize_with = "deserialize_pydantic_bool")]
     restore_last_state: bool,
 }
 
@@ -2694,6 +2754,29 @@ fn make_sequence_with_id(
             })
         })
         .collect::<Result<Vec<_>, ApiError>>()?;
+    for step in &steps {
+        let definition = catalog().animation(&step.animation_name).ok_or_else(|| {
+            ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("unknown animation in sequence: {}", step.animation_name),
+            )
+        })?;
+        let dynamic = &definition.dynamic_metadata;
+        let eligible = definition.automatic
+            && definition.role == "base"
+            && dynamic.get("role").and_then(Value::as_str) == Some("base")
+            && dynamic.get("dynamic_safe").and_then(Value::as_bool) == Some(true)
+            && definition.effect_metadata.is_none();
+        if !eligible {
+            return Err(ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!(
+                    "animation is not eligible for Dynamic sequences: {}",
+                    step.animation_name
+                ),
+            ));
+        }
+    }
     Ok(SavedAnimationSequence {
         id,
         name,
@@ -2877,15 +2960,6 @@ async fn access_middleware(
     next: Next,
 ) -> Response {
     let path = request.uri().path();
-    if matches!(path, "/ws/state" | "/ws/audio" | "/ws/preview") {
-        if !websocket_origin_allowed(request.headers()) {
-            return ApiError::new(StatusCode::FORBIDDEN, "invalid origin").into_response();
-        }
-        let session = session_from_headers(request.headers());
-        if !access.authenticated(session.as_deref()) {
-            return ApiError::new(StatusCode::FORBIDDEN, "pairing required").into_response();
-        }
-    }
     if path.starts_with("/api/")
         && matches!(
             request.method(),
@@ -2920,9 +2994,10 @@ async fn validate_json_object(request: Request<Body>, next: Next) -> Response {
     let matched_path = request
         .extensions()
         .get::<MatchedPath>()
-        .map(MatchedPath::as_str)
-        .unwrap_or_else(|| request.uri().path());
-    if !has_json_object_body(request.method(), matched_path) {
+        .map(|path| path.as_str().to_owned())
+        .unwrap_or_else(|| request.uri().path().to_owned());
+    let request_method = request.method().clone();
+    if !has_json_object_body(request.method(), &matched_path) {
         return next.run(request).await;
     }
     let is_json = request
@@ -2950,16 +3025,27 @@ async fn validate_json_object(request: Request<Body>, next: Next) -> Response {
             .into_response();
         }
     };
-    if let Ok(value) = serde_json::from_slice::<Value>(&bytes)
-        && !value.is_object()
-    {
-        return ApiError::validation(json!([{
-            "type": "model_type",
-            "loc": ["body"],
-            "msg": "Input should be a valid JSON object",
-            "input": value,
-        }]))
-        .into_response();
+    if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
+        if !value.is_object() {
+            let mut detail = json!({
+                "type": "model_attributes_type",
+                "loc": ["body"],
+                "msg": "Input should be a valid dictionary or object to extract fields from",
+                "input": value,
+            });
+            if matched_path == "/api/network/connect"
+                && let Some(detail_object) = detail.as_object_mut()
+            {
+                detail_object.remove("input");
+            }
+            return ApiError::validation(json!([detail])).into_response();
+        }
+
+        if let Some(errors) =
+            pydantic_body_validation_errors(&request_method, &matched_path, &value)
+        {
+            return ApiError::validation(json!(errors)).into_response();
+        }
     }
     next.run(Request::from_parts(parts, Body::from(bytes)))
         .await
@@ -3016,16 +3102,340 @@ fn has_json_object_body(method: &Method, path: &str) -> bool {
     )
 }
 
+fn pydantic_body_validation_errors(
+    method: &Method,
+    path: &str,
+    body: &Value,
+) -> Option<Vec<Value>> {
+    let object = body.as_object()?;
+    let mut errors = Vec::new();
+
+    match (method, path) {
+        (&Method::PUT, "/api/mode") => {
+            if let Some(mode) = object.get("mode")
+                && !matches!(
+                    mode.as_str(),
+                    Some("solid" | "static" | "cycling" | "dynamic")
+                )
+            {
+                errors.push(enum_validation_error(
+                    "mode",
+                    "'solid', 'static', 'cycling' or 'dynamic'",
+                    mode.clone(),
+                ));
+            }
+        }
+        (&Method::POST, "/api/auth/pair") => {
+            if let Some(code) = object.get("code")
+                && !code.is_string()
+            {
+                errors.push(pydantic_validation_error(
+                    "string_type",
+                    "code",
+                    "Input should be a valid string",
+                    code.clone(),
+                    None,
+                ));
+            }
+        }
+        (&Method::PUT, "/api/sequencer/settings") => {
+            if let Some(quantization) = object.get("switch_quantization")
+                && !matches!(
+                    quantization.as_str(),
+                    Some("off" | "beat" | "bar" | "phrase")
+                )
+            {
+                errors.push(enum_validation_error(
+                    "switch_quantization",
+                    "'off', 'beat', 'bar' or 'phrase'",
+                    quantization.clone(),
+                ));
+            }
+        }
+        (&Method::PUT, "/api/stripes") => {
+            if let Some(layout) = object.get("layout")
+                && !matches!(
+                    layout.as_str(),
+                    Some("mirrored" | "continuous" | "independent")
+                )
+            {
+                errors.push(pydantic_literal_validation_error(
+                    "layout",
+                    "'mirrored', 'continuous' or 'independent'",
+                    layout.clone(),
+                ));
+            }
+            if let Some(outputs) = object.get("outputs").and_then(Value::as_array) {
+                for (index, output) in outputs.iter().enumerate() {
+                    let Some(output_fields) = output.as_object() else {
+                        continue;
+                    };
+                    if let Some(pattern) = output_fields.get("zone_pattern")
+                        && !matches!(pattern.as_str(), Some("repeat" | "alternate"))
+                    {
+                        let expected = "'repeat' or 'alternate'";
+                        errors.push(json!({
+                            "type": "literal_error",
+                            "loc": ["body", "outputs", index, "zone_pattern"],
+                            "msg": format!("Input should be {expected}"),
+                            "input": pattern,
+                            "ctx": {"expected": expected},
+                        }));
+                        continue;
+                    }
+                    let pixels = output_fields.get("pixels").and_then(Value::as_u64);
+                    let zone_count = output_fields.get("zone_count").and_then(Value::as_u64);
+                    if let (Some(pixels), Some(zone_count)) = (pixels, zone_count)
+                        && zone_count > pixels
+                    {
+                        errors.push(json!({
+                            "type": "value_error",
+                            "loc": ["body", "outputs", index],
+                            "msg": "Value error, zone count cannot exceed the stripe pixel count",
+                            "input": output,
+                            "ctx": {"error": {}},
+                        }));
+                    }
+                }
+            }
+            if errors.is_empty()
+                && object.get("power_budget_enabled") == Some(&Value::Bool(true))
+                && object.get("power_budget_watts").is_none_or(Value::is_null)
+            {
+                errors.push(json!({
+                    "type": "value_error",
+                    "loc": ["body"],
+                    "msg": "Value error, an enabled power budget requires a watt limit",
+                    "input": body,
+                    "ctx": {"error": {}},
+                }));
+            }
+            if object
+                .get("supply_capacity_watts")
+                .and_then(Value::as_f64)
+                .is_some_and(|capacity| capacity <= 0.0)
+            {
+                let input = object
+                    .get("supply_capacity_watts")
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                errors.push(pydantic_validation_error(
+                    "greater_than",
+                    "supply_capacity_watts",
+                    "Input should be greater than 0",
+                    input,
+                    Some(json!({"gt": 0.0})),
+                ));
+            }
+        }
+        (&Method::POST, "/api/calibration/session") => {
+            if let Some(output_index) = object.get("output_index")
+                && output_index.as_i64().is_some_and(|value| value < 0)
+            {
+                errors.push(pydantic_validation_error(
+                    "greater_than_equal",
+                    "output_index",
+                    "Input should be greater than or equal to 0",
+                    output_index.clone(),
+                    Some(json!({"ge": 0})),
+                ));
+            }
+        }
+        (&Method::PUT, "/api/calibration/session/{session_id}") => {
+            for field in ["red", "green", "blue"] {
+                if let Some(input) = object.get(field)
+                    && let Some(value) = input.as_i64()
+                    && value < 0
+                {
+                    errors.push(pydantic_validation_error(
+                        "greater_than_equal",
+                        field,
+                        "Input should be greater than or equal to 0",
+                        input.clone(),
+                        Some(json!({"ge": 0})),
+                    ));
+                }
+            }
+            if let Some(pattern) = object.get("pattern")
+                && !matches!(pattern.as_str(), Some("white" | "red" | "green" | "blue"))
+            {
+                errors.push(pydantic_literal_validation_error(
+                    "pattern",
+                    "'white', 'red', 'green' or 'blue'",
+                    pattern.clone(),
+                ));
+            }
+        }
+        (&Method::PUT, "/api/animations/{animation_name}/settings") => {
+            if let Some(values) = object.get("values")
+                && !values.is_object()
+            {
+                errors.push(pydantic_validation_error(
+                    "dict_type",
+                    "values",
+                    "Input should be a valid dictionary",
+                    values.clone(),
+                    None,
+                ));
+            }
+        }
+        (
+            &Method::POST,
+            "/api/audio/bluetooth/pair"
+            | "/api/audio/bluetooth/connect"
+            | "/api/audio/bluetooth/disconnect"
+            | "/api/audio/bluetooth/forget",
+        ) => {
+            if let Some(address) = object.get("address")
+                && !address.is_string()
+            {
+                errors.push(pydantic_validation_error(
+                    "string_type",
+                    "address",
+                    "Input should be a valid string",
+                    address.clone(),
+                    None,
+                ));
+            }
+        }
+        (&Method::POST, "/api/audio/spotify/control") => {
+            if let Some(action) = object.get("action")
+                && !matches!(
+                    action.as_str(),
+                    Some(
+                        "play"
+                            | "pause"
+                            | "skip_next"
+                            | "skip_prev"
+                            | "seek"
+                            | "set_volume"
+                            | "set_shuffle"
+                            | "set_repeat"
+                    )
+                )
+            {
+                errors.push(pydantic_literal_validation_error(
+                    "action",
+                    "'play', 'pause', 'skip_next', 'skip_prev', 'seek', 'set_volume', 'set_shuffle' or 'set_repeat'",
+                    action.clone(),
+                ));
+            }
+        }
+        (&Method::POST, "/api/sequencer/sequences") => {
+            if let Some(steps) = object.get("steps")
+                && steps.as_array().is_some_and(Vec::is_empty)
+            {
+                errors.push(pydantic_validation_error(
+                    "too_short",
+                    "steps",
+                    "List should have at least 1 item after validation, not 0",
+                    steps.clone(),
+                    Some(json!({
+                        "field_type": "List",
+                        "min_length": 1,
+                        "actual_length": 0,
+                    })),
+                ));
+            }
+        }
+        (&Method::PUT, "/api/sequencer/sequences/{sequence_id}") => {
+            for field in ["name", "repeat", "steps"] {
+                if !object.contains_key(field) {
+                    errors.push(pydantic_validation_error(
+                        "missing",
+                        field,
+                        "Field required",
+                        body.clone(),
+                        None,
+                    ));
+                }
+            }
+        }
+        _ => {}
+    }
+
+    (!errors.is_empty()).then_some(errors)
+}
+
+fn pydantic_validation_error(
+    error_type: &str,
+    field: &str,
+    message: &str,
+    input: Value,
+    context: Option<Value>,
+) -> Value {
+    let mut error = json!({
+        "type": error_type,
+        "loc": ["body", field],
+        "msg": message,
+        "input": input,
+    });
+    if let Some(context) = context {
+        error["ctx"] = context;
+    }
+    error
+}
+
+fn enum_validation_error(field: &str, expected: &str, input: Value) -> Value {
+    pydantic_validation_error(
+        "enum",
+        field,
+        &format!("Input should be {expected}"),
+        input,
+        Some(json!({"expected": expected})),
+    )
+}
+
+fn pydantic_literal_validation_error(field: &str, expected: &str, input: Value) -> Value {
+    pydantic_validation_error(
+        "literal_error",
+        field,
+        &format!("Input should be {expected}"),
+        input,
+        Some(json!({"expected": expected})),
+    )
+}
+
 async fn api_not_found() -> Response {
     (StatusCode::NOT_FOUND, Json(json!({"detail": "Not Found"}))).into_response()
 }
 
 fn json_rejection(rejection: axum::extract::rejection::JsonRejection) -> ApiError {
+    let message = rejection.body_text();
+    if let Some((field_path, input)) = pydantic_bool_error(&message) {
+        let mut location = vec![json!("body")];
+        location.extend(field_path);
+        let (error_type, detail) = match input {
+            Value::String(_) | Value::Number(_) => (
+                "bool_parsing",
+                "Input should be a valid boolean, unable to interpret input",
+            ),
+            Value::Null | Value::Array(_) | Value::Object(_) | Value::Bool(_) => {
+                ("bool_type", "Input should be a valid boolean")
+            }
+        };
+        return ApiError::validation(json!([{
+            "type": error_type,
+            "loc": location,
+            "msg": detail,
+            "input": input,
+        }]));
+    }
     ApiError::validation(json!([{
         "type": "json_invalid",
         "loc": ["body"],
-        "msg": rejection.body_text(),
+        "msg": message,
         "input": Value::Null,
+    }]))
+}
+
+fn literal_validation_error(field: &str, expected: &str, input: Value) -> ApiError {
+    ApiError::validation(json!([{
+        "type": "literal_error",
+        "loc": ["body", field],
+        "msg": format!("Input should be {expected}"),
+        "input": input,
+        "ctx": {"expected": expected},
     }]))
 }
 

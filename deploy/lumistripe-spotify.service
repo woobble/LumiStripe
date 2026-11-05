@@ -17,9 +17,9 @@ WorkingDirectory=@LUMI_HOME@
 Environment=PATH=@LUMI_HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=XDG_RUNTIME_DIR=/run/user/@LUMI_SERVICE_UID@
 EnvironmentFile=/etc/lumistripe/lumistripe-spotify.env
-# The dashboard writes only this non-secret override through its restricted helper.
-EnvironmentFile=-/var/lib/lumistripe/spotify-device-name.env
-ExecStartPre=/usr/bin/env -u LUMI_SPOTIFY_API_KEY /usr/bin/python3 /usr/local/libexec/lumistripe/deploy/soloist_diagnostics.py --binary @LUMI_HOME@/.local/bin/soloist
+# The dashboard writes only this non-secret override with the service user's Rust helper.
+EnvironmentFile=-@LUMI_HOME@/.config/lumistripe/spotify-device-name.env
+ExecStartPre=/usr/bin/env -u LUMI_SPOTIFY_API_KEY "@LUMI_PROJECT_DIR@/rust/target/rust-deploy/current/lumistripe-deploy-helper" soloist-check --binary "@LUMI_HOME@/.local/bin/soloist"
 ExecStart=/bin/bash -c 'exec soloist --device-name "$LUMI_SPOTIFY_DEVICE_NAME" --api-key "$LUMI_SPOTIFY_API_KEY" --ws "$LUMI_SPOTIFY_WS" --pipewire-device "$LUMI_SPOTIFY_PIPEWIRE_DEVICE" --data-dir "$LUMI_SPOTIFY_DATA_DIR" --cache-dir "$LUMI_SPOTIFY_CACHE_DIR"'
 NoNewPrivileges=yes
 PrivateTmp=yes

@@ -8,6 +8,8 @@ import pytest
 
 BUILDER = Path(__file__).parents[1] / "build-rust-backend.sh"
 UPDATE_SUPPORT = Path(__file__).parents[1] / "update-support.sh"
+INSTALLER = Path(__file__).parents[1] / "install.sh"
+UPDATER = Path(__file__).parents[1] / "update.sh"
 
 
 def _git(project: Path, *arguments: str) -> str:
@@ -42,7 +44,7 @@ def _builder_environment(tmp_path: Path, cargo_log: Path) -> dict[str, str]:
         "    log.write(' '.join(args) + '\\n')\n"
         "if os.environ.get('LUMI_TEST_FAIL_ON') and os.environ['LUMI_TEST_FAIL_ON'] in args:\n"
         "    raise SystemExit(17)\n"
-        "name = 'lumistripe-engine' if 'lumistripe-engine' in args else 'lumistripe-web'\n"
+        "name = next((candidate for candidate in ('lumistripe-engine', 'lumistripe-web', 'lumistripe-deploy-helper', 'lumistripe') if candidate in args), 'unknown')\n"
         "build_id = os.environ['LUMI_TEST_BUILD_ID']\n"
         "output = pathlib.Path(os.environ['CARGO_TARGET_DIR']) / 'release' / name\n"
         "output.parent.mkdir(parents=True, exist_ok=True)\n"
@@ -132,8 +134,160 @@ def test_update_support_does_not_execute_environment_file(tmp_path: Path) -> Non
     assert not marker.exists()
 
 
+@pytest.mark.parametrize(
+    ("requested", "contents", "expected", "needs_python"),
+    [
+        ("rust", "LUMI_WEB_BACKEND=python\n", "rust", "false"),
+        ("", "LUMI_WEB_BACKEND=rust\n", "rust", "false"),
+        ("", "", "python", "true"),
+        ("python", "LUMI_WEB_BACKEND=rust\n", "python", "true"),
+    ],
+)
+def test_backend_profile_selects_runtime_dependencies(
+    tmp_path: Path, requested: str, contents: str, expected: str, needs_python: str
+) -> None:
+    environment_file = tmp_path / "lumistripe-web.env"
+    environment_file.write_text(contents, encoding="utf-8")
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            (
+                'source "$1"; backend="$(resolve_web_backend "$2" "$3")"; '
+                'printf "%s\\n%s\\n" "$backend" "$(web_backend_requires_python "$backend" && echo true || echo false)"'
+            ),
+            "resolve-web-backend",
+            str(UPDATE_SUPPORT),
+            requested,
+            str(environment_file),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [expected, needs_python]
+
+
+def test_web_launcher_keeps_python_default_until_cutover(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    uv_bin = home / ".local/bin/uv"
+    uv_bin.parent.mkdir(parents=True)
+    uv_bin.write_text(
+        '#!/bin/sh\nprintf \'%s\\n\' "$*" > "$LUMI_TEST_LAUNCH_LOG"\n',
+        encoding="utf-8",
+    )
+    uv_bin.chmod(0o755)
+    empty_path = tmp_path / "empty-path"
+    empty_path.mkdir()
+    launch_log = tmp_path / "launch.log"
+    environment = os.environ.copy()
+    environment.pop("LUMI_WEB_BACKEND", None)
+    environment.pop("LUMI_UV_BIN", None)
+    environment.update(
+        {
+            "HOME": str(home),
+            "PATH": str(empty_path),
+            "LUMI_PROJECT_DIR": str(tmp_path / "project"),
+            "LUMI_TEST_LAUNCH_LOG": str(launch_log),
+        }
+    )
+
+    launcher = Path(__file__).parents[1] / "lumistripe-web-launcher.sh"
+    result = subprocess.run(
+        ["/bin/bash", str(launcher)],
+        check=False,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr
+    invocation = launch_log.read_text(encoding="utf-8").strip()
+    assert invocation.startswith("run --directory ")
+    assert "--python 3.12" in invocation
+    assert "lumistripe-web --host 127.0.0.1 --hardware" in invocation
+    assert "rust/target" not in invocation
+
+
+def test_rust_install_and_update_profiles_skip_python_tooling(tmp_path: Path) -> None:
+    installer = INSTALLER.read_text(encoding="utf-8")
+    updater = UPDATER.read_text(encoding="utf-8")
+
+    assert 'web_backend_requires_python "$WEB_BACKEND"' in installer
+    assert "Skipping Python packages and native extensions for the Rust-only backend." in installer
+    assert 'web_backend_requires_python "$WEB_BACKEND" || return 0' in updater
+    assert '[[ -x "$UV_BIN" ]] ||' in updater
+    assert 'if web_backend_requires_python "$WEB_BACKEND"; then' in updater
+
+    system_packages = installer[
+        installer.index("install_system_packages() {"):installer.index("install_mkcert() {")
+    ]
+    project_dependencies = installer[
+        installer.index("install_project_dependencies() {"):installer.index("build_rust_release() {")
+    ]
+    update_dependencies = updater[
+        updater.index("sync_dependencies() ("):updater.index("build_frontend() (")
+    ]
+    project_dir = tmp_path / "project"
+    frontend_dir = project_dir / "apps/lumistripe-web/frontend"
+    frontend_dir.mkdir(parents=True)
+    empty_path = tmp_path / "empty-path"
+    empty_path.mkdir()
+    call_log = tmp_path / "calls"
+    script = f"""
+set -Eeuo pipefail
+web_backend_requires_python() {{ [[ "${{1:-}}" == python ]]; }}
+apt-get() {{ printf 'apt-get %s\\n' "$*" >> "$CALL_LOG"; }}
+apt-cache() {{
+  printf 'apt-cache %s\\n' "$*" >> "$CALL_LOG"
+  [[ "$*" == 'show libgpiod3' ]]
+}}
+as_user() {{ printf 'as_user %s\\n' "$*" >> "$CALL_LOG"; }}
+as_user_with_env() {{ printf 'as_user_with_env %s\\n' "$*" >> "$CALL_LOG"; }}
+{system_packages}
+{project_dependencies}
+{update_dependencies}
+install_system_packages
+install_project_dependencies
+sync_dependencies
+"""
+    environment = {
+        "PATH": str(empty_path),
+        "CALL_LOG": str(call_log),
+        "PROJECT_DIR": str(project_dir),
+        "WEB_BACKEND": "rust",
+        "BUN_BIN": "bun",
+        "UV_BIN": "uv",
+        "PYTHON_VERSION": "3.12",
+    }
+    for interpreter in ("python", "python3"):
+        with pytest.raises(FileNotFoundError):
+            subprocess.run([interpreter], env=environment, check=False)
+
+    result = subprocess.run(
+        ["/bin/bash", "-c", script],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    calls = call_log.read_text(encoding="utf-8").splitlines()
+    install_command = next(call for call in calls if call.startswith("apt-get install "))
+    assert "python3" not in install_command
+    assert "python3-dev" not in install_command
+    assert "python3-venv" not in install_command
+    assert not any("uv" in call.lower() or "python" in call.lower() for call in calls)
+    assert "as_user bun install --frozen-lockfile" in calls
+    assert "as_user bun run build" in calls
+
+
 @pytest.mark.skipif(os.geteuid() == 0, reason="builder intentionally rejects root")
-def test_rust_update_build_promotes_a_complete_commit_matched_pair(
+def test_rust_update_build_promotes_a_complete_commit_matched_release(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "project"
@@ -169,14 +323,28 @@ def test_rust_update_build_promotes_a_complete_commit_matched_pair(
     assert "first:lumistripe-web" in (release / "lumistripe-web").read_text(
         encoding="utf-8"
     )
-    for name in ("lumistripe-web", "lumistripe-engine"):
+    assert "first:lumistripe-deploy-helper" in (
+        release / "lumistripe-deploy-helper"
+    ).read_text(encoding="utf-8")
+    assert "first:lumistripe" in (release / "lumistripe").read_text(
+        encoding="utf-8"
+    )
+    for name in (
+        "lumistripe-web",
+        "lumistripe-engine",
+        "lumistripe-deploy-helper",
+        "lumistripe",
+    ):
         assert (release / name).stat().st_mode & 0o111
 
     commands = cargo_log.read_text(encoding="utf-8").splitlines()
-    assert len(commands) == 2
+    assert len(commands) == 4
     assert all(command.startswith("+1.88.0 build --locked --release") for command in commands)
     assert "lumistripe-engine" in commands[0]
     assert "--features bluez,pipewire" in commands[1]
+    assert "lumistripe-deploy-helper" in commands[2]
+    assert "lumistripe-cli" in commands[3]
+    assert "--bin lumistripe" in commands[3]
 
     launch_log = tmp_path / "launch.log"
     launcher_env = environment.copy()
@@ -189,9 +357,20 @@ def test_rust_update_build_promotes_a_complete_commit_matched_pair(
             "LUMI_TEST_LAUNCH_LOG": str(launch_log),
         }
     )
+    launcher_path = tmp_path / "launcher-path"
+    launcher_path.mkdir()
+    for utility in ("git", "cat", "readlink"):
+        system_utility = Path("/usr/bin") / utility
+        assert system_utility.is_file()
+        os.symlink(system_utility, launcher_path / utility)
+    launcher_env["PATH"] = str(launcher_path)
+    for interpreter in ("python", "python3"):
+        with pytest.raises(FileNotFoundError):
+            subprocess.run([interpreter], env=launcher_env, check=False)
+
     launcher = Path(__file__).parents[1] / "lumistripe-web-launcher.sh"
     launched = subprocess.run(
-        ["bash", str(launcher)],
+        ["/bin/bash", str(launcher)],
         check=False,
         env=launcher_env,
         capture_output=True,
@@ -207,7 +386,7 @@ def test_rust_update_build_promotes_a_complete_commit_matched_pair(
 
     second_commit = _commit(project, "second.txt")
     stale_launch = subprocess.run(
-        ["bash", str(launcher)],
+        ["/bin/bash", str(launcher)],
         check=False,
         env=launcher_env,
         capture_output=True,

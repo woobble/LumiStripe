@@ -10,6 +10,7 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime
+from http.cookiejar import CookieJar
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -26,7 +27,11 @@ from lumistripe_web.api.protocols.preview import (
     PREVIEW_VERSION,
 )
 from lumistripe_web.app import create_app
-from lumistripe_web.contracts.audio import AudioTelemetry, SpotifyStatusResponse
+from lumistripe_web.contracts.audio import (
+    AudioSettingsResponse,
+    AudioTelemetry,
+    SpotifyStatusResponse,
+)
 from lumistripe_web.contracts.bluetooth import BluetoothStatusResponse
 from lumistripe_web.contracts.common import DashboardState
 from lumistripe_web.contracts.network import NetworkStatusResponse
@@ -34,6 +39,7 @@ from lumistripe_web.contracts.system import SystemStats, UpdateStatus
 from lumistripe_web.runtime import LumiStripeRuntime, RuntimeSettings
 from lumistripe_web.spotify import SpotifyClient
 from pydantic import BaseModel
+from starlette.websockets import WebSocketDisconnect
 from websockets.exceptions import ConnectionClosed
 from websockets.sync.client import connect as websocket_connect
 from websockets.sync.server import serve as websocket_serve
@@ -50,7 +56,8 @@ def _request(
     method: str,
     path: str,
     body: Any | None = None,
-    timeout_seconds: float = 2,
+    # Native control commands have a bounded five-second engine acknowledgement.
+    timeout_seconds: float = 8,
 ) -> tuple[int, Any]:
     if isinstance(client, TestClient):
         response = client.request(method, path, json=body)
@@ -76,10 +83,266 @@ def _assert_response_matches_contract(body: Any, contract: type[BaseModel]) -> N
     contract.model_validate(body)
 
 
+@pytest.mark.skipif(
+    not os.environ.get("LUMISTRIPE_RUST_WEB_BINARY"),
+    reason="Rust web binary is built for the Python 3.12 parity job",
+)
+def test_python_and_rust_pairing_authentication_matches() -> None:
+    rust_web = Path(os.environ["LUMISTRIPE_RUST_WEB_BINARY"]).resolve()
+    rust_engine = rust_web.with_name("lumistripe-engine")
+    if not rust_web.is_file() or not rust_engine.is_file():
+        pytest.fail("Rust web and engine binaries must be built for API parity")
+
+    with TemporaryDirectory(prefix="lumistripe-auth-parity-") as temporary:
+        root = Path(temporary)
+        port = _port()
+        settings_file = root / "rust-settings.json"
+        log_path = root / "rust-web.log"
+        command = [
+            str(rust_web),
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--pixels",
+            "8",
+            "--output-backend",
+            "mock",
+            "--settings-file",
+            str(settings_file),
+            "--engine-binary",
+            str(rust_engine),
+        ]
+        with log_path.open("w", encoding="utf-8") as log:
+            process = subprocess.Popen(
+                command,
+                cwd=root,
+                stdout=subprocess.DEVNULL,
+                stderr=log,
+                env={
+                    **os.environ,
+                    "LUMI_PAIRING_CODE": "1234",
+                    "LUMI_UPDATE_STATE_FILE": str(root / "update-status.json"),
+                    "LUMI_PROJECT_DIR": str(root / "rust-project"),
+                },
+            )
+            rust_client = f"http://127.0.0.1:{port}"
+            rust_opener = urllib.request.build_opener(
+                urllib.request.HTTPCookieProcessor(CookieJar())
+            )
+
+            def request_rust(
+                method: str, path: str, body: Any | None = None
+            ) -> tuple[int, Any, Any]:
+                data = None if body is None else json.dumps(body).encode("utf-8")
+                request = urllib.request.Request(
+                    f"{rust_client}{path}",
+                    data=data,
+                    headers={"Content-Type": "application/json"},
+                    method=method,
+                )
+                try:
+                    with rust_opener.open(request, timeout=8) as response:
+                        return response.status, json.loads(response.read()), response.headers
+                except urllib.error.HTTPError as error:
+                    return error.code, json.loads(error.read()), error.headers
+
+            try:
+                deadline = time.monotonic() + 15
+                while time.monotonic() < deadline:
+                    if process.poll() is not None:
+                        log.flush()
+                        pytest.fail(
+                            "Rust web process exited during startup:\n"
+                            + log_path.read_text(encoding="utf-8")
+                        )
+                    try:
+                        status, body = _request(rust_client, "GET", "/api/health")
+                        if status == 200 and body == {"status": "ok"}:
+                            break
+                    except (OSError, TimeoutError):
+                        time.sleep(0.05)
+                else:
+                    log.flush()
+                    pytest.fail(
+                        "Rust web process did not become ready:\n"
+                        + log_path.read_text(encoding="utf-8")
+                    )
+
+                app = create_app(
+                    RuntimeSettings(
+                        pixels=8,
+                        settings_file=root / "python-settings.json",
+                    ),
+                    pairing_code="1234",
+                    update_state_file=root / "python-update-status.json",
+                    project_dir=root / "python-project",
+                )
+                with TestClient(app) as python_client:
+
+                    def compare(
+                        method: str, path: str, body: Any | None = None
+                    ) -> tuple[Any, Any]:
+                        python_response = python_client.request(
+                            method, path, json=body
+                        )
+                        rust_status, rust_body, rust_headers = request_rust(
+                            method, path, body
+                        )
+                        assert rust_status == python_response.status_code, (
+                            f"{method} {path}: Python {python_response.status_code}; "
+                            f"Rust {rust_status}"
+                        )
+                        assert rust_body == python_response.json(), (
+                            f"{method} {path}: Python {python_response.json()!r}; "
+                            f"Rust {rust_body!r}"
+                        )
+                        return python_response, rust_headers
+
+                    def cookie_attributes(header: str) -> frozenset[str]:
+                        return frozenset(
+                            attribute.strip().lower()
+                            for attribute in header.split(";")[1:]
+                        )
+
+                    for path in ("/api/auth/status", "/api/animations/rainbow_cycle/settings"):
+                        compare("GET", path)
+
+                    with (
+                        pytest.raises(WebSocketDisconnect) as python_ws_close,
+                        python_client.websocket_connect("/ws/state"),
+                    ):
+                        pass
+                    with (
+                        pytest.raises(ConnectionClosed) as rust_ws_close,
+                        websocket_connect(
+                            f"ws://127.0.0.1:{port}/ws/state",
+                            open_timeout=3,
+                            close_timeout=3,
+                        ) as websocket,
+                    ):
+                        websocket.recv(timeout=3)
+                    assert python_ws_close.value.code == 4401
+                    assert rust_ws_close.value.rcvd is not None
+                    assert rust_ws_close.value.rcvd.code == python_ws_close.value.code
+                    assert rust_ws_close.value.rcvd.reason == python_ws_close.value.reason
+
+                    with (
+                        pytest.raises(WebSocketDisconnect) as python_origin_close,
+                        python_client.websocket_connect(
+                            "/ws/state", headers={"origin": "https://evil.example"}
+                        ),
+                    ):
+                        pass
+                    with (
+                        pytest.raises(ConnectionClosed) as rust_origin_close,
+                        websocket_connect(
+                            f"ws://127.0.0.1:{port}/ws/state",
+                            origin="https://evil.example",
+                            open_timeout=3,
+                            close_timeout=3,
+                        ) as websocket,
+                    ):
+                        websocket.recv(timeout=3)
+                    assert python_origin_close.value.code == 1008
+                    assert python_origin_close.value.reason == "invalid origin"
+                    assert rust_origin_close.value.rcvd is not None
+                    assert rust_origin_close.value.rcvd.code == python_origin_close.value.code
+                    assert rust_origin_close.value.rcvd.reason == python_origin_close.value.reason
+
+                    rejected, _ = compare(
+                        "POST", "/api/auth/pair", {"code": "0000"}
+                    )
+                    assert rejected.status_code == 401
+
+                    paired, rust_headers = compare(
+                        "POST", "/api/auth/pair", {"code": "1234"}
+                    )
+                    assert paired.status_code == 200
+                    python_cookie = paired.headers["set-cookie"]
+                    rust_cookie = rust_headers.get("Set-Cookie")
+                    assert rust_cookie is not None
+                    assert cookie_attributes(rust_cookie) == cookie_attributes(
+                        python_cookie
+                    )
+                    for cookie in (python_cookie, rust_cookie):
+                        session = cookie.split(";", 1)[0].split("=", 1)[1]
+                        assert session not in {"", "1234"}
+
+                    compare("GET", "/api/auth/status")
+                    compare("GET", "/api/animations/rainbow_cycle/settings")
+                    logged_out, rust_headers = compare("POST", "/api/auth/logout")
+                    assert logged_out.status_code == 200
+                    for header in (
+                        logged_out.headers["set-cookie"],
+                        rust_headers.get("Set-Cookie", ""),
+                    ):
+                        attributes = cookie_attributes(header)
+                        cookie = header.split(";", 1)[0].split("=", 1)[1].strip('"')
+                        assert cookie == ""
+                        assert "max-age=0" in attributes
+                        assert "path=/" in attributes
+                        assert "samesite=strict" in attributes
+
+                    compare("GET", "/api/auth/status")
+                    unauthorized, _ = compare(
+                        "GET", "/api/animations/rainbow_cycle/settings"
+                    )
+                    assert unauthorized.status_code == 401
+
+                    for _ in range(4):
+                        limited_attempt, rust_headers = compare(
+                            "POST", "/api/auth/pair", {"code": "0000"}
+                        )
+                        assert limited_attempt.status_code == 401
+                    limited, rust_headers = compare(
+                        "POST", "/api/auth/pair", {"code": "1234"}
+                    )
+                    assert limited.status_code == 429
+                    for retry_after in (
+                        limited.headers["retry-after"],
+                        rust_headers["Retry-After"],
+                    ):
+                        assert 1 <= int(retry_after) <= 60
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=5)
+
+
 def test_rust_openapi_preserves_fastapi_operations_and_status_codes() -> None:
     rust_openapi_path = Path(__file__).parents[1] / "frontend" / "openapi.json"
     rust_openapi = json.loads(rust_openapi_path.read_text(encoding="utf-8"))
     python_openapi = create_app().openapi()
+    rust_dashboard_schema = rust_openapi["components"]["schemas"]["DashboardState"]
+    selector_diagnostics_schema = rust_dashboard_schema["properties"][
+        "selector_diagnostics"
+    ]
+    assert selector_diagnostics_schema["type"] == "array"
+    assert selector_diagnostics_schema["items"]["$ref"] == (
+        "#/components/schemas/DynamicSelectorDiagnostics"
+    )
+    rust_compatibility_openapi = {
+        **rust_openapi,
+        "components": {
+            **rust_openapi["components"],
+            "schemas": {
+                **rust_openapi["components"]["schemas"],
+                "DashboardState": {
+                    **rust_dashboard_schema,
+                    "properties": {
+                        name: schema
+                        for name, schema in rust_dashboard_schema["properties"].items()
+                        if name != "selector_diagnostics"
+                    },
+                },
+            },
+        },
+    }
     http_methods = {"get", "post", "put", "patch", "delete", "options", "head"}
 
     def operations(document: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
@@ -363,9 +626,12 @@ def test_rust_openapi_preserves_fastapi_operations_and_status_codes() -> None:
                 rust_schema = rust_content[media_type].get("schema")
                 python_schema = python_content[media_type].get("schema")
                 if rust_schema is not None and python_schema is not None:
-                    assert schema_signature(rust_schema, rust_openapi) == schema_signature(
-                        python_schema, python_openapi
-                    ), (operation_key, status_code)
+                    assert schema_signature(
+                        rust_schema, rust_compatibility_openapi
+                    ) == schema_signature(python_schema, python_openapi), (
+                        operation_key,
+                        status_code,
+                    )
 
     for schema_name in ("SystemStats", "UpdateStatus"):
         rust_schema = rust_openapi["components"]["schemas"][schema_name]
@@ -555,7 +821,13 @@ def _assert_spotify_control_parity(
 
 def _assert_dashboard_snapshot_parity(python_body: Any, rust_body: Any) -> None:
     _assert_response_matches_contract(python_body, DashboardState)
-    _assert_response_matches_contract(rust_body, DashboardState)
+    assert isinstance(rust_body, dict)
+    selector_diagnostics = rust_body.get("selector_diagnostics")
+    assert isinstance(selector_diagnostics, list)
+    rust_compatibility_body = {
+        field: value for field, value in rust_body.items() if field != "selector_diagnostics"
+    }
+    _assert_response_matches_contract(rust_compatibility_body, DashboardState)
     stable_fields = (
         "running",
         "mode",
@@ -722,6 +994,7 @@ def test_python_and_rust_control_endpoints_match_with_isolated_mock_outputs() ->
                     stripe_topology_request: dict[str, Any] | None = None
                     exact_cases = [
                         ("GET", "/api/health", None),
+                        ("GET", "/api/animations", None),
                         ("GET", "/api/identity", None),
                         (
                             "PUT",
@@ -735,6 +1008,8 @@ def test_python_and_rust_control_endpoints_match_with_isolated_mock_outputs() ->
                         ("GET", "/api/startup", None),
                         ("PUT", "/api/startup", {"restore_last_state": False}),
                         ("GET", "/api/startup", None),
+                        ("PUT", "/api/startup", {"restore_last_state": "yes"}),
+                        ("GET", "/api/startup", None),
                         ("GET", "/api/transitions/settings", None),
                         (
                             "GET",
@@ -742,6 +1017,9 @@ def test_python_and_rust_control_endpoints_match_with_isolated_mock_outputs() ->
                             None,
                         ),
                         ("GET", "/api/sequencer/sequences", None),
+                        ("GET", "/api/auth/status", None),
+                        ("POST", "/api/auth/logout", None),
+                        ("GET", "/api/auth/status", None),
                         ("GET", "/api/stripes", None),
                         ("GET", "/api/animations/rainbow_cycle/settings", None),
                     ]
@@ -781,6 +1059,50 @@ def test_python_and_rust_control_endpoints_match_with_isolated_mock_outputs() ->
                         assert rust_result == python_result, (
                             f"{method} {path}\nRust: {rust_result!r}\nPython: {python_result!r}"
                         )
+
+                    rust_openapi_path = (
+                        Path(__file__).parents[1] / "frontend" / "openapi.json"
+                    )
+                    rust_openapi = json.loads(
+                        rust_openapi_path.read_text(encoding="utf-8")
+                    )
+                    concrete_path_values = {
+                        "animation_name": "rainbow_cycle",
+                        "session_id": "missing-session",
+                        "sequence_id": "missing-sequence",
+                    }
+                    for path, path_item in rust_openapi["paths"].items():
+                        concrete_path = path
+                        for name, value in concrete_path_values.items():
+                            concrete_path = concrete_path.replace(
+                                "{" + name + "}", value
+                            )
+                        for method, operation in path_item.items():
+                            if (
+                                method.lower() not in {
+                                    "post",
+                                    "put",
+                                    "patch",
+                                    "delete",
+                                }
+                                or "requestBody" not in operation
+                            ):
+                                continue
+                            python_status, python_body = _request(
+                                python_client, method.upper(), concrete_path, []
+                            )
+                            rust_status, rust_body = _request(
+                                rust_client, method.upper(), concrete_path, []
+                            )
+                            assert python_status == rust_status == 422, (
+                                f"invalid JSON body {method.upper()} {concrete_path}: "
+                                f"Python={python_status} {python_body!r}; "
+                                f"Rust={rust_status} {rust_body!r}"
+                            )
+                            assert python_body == rust_body, (
+                                f"invalid JSON body {method.upper()} {concrete_path}: "
+                                f"Python={python_body!r}; Rust={rust_body!r}"
+                            )
 
                     # These services expose live host/provider state, so their
                     # values can legitimately differ between the two process
@@ -1065,8 +1387,267 @@ def test_python_and_rust_control_endpoints_match_with_isolated_mock_outputs() ->
 
                     invalid_cases = (
                         ("PUT", "/api/music-idle", []),
+                        ("PUT", "/api/mode", {"mode": "unknown"}),
+                        (
+                            "PUT",
+                            "/api/mode",
+                            {"mode": "dynamic", "music_recognition_enabled": "invalid"},
+                        ),
+                        (
+                            "PUT",
+                            "/api/mode",
+                            {"mode": "solid", "color": "not-a-color"},
+                        ),
+                        ("PUT", "/api/brightness", {"brightness": 1.01}),
+                        ("PUT", "/api/animation", {"name": ""}),
+                        ("POST", "/api/blackout", {"enabled": "not-a-bool"}),
+                        ("POST", "/api/auth/pair", {"code": 1234}),
+                        ("PUT", "/api/startup", {"restore_last_state": "invalid"}),
+                        (
+                            "PUT",
+                            "/api/stripes",
+                            {"layout": "mirrored", "outputs": [], "power_budget_enabled": "invalid"},
+                        ),
+                        (
+                            "PUT",
+                            "/api/stripes",
+                            {
+                                "layout": "mirrored",
+                                "outputs": [
+                                    {"id": "main", "name": "Main", "pixels": 8, "reversed": "invalid"}
+                                ],
+                            },
+                        ),
+                        (
+                            "PUT",
+                            "/api/transitions/settings",
+                            {"enabled": True, "duration_ms": 99, "effect": "wipe"},
+                        ),
+                        (
+                            "PUT",
+                            "/api/sequencer/settings",
+                            {"switch_quantization": "unknown", "bars_per_phrase": 8},
+                        ),
+                        (
+                            "POST",
+                            "/api/sequencer/sequences",
+                            {"id": "invalid", "name": "Invalid", "repeat": True, "steps": []},
+                        ),
+                        (
+                            "POST",
+                            "/api/sequencer/sequences",
+                            {
+                                "id": "invalid-animation",
+                                "name": "Invalid Animation",
+                                "repeat": True,
+                                "steps": [
+                                    {
+                                        "animation_name": "not-a-dynamic-animation",
+                                        "duration_bars": 2,
+                                    }
+                                ],
+                            },
+                        ),
+                        (
+                            "POST",
+                            "/api/sequencer/sequences",
+                            {
+                                "id": "ineligible-effect",
+                                "name": "Ineligible Effect",
+                                "repeat": True,
+                                "steps": [
+                                    {
+                                        "animation_name": "bass_drop",
+                                        "duration_bars": 2,
+                                    }
+                                ],
+                            },
+                        ),
+                        (
+                            "PUT",
+                            "/api/stripes",
+                            {"layout": "invalid", "outputs": []},
+                        ),
+                        (
+                            "PUT",
+                            "/api/stripes",
+                            {
+                                "layout": "mirrored",
+                                "outputs": [
+                                    {
+                                        "id": "small",
+                                        "name": "Small",
+                                        "pixels": 2,
+                                        "zone_count": 3,
+                                    }
+                                ],
+                            },
+                        ),
+                        (
+                            "PUT",
+                            "/api/stripes",
+                            {
+                                "layout": "mirrored",
+                                "outputs": [
+                                    {
+                                        "id": "small",
+                                        "name": "Small",
+                                        "pixels": 2,
+                                        "zone_pattern": "shift",
+                                    }
+                                ],
+                            },
+                        ),
+                        (
+                            "PUT",
+                            "/api/stripes",
+                            {
+                                "layout": "mirrored",
+                                "power_budget_enabled": True,
+                                "power_budget_watts": None,
+                                "outputs": [],
+                            },
+                        ),
+                        (
+                            "PUT",
+                            "/api/stripes",
+                            {
+                                "layout": "independent",
+                                "outputs": [
+                                    {"id": "same", "name": "One", "pixels": 8},
+                                    {"id": "same", "name": "Two", "pixels": 8},
+                                ],
+                            },
+                        ),
+                        (
+                            "PUT",
+                            "/api/stripes",
+                            {
+                                "layout": "independent",
+                                "outputs": [
+                                    {
+                                        "id": "left",
+                                        "name": "Left",
+                                        "pixels": 8,
+                                        "spi_device": "/dev/spidev0.0",
+                                    },
+                                    {
+                                        "id": "right",
+                                        "name": "Right",
+                                        "pixels": 8,
+                                        "spi_device": "/dev/spidev0.0",
+                                    },
+                                ],
+                            },
+                        ),
+                        (
+                            "PUT",
+                            "/api/stripes",
+                            {
+                                "layout": "independent",
+                                "outputs": [
+                                    {
+                                        "id": "left",
+                                        "name": "Left",
+                                        "pixels": 8,
+                                        "backend": "gpio",
+                                        "data_pin": 10,
+                                        "clock_pin": 11,
+                                    },
+                                    {
+                                        "id": "right",
+                                        "name": "Right",
+                                        "pixels": 8,
+                                        "backend": "gpio",
+                                        "data_pin": 10,
+                                        "clock_pin": 12,
+                                    },
+                                ],
+                            },
+                        ),
+                        (
+                            "PUT",
+                            "/api/stripes",
+                            {
+                                "layout": "mirrored",
+                                "shared_supply_enabled": True,
+                                "supply_capacity_watts": 0,
+                                "outputs": [],
+                            },
+                        ),
+                        (
+                            "POST",
+                            "/api/stripes/test",
+                            {"stripe_id": "main", "pattern": "rainbow"},
+                        ),
+                        (
+                            "POST",
+                            "/api/calibration/session",
+                            {"output_index": -1},
+                        ),
+                        (
+                            "POST",
+                            "/api/calibration/session/invalid/finish",
+                            {"save": "invalid"},
+                        ),
+                        (
+                            "PUT",
+                            "/api/calibration/session/invalid",
+                            {"red": -1, "green": 0, "blue": 0, "pattern": "ultraviolet"},
+                        ),
+                        (
+                            "PUT",
+                            "/api/animations/rainbow_cycle/settings",
+                            {"values": []},
+                        ),
+                        ("PUT", "/api/audio/source", {"source": "cassette"}),
+                        ("PUT", "/api/audio/sync-offset", {"offset_ms": 501}),
+                        ("POST", "/api/audio/sync-calibration", {"active": "invalid"}),
+                        (
+                            "POST",
+                            "/api/audio/calibration/session",
+                            {"device": "microphone", "two_step": "invalid"},
+                        ),
+                        (
+                            "POST",
+                            "/api/audio/calibration/session/invalid/finish",
+                            {"apply": "invalid"},
+                        ),
+                        ("PUT", "/api/audio/device", {"device": ""}),
+                        (
+                            "PUT",
+                            "/api/audio/settings",
+                            {"device": "", "settings": {}},
+                        ),
+                        ("POST", "/api/audio/settings/reset", {"device": ""}),
+                        ("PUT", "/api/audio/output", {"selector": ""}),
+                        (
+                            "PUT",
+                            "/api/audio/output/mute",
+                            {"selector": "", "muted": False},
+                        ),
                         ("PUT", "/api/audio/bluetooth/power", {"powered": 3}),
                         ("PUT", "/api/audio/bluetooth/alias", {"alias": ""}),
+                        (
+                            "POST",
+                            "/api/audio/bluetooth/pair",
+                            {"address": 7},
+                        ),
+                        (
+                            "POST",
+                            "/api/audio/bluetooth/connect",
+                            {"address": 7},
+                        ),
+                        (
+                            "POST",
+                            "/api/audio/bluetooth/disconnect",
+                            {"address": 7},
+                        ),
+                        (
+                            "POST",
+                            "/api/audio/bluetooth/forget",
+                            {"address": 7},
+                        ),
                         (
                             "POST",
                             "/api/network/scan",
@@ -1100,18 +1681,89 @@ def test_python_and_rust_control_endpoints_match_with_isolated_mock_outputs() ->
                             "/api/audio/spotify/control",
                             {"action": "launch"},
                         ),
+                        ("PUT", "/api/sequencer/active", {"sequence_id": []}),
+                        ("PUT", "/api/sequencer/sequences/invalid", {}),
                     )
                     for method, path, body in invalid_cases:
-                        python_status, _ = _request(
+                        python_status, python_body = _request(
                             python_client, method, path, body
                         )
-                        rust_status, _ = _request(
+                        rust_status, rust_body = _request(
                             rust_client, method, path, body
                         )
                         assert rust_status == python_status == 422, (
                             f"{method} {path}: Python {python_status}; "
                             f"Rust {rust_status}"
                         )
+                        assert type(rust_body["detail"]) is type(
+                            python_body["detail"]
+                        ), (
+                            f"{method} {path}: Python validation detail is "
+                            f"{type(python_body['detail']).__name__}; Rust is "
+                            f"{type(rust_body['detail']).__name__}"
+                        )
+                        assert rust_body == python_body, (
+                            f"{method} {path} validation details differ: "
+                            f"Python={python_body!r}; Rust={rust_body!r}"
+                        )
+                        if (method, path) in {
+                            ("POST", "/api/stripes/test"),
+                            ("PUT", "/api/audio/source"),
+                            ("PUT", "/api/audio/device"),
+                            ("PUT", "/api/audio/settings"),
+                            ("POST", "/api/audio/settings/reset"),
+                            ("POST", "/api/audio/calibration/session"),
+                            ("POST", "/api/network/scan"),
+                            ("PUT", "/api/audio/output"),
+                            ("PUT", "/api/audio/output/mute"),
+                        } or (
+                            method == "POST"
+                            and path == "/api/network/connect"
+                            and (
+                                len(body.get("ssid", "")) > 32
+                                or len(body.get("password", "")) > 63
+                            )
+                        ):
+                            assert rust_body == python_body, (
+                                f"{method} {path} validation details differ: "
+                                f"Python={python_body!r}; Rust={rust_body!r}"
+                            )
+                        pydantic_bool_field = {
+                            ("PUT", "/api/mode"): "music_recognition_enabled",
+                            ("POST", "/api/blackout"): "enabled",
+                            ("PUT", "/api/startup"): "restore_last_state",
+                            ("PUT", "/api/stripes"): "power_budget_enabled",
+                            ("POST", "/api/audio/sync-calibration"): "active",
+                            ("POST", "/api/audio/calibration/session"): "two_step",
+                            (
+                                "POST",
+                                "/api/audio/calibration/session/invalid/finish",
+                            ): "apply",
+                            ("PUT", "/api/audio/bluetooth/power"): "powered",
+                        }.get((method, path))
+                        if pydantic_bool_field is not None and (
+                            body.get(pydantic_bool_field) is not None
+                        ):
+                            assert rust_body == python_body, (
+                                f"{method} {path} boolean validation details differ: "
+                                f"Python={python_body!r}; Rust={rust_body!r}"
+                            )
+                        if method == "PUT" and path == "/api/stripes" and any(
+                            output.get("reversed") == "invalid"
+                            for output in body.get("outputs", [])
+                        ):
+                            assert rust_body == python_body, (
+                                f"{method} {path} nested boolean validation details differ: "
+                                f"Python={python_body!r}; Rust={rust_body!r}"
+                            )
+                        if (
+                            method == "POST"
+                            and path == "/api/network/connect"
+                            and len(body.get("password", "")) > 63
+                        ):
+                            assert body["password"] not in json.dumps(rust_body), (
+                                "Rust validation errors must not echo Wi-Fi passwords"
+                            )
 
                     invalid_bluetooth_address = {
                         "address": "AA:BB:CC:DD:EE:FG",
@@ -1224,7 +1876,18 @@ def test_python_and_rust_control_endpoints_match_with_isolated_mock_outputs() ->
                             python_brightness["brightness"]
                         )
                         python_changed = python_socket.receive_json()
+                        while (
+                            python_changed["revision"] < python_brightness["revision"]
+                            or python_changed["brightness"]
+                            != python_brightness["brightness"]
+                        ):
+                            python_changed = python_socket.receive_json()
                         rust_changed = json.loads(rust_socket.recv(timeout=3))
+                        while (
+                            rust_changed["revision"] < rust_brightness["revision"]
+                            or rust_changed["brightness"] != rust_brightness["brightness"]
+                        ):
+                            rust_changed = json.loads(rust_socket.recv(timeout=3))
 
                     _assert_dashboard_snapshot_parity(python_changed, rust_changed)
                     assert python_changed["brightness"] == 0.25
@@ -1326,13 +1989,31 @@ def test_python_and_rust_control_endpoints_match_with_isolated_mock_outputs() ->
                         python_client,
                         "PUT",
                         "/api/stripes",
-                        stripe_topology_request,
+                        {
+                            **stripe_topology_request,
+                            "power_budget_enabled": "yes",
+                            "power_budget_watts": 20.0,
+                            "shared_supply_enabled": "no",
+                            "outputs": [
+                                {**output, "reversed": "no"}
+                                for output in stripe_topology_request["outputs"]
+                            ],
+                        },
                     )
                     rust_status, rust_body = _request(
                         rust_client,
                         "PUT",
                         "/api/stripes",
-                        stripe_topology_request,
+                        {
+                            **stripe_topology_request,
+                            "power_budget_enabled": "yes",
+                            "power_budget_watts": 20.0,
+                            "shared_supply_enabled": "no",
+                            "outputs": [
+                                {**output, "reversed": "no"}
+                                for output in stripe_topology_request["outputs"]
+                            ],
+                        },
                     )
                     assert rust_status == python_status == 200, (
                         f"topology update: Python {python_status}; Rust {rust_status} "
@@ -1341,6 +2022,8 @@ def test_python_and_rust_control_endpoints_match_with_isolated_mock_outputs() ->
                     assert rust_body["stripe_topology"]["layout"] == (
                         python_body["stripe_topology"]["layout"]
                     )
+                    assert rust_body["stripe_topology"]["power_budget_enabled"] is True
+                    assert python_body["stripe_topology"]["power_budget_enabled"] is True
                     assert [
                         (output["id"], output["pixels"])
                         for output in rust_body["stripe_topology"]["outputs"]
@@ -1370,6 +2053,65 @@ def test_python_and_rust_control_endpoints_match_with_isolated_mock_outputs() ->
                     assert rust_body["stripe_topology"]["layout"] == (
                         python_body["stripe_topology"]["layout"]
                     )
+
+                    unknown_stripe_test = {
+                        "stripe_id": "missing-stripe",
+                        "pattern": "blue",
+                    }
+                    python_unknown_stripe_test = _request(
+                        python_client,
+                        "POST",
+                        "/api/stripes/test",
+                        unknown_stripe_test,
+                    )
+                    rust_unknown_stripe_test = _request(
+                        rust_client,
+                        "POST",
+                        "/api/stripes/test",
+                        unknown_stripe_test,
+                    )
+                    assert python_unknown_stripe_test == rust_unknown_stripe_test
+
+                    unknown_target_cases = (
+                        (
+                            "PUT",
+                            "/api/brightness",
+                            {"brightness": 0.3, "stripe_id": "missing-stripe"},
+                        ),
+                        (
+                            "POST",
+                            "/api/blackout",
+                            {"enabled": True, "stripe_id": "missing-stripe"},
+                        ),
+                        (
+                            "PUT",
+                            "/api/animation",
+                            {
+                                "name": "rainbow_cycle",
+                                "stripe_id": "missing-stripe",
+                            },
+                        ),
+                        (
+                            "PUT",
+                            "/api/music-idle",
+                            {
+                                "mode": "solid",
+                                "color": "#123456",
+                                "animation": "",
+                                "brightness": 0.3,
+                                "stripe_id": "missing-stripe",
+                            },
+                        ),
+                    )
+                    for method, path, body in unknown_target_cases:
+                        python_result = _request(
+                            python_client, method, path, body
+                        )
+                        rust_result = _request(rust_client, method, path, body)
+                        assert python_result == rust_result, (
+                            f"{method} {path} with missing stripe: "
+                            f"Python={python_result!r}; Rust={rust_result!r}"
+                        )
 
                     python_status, python_calibration = _request(
                         python_client,
@@ -1408,6 +2150,19 @@ def test_python_and_rust_control_endpoints_match_with_isolated_mock_outputs() ->
                     assert rust_body["calibration"]["pattern"] == (
                         python_body["calibration"]["pattern"]
                     )
+                    python_calibration_blocked = _request(
+                        python_client,
+                        "PUT",
+                        "/api/brightness",
+                        {"brightness": 0.5},
+                    )
+                    rust_calibration_blocked = _request(
+                        rust_client,
+                        "PUT",
+                        "/api/brightness",
+                        {"brightness": 0.5},
+                    )
+                    assert python_calibration_blocked == rust_calibration_blocked
                     python_status, python_body = _request(
                         python_client,
                         "POST",
@@ -1424,6 +2179,19 @@ def test_python_and_rust_control_endpoints_match_with_isolated_mock_outputs() ->
                     assert rust_body["calibration"]["active"] == (
                         python_body["calibration"]["active"]
                     )
+                    python_stale_calibration = _request(
+                        python_client,
+                        "POST",
+                        f"/api/calibration/session/{python_session}/finish",
+                        {"save": False},
+                    )
+                    rust_stale_calibration = _request(
+                        rust_client,
+                        "POST",
+                        f"/api/calibration/session/{rust_session}/finish",
+                        {"save": False},
+                    )
+                    assert python_stale_calibration == rust_stale_calibration
 
                     for method, path, body, fields in [
                         (
@@ -1483,6 +2251,18 @@ def test_python_and_rust_control_endpoints_match_with_isolated_mock_outputs() ->
                     )
                     assert rust_status == python_status == 200
                     assert rust_body == python_body
+                    python_status, python_reset = _request(
+                        python_client,
+                        "POST",
+                        "/api/animations/rainbow_cycle/settings/reset",
+                    )
+                    rust_status, rust_reset = _request(
+                        rust_client,
+                        "POST",
+                        "/api/animations/rainbow_cycle/settings/reset",
+                    )
+                    assert rust_status == python_status == 200
+                    assert rust_reset == python_reset
                     for method, body in [
                         (
                             "PUT",
@@ -1509,6 +2289,27 @@ def test_python_and_rust_control_endpoints_match_with_isolated_mock_outputs() ->
                         assert rust_status == python_status == 200, f"{method} {path}"
                         result_field = "music_idle" if path == "/api/music-idle" else "transition_settings"
                         assert rust_body[result_field] == python_body[result_field]
+
+                    for idle_settings in (
+                        {"mode": "animation", "animation": "missing-animation"},
+                        {"mode": "animation", "animation": ""},
+                    ):
+                        python_idle_error = _request(
+                            python_client,
+                            "PUT",
+                            "/api/music-idle",
+                            idle_settings,
+                        )
+                        rust_idle_error = _request(
+                            rust_client,
+                            "PUT",
+                            "/api/music-idle",
+                            idle_settings,
+                        )
+                        assert python_idle_error == rust_idle_error, (
+                            f"PUT /api/music-idle {idle_settings!r}: "
+                            f"Python={python_idle_error!r}; Rust={rust_idle_error!r}"
+                        )
 
                     sequencer_settings = {
                         "switch_quantization": "phrase",
@@ -1551,6 +2352,54 @@ def test_python_and_rust_control_endpoints_match_with_isolated_mock_outputs() ->
                     )
                     assert rust_status == python_status == 200
                     assert rust_body["sequence_library"] == python_body["sequence_library"]
+
+                    sequence_error_cases = (
+                        (
+                            "POST",
+                            "/api/sequencer/sequences",
+                            sequence,
+                            409,
+                        ),
+                        (
+                            "PUT",
+                            "/api/sequencer/sequences/missing-sequence",
+                            {
+                                "name": "Missing Sequence",
+                                "repeat": True,
+                                "steps": [
+                                    {
+                                        "animation_name": "rainbow_cycle",
+                                        "duration_bars": 2,
+                                    }
+                                ],
+                            },
+                            404,
+                        ),
+                        (
+                            "PUT",
+                            "/api/sequencer/active",
+                            {"sequence_id": "missing-sequence"},
+                            404,
+                        ),
+                        (
+                            "DELETE",
+                            "/api/sequencer/sequences/missing-sequence",
+                            None,
+                            404,
+                        ),
+                        ("PUT", "/api/animation", {"name": "missing-animation"}, 404),
+                        ("GET", "/api/animations/missing-animation/settings", None, 404),
+                    )
+                    for method, path, body, expected_status in sequence_error_cases:
+                        python_result = _request(python_client, method, path, body)
+                        rust_result = _request(rust_client, method, path, body)
+                        assert python_result == rust_result, (
+                            f"{method} {path}: Python={python_result!r}; "
+                            f"Rust={rust_result!r}"
+                        )
+                        assert python_result[0] == expected_status, (
+                            f"{method} {path}: {python_result!r}"
+                        )
 
                     active_sequence = {"sequence_id": "parity-sequence"}
                     python_status, python_body = _request(
@@ -1595,6 +2444,48 @@ def test_python_and_rust_control_endpoints_match_with_isolated_mock_outputs() ->
                         assert rust_status == python_status == 200, f"{method} {path}"
                         assert rust_body["sequence_library"] == python_body["sequence_library"]
 
+                    for index in range(20):
+                        limited_sequence = {
+                            **sequence,
+                            "id": f"limit-{index}",
+                            "name": f"Limit {index}",
+                        }
+                        python_result = _request(
+                            python_client,
+                            "POST",
+                            "/api/sequencer/sequences",
+                            limited_sequence,
+                        )
+                        rust_result = _request(
+                            rust_client,
+                            "POST",
+                            "/api/sequencer/sequences",
+                            limited_sequence,
+                        )
+                        assert python_result[0] == rust_result[0] == 200
+
+                    limit_case = {
+                        **sequence,
+                        "id": "over-limit",
+                        "name": "Over limit",
+                    }
+                    python_limit_error = _request(
+                        python_client,
+                        "POST",
+                        "/api/sequencer/sequences",
+                        limit_case,
+                    )
+                    rust_limit_error = _request(
+                        rust_client,
+                        "POST",
+                        "/api/sequencer/sequences",
+                        limit_case,
+                    )
+                    assert python_limit_error == rust_limit_error == (
+                        409,
+                        {"detail": "at most 20 sequences may be saved"},
+                    )
+
                     audio_source = {"source": "demo"}
                     python_status, python_body = _request(
                         python_client, "PUT", "/api/audio/source", audio_source
@@ -1611,8 +2502,105 @@ def test_python_and_rust_control_endpoints_match_with_isolated_mock_outputs() ->
                             f"audio source {field}: Python={python_body[field]!r}, "
                             f"Rust={rust_body[field]!r}, error={rust_body.get('error')!r}"
                         )
+                    python_state_status, python_state = _request(
+                        python_client, "GET", "/api/state"
+                    )
+                    rust_state_status, rust_state = _request(
+                        rust_client, "GET", "/api/state"
+                    )
+                    assert rust_state_status == python_state_status == 200
+                    _assert_dashboard_snapshot_parity(python_state, rust_state)
                     python_audio_settings = python_body
                     rust_audio_settings = rust_body
+                    _assert_response_matches_contract(
+                        python_audio_settings, AudioSettingsResponse
+                    )
+                    _assert_response_matches_contract(
+                        rust_audio_settings, AudioSettingsResponse
+                    )
+                    python_status, python_audio_settings = _request(
+                        python_client, "GET", "/api/audio/settings"
+                    )
+                    rust_status, rust_audio_settings = _request(
+                        rust_client, "GET", "/api/audio/settings"
+                    )
+                    assert rust_status == python_status == 200
+                    _assert_response_matches_contract(
+                        python_audio_settings, AudioSettingsResponse
+                    )
+                    _assert_response_matches_contract(
+                        rust_audio_settings, AudioSettingsResponse
+                    )
+                    for field in (
+                        "source",
+                        "active_source",
+                        "monitoring",
+                        "settings",
+                        "configured_noise_floor",
+                        "sync_route",
+                        "sync_offset_ms",
+                    ):
+                        assert rust_audio_settings[field] == python_audio_settings[field], (
+                            f"GET /api/audio/settings {field}: "
+                            f"Python={python_audio_settings[field]!r}, "
+                            f"Rust={rust_audio_settings[field]!r}"
+                        )
+
+                    python_calibration_error = _request(
+                        python_client,
+                        "POST",
+                        "/api/audio/calibration/session",
+                        {"device": "USB microphone"},
+                    )
+                    rust_calibration_error = _request(
+                        rust_client,
+                        "POST",
+                        "/api/audio/calibration/session",
+                        {"device": "USB microphone"},
+                    )
+                    assert python_calibration_error[0] == 409
+                    assert rust_calibration_error == python_calibration_error, (
+                        "starting microphone calibration without a microphone: "
+                        f"Python={python_calibration_error!r}, "
+                        f"Rust={rust_calibration_error!r}"
+                    )
+
+                    missing_session_cases = (
+                        (
+                            "GET",
+                            "/api/audio/calibration/session/missing-session",
+                            None,
+                            404,
+                            "audio calibration session not found",
+                        ),
+                        (
+                            "POST",
+                            "/api/audio/calibration/session/missing-session/music",
+                            None,
+                            409,
+                            "calibration is not waiting for music",
+                        ),
+                        (
+                            "POST",
+                            "/api/audio/calibration/session/missing-session/finish",
+                            {"apply": False},
+                            409,
+                            "audio calibration session not found",
+                        ),
+                    )
+                    for method, path, body, expected_status, expected_detail in (
+                        missing_session_cases
+                    ):
+                        python_result = _request(python_client, method, path, body)
+                        rust_result = _request(rust_client, method, path, body)
+                        expected_result = (
+                            expected_status,
+                            {"detail": expected_detail},
+                        )
+                        assert python_result == rust_result == expected_result, (
+                            f"{method} {path}: expected={expected_result!r}, "
+                            f"Python={python_result!r}, Rust={rust_result!r}"
+                        )
 
                     python_status, python_body = _request(
                         python_client,
@@ -1634,13 +2622,13 @@ def test_python_and_rust_control_endpoints_match_with_isolated_mock_outputs() ->
                         python_client,
                         "POST",
                         "/api/audio/sync-calibration",
-                        {"active": False},
+                        {"active": "no"},
                     )
                     rust_status, rust_body = _request(
                         rust_client,
                         "POST",
                         "/api/audio/sync-calibration",
-                        {"active": False},
+                        {"active": "no"},
                     )
                     assert rust_status == python_status == 200
                     assert rust_body == python_body
@@ -1713,6 +2701,34 @@ def test_python_and_rust_control_endpoints_match_with_isolated_mock_outputs() ->
                         "audio_monitoring",
                     ):
                         assert rust_body[field] == python_body[field], f"dynamic demo: {field}"
+
+                    assert stripe_topology_request is not None
+                    independent_topology = {
+                        **stripe_topology_request,
+                        "layout": "independent",
+                    }
+                    python_topology_result = _request(
+                        python_client,
+                        "PUT",
+                        "/api/stripes",
+                        independent_topology,
+                    )
+                    rust_topology_result = _request(
+                        rust_client,
+                        "PUT",
+                        "/api/stripes",
+                        independent_topology,
+                    )
+                    assert python_topology_result[0] == rust_topology_result[0] == 200
+                    for method, path, body in unknown_target_cases:
+                        python_result = _request(
+                            python_client, method, path, body
+                        )
+                        rust_result = _request(rust_client, method, path, body)
+                        assert python_result == rust_result, (
+                            f"{method} {path} with unknown independent stripe: "
+                            f"Python={python_result!r}; Rust={rust_result!r}"
+                        )
             finally:
                 process.terminate()
                 try:

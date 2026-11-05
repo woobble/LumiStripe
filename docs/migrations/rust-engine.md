@@ -139,9 +139,14 @@ available and is reported through the engine audio status.
 
 The trusted Raspberry Pi CI job verifies its native build packages first and
 installs only when something is missing. It uses `sudo` when available or runs
-`apt-get` directly when the runner is root; a non-root runner without `sudo`
-must be provisioned with the packages in advance. The job uses a host-provisioned
-Rust toolchain and does not bootstrap Rust with `curl`.
+`apt-get` directly when the runner is root. A non-root runner without `sudo`
+downloads signed Debian packages into the job's temporary directory and uses
+that private header/library/pkg-config overlay for the remainder of the job;
+it does not change the persistent runner's system packages. The provisioning
+step is implemented in
+[`scripts/provision_rpi_ci_native_deps.sh`](../../scripts/provision_rpi_ci_native_deps.sh).
+The job uses a host-provisioned Rust toolchain and does not bootstrap Rust with
+`curl`.
 The job only runs for pushes to `main` and manual dispatches from `main`; pull
 request code stays on hosted runners. Outside CI, install the OS prerequisites
 once as root:
@@ -163,7 +168,12 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
 Confirm `rustc` and `cargo` are on that account's `PATH` when the runner service
 starts, then restart the service. The Pi job verifies those tools, ARM64, the
 CA bundle, ALSA/PipeWire/PulseAudio headers and pkg-config metadata, and
-recursive submodule checkout before building.
+recursive submodule checkout before building. The available Pi 5 has the
+packages installed, and the provisioner confirmed that path without changing
+system packages. The no-root overlay path is covered by
+`deploy/tests/test_rpi_ci_provisioning.py`; the trusted Pi workflow has not yet
+run with the new provisioning step, so end-to-end runner validation remains
+open.
 
 To include live microphone or USB capture in the Pi job, set the repository
 variable `LUMISTRIPE_RUST_AUDIO_DEVICE` to a CPAL selector or matching device
@@ -285,22 +295,26 @@ it does not substitute for measurements on the target boards and devices.
 - [x] Hosted x86_64 and ARM64 jobs build and test the Rust workspace.
 - [x] `cargo-audit` reports no known vulnerabilities in the 201 locked Rust
   dependencies (advisory database updated 2026-11-02).
-- [x] Local Python 3.12 full suite: 7,370 passed and 168 skipped. The full Rust
-  workspace tests and the focused Loom bounded-slot check also pass. The Rust
-  scheduler startup test passed five consecutive focused runs with the more
-  tolerant five-second deadline.
-- [x] Frontend REST contract regeneration is clean; frontend lint, 175 tests,
-  and production build pass. `uv build --all-packages` builds all five Python
-  workspace distributions.
+- [x] Local Python 3.12 full suite: 7,371 passed and 170 skipped, with Rust
+  process differential tests enabled. The full Rust
+  workspace tests pass (323 passed, 5 live-service tests ignored), and the
+  focused Loom bounded-slot check also passes. The Rust scheduler startup test
+  passed five consecutive focused runs with the more tolerant five-second
+  deadline.
+- [x] Frontend REST contract regeneration is clean; frontend lint, 180 tests,
+  and production build pass. `uv build --all-packages` builds all four Python
+  workspace distributions after retirement of the standalone Tk app.
 - [ ] Rerun the hosted build/test matrix on this workflow revision. In the
   latest run on 2026-11-02, Rust x86_64/ARM64, Python 3.13/3.14, frontend, and
   all four distribution jobs passed. Python 3.12 failed in the Rust scheduler
   startup test before its first output frame; the local suite now passes with
   the longer startup deadline and an explicit transmitted-frame assertion.
 - [ ] The Pi 5 workflow must pass end to end. Its latest run stopped at runner
-  verification because `pkg-config` was absent. The workflow now installs the
-  native OS packages before verification; a Pi run is still needed to validate
-  that environment fix.
+  verification because `pkg-config` was absent. The workflow now installs
+  packages into a temporary user-owned overlay when the persistent runner has
+  neither `pkg-config` nor `sudo`; unit tests cover both the already-provisioned
+  and no-root overlay paths. A Pi workflow run is still needed to validate the
+  bootstrap and native build together.
 
 ### Audio capture acceptance
 
@@ -322,6 +336,11 @@ it does not substitute for measurements on the target boards and devices.
 
 - [x] Synthetic x86_64 Python/native-C versus Rust DSP results are recorded in
   [`../performance/rust-audio-dsp-comparison.md`](../performance/rust-audio-dsp-comparison.md).
+- [x] A current x86-64 virtual-output sample records runtime initialization,
+  process CPU/RSS, supervisor and engine-output cadence, IPC/frame latency, and
+  synthetic audio-feature-to-LED latency in the local runtime section below.
+  Live capture, physical output, and production web-server startup remain
+  separate validation items.
 - [ ] Historical Pi 5 renderer-only evidence is available from [workflow run
   41421435690](https://github.com/woobble/LumiStripe/actions/runs/41421435690),
   source revision `767a41b71d58504677fcde39a85bf8f4510de801`. On a Pi 5 Model B
@@ -377,9 +396,11 @@ it does not substitute for measurements on the target boards and devices.
   transient hardware writes. Oversized control/frame requests are rejected
   without stopping the engine; queue replacement, invalid packets, retries,
   shutdown, and recovery have automated coverage.
-- [ ] Run available sanitizers or Miri-compatible tests. The local toolchain
-  does not provide `cargo-miri`; physical GPIO/SPI recovery checks remain
-  separate from this software review.
+- [x] Run available Miri-compatible tests. Nightly Miri passed all 15 tests in
+  `lumistripe-engine-output`. A broader renderer run was stopped during its
+  golden-frame test because it did not finish in practical local time, so
+  renderer-crate Miri coverage remains unverified. Physical GPIO/SPI recovery
+  checks remain separate from this software review.
 - [ ] Run the overnight physical stress matrix and inspect memory, queue bounds,
   frame loss, device recovery, shutdown ordering, and long-duration counters.
 
@@ -481,6 +502,68 @@ to 512 samples; the Rust status window is bounded to 64 callbacks. The synthetic
 demo source cannot exercise native capture, so use a real microphone, Bluetooth
 source, or Spotify monitor for this comparison.
 
+### Local x86-64 runtime smoke sample
+
+On 2026-11-04, a five-second simulated 300-pixel Dynamic run on an AMD Ryzen 9
+9900X (Linux x86-64, Python 3.12.16) compared the Python engine with the Rust
+engine using Python's synthetic demo-audio path. It used one mirrored virtual
+output, no power cap, one second of warmup, and no physical GPIO/SPI device.
+The runtime startup value is one sample per case, from runtime object
+construction through `start()` and the initial Dynamic-mode acknowledgement; it
+does not include Python interpreter or web-server startup.
+
+| Engine | Runtime startup | Supervisor loop | Engine output | p95 output frame latency | p95 audio-feature-to-LED | CPU | RSS baseline → end |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Python | 8.5 ms | 50.0 FPS; 0 missed deadlines | — | — | — | 4.1% | Python 74.1 → 78.5 MiB |
+| Rust | 23.7 ms | 20.0 FPS; 0 missed deadlines | 50.6 FPS; 0 drops | 0.250 ms | 42.7 ms | 3.0% combined | Python 78.7 → 79.1 MiB; engine 7.5 → 7.9 MiB |
+
+For the Rust case, the 20 Hz supervisor loop and 50.6 Hz engine output are
+separate cadences. The audio-feature-to-LED latency includes the synthetic
+Python audio path and IPC; it does not represent live capture or native Rust
+audio. Python RSS spans case initialization through the end of the case; Rust
+engine RSS spans the measured interval. These short virtual-output measurements
+are an x86 software sample, not a production web-server startup benchmark,
+hardware timing result, or soak test.
+Reproduce the run with:
+
+```bash
+UV_CACHE_DIR=/tmp/lumistripe-uv-cache uv run --locked python scripts/benchmark_runtime_pipeline.py \
+  --led-counts 300 --output-counts 1 --layouts mirrored --zone-counts 1 \
+  --modes dynamic --power-limits off --engine-backends python,rust \
+  --audio-backends python --engine-binary rust/target/release/lumistripe-engine \
+  --audio-source demo --warmup 1 --duration 5 \
+  --output /tmp/lumistripe-runtime-x86.json
+```
+
+On the same x86_64 host, the release Rust CLI and engine were also run directly
+with an empty `PATH`, 80 mock pixels, Dynamic mode, and the engine's synthetic
+demo source for eight seconds. Across repeated runs, steady output ranged from
+49.8 to 55.3 FPS; the engine reported no dropped or failed frames and no missed
+scheduler deadlines. Frame-latency p95 ranged from 0.18 to 0.22 ms, and the
+reported audio-feature-to-LED p95 ranged from 14 to 35 ms. A separate five-
+second Static run held 60 FPS with no missed deadlines. Process RSS samples
+during the Dynamic run were about 6.3 MiB for the CLI and 7.5 MiB for the
+engine; `ps` reported approximately 0.0% and 0.6% lifetime-average CPU at the
+sample points. These are short mock-output samples; synthetic audio is not a
+capture-latency measurement, and process RSS samples are not peak-memory
+measurements.
+
+Reproduce the Python-free CLI runs with:
+
+```bash
+cargo build --release --locked --manifest-path rust/Cargo.toml \
+  -p lumistripe-cli -p lumistripe-engine
+mkdir -p /tmp/lumistripe-empty-path
+PATH=/tmp/lumistripe-empty-path rust/target/release/lumistripe \
+  --engine-binary "$PWD/rust/target/release/lumistripe-engine" run \
+  --backend mock --pixels 80 --mode dynamic --audio-source demo \
+  --duration-seconds 8 --stats --stats-interval-ms 1000
+PATH=/tmp/lumistripe-empty-path rust/target/release/lumistripe \
+  --engine-binary "$PWD/rust/target/release/lumistripe-engine" run \
+  --backend mock --pixels 80 --mode static --audio-source off \
+  --duration-seconds 5 --stats --stats-interval-ms 1000
+```
+
 ### Supplied Raspberry Pi 5 runtime matrix
 
 A user-supplied run identified a Raspberry Pi 5 Model B Rev 1.0 running
@@ -506,6 +589,50 @@ revision, thermal/governor readings, or selected Dynamic animation names, so
 those details still need to be recorded for a reproducible comparison. Pi 4
 runtime measurements and physical waveform, shutdown/blackout, and crash
 recovery checks also remain outstanding.
+
+### Synthetic Rust CPU benchmarks on x86_64 and Pi 5 (2026-11-04)
+
+The release audio and renderer benchmarks ran with Rust 1.88.0 on the current
+migration worktree (`edd8304` plus uncommitted changes). The Rust source tree
+fingerprint, computed from sorted per-file SHA-256 hashes while excluding
+`target/`, was
+`048ec17dd888c765118ce7e1cc18888381e7b92a9ca7ddd73f1fd37c31f6cd10` on both
+machines.
+
+The audio benchmark processed 4,096 calls per batch size over a deterministic
+44.1 kHz synthetic two-tone signal. The renderer benchmark used `rainbow`, two
+144-pixel outputs, 200 warm-up frames, 2,000 measured frames, and synthetic
+audio features.
+
+| Measurement | Raspberry Pi 5 aarch64 | x86_64 Ryzen 9 9900X |
+| --- | ---: | ---: |
+| 512-sample DSP hop p99 | 0.0423 ms | 0.0117 ms |
+| 512-sample DSP plus structure tracking p99 | 0.0442 ms | 0.0129 ms |
+| DSP plus structure real-time headroom | 294.5× | 1,061.6× |
+| Audio benchmark process peak RSS | 74.9 MiB | 150.6 MiB |
+| DSP steady-state allocations per call | 0 | 0 |
+| Two-output renderer p50 / p95 / p99 | 19.2 / 19.3 / 21.6 µs | 6.0 / 6.1 / 7.9 µs |
+| Renderer allocations per frame | 0 | 0 |
+
+The Pi 5 used the `ondemand` CPU governor; observed frequency ranged from 2.2
+to 2.4 GHz and temperature from 46.85 °C before the audio run to 57.30 °C
+after the renderer run. The benchmark executables used the release profile.
+The Pi and x86 measurements use the same source fingerprint and toolchain.
+
+These are synthetic, software-only measurements. They do not measure live
+capture, audio-to-LED latency, service scheduling, SPI/GPIO transfer timing,
+frame drops under hardware output, or long-duration stability. Those checks
+remain open; the earlier physical Pi matrix is separately reported above.
+
+Reproduce with:
+
+```bash
+cargo +1.88.0 run --locked --release --manifest-path rust/Cargo.toml \
+  -p lumistripe-engine-audio --bin benchmark_audio -- --iterations 4096
+cargo +1.88.0 run --locked --release --manifest-path rust/Cargo.toml \
+  -p lumistripe-engine-animation-state --example benchmark_render -- \
+  --animation rainbow --pixels 144 --outputs 2 --frames 2000 --warmup 200 --audio
+```
 
 ```bash
 CARGO_HOME=/tmp/lumistripe-cargo-home cargo fmt --manifest-path rust/Cargo.toml --all -- --check

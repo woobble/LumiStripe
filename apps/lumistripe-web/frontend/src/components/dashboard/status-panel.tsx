@@ -77,6 +77,10 @@ function formatTemperature(temperature: number | null | undefined) {
   return temperature == null ? "—" : `${temperature.toFixed(1)} °C`
 }
 
+function formatSeconds(nanoseconds: number) {
+  return `${(nanoseconds / 1_000_000_000).toFixed(1)} s`
+}
+
 function formatPercent(percent: number | null | undefined) {
   return percent == null ? "—" : `${percent.toFixed(1)}%`
 }
@@ -177,7 +181,7 @@ export function StatusPanel({ controller, onLogout }: { controller: DashboardCon
         >
           <span>
             <span className="block font-medium">Technical details</span>
-            <span className="mt-0.5 block text-sm text-muted-foreground">Runtime, power, audio, and host metrics</span>
+            <span className="mt-0.5 block text-sm text-muted-foreground">Runtime, power, audio, selector, and host metrics</span>
           </span>
           <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" aria-hidden="true" />
         </summary>
@@ -301,6 +305,48 @@ export function StatusPanel({ controller, onLogout }: { controller: DashboardCon
           </div>
         </CardContent>
       </Card>
+
+      {(state.selector_diagnostics ?? []).map((diagnostic) => {
+        const output = state.stripe_topology.outputs[diagnostic.output_index]
+        const scores = diagnostic.scores ?? []
+        const recentNames = diagnostic.recent_names ?? []
+        return (
+          <Card key={diagnostic.output_index} className="border-border/70 bg-card shadow-none">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2"><MusicIcon className="size-4 text-cyan-300" aria-hidden="true" />Dynamic selector</CardTitle>
+              <CardDescription>{output?.name ?? `Output ${diagnostic.output_index + 1}`} · {diagnostic.reason.replaceAll("_", " ")}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="grid grid-cols-2 gap-2">
+                <Metric icon={RadioIcon} label="Current animation" value={diagnostic.current_animation || "—"} />
+                <Metric icon={MusicIcon} label="Candidate" value={diagnostic.candidate_animation ?? "—"} />
+                <Metric icon={Clock3Icon} label="Time in animation" value={formatSeconds(diagnostic.elapsed_ns)} />
+                <Metric icon={Clock3Icon} label="Minimum time remaining" value={formatSeconds(diagnostic.min_duration_remaining_ns)} />
+              </div>
+              <div className="rounded-xl bg-white/[0.035] p-3">
+                <p className="mb-2 text-xs text-muted-foreground">Top animation scores</p>
+                {scores.length > 0 ? (
+                  <ul className="space-y-2">
+                    {scores.map((score) => (
+                      <li key={score.animation} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-sm">
+                        <span className="font-medium">{score.animation}</span>
+                        <span className="tabular-nums">{score.score.toFixed(2)}</span>
+                        {(score.reasons ?? []).length > 0 && <span className="w-full text-xs text-muted-foreground">{(score.reasons ?? []).join(", ")}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                ) : <p className="text-sm text-muted-foreground">Waiting for audio features.</p>}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Recent animations: {recentNames.length > 0 ? recentNames.join(" → ") : "No selection history yet"}
+              </p>
+              <p className="text-xs text-muted-foreground" role="status">
+                {diagnostic.should_switch ? "Selector is ready to switch." : `Switch cooldown: ${formatSeconds(diagnostic.switch_cooldown_remaining_ns)}`}
+              </p>
+            </CardContent>
+          </Card>
+        )
+      })}
         </div>}
       </details>
 
