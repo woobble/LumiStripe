@@ -973,33 +973,40 @@ esac\n"
 
     #[test]
     fn key_management_validates_open_and_personal_security() {
-        assert_eq!(key_management("Open", "").expect("open network"), None);
+        let empty_password = String::new();
+        let test_password = Uuid::new_v4().to_string();
+        let short_password = test_password[..7].to_owned();
+
         assert_eq!(
-            key_management("WPA2", "password").expect("WPA2"),
+            key_management("Open", &empty_password).expect("open network"),
+            None
+        );
+        assert_eq!(
+            key_management("WPA2", &test_password).expect("WPA2"),
             Some("wpa-psk")
         );
         assert_eq!(
-            key_management("WPA3-SAE", "password").expect("WPA3"),
+            key_management("WPA3-SAE", &test_password).expect("WPA3"),
             Some("sae")
         );
         assert_eq!(
-            key_management("WPA2 WPA3-SAE", "password").expect("transition"),
+            key_management("WPA2 WPA3-SAE", &test_password).expect("transition"),
             Some("wpa-psk")
         );
         assert_eq!(
-            key_management("WPA2 802.1X", "password")
+            key_management("WPA2 802.1X", &test_password)
                 .expect_err("enterprise")
                 .code,
             "unsupported"
         );
         assert_eq!(
-            key_management("Open", "password")
+            key_management("Open", &test_password)
                 .expect_err("open with password")
                 .code,
             "invalid"
         );
         assert_eq!(
-            key_management("WPA2", "short")
+            key_management("WPA2", &short_password)
                 .expect_err("short password")
                 .code,
             "invalid"
