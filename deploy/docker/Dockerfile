@@ -1,10 +1,9 @@
 # syntax=docker/dockerfile:1.7
 
-ARG UV_VERSION=0.13.0
+ARG RUST_VERSION=1.88.0
+ARG BUN_VERSION=1.4.4
 
-FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
-
-FROM oven/bun:1.4.0 AS frontend
+FROM oven/bun:${BUN_VERSION} AS frontend
 
 WORKDIR /src/apps/lumistripe-web/frontend
 
@@ -14,33 +13,30 @@ RUN bun install --frozen-lockfile
 COPY apps/lumistripe-web/frontend/ ./
 RUN bun run build
 
-FROM python:3.12-slim-bookworm AS python-build
+FROM rust:${RUST_VERSION}-slim-trixie AS rust-build
 
-ENV DEBIAN_FRONTEND=noninteractive \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    UV_LINK_MODE=copy \
-    UV_COMPILE_BYTECODE=1 \
-    UV_PYTHON_PREFERENCE=only-system \
-    LUMISTRIPE_BUILD_EXTENSIONS=all
+ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
         build-essential \
         ca-certificates \
         libasound2-dev \
-        libgpiod-dev \
+        libclang-dev \
+        libdbus-1-dev \
+        libpipewire-0.3-dev \
+        libpulse-dev \
         pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=uv /uv /uvx /usr/local/bin/
-
-WORKDIR /opt/lumistripe
-COPY . .
-COPY --from=frontend \
-    /src/apps/lumistripe-web/src/lumistripe_web/static \
-    /opt/lumistripe/apps/lumistripe-web/src/lumistripe_web/static
-
-RUN uv sync --python /usr/local/bin/python --locked --no-dev --extra hardware-gain
+WORKDIR /src
+COPY rust/ ./rust/
+RUN cargo build --locked --release --manifest-path rust/Cargo.toml \
+        --package lumistripe-engine --bin lumistripe-engine \
+        --package lumistripe-cli --bin lumistripe \
+        --package lumistripe-deploy-helper --bin lumistripe-deploy-helper \
+    && cargo build --locked --release --manifest-path rust/Cargo.toml \
+        --package lumistripe-web --bin lumistripe-web --features bluez,pipewire
 
 FROM debian:trixie-slim AS soloist
 
@@ -48,12 +44,12 @@ ARG TARGETARCH
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-COPY deploy/extract_soloist.py /opt/extract_soloist.py
+COPY --from=rust-build \
+    /src/rust/target/release/lumistripe-deploy-helper \
+    /usr/local/bin/lumistripe-deploy-helper
 
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends \
-        ca-certificates \
-        python3 \
+    && apt-get install --yes --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && case "${TARGETARCH}" in \
         arm64) archive_arch=arm64 ;; \
@@ -62,47 +58,56 @@ RUN apt-get update \
         *) echo "Unsupported Docker architecture: ${TARGETARCH}" >&2; exit 1 ;; \
        esac \
     && mkdir -p /tmp/soloist \
-    && python3 /opt/extract_soloist.py --download \
-        "https://soloist-builds.spotifycdn.com/soloist_release_${archive_arch}.tar.gz" \
-        /tmp/soloist/soloist.tar.gz /tmp/soloist/soloist \
+    && /usr/local/bin/lumistripe-deploy-helper soloist-download \
+        --url "https://soloist-builds.spotifycdn.com/soloist_release_${archive_arch}.tar.gz" \
+        --archive /tmp/soloist/soloist.tar.gz \
+        --destination /tmp/soloist/soloist \
     && test -x /tmp/soloist/soloist \
-    && install -o root -g root -m 755 /tmp/soloist/soloist /usr/local/bin/soloist \
-    && rm -rf /tmp/soloist
+    && rm -rf /tmp/soloist/soloist.tar.gz
 
-FROM python:3.12-slim-trixie AS runtime
+FROM debian:trixie-slim AS runtime
 
-ENV DEBIAN_FRONTEND=noninteractive \
-    PYTHONUNBUFFERED=1 \
-    PATH=/opt/lumistripe/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
-        bluez \
         ca-certificates \
         curl \
         dbus \
         libasound2 \
-        libasound2-plugins \
         libatomic1 \
+        libdbus-1-3 \
         libgpiod3 \
-        libportaudio2 \
+        libpipewire-0.3-0 \
+        libpulse0 \
         libspa-0.2-bluetooth \
+        libspa-0.2-modules \
         pipewire-alsa \
-        pipewire-bin \
         pulseaudio-utils \
     && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /var/lib/lumistripe
+    && mkdir -p /opt/lumistripe/static /var/lib/lumistripe
 
-COPY --from=python-build /opt/lumistripe /opt/lumistripe
-COPY --from=soloist /usr/local/bin/soloist /usr/local/bin/soloist
+COPY --from=rust-build /src/rust/target/release/lumistripe-web /usr/local/bin/lumistripe-web
+COPY --from=rust-build /src/rust/target/release/lumistripe-engine /usr/local/bin/lumistripe-engine
+COPY --from=rust-build /src/rust/target/release/lumistripe /usr/local/bin/lumistripe-cli
+COPY --from=rust-build /src/rust/target/release/lumistripe-deploy-helper /usr/local/bin/lumistripe-deploy-helper
+COPY --from=frontend \
+    /src/apps/lumistripe-web/src/lumistripe_web/static/ \
+    /opt/lumistripe/static/
+COPY --from=soloist /tmp/soloist/soloist /usr/local/bin/soloist
 COPY deploy/docker/spotify-entrypoint.sh /usr/local/bin/lumistripe-spotify-entrypoint
 
-RUN chmod 755 /usr/local/bin/lumistripe-spotify-entrypoint
-
-RUN groupadd --system --gid 10001 lumistripe \
+RUN chmod 755 /usr/local/bin/lumistripe-spotify-entrypoint \
+    && groupadd --system --gid 10001 lumistripe \
     && useradd --system --uid 10001 --gid lumistripe \
         --home-dir /var/lib/lumistripe --no-create-home lumistripe \
-    && chown lumistripe:lumistripe /var/lib/lumistripe
+    && chown -R lumistripe:lumistripe /var/lib/lumistripe
 
 WORKDIR /opt/lumistripe
 USER 10001:10001
+
+ENTRYPOINT ["/usr/local/bin/lumistripe-web"]
+CMD ["--simulate", "--host", "127.0.0.1", "--port", "8000", "--engine-binary", "/usr/local/bin/lumistripe-engine", "--static-dir", "/opt/lumistripe/static", "--settings-file", "/var/lib/lumistripe/settings.json"]
+
+HEALTHCHECK --interval=10s --timeout=5s --retries=12 --start-period=30s \
+    CMD curl --fail --silent http://127.0.0.1:8000/api/health >/dev/null || exit 1

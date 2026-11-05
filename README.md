@@ -6,9 +6,9 @@
 **Native Rust LED application with audio-reactive lighting and a React dashboard.**
 
 The Rust web server, shared playback and audio engine, and CLI are LumiStripe's
-primary application target. Python CLI and web implementations remain for
-compatibility and rollback; the installer keeps Python selected until the
-Raspberry Pi cutover gates pass.
+primary application. New installations use Rust by default and install the
+Rust CLI as `lumistripe-cli`. Python web and CLI implementations remain for
+explicit legacy rollback and migration checks.
 
 LumiStripe drives 2-wire addressable LED strips from a Raspberry Pi or other
 Linux single-board computer via GPIO bit-banging, and provides a rich animation
@@ -23,7 +23,7 @@ Rust engine and React dashboard.
 - **Audio Reactive** — Real-time FFT analysis with 8 frequency bands, beat detection, BPM estimation, and onset/transient detection
 - **Layered Dynamic Selection** — Selects a smooth base animation and independently schedules up to two compatible beat/drop effects from live music features
 - **Three Playback Modes** — Static, Cycling, and music-driven Dynamic playback in both the CLI and web simulator
-- **CLI** — Run the shared Rust engine headlessly with `lumistripe-cli`; the Python `lumistripe` command remains available during migration
+- **CLI** — Run the shared Rust engine headlessly with the installed `lumistripe-cli` command
 - **Simulator** — Run the Rust engine and React dashboard with mock outputs on x86_64 Linux or Raspberry Pi
 
 ## Raspberry Pi party appliance
@@ -36,10 +36,11 @@ access, run the self-contained installer from the checkout on the Pi:
 sudo ./deploy/install.sh
 ```
 
-The installer installs the system packages and native build tools, uv 0.13.0,
-managed Python 3.12, the native audio, GPIO, and SPI extensions, Bun, and all
-locked Python/frontend dependencies. It also builds the frontend and configures
-Bluetooth/WirePlumber, Raspberry Pi SPI, Nginx, and the systemd service.
+The installer installs the system packages and native build tools, Rust 1.88.0,
+Bun, and the locked frontend dependencies. It builds the frontend and the
+commit-matched Rust web, engine, CLI, and deployment helper, then configures
+Bluetooth/WirePlumber, Raspberry Pi SPI, Nginx, and the systemd service. It does
+not install Python application packages or `uv` for a Rust installation.
 It uses the non-root account invoking `sudo`; set `LUMI_SERVICE_USER` and
 `LUMI_PROJECT_DIR` when the checkout or service account differs. In an
 interactive terminal, the installer prompts for a four-digit pairing code and
@@ -178,21 +179,21 @@ cargo run --locked --manifest-path rust/Cargo.toml -p lumistripe-web -- \
 Measure the selected microphone and print recommended tuning flags:
 
 ```bash
-lumistripe --calibrate-audio 3 --audio-device usb
+lumistripe-cli --calibrate-audio 3 --audio-device usb
 ```
 
 Apply calibration automatically before starting Dynamic mode:
 
 ```bash
-lumistripe --mode dynamic --auto-calibrate-audio 3
-lumistripe --audio-debug --auto-calibrate-audio 3
+lumistripe-cli --mode dynamic --auto-calibrate-audio 3
+lumistripe-cli --audio-debug --auto-calibrate-audio 3
 ```
 
 For live base-animation, effect-layer, selector, and scheduler diagnostics:
 
 ```bash
-lumistripe --mode dynamic --debug-selector
-lumistripe --audio-debug --audio-debug-verbose
+lumistripe-cli run --mode dynamic --debug-selector
+lumistripe-cli audio-debug --verbose
 ```
 
 ## Development

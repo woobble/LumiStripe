@@ -724,6 +724,7 @@ write_install_state
 chown -R "$SERVICE_USER:$SERVICE_GROUP" "$PROJECT_DIR"
 install_project_dependencies
 build_rust_release
+install_rust_cli_command "$SERVICE_HOME"
 install_privileged_network_helper
 if [[ ! -e /var/lib/lumistripe/update/status.json ]]; then
   as_user "$PROJECT_DIR/rust/target/rust-deploy/current/lumistripe-deploy-helper" \

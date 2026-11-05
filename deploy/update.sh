@@ -180,7 +180,8 @@ build_rust_backend() {
   as_user_with_env \
     RUSTUP_HOME="$PROJECT_HOME/.rustup" \
     CARGO_HOME="$PROJECT_HOME/.cargo" \
-    "$PROJECT_DIR/deploy/build-rust-backend.sh" "$PROJECT_DIR"
+    "$PROJECT_DIR/deploy/build-rust-backend.sh" "$PROJECT_DIR" || return 1
+  install_rust_cli_command "$PROJECT_HOME"
 }
 
 prune_rust_backend_releases() {

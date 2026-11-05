@@ -10,6 +10,7 @@ BUILDER = Path(__file__).parents[1] / "build-rust-backend.sh"
 UPDATE_SUPPORT = Path(__file__).parents[1] / "update-support.sh"
 INSTALLER = Path(__file__).parents[1] / "install.sh"
 UPDATER = Path(__file__).parents[1] / "update.sh"
+ENV_TEMPLATE = Path(__file__).parents[1] / "lumistripe-web.env.example"
 
 
 def _git(project: Path, *arguments: str) -> str:
@@ -139,7 +140,7 @@ def test_update_support_does_not_execute_environment_file(tmp_path: Path) -> Non
     [
         ("rust", "LUMI_WEB_BACKEND=python\n", "rust", "false"),
         ("", "LUMI_WEB_BACKEND=rust\n", "rust", "false"),
-        ("", "", "python", "true"),
+        ("", "", "rust", "false"),
         ("python", "LUMI_WEB_BACKEND=rust\n", "python", "true"),
     ],
 )
@@ -170,8 +171,45 @@ def test_backend_profile_selects_runtime_dependencies(
     assert result.stdout.splitlines() == [expected, needs_python]
 
 
-def test_web_launcher_keeps_python_default_until_cutover(tmp_path: Path) -> None:
+def test_web_launcher_defaults_to_rust_and_requires_an_active_release(tmp_path: Path) -> None:
     home = tmp_path / "home"
+    project = tmp_path / "project"
+    project.mkdir()
+    empty_path = tmp_path / "empty-path"
+    empty_path.mkdir()
+    launch_log = tmp_path / "launch.log"
+    environment = os.environ.copy()
+    environment.pop("LUMI_WEB_BACKEND", None)
+    environment.pop("LUMI_UV_BIN", None)
+    environment.update(
+        {
+            "HOME": str(home),
+            "PATH": str(empty_path),
+            "LUMI_PROJECT_DIR": str(project),
+            "LUMI_TEST_LAUNCH_LOG": str(launch_log),
+        }
+    )
+
+    launcher = Path(__file__).parents[1] / "lumistripe-web-launcher.sh"
+    result = subprocess.run(
+        ["/bin/bash", str(launcher)],
+        check=False,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 127
+    assert "Rust release pointer is missing" in result.stderr
+    assert "deploy/install.sh or deploy/update.sh" in result.stderr
+    assert not launch_log.exists()
+
+
+def test_web_launcher_keeps_explicit_python_rollback(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "project"
+    project.mkdir()
     uv_bin = home / ".local/bin/uv"
     uv_bin.parent.mkdir(parents=True)
     uv_bin.write_text(
@@ -183,13 +221,12 @@ def test_web_launcher_keeps_python_default_until_cutover(tmp_path: Path) -> None
     empty_path.mkdir()
     launch_log = tmp_path / "launch.log"
     environment = os.environ.copy()
-    environment.pop("LUMI_WEB_BACKEND", None)
-    environment.pop("LUMI_UV_BIN", None)
     environment.update(
         {
             "HOME": str(home),
             "PATH": str(empty_path),
-            "LUMI_PROJECT_DIR": str(tmp_path / "project"),
+            "LUMI_WEB_BACKEND": "python",
+            "LUMI_PROJECT_DIR": str(project),
             "LUMI_TEST_LAUNCH_LOG": str(launch_log),
         }
     )
@@ -209,7 +246,83 @@ def test_web_launcher_keeps_python_default_until_cutover(tmp_path: Path) -> None
     assert invocation.startswith("run --directory ")
     assert "--python 3.12" in invocation
     assert "lumistripe-web --host 127.0.0.1 --hardware" in invocation
-    assert "rust/target" not in invocation
+
+
+def test_rust_cli_command_points_to_the_commit_matched_release(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    home = tmp_path / "service-home"
+    release = project / "rust/target/rust-deploy/releases/0123456789abcdef"
+    release.mkdir(parents=True)
+    current = project / "rust/target/rust-deploy/current"
+    current.parent.mkdir(parents=True, exist_ok=True)
+    current.symlink_to("releases/0123456789abcdef")
+    binary = release / "lumistripe"
+    marker = tmp_path / "cli-invoked"
+    binary.write_text(
+        f"#!/bin/sh\nprintf '%s\\n' \"$*\" > '{marker}'\n", encoding="utf-8"
+    )
+    binary.chmod(0o755)
+
+    script = f"""
+set -Eeuo pipefail
+PROJECT_DIR={str(project)!r}
+as_user() {{ "$@"; }}
+source "$1"
+install_rust_cli_command "$2"
+"$2/.local/bin/lumistripe-cli" --help
+"""
+    result = subprocess.run(
+        ["/bin/bash", "-c", script, "install-rust-cli", str(UPDATE_SUPPORT), str(home)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr
+    command_path = home / ".local/bin/lumistripe-cli"
+    assert command_path.is_symlink()
+    assert command_path.resolve() == binary
+    assert marker.read_text(encoding="utf-8").strip() == "--help"
+
+
+def test_installer_preserves_explicit_python_configuration(tmp_path: Path) -> None:
+    environment_file = tmp_path / "lumistripe-web.env"
+    original = (
+        "LUMI_PAIRING_CODE=1234\n"
+        "LUMI_WEB_BACKEND=python\n"
+        "LUMISTRIPE_ENABLE_SPOTIFY=true\n"
+    )
+    environment_file.write_text(original, encoding="utf-8")
+    installer = INSTALLER.read_text(encoding="utf-8")
+    definition = installer[
+        installer.index("create_environment_file() {"):
+        installer.index("create_spotify_environment_file() {")
+    ]
+    script = f"""
+set -Eeuo pipefail
+install() {{ :; }}
+chown() {{ :; }}
+chmod() {{ :; }}
+ENV_DIR={str(tmp_path)!r}
+ENV_FILE={str(environment_file)!r}
+SERVICE_USER=test
+SERVICE_GROUP=test
+WEB_BACKEND=python
+{definition}
+create_environment_file
+"""
+    result = subprocess.run(
+        ["/bin/bash", "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert environment_file.read_text(encoding="utf-8") == original
+    assert "LUMI_WEB_BACKEND=rust" in ENV_TEMPLATE.read_text(encoding="utf-8")
 
 
 def test_rust_install_and_update_profiles_skip_python_tooling(tmp_path: Path) -> None:

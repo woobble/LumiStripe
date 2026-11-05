@@ -72,13 +72,12 @@ The installer provisions the appliance: Debian/Raspberry Pi OS packages and
 native build tools, D-Bus and PipeWire development headers, the service user
 and GPIO/SPI/audio permissions, Raspberry Pi SPI, Rust 1.88.0, Bun,
 NetworkManager and Wi-Fi adapter tools, the frontend production build, and
-Bluetooth/WirePlumber configuration. The default Python backend also installs
-uv, managed Python 3.12, and Python native extensions. Set
-`LUMI_WEB_BACKEND=rust` for the Rust-only installation profile; it skips uv,
-Python packages, and Python native extensions. It builds the commit-matched
-Rust web, engine, CLI, and deployment helper binaries. Python remains the
-default until the Pi cutover gates pass. The installer also installs the
-Spotify Soloist
+Bluetooth/WirePlumber configuration. New installations use Rust and build
+commit-matched web, engine, CLI, and deployment-helper binaries. They do not
+install Python application packages, Python native extensions, or `uv`. Set
+`LUMI_WEB_BACKEND=python` only to retain or explicitly select the legacy
+rollback backend; that path installs `uv`, managed Python 3.12, and Python
+native extensions. The installer also installs the Spotify Soloist
 binary under the non-root service account when configured, plus a local mkcert
 CA and HTTPS certificate, Nginx, and the required systemd services. Without a
 Spotify key the Spotify service remains disabled. Existing
@@ -90,11 +89,11 @@ permits HTTPS-only redirects, validates that it contains one regular
 `soloist` file, and installs it under the service user's `.local/bin`; it does
 not install the downloaded binary with root ownership.
 
-The Python systemd service uses the same Python version selected by the
-installer and syncs only production dependencies. Set `LUMI_PYTHON_VERSION`
-when installing or updating to choose a different supported interpreter
-version. The Rust-only profile does not require uv or a Python interpreter for
-installation, normal service operation, or update and rollback.
+When `LUMI_WEB_BACKEND=python` is explicitly selected, the launcher uses the
+same Python version selected by the installer and syncs only production
+dependencies. Set `LUMI_PYTHON_VERSION` to choose another supported version
+for that rollback path. Rust installation, normal service operation, and
+Rust-only update and rollback do not require `uv` or a Python interpreter.
 
 The installer uses the non-root account that invoked `sudo` (or the checkout
 owner when run from a root shell). To install for another account, set
@@ -119,29 +118,36 @@ The pairing code is stored in `/etc/lumistripe/lumistripe-web.env` with mode
 `600`. The systemd service passes it through the process environment, not its
 command-line arguments.
 
-## Select the Rust web backend
+## Backend selection and rollback
 
-Python remains the installer default until the Raspberry Pi validation gates
-pass. To exercise a fresh Rust-only installation, select the backend in the
-installer environment:
+Rust is the default for new installations. The installer writes
+`LUMI_WEB_BACKEND=rust` into a newly created environment file, builds the
+commit-matched release, and installs `lumistripe-cli` under the service user's
+`~/.local/bin`. That command and the systemd launcher resolve binaries through
+the same atomic release pointer, so CLI and service engine versions move with
+the updater. For an existing installation that remains explicitly configured
+for Python, the installer and updater retain that backend until an
+administrator changes it.
+
+To select the legacy Python rollback backend for a new installation, set it
+explicitly:
 
 ```bash
 sudo env LUMI_SERVICE_USER=woobb \
   LUMI_PROJECT_DIR=/opt/lumistripe-install \
-  LUMI_WEB_BACKEND=rust \
+  LUMI_WEB_BACKEND=python \
   /opt/lumistripe-install/deploy/install.sh
 ```
 
-This profile provisions Rust 1.88.0 and the `libdbus-1-dev` and
-`libpipewire-0.3-dev` headers, then builds the commit-matched Rust web, engine,
-CLI, and deployment helper release with the React frontend. It does not install
-uv, Python application packages, or Python native extensions. The updater uses
-the same setting from `/etc/lumistripe/lumistripe-web.env`; Rust-only updates
-and rollback build matching Rust releases without Python.
+The explicit Python profile keeps the FastAPI rollback backend and Python CLI
+available. It installs `uv` and Python dependencies for those existing
+consumers; it still builds the version-matched Rust release and installs the
+separate `lumistripe-cli` command. The updater reads the selected backend from
+`/etc/lumistripe/lumistripe-web.env`. Rust deployments skip Python dependency
+installation during updates and rollback.
 
 For an existing Python installation, Rust can be staged without changing the
-selected backend. The installer provisions Rust 1.88.0 and the native
-provider headers. From a clean checkout, build the commit-matched binaries as
+selected backend. From a clean checkout, build the commit-matched binaries as
 the service account:
 
 ```bash
@@ -153,12 +159,21 @@ sudo -H -u pi env \
   /opt/lumistripe-install
 ```
 
-Then set `LUMI_WEB_BACKEND=rust` in
-`/etc/lumistripe/lumistripe-web.env` and restart `lumistripe-web.service`.
-The launcher checks that the staged binaries match the checkout and pins the
-running web process and its engine restarts to the same release. The updater
-rebuilds both binaries before switching releases; a failed build leaves the
-previous release active. Keep the Python backend available for rollback.
+The normal installer and updater install the service user's Rust CLI command
+alongside the release. Running the builder directly only stages the binaries.
+Moving an existing Python installation to Rust is a separate administrator
+decision. Set `LUMI_WEB_BACKEND=rust` in
+`/etc/lumistripe/lumistripe-web.env` and run
+`deploy/update.sh`. The launcher fails with a repair command if a release is
+missing or does not match the checkout, and pins the running web process and
+engine restarts to one release. The updater stages a complete release, then
+checks service health and returns to the previous release if startup fails.
+
+Run the installed CLI as the service user, for example:
+
+```bash
+sudo -H -u pi /home/pi/.local/bin/lumistripe-cli --help
+```
 
 On Trixie the installer selects `libgpiod3`; older supported Debian-based Pi
 images are handled with `libgpiod2` when that is the available runtime package.
@@ -249,8 +264,8 @@ sudo journalctl -u lumistripe-update-check.service \
 
 ## Local Docker development with Spotify Connect
 
-The local development stack builds the web app with simulated LED
-output. It uses Spotify Connect as its audio source and plays Spotify through
+The local development stack builds the Rust web app and engine with simulated
+LED output. It uses Spotify Connect as its audio source and plays Spotify through
 the host speakers. It does not start Bluetooth, mount GPIO/SPI devices, or
 require a microphone. This profile targets Linux hosts with Docker Compose and
 a PipeWire PulseAudio-compatible server in the active desktop session.
@@ -274,10 +289,12 @@ Start the local stack from the repository root:
 
 ```bash
 docker compose --project-name lumistripe-dev \
-  -f deploy/docker-compose.dev.yml up --build
+  -f deploy/docker-compose.dev.yml --profile spotify up --build
 ```
 
-Open `http://127.0.0.1:8000/`. In Spotify on a phone or computer, select the
+The Spotify service is optional and runs in its own container. Omit
+`--profile spotify` to start only the web simulator. Open
+`http://127.0.0.1:8000/`. In Spotify on a phone or computer, select the
 **LumiStripe** Connect device. The web runtime captures the Spotify monitor
 while Soloist routes it to the host's default speaker output. LumiStripe
 settings and Soloist session/cache data persist under `.docker-dev/data/`;
@@ -290,6 +307,9 @@ docker compose --project-name lumistripe-dev \
   -f deploy/docker-compose.dev.yml down
 ```
 
+The Rust image builds the web, engine, CLI, and restricted deployment helper
+with the pinned Rust toolchain and builds the dashboard with Bun. Its normal
+build, runtime, and Soloist archive setup do not use Python, `pip`, or `uv`.
 The Compose file uses host networking so the web runtime can connect to
 Soloist's local WebSocket on `127.0.0.1:9090`. It binds the dashboard to
 `127.0.0.1:8000`, runs both containers as the current user's UID/GID with a
@@ -311,7 +331,8 @@ PipeWire services is a recovery step, not normally required.
 
 To remove the LumiStripe appliance files and services while preserving the
 checkout, shared Debian packages, PipeWire/Bluetooth/Nginx services, the
-service account, uv, Bun, mkcert, and the mkcert CA, run:
+service account, Rust and Bun toolchains, optional Python tooling, mkcert, and
+the mkcert CA, run:
 
 ```bash
 sudo ./deploy/uninstall.sh

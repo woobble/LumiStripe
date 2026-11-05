@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-PROJECT_DIR="${LUMI_PROJECT_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)}"
-BACKEND="${LUMI_WEB_BACKEND:-python}"
+PROJECT_DIR_INPUT="${LUMI_PROJECT_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)}"
+PROJECT_DIR="$(cd -- "$PROJECT_DIR_INPUT" 2>/dev/null && pwd -P)" || {
+  echo "LumiStripe project directory is missing: $PROJECT_DIR_INPUT" >&2
+  exit 127
+}
+BACKEND="${LUMI_WEB_BACKEND:-rust}"
 
 case "$BACKEND" in
   python)
@@ -16,38 +20,35 @@ case "$BACKEND" in
     ;;
   rust)
     RUST_DEPLOY_CURRENT="$PROJECT_DIR/rust/target/rust-deploy/current"
-    if [[ -e "$RUST_DEPLOY_CURRENT" || -L "$RUST_DEPLOY_CURRENT" ]]; then
-      if [[ ! -L "$RUST_DEPLOY_CURRENT" ]]; then
-        echo "Rust deployment pointer is not a symbolic link: $RUST_DEPLOY_CURRENT" >&2
-        exit 127
-      fi
-      PROJECT_COMMIT="$(git -C "$PROJECT_DIR" rev-parse --verify HEAD 2>/dev/null || true)"
-      DEPLOYED_COMMIT="$(cat "$RUST_DEPLOY_CURRENT/source-commit" 2>/dev/null || true)"
-      if [[ -z "$PROJECT_COMMIT" || "$PROJECT_COMMIT" != "$DEPLOYED_COMMIT" ]]; then
-        echo "Rust binaries do not match the checked-out project commit. Run deploy/update.sh before starting the Rust backend." >&2
-        exit 127
-      fi
-      RUST_DEPLOY_RELEASE="$(readlink -f -- "$RUST_DEPLOY_CURRENT" 2>/dev/null || true)"
-      if [[ -z "$RUST_DEPLOY_RELEASE" ]]; then
-        echo "Rust deployment pointer does not resolve to a release directory." >&2
-        exit 127
-      fi
-      # Pin the web process and any supervised engine restart to this release.
-      WEB_BIN="$RUST_DEPLOY_RELEASE/lumistripe-web"
-      ENGINE_BIN="$RUST_DEPLOY_RELEASE/lumistripe-engine"
-    else
-      # Preserve the documented manual build path for the first Rust startup.
-      WEB_BIN="$PROJECT_DIR/rust/target/release/lumistripe-web"
-      ENGINE_BIN="$PROJECT_DIR/rust/target/release/lumistripe-engine"
+    if [[ ! -L "$RUST_DEPLOY_CURRENT" ]]; then
+      echo "The Rust release pointer is missing: $RUST_DEPLOY_CURRENT. Run deploy/install.sh or deploy/update.sh to build and activate a commit-matched release." >&2
+      exit 127
     fi
+    PROJECT_COMMIT="$(git -C "$PROJECT_DIR" rev-parse --verify HEAD 2>/dev/null || true)"
+    DEPLOYED_COMMIT="$(cat -- "$RUST_DEPLOY_CURRENT/source-commit" 2>/dev/null || true)"
+    if [[ ! "$PROJECT_COMMIT" =~ ^[0-9a-f]{40}$ || "$PROJECT_COMMIT" != "$DEPLOYED_COMMIT" ]]; then
+      echo "Rust binaries do not match the checked-out project commit. Run deploy/update.sh before starting the Rust backend." >&2
+      exit 127
+    fi
+    RUST_DEPLOY_RELEASE="$(readlink -f -- "$RUST_DEPLOY_CURRENT" 2>/dev/null || true)"
+    EXPECTED_RELEASE="$PROJECT_DIR/rust/target/rust-deploy/releases/$PROJECT_COMMIT"
+    if [[ "$RUST_DEPLOY_RELEASE" != "$EXPECTED_RELEASE" ]]; then
+      echo "Rust release pointer resolves outside the expected commit-matched release: $RUST_DEPLOY_CURRENT" >&2
+      exit 127
+    fi
+    for binary in lumistripe-web lumistripe-engine lumistripe-deploy-helper lumistripe; do
+      if [[ ! -f "$RUST_DEPLOY_RELEASE/$binary" || -L "$RUST_DEPLOY_RELEASE/$binary" || ! -x "$RUST_DEPLOY_RELEASE/$binary" ]]; then
+        echo "Rust release $PROJECT_COMMIT is incomplete: missing executable $RUST_DEPLOY_RELEASE/$binary. Run deploy/update.sh to rebuild it." >&2
+        exit 127
+      fi
+    done
+    # Pin the web process and every supervised engine restart to this release.
+    WEB_BIN="$RUST_DEPLOY_RELEASE/lumistripe-web"
+    ENGINE_BIN="$RUST_DEPLOY_RELEASE/lumistripe-engine"
     STATIC_DIR="$PROJECT_DIR/apps/lumistripe-web/src/lumistripe_web/static"
     SETTINGS_FILE="${LUMISTRIPE_SETTINGS_FILE:-${HOME:?HOME must be set}/.config/lumistripe/settings.json}"
     OUTPUT_BACKEND="${LUMI_RUST_OUTPUT_BACKEND:-spi}"
 
-    if [[ ! -x "$WEB_BIN" || ! -x "$ENGINE_BIN" ]]; then
-      echo "Rust web binaries are missing. Install libdbus-1-dev and libpipewire-0.3-dev, then build lumistripe-engine and lumistripe-web with the bluez,pipewire features." >&2
-      exit 127
-    fi
     case "$OUTPUT_BACKEND" in
       spi|gpio|mock|mock-spi) ;;
       *)

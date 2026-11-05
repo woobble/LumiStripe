@@ -1,12 +1,21 @@
 # Native Rust web migration
 
+> **Current deployment status:** new installations use the standalone Axum
+> server, engine, and Rust CLI. The Python FastAPI application remains an
+> explicit rollback path and compatibility reference; it is not required by
+> the normal installer or runtime. See the
+> [Python retirement inventory](python-retirement-inventory.md) for the
+> remaining Python consumers.
+
 ## Goal 7 boundary
 
 The Rust web application is an independent Axum server in
 [`rust/apps/lumistripe-web`](../../rust/apps/lumistripe-web). It starts and
 supervises a separate `lumistripe-engine` process, serves the built React app,
 and exposes the first authenticated dashboard API slice. The Python FastAPI
-application remains the default deployment and complete feature fallback.
+application was the default deployment and complete feature fallback when this
+migration began. It remains available for explicit rollback and differential
+checks.
 Only one server may own physical outputs at a time; use mock outputs when
 running both servers for differential checks.
 
@@ -143,14 +152,15 @@ the `update-state` subcommand in the commit-matched deployment helper. The
 Python `deploy/update_state.py` remains as a differential reference. These
 privileged helpers do not give the web process general root access. The Rust
 web process can start and serve its APIs without Python. Soloist download and
-extraction use the Rust deployment helper. The active Python rollback
-installation path and Docker development image still use Python.
+extraction use the Rust deployment helper. New installations select the Rust
+backend; explicitly configured Python deployments remain the rollback path.
+The Docker development image also builds and runs Rust binaries.
 Spotify device names are written to a service-user-owned EnvironmentFile by
 the Rust deploy helper; sudoers permits only a nonblocking restart of the
 Spotify service.
-Rust release binaries are built on installation and update; Python remains
-the default web backend and immediate rollback path until the remaining
-cutover gates pass.
+Rust release binaries are built on installation and update. Rust is the default
+web backend for new installations. Existing Python configuration remains
+selected until an administrator explicitly migrates it.
 
 `frontend/openapi.json` and `src/generated/api.ts` are generated from the Rust
 Axum routes and Utoipa schemas. The Rust document covers all 64 REST operations
@@ -274,15 +284,17 @@ bounded graph enumeration, and did not change routes. BlueZ integration could
 not be verified on that x86_64 host because its system D-Bus service was
 unavailable; Raspberry Pi validation is recorded below.
 
-Set `LUMI_WEB_BACKEND=rust` in the service environment to select those
-binaries. The updater reads that setting and rebuilds both services with Rust
-1.88.0 and the `bluez,pipewire` features before restarting the web service.
+New installations use the commit-matched Rust binaries by default. The updater
+reads `LUMI_WEB_BACKEND` from the service environment and rebuilds the web,
+engine, CLI, and helper with Rust 1.88.0 and the `bluez,pipewire` features
+before restarting the web service.
 It builds into a staging target and atomically activates a commit-matched
 application release; a failed build leaves the previous release
 active for rollback. The launcher rejects a staged release when its source commit does not match the
 checkout. The installer provisions the Rust toolchain and native development
 headers, then builds the commit-matched web, engine, CLI, and deployment helper
-release. The Python backend remains the default.
+release. Set `LUMI_WEB_BACKEND=python` explicitly to retain the legacy rollback
+backend.
 
 ## Remaining Python responsibilities and Rust replacements
 
@@ -414,8 +426,9 @@ release. The Python backend remains the default.
    and PipeWire snapshots; physical pairing and route changes, Wi-Fi
    connection changes, live Soloist playback, and update installation
    recovery remain. The hosted ARM64 workflow has not run in this session.
-   Python remains the default until
-   deployment checks pass on x86_64 and Raspberry Pi ARM64.
+   Rust is the new-install default. The Python backend remains available for
+   explicit rollback; hardware checks remain deferred in the retirement
+   inventory.
 
 ## Validation and operational risks
 

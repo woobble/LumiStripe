@@ -15,25 +15,25 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    depends_on:
-      lumistripe-spotify:
-        condition: service_healthy
     environment:
       HOME: /var/lib/lumistripe
       XDG_RUNTIME_DIR: /run/host-audio
       PULSE_SERVER: unix:/run/host-audio/pulse/native
+      LUMISTRIPE_ENABLE_SPOTIFY: "true"
     volumes:
       - ../.docker-dev/data/web:/var/lib/lumistripe
       - "${XDG_RUNTIME_DIR:?Run Docker Compose from a Linux desktop audio session}:/run/host-audio:ro"
     command:
-      - /opt/lumistripe/.venv/bin/lumistripe-web
+      - --simulate
       - --host
       - 127.0.0.1
       - --port
       - "8000"
       - --enable-spotify
-      - --audio-source
-      - spotify
+      - --engine-binary
+      - /usr/local/bin/lumistripe-engine
+      - --static-dir
+      - /opt/lumistripe/static
       - --settings-file
       - /var/lib/lumistripe/settings.json
     healthcheck:
@@ -45,6 +45,7 @@ services:
 
   lumistripe-spotify:
     image: lumistripe:dev
+    profiles: ["spotify"]
     pull_policy: never
     network_mode: host
     restart: unless-stopped
@@ -76,7 +77,11 @@ services:
     command: ["/usr/local/bin/lumistripe-spotify-entrypoint"]
     healthcheck:
       test:
-        ["CMD-SHELL", "python -c 'import socket; s=socket.create_connection((\"127.0.0.1\", 9090), 1); s.close()'"]
+        - CMD-SHELL
+        - >-
+          status=$(curl --silent --output /dev/null --write-out '%{http_code}'
+          --max-time 2 http://127.0.0.1:9090/ || true);
+          test -n "$status" && test "$status" != 000
       interval: 10s
       timeout: 5s
       retries: 12

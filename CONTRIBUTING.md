@@ -70,11 +70,11 @@ cargo test --locked --manifest-path rust/Cargo.toml --workspace
 cargo build --locked --manifest-path rust/Cargo.toml --workspace
 ```
 
-The Python web backend remains available for rollback and differential tests;
-new installations keep it selected until the Raspberry Pi cutover gates pass.
-See [the deployment guide](deploy/README.md) for the Rust-only installation
-profile and [the migration inventory](docs/migrations/python-retirement-inventory.md)
-for remaining parity and hardware checks.
+The Python web backend remains available for explicit rollback and differential
+tests; new installations use the Rust web application and install the Rust CLI
+as `lumistripe-cli`. See [the deployment guide](deploy/README.md) for the
+Rust-first installation and [the migration inventory](docs/migrations/python-retirement-inventory.md)
+for remaining legacy Python code and parity work.
 
 For Python/Rust engine adapter tests that still exercise the compatibility
 runtime, build the engine binary first and then run:

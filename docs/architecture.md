@@ -1,14 +1,13 @@
 # LumiStripe architecture
 
-LumiStripe's primary application target is native Rust with the existing React
-and TypeScript dashboard. The Rust workspace contains the Axum web server,
+LumiStripe's primary application is native Rust with the existing React and
+TypeScript dashboard. The Rust workspace contains the Axum web server,
 real-time engine, CLI, browser simulator mode, and restricted deployment
-helper. Python remains for compatibility, the currently installed CLI, and the
-web rollback backend. There is no standalone simulator; the supported
-simulator is the Rust web application running with mock outputs. New
-installations still default to Python until the Raspberry Pi cutover gates in
-the [Python retirement inventory](migrations/python-retirement-inventory.md)
-pass.
+helper. Python remains for explicit legacy rollback and migration checks. There
+is no standalone simulator; the supported simulator is the Rust web application
+running with mock outputs. New installations use Rust by default. Remaining
+Python code and migration evidence are listed in the
+[Python retirement inventory](migrations/python-retirement-inventory.md).
 
 ## Dependency direction
 
@@ -23,7 +22,7 @@ React / TypeScript frontend
 
 Python FastAPI + Python core ---- compatibility and rollback path
 Browser simulator --------------- React frontend + Rust web + mock outputs
-Python CLI ---------------------- installed CLI until production cutover
+Python compatibility ----------- FastAPI rollback + migration tooling
 ```
 
 The Rust engine owns pixel rendering, audio processing, playback scheduling,
@@ -33,8 +32,9 @@ dashboard. The deployment helper provides narrowly scoped update-state,
 NetworkManager, Spotify device-name, and Soloist operations.
 
 The Python `lumistripe-core` and `lumistripe-app-support` packages continue to
-serve the FastAPI rollback path, the installed Python CLI, and migration tests.
-They must not depend on browser code or application-specific web configuration.
+serve the FastAPI rollback path, optional legacy CLI deployments, and migration
+tests. They must not depend on browser code or application-specific web
+configuration.
 Rust REST models are the source for generated frontend contracts.
 
 The frontend consumes the REST and WebSocket contracts and does not depend on
@@ -145,11 +145,11 @@ The Rust engine, web server, CLI, deployment helper, and web simulator mode are
 documented in [the Rust engine migration guide](migrations/rust-engine.md),
 [the Rust web migration guide](migrations/rust-web.md), and
 [the Python retirement inventory](migrations/python-retirement-inventory.md).
-The Rust-only web profile can run without Python. The Rust CLI and web
-simulator mode use the shared engine. The Python web backend remains the
-installer's default and rollback path until Raspberry Pi 4/5 installation,
-service, audio, Bluetooth, Wi-Fi, and physical output checks pass. Hosted and
-mock tests do not replace those hardware checks.
+The normal installer builds a commit-matched Rust release and does not require
+Python application dependencies or `uv`. The Rust CLI and web simulator mode
+use the shared engine. An existing installation can explicitly retain the
+Python web backend for rollback. Hardware behavior remains a separate
+validation task; hosted and mock tests do not replace those checks.
 
 ## Physical stripe zones
 

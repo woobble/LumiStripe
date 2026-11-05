@@ -113,7 +113,7 @@ resolve_web_backend() {
   if [[ -z "$backend" && -r "$env_file" ]]; then
     backend="$(read_web_backend "$env_file")" || return 1
   fi
-  [[ -n "$backend" ]] || backend=python
+  [[ -n "$backend" ]] || backend=rust
   case "$backend" in
     python|rust) printf '%s\n' "$backend" ;;
     *) echo "Unsupported LUMI_WEB_BACKEND: $backend" >&2; return 1 ;;
@@ -122,6 +122,29 @@ resolve_web_backend() {
 
 web_backend_requires_python() {
   [[ "${1:-}" == python ]]
+}
+
+install_rust_cli_command() {
+  local service_home="${1:-}"
+  local command_path
+  local release_binary="$PROJECT_DIR/rust/target/rust-deploy/current/lumistripe"
+
+  [[ -n "$service_home" ]] || {
+    echo "The LumiStripe service home is required to install the Rust CLI." >&2
+    return 1
+  }
+  [[ -f "$release_binary" && -x "$release_binary" ]] || {
+    echo "The commit-matched Rust CLI is missing at $release_binary; run deploy/build-rust-backend.sh first." >&2
+    return 1
+  }
+
+  command_path="$service_home/.local/bin/lumistripe-cli"
+  as_user install -d -m 755 "$service_home/.local/bin" || return 1
+  if [[ -e "$command_path" && ! -L "$command_path" ]]; then
+    echo "Refusing to replace an existing non-symlink CLI command: $command_path" >&2
+    return 1
+  fi
+  as_user ln -sfn "$release_binary" "$command_path"
 }
 
 migrate_spotify_device_name_override() {

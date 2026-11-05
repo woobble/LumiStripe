@@ -1,9 +1,16 @@
 # Incremental Rust engine migration
 
+> **Current deployment status:** this guide covers the Rust engine adapter in
+> the legacy Python compatibility application. New installations use the
+> native Rust web application, engine, and CLI by default. Python remains for
+> explicit rollback, differential checks, and migration work; see the
+> [Python retirement inventory](python-retirement-inventory.md) for the current
+> deployment state.
+
 ## Goal and current boundary
 
-LumiStripe keeps its application control plane in Python. The opt-in Rust
-backend owns animation and visual-effect pixel rendering, reusable frame
+The Python compatibility application's control plane can use the opt-in Rust
+engine for animation and visual-effect pixel rendering, reusable frame
 buffers, final output processing, and every configured device in one Rust
 process. Rust owns Cycling selection and the Dynamic selector, activity gate,
 idle scene, and beat/bar/phrase switch quantization when its monotonic scheduler
@@ -16,8 +23,9 @@ snapshots for existing dashboard, settings, and calibration flows. The Rust
 worker replays timestamped structure and beat events through bounded per-output
 history until the scheduler acknowledges them. Saved Dynamic
 sequences run in Rust against estimated 4/4 bar boundaries, with their progress
-mirrored into Python for API state and fallback. The original
-Python/C renderer remains available as the default backend and rollback path.
+mirrored into Python for API state and fallback. Within that compatibility
+application, the original Python/C renderer remains available as its default
+backend and rollback path.
 
 For supported scenes, the Python worker sends typed, timestamped render inputs
 through protocol v3; it does not send completed pixel frames. Rust renders
@@ -100,7 +108,8 @@ original commands.
 
 ## Selecting the backend
 
-The Python engine remains the default. Build and select Rust explicitly:
+Within the Python compatibility application, the Python engine remains the
+default. Build and select its Rust engine adapter explicitly:
 
 ```bash
 cargo build --release --locked --manifest-path rust/Cargo.toml --bin lumistripe-engine
@@ -210,7 +219,7 @@ implementation installed as the rollback path.
 
 | Capability | Python backend | Rust backend | Validation state |
 | --- | --- | --- | --- |
-| FastAPI routes, REST models, dashboard, WebSocket preview | Supported | Python remains the default; the standalone Axum server exposes compatible state, control, topology, calibration, animation, startup, audio-tuning, transition, and sequencer routes | Rust HTTP/OpenAPI/WebSocket tests and Python/Rust mock-output API parity test |
+| FastAPI routes, REST models, dashboard, WebSocket preview | Supported for rollback | The standalone Axum server is the new-install default and exposes compatible state, control, topology, calibration, animation, startup, audio-tuning, transition, and sequencer routes. The Python runtime remains the default only within this compatibility application. | Rust HTTP/OpenAPI/WebSocket tests and Python/Rust mock-output API parity test |
 | Versioned dashboard settings | Full v1–v12 loader and atomic persistence | Rust reads Python-generated v1–v12 files and transactionally persists identity, topology, startup, playback, animation, transition, audio-profile, calibration, and sequencer settings while preserving unrelated fields | Rust settings compatibility, persistence, acknowledgement, and rollback tests |
 | Startup playback restoration | Supported | Rust restores remembered mode, color, animation, brightness, and blackout; global playback updates refresh remembered state when restoration is enabled | Rust startup-scene and HTTP persistence tests |
 | Animation settings | Supported for all catalogued settings | Rust validates against the generated catalog, supports shared and independent-output values, applies values to scenes, and resets to catalog defaults | Rust animation-settings HTTP and persistence tests |

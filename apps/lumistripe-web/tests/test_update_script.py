@@ -362,10 +362,15 @@ def test_soloist_extractor_rejects_unexpected_members(
     assert "Could not safely extract Soloist" in result.stderr
 
 
-def test_docker_image_uses_bounded_safe_soloist_extraction() -> None:
+def test_docker_image_uses_the_rust_soloist_helper() -> None:
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
 
-    assert "python3 /opt/extract_soloist.py --download" in dockerfile
+    assert "lumistripe-deploy-helper soloist-download" in dockerfile
+    assert "deploy/extract_soloist.py" not in dockerfile
+    assert "python" not in dockerfile.lower()
+    assert "uv" not in dockerfile.lower()
+    assert "pip install" not in dockerfile.lower()
+    assert "pip3 install" not in dockerfile.lower()
     assert "tar -xzf" not in dockerfile
     assert "USER 10001:10001" in dockerfile
 
@@ -710,6 +715,13 @@ def test_rust_rollback_skips_python_and_verifies_restored_web_health(
     builder = deploy_dir / "build-rust-backend.sh"
     builder.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     builder.chmod(0o755)
+    release = project_dir / "rust/target/rust-deploy/releases/previous-rust-commit"
+    release.mkdir(parents=True)
+    cli_binary = release / "lumistripe"
+    cli_binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    cli_binary.chmod(0o755)
+    current_release = project_dir / "rust/target/rust-deploy/current"
+    current_release.symlink_to("releases/previous-rust-commit")
     empty_path = tmp_path / "empty-path"
     empty_path.mkdir()
     call_log = tmp_path / "calls"
@@ -721,7 +733,14 @@ ROLLING_BACK=0
 PROJECT_DIR="$PROJECT_DIR"
 PROJECT_HOME="$PROJECT_HOME"
 WEB_BACKEND=rust
-as_user() {{ printf 'unexpected as_user %s\\n' "$*" >> "$CALL_LOG"; return 95; }}
+as_user() {{
+  printf 'as_user %s\\n' "$*" >> "$CALL_LOG"
+  case "$1" in
+    install) /usr/bin/install "${{@:2}}" ;;
+    ln) /usr/bin/ln "${{@:2}}" ;;
+    *) return 95 ;;
+  esac
+}}
 as_user_with_env() {{ printf 'rust_build %s\\n' "$*" >> "$CALL_LOG"; }}
 git_user() {{ printf 'git %s\\n' "$*" >> "$CALL_LOG"; }}
 configured_web_backend() {{ printf '%s\\n' "$WEB_BACKEND"; }}
@@ -781,8 +800,9 @@ if rollback; then exit 0; else exit 42; fi
     )
     assert "build_frontend" in calls
     assert "refresh_deployment_files" in calls
-    assert not any(line.startswith("unexpected as_user ") for line in calls)
+    assert any(line.startswith("as_user ln -sfn ") for line in calls)
     assert not any("python" in line.lower() or "uv" in line.lower() for line in calls)
+    assert (tmp_path / "service-home/.local/bin/lumistripe-cli").resolve() == cli_binary
     health_probes = [line for line in calls if line.startswith("curl ")]
     assert len(health_probes) == probes
     assert all("--max-time 0.25" in line for line in health_probes)

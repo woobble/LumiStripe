@@ -405,7 +405,10 @@ impl ControlPlane {
                         }
                     }
                     _ = state_tick.tick() => {
-                        if model.config.runtime_kind == "hardware"
+                        if should_poll_automatic_audio_source(
+                            model.config.runtime_kind,
+                            model.config.spotify_provider_enabled,
+                        )
                             && matches!(model.audio_source.as_str(), "auto" | "bluetooth" | "spotify")
                         {
                             let _ = maintain_configured_audio_source(
@@ -3298,7 +3301,11 @@ async fn maintain_configured_audio_source(
     bluetooth: Option<&BluetoothService>,
     spotify: Option<&dyn SpotifyProvider>,
 ) -> Result<(), ApiError> {
-    let automatic = model.audio_source == "auto" && model.config.runtime_kind == "hardware";
+    let automatic = model.audio_source == "auto"
+        && should_poll_automatic_audio_source(
+            model.config.runtime_kind,
+            model.config.spotify_provider_enabled,
+        );
     if automatic {
         let spotify_status = spotify.map(SpotifyProvider::status);
         let spotify_ready = spotify_status.as_ref().is_some_and(|status| {
@@ -3461,6 +3468,10 @@ fn automatic_audio_source_candidates(
     }
     candidates.push("mic");
     candidates
+}
+
+fn should_poll_automatic_audio_source(runtime_kind: &str, spotify_provider_enabled: bool) -> bool {
+    runtime_kind == "hardware" || spotify_provider_enabled
 }
 
 fn automatic_spotify_retry_ready(now: Instant, retry_at: Option<Instant>) -> bool {
@@ -4250,6 +4261,7 @@ mod tests {
         automatic_spotify_retry_ready, begin_audio_calibration_music, expire_color_calibration,
         finish_audio_calibration, maintain_configured_audio_source, microphone_calibration_result,
         restore_audio_source, set_audio_source, set_identity_settings,
+        should_poll_automatic_audio_source,
     };
     use crate::bluetooth::BluetoothService;
     use crate::bluetooth_models::BluetoothDevice;
@@ -5457,6 +5469,13 @@ mod tests {
             automatic_audio_source_candidates(true, false, false),
             ["mic"]
         );
+    }
+
+    #[test]
+    fn simulation_polls_automatic_audio_only_when_spotify_is_enabled() {
+        assert!(!should_poll_automatic_audio_source("simulation", false));
+        assert!(should_poll_automatic_audio_source("simulation", true));
+        assert!(should_poll_automatic_audio_source("hardware", false));
     }
 
     #[test]

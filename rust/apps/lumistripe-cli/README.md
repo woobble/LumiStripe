@@ -1,8 +1,9 @@
 # LumiStripe Rust CLI
 
-The `lumistripe` binary starts the existing Rust engine as a child process and controls
-it over the versioned local IPC. Playback, scheduling, rendering, audio capture,
-and hardware output remain owned by the engine.
+The installer exposes this Rust binary as `lumistripe-cli` from the active,
+commit-matched deployment release. It starts the matching Rust engine as a
+child process and controls it over versioned local IPC. Playback, scheduling,
+rendering, audio capture, and hardware output remain owned by the engine.
 
 The `run` command defaults to the legacy hardware behavior: SPI output at
 `/dev/spidev0.0`, 80 pixels, and Static mode. Select `--backend mock` for
@@ -56,9 +57,9 @@ that contains no commands:
 cargo test -p lumistripe-cli --features test-engine
 ```
 
-The legacy Python CLI remains the installed production command until the Rust
-deployment cutover gates pass on Raspberry Pi hardware. Rust supports one-shot
-and automatic calibration, named or device-matched mic
+The Python CLI remains available to explicitly configured legacy Python
+deployments. The installed `lumistripe-cli` command uses Rust without Python.
+Rust supports one-shot and automatic calibration, named or device-matched mic
 profiles, profile writing, and opt-in live engine performance reports through
 `run --stats`. Rust audio-debug recordings
 contain the engine's capture and DSP telemetry as JSONL; analysis accepts those
