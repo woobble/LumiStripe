@@ -13,9 +13,6 @@ source "$SCRIPT_DIR/soloist.sh"
 PROJECT_DIR="$(canonical_project_directory \
   "${LUMI_PROJECT_DIR:-$(cd -- "$SCRIPT_DIR/.." && pwd -P)}")" || exit 1
 PROJECT_USER="${LUMI_SERVICE_USER:-${SUDO_USER:-}}"
-PYTHON_VERSION="${LUMI_PYTHON_VERSION:-3.12}"
-UV_VERSION="${LUMI_UV_VERSION:-0.13.0}"
-# Preserve newer installs; UV_VERSION is the minimum supported version.
 TARGET_REF="${1:-refs/remotes/lumistripe-upstream/main}"
 LOCK_DIR=/run/lumistripe-update
 LOCK_FILE="$LOCK_DIR/update.lock"
@@ -55,7 +52,6 @@ SERVICE_HOME="$PROJECT_HOME"
 SERVICE_GROUP="$PROJECT_GROUP"
 UPDATE_STATE_FILE="${LUMI_UPDATE_STATE_FILE:-/var/lib/lumistripe/update/status.json}"
 WEB_ENV_FILE=/etc/lumistripe/lumistripe-web.env
-UV_BIN="$PROJECT_HOME/.local/bin/uv"
 BUN_BIN="$PROJECT_HOME/.bun/bin/bun"
 WIREPLUMBER_DIR="$PROJECT_HOME/.config/wireplumber/wireplumber.conf.d"
 WIREPLUMBER_FILE="$WIREPLUMBER_DIR/90-lumistripe-bluetooth.conf"
@@ -68,13 +64,7 @@ command -v runuser >/dev/null || { echo "runuser is required" >&2; exit 1; }
 command -v flock >/dev/null || { echo "flock is required (install util-linux)" >&2; exit 1; }
 command -v curl >/dev/null || { echo "curl is required" >&2; exit 1; }
 [[ -x "$BUN_BIN" ]] || { echo "Bun is missing at $BUN_BIN; run deploy/install.sh first." >&2; exit 1; }
-WEB_BACKEND="$(resolve_web_backend "" "$WEB_ENV_FILE")" || exit 1
-if web_backend_requires_python "$WEB_BACKEND"; then
-  [[ -x "$UV_BIN" ]] || {
-    echo "uv is missing at $UV_BIN; run deploy/install.sh first." >&2
-    exit 1
-  }
-fi
+resolve_web_backend "" "$WEB_ENV_FILE" >/dev/null || exit 1
 
 install -d -o root -g root -m 755 "$LOCK_DIR"
 exec 9>"$LOCK_FILE"
@@ -92,20 +82,6 @@ as_user_with_env() {
     HOME="$PROJECT_HOME" \
     PATH="$PROJECT_HOME/.bun/bin:$PROJECT_HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" \
     "$@"
-}
-
-ensure_uv_version() {
-  local installed_uv_version
-  installed_uv_version="$(as_user "$UV_BIN" --version 2>/dev/null | awk '{ print $2 }' || true)"
-  if ! uv_version_at_least "$installed_uv_version" "$UV_VERSION"; then
-    echo "Updating uv to at least $UV_VERSION for $PROJECT_USER..."
-    as_user "$UV_BIN" self update "$UV_VERSION"
-    installed_uv_version="$(as_user "$UV_BIN" --version 2>/dev/null | awk '{ print $2 }' || true)"
-  fi
-  uv_version_at_least "$installed_uv_version" "$UV_VERSION" || {
-    echo "Expected uv $UV_VERSION or newer at $UV_BIN; found ${installed_uv_version:-no usable uv binary}." >&2
-    return 1
-  }
 }
 
 install_audio_bridge_packages() {
@@ -164,19 +140,12 @@ spotify_environment_ready() {
 
 git_user() { as_user git -C "$PROJECT_DIR" "$@"; }
 
-configured_web_backend() {
-  printf '%s\n' "$WEB_BACKEND"
-}
-
 build_rust_backend() {
-  configured_web_backend >/dev/null || return 1
   [[ -x "$PROJECT_DIR/deploy/build-rust-backend.sh" ]] || {
     echo "Rust deployment builder is missing from $PROJECT_DIR/deploy." >&2
     return 1
   }
-  # Keep a complete, commit-matched Rust release available even while an
-  # installation is using the Python rollback backend. The Spotify service
-  # preflight uses the deploy helper from this same atomic release.
+  # Build every application component from the same source commit.
   as_user_with_env \
     RUSTUP_HOME="$PROJECT_HOME/.rustup" \
     CARGO_HOME="$PROJECT_HOME/.cargo" \
@@ -205,20 +174,6 @@ prune_rust_backend_releases() {
   done
 }
 
-sync_dependencies() (
-  cd "$PROJECT_DIR" || return 1
-  web_backend_requires_python "$WEB_BACKEND" || return 0
-  as_user "$UV_BIN" python install "$PYTHON_VERSION" || return 1
-  as_user_with_env \
-    LUMISTRIPE_BUILD_EXTENSIONS=all \
-    LUMISTRIPE_NATIVE_OPTIMIZATION=1 \
-    UV_PYTHON_PREFERENCE=only-managed \
-    "$UV_BIN" sync --locked --python "$PYTHON_VERSION" --no-dev \
-    --extra hardware-gain --reinstall-package lumistripe-core || return 1
-  as_user "$PROJECT_DIR/.venv/bin/python" -c \
-    'import lumistripe.audio._audio, lumistripe.gpio._gpiomem, lumistripe.gpio._sm16716' || return 1
-)
-
 build_frontend() (
   cd "$PROJECT_DIR/apps/lumistripe-web/frontend" || return 1
   as_user "$BUN_BIN" install --frozen-lockfile || return 1
@@ -236,14 +191,12 @@ render_service_unit() {
   local rendered_file
   local project_replacement
   local home_replacement
-  local python_replacement
   local user_replacement
   local group_replacement
   local uid_replacement
   rendered_file="$(mktemp /tmp/lumistripe-service-update.XXXXXX)" || return 1
   project_replacement="$(printf '%s' "$PROJECT_DIR" | sed 's/[&|\\]/\\&/g')"
   home_replacement="$(printf '%s' "$PROJECT_HOME" | sed 's/[&|\\]/\\&/g')"
-  python_replacement="$(printf '%s' "$PYTHON_VERSION" | sed 's/[&|\\]/\\&/g')"
   user_replacement="$(printf '%s' "$PROJECT_USER" | sed 's/[&|\\]/\\&/g')"
   group_replacement="$(printf '%s' "$PROJECT_GROUP" | sed 's/[&|\\]/\\&/g')"
   uid_replacement="$(printf '%s' "$(id -u "$PROJECT_USER")" | sed 's/[&|\\]/\\&/g')"
@@ -253,7 +206,6 @@ render_service_unit() {
     -e "s|@LUMI_SERVICE_GROUP@|$group_replacement|g" \
     -e "s|@LUMI_PROJECT_DIR@|$project_replacement|g" \
     -e "s|@LUMI_HOME@|$home_replacement|g" \
-    -e "s|@LUMI_PYTHON_VERSION@|$python_replacement|g" \
     -e "s|@LUMI_SERVICE_UID@|$uid_replacement|g" \
     "$SCRIPT_DIR/lumistripe-web.service" > "$rendered_file" || {
       rm -f -- "$rendered_file"
@@ -362,12 +314,7 @@ rollback() {
     echo "Rollback could not restore the previous revision; manual recovery is required." >&2
     return 1
   fi
-  if ! git_user submodule update --init --recursive; then
-    echo "Rollback could not restore submodules; manual recovery is required." >&2
-    return 1
-  fi
   source "$PROJECT_DIR/deploy/update-support.sh"
-  sync_dependencies || failed=1
   build_rust_backend || failed=1
   build_frontend || failed=1
   refresh_deployment_files || failed=1
@@ -413,16 +360,12 @@ trap handle_update_error ERR
 STATUS=$(git_user status --porcelain)
 [[ -z "$STATUS" ]] || { echo "Working tree is dirty; commit or stash changes before updating." >&2; exit 1; }
 record_update_state install-start
-if web_backend_requires_python "$WEB_BACKEND"; then
-  ensure_uv_version
-fi
 PREVIOUS_REF=$(git_user rev-parse HEAD)
 git_user -c core.hooksPath=/dev/null fetch --prune \
   https://github.com/woobble/LumiStripe.git \
   +refs/heads/main:refs/remotes/lumistripe-upstream/main
 TARGET_COMMIT=$(git_user rev-parse --verify "${TARGET_REF}^{commit}")
 git_user -c core.hooksPath=/dev/null switch --detach "$TARGET_COMMIT"
-git_user submodule update --init --recursive
 source "$PROJECT_DIR/deploy/update-support.sh"
 
 install_audio_bridge_packages
@@ -430,7 +373,6 @@ create_spotify_environment_file
 if ! spotify_environment_ready; then
   systemctl disable --now lumistripe-spotify.service >/dev/null 2>&1 || true
 fi
-sync_dependencies
 build_rust_backend
 build_frontend
 if spotify_environment_ready; then

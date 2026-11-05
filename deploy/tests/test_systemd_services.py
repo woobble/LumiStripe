@@ -48,11 +48,11 @@ def test_systemd_services_keep_rust_helpers_and_privilege_boundaries() -> None:
         '/bin/bash "@LUMI_PROJECT_DIR@/deploy/lumistripe-web-launcher.sh"'
     ]
     assert "Environment=PYTHONUNBUFFERED" not in web_service
-    assert "Environment=LUMI_PYTHON_VERSION=@LUMI_PYTHON_VERSION@" in web_service
-    assert "LUMI_WEB_BACKEND=python" in web_service
+    assert "LUMI_PYTHON_VERSION" not in web_service
+    assert "LUMI_WEB_BACKEND=python" not in web_service
 
     environment_template = _unit("lumistripe-web.env.example")
-    assert _section_values(environment_template, "", "LUMI_WEB_BACKEND") == ["rust"]
+    assert _section_values(environment_template, "", "LUMI_WEB_BACKEND") == []
 
     update_check = _unit("lumistripe-update-check.service")
     assert _section_values(update_check, "Service", "User") == [
@@ -144,7 +144,6 @@ def test_systemd_analyze_accepts_rendered_service_units(tmp_path: Path) -> None:
         "@LUMI_SERVICE_HOME@": str(tmp_path),
         "@LUMI_HOME@": str(tmp_path),
         "@LUMI_PROJECT_DIR@": str(tmp_path / "project"),
-        "@LUMI_PYTHON_VERSION@": "3.12",
         "@LUMI_SERVICE_UID@": str(service_user.pw_uid),
     }
     unit_names = (

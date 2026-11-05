@@ -3490,8 +3490,7 @@ fn default_static_dir() -> PathBuf {
     std::env::var_os("LUMISTRIPE_WEB_STATIC_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../../apps/lumistripe-web/src/lumistripe_web/static")
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../apps/lumistripe-web/static")
         })
 }
 

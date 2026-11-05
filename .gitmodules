@@ -1,3 +1,0 @@
-[submodule "third_party/kissfft"]
-	path = third_party/kissfft
-	url = https://github.com/mborgerding/kissfft.git

@@ -1,5 +1,7 @@
 # Runtime output threading
 
+> Historical validation record. This report describes earlier Python and/or native-C implementations and measurements. Some commands refer to retired tools and no longer run. Keep the results as evidence for the recorded revision only; use the current README, architecture, and simulator guides for supported workflows.
+
 The hardware runtime now has separate render and LED output owners. The
 `RuntimeWorker` renders into software controllers and performs zone mapping,
 color correction, power limiting, and preview preparation. `LedOutputThread`

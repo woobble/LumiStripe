@@ -1,8 +1,8 @@
 # Browser simulator
 
 The supported LumiStripe simulator is the Rust web application running with
-mock LED outputs. It serves the same React dashboard and uses the same Rust
-engine as the production web application. There is no standalone simulator.
+mock LED outputs. It serves the production React dashboard and uses the same
+Rust engine as the appliance.
 
 From the repository root, install and build the frontend, then build the Rust
 web server and engine:
@@ -11,9 +11,9 @@ web server and engine:
 cd apps/lumistripe-web/frontend
 bun install --frozen-lockfile
 bun run build
-cd ../../../rust
-cargo build --locked -p lumistripe-engine -p lumistripe-web
-cd ..
+cd ../../../
+cargo build --locked --manifest-path rust/Cargo.toml \
+  -p lumistripe-engine -p lumistripe-web
 ```
 
 Launch one or two simulated outputs:
@@ -22,16 +22,16 @@ Launch one or two simulated outputs:
 cargo run --locked --manifest-path rust/Cargo.toml -p lumistripe-web -- \
   --simulate --pixels 80 --pixels-2 24 \
   --engine-binary rust/target/debug/lumistripe-engine \
-  --static-dir apps/lumistripe-web/src/lumistripe_web/static
+  --static-dir apps/lumistripe-web/static
 ```
 
-Open the URL printed by the command. The simulator binds to `127.0.0.1` and
-stores settings separately at
-`${XDG_CONFIG_HOME:-$HOME/.config}/lumistripe/simulator-settings.json`. Choose
-Static, Cycling, or Dynamic mode and select demo or microphone input in the
-dashboard. The `--settings-file` option can select a temporary settings file
-for isolated runs.
+Open the URL printed by the command. Simulator settings are stored separately
+at `${XDG_CONFIG_HOME:-$HOME/.config}/lumistripe/simulator-settings.json`.
+Use `--settings-file` to choose a temporary settings file. Select Static,
+Cycling, or Dynamic mode in the dashboard and choose demo or microphone input.
+Microphone capture and calibration require a working host audio device; demo
+audio is available without a microphone.
 
 Simulator mode rejects hardware output selections and keeps saved topology on
-mock outputs. Microphone capture and calibration require a host with a working
-microphone; use demo audio for hardware-free runs.
+mock outputs. It does not require a Raspberry Pi, GPIO permissions, or SPI
+devices.

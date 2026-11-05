@@ -1,5 +1,7 @@
 # Rust as the REST contract source
 
+> Current contract decision, completed cutover: Rust Axum models and the Rust OpenAPI exporter are authoritative. The transitional requirement to retain FastAPI/Pydantic for rollback and differential verification ended with Goal 12.
+
 **Status:** Accepted  
 **Date:** 2026-11-03  
 **Supersedes:** [ADR 0004](0004-openapi-contract.md)

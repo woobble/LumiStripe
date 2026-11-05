@@ -1,5 +1,7 @@
 # Comprehensive engineering audit
 
+> Historical validation record. This report describes earlier Python and/or native-C implementations and measurements. Some commands refer to retired tools and no longer run. Keep the results as evidence for the recorded revision only; use the current README, architecture, and simulator guides for supported workflows.
+
 Status: **complete as a prioritized audit**, with limitations and deferred
 checks recorded below. Pi/ARM64 and physical-device validation were explicitly
 waived by the user; no such check is represented as passed.

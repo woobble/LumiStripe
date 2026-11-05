@@ -1,11 +1,17 @@
 # Native Rust web migration
 
-> **Current deployment status:** new installations use the standalone Axum
-> server, engine, and Rust CLI. The Python FastAPI application remains an
-> explicit rollback path and compatibility reference; it is not required by
-> the normal installer or runtime. See the
+> Historical migration and validation record. This report captures an earlier
+> stage of the Python-to-Rust transition; some commands and deployment details
+> below describe retired tools. Keep those results as evidence for their
+> recorded revisions, and use the current README, architecture, and simulator
+> guides for supported workflows.
+
+> **Current status:** Rust Axum is the only maintained web application, and
+> Python application packages and production fallback paths have been retired.
+> The Rust CLI and `--simulate` mode are the supported command-line and
+> simulation interfaces. See the
 > [Python retirement inventory](python-retirement-inventory.md) for the
-> remaining Python consumers.
+> retained development-only Python tools.
 
 ## Goal 7 boundary
 
@@ -284,21 +290,26 @@ bounded graph enumeration, and did not change routes. BlueZ integration could
 not be verified on that x86_64 host because its system D-Bus service was
 unavailable; Raspberry Pi validation is recorded below.
 
-New installations use the commit-matched Rust binaries by default. The updater
-reads `LUMI_WEB_BACKEND` from the service environment and rebuilds the web,
-engine, CLI, and helper with Rust 1.88.0 and the `bluez,pipewire` features
-before restarting the web service.
-It builds into a staging target and atomically activates a commit-matched
-application release; a failed build leaves the previous release
-active for rollback. The launcher rejects a staged release when its source commit does not match the
-checkout. The installer provisions the Rust toolchain and native development
-headers, then builds the commit-matched web, engine, CLI, and deployment helper
-release. Set `LUMI_WEB_BACKEND=python` explicitly to retain the legacy rollback
-backend.
+## Deployment behavior recorded during the migration
 
-## Remaining Python responsibilities and Rust replacements
+At the stage recorded here, new installations used commit-matched Rust
+binaries while `LUMI_WEB_BACKEND=python` still selected the then-existing
+rollback backend. Goal 12 retired that Python fallback. The current installer,
+updater, and launcher reject the saved Python value with migration
+instructions; see the [retirement inventory](python-retirement-inventory.md).
 
-| Python area | Current ownership | Planned Rust boundary and parity needs |
+The updater at that stage read `LUMI_WEB_BACKEND` from the service environment
+and rebuilt the web, engine, CLI, and helper with Rust 1.88.0 and the
+`bluez,pipewire` features before restarting the web service. It built into a
+staging target and atomically activated a commit-matched application release;
+a failed build left the previous release active for rollback. The launcher
+rejected a staged release when its source commit did not match the checkout.
+The installer provisioned the Rust toolchain and native development headers,
+then built the commit-matched web, engine, CLI, and deployment helper release.
+
+## Migration checklist recorded before Python retirement
+
+| Python area | Ownership at that stage | Planned Rust boundary and parity needs |
 | --- | --- | --- |
 | FastAPI route assembly and auth | `app.py`, `api/routes/*`, `api/dependencies.py`, and feature contracts under `contracts/` remain the rollback and differential reference. | Rust has feature-oriented Axum routes, typed contracts, pairing auth, origin checks, and static serving for all 64 REST operations. Rust OpenAPI documents the Bluetooth/output 409 conflicts returned at runtime but omitted from FastAPI's OpenAPI; differential fixtures compare those errors. Continue checking cookie policy and frontend strict schemas during cutover. |
 | Runtime façade and worker | `runtime/facade.py` exposes `LumiStripeRuntime`; `runtime/worker.py` is the single writer for mutable playback, audio, topology, controller, and output state. `commands.py` defines queued operations; `state.py` defines snapshots and injected factories. | Move application policy into the Tokio command actor and immutable state snapshots. Preserve ordering, queue rejection, timeout behavior, fatal-worker recovery, and exactly one writer for each state element. Engine scene acknowledgements remain the boundary for rendered state. |

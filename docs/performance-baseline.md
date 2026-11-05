@@ -1,5 +1,7 @@
 # Performance Baseline and Bottleneck Analysis
 
+> Historical validation record. This report describes earlier Python and/or native-C implementations and measurements. Some commands refer to retired tools and no longer run. Keep the results as evidence for the recorded revision only; use the current README, architecture, and simulator guides for supported workflows.
+
 ## Summary
 
 This baseline measures commit `db6d139d6c7a2ef279d410fa9f6a3732c2e9cd9c`

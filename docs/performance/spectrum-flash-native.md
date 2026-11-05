@@ -1,5 +1,7 @@
 # Native SpectrumFlash Rendering
 
+> Historical validation record. This report describes earlier Python and/or native-C implementations and measurements. Some commands refer to retired tools and no longer run. Keep the results as evidence for the recorded revision only; use the current README, architecture, and simulator guides for supported workflows.
+
 SpectrumFlash now has an optional scalar C kernel in the existing `render`
 extension. Python still owns reactive audio analysis, flash decay, hue phase,
 settings, and effect lifecycle. The native path renders the RGBA pixels into the

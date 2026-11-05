@@ -1,5 +1,7 @@
 # Native BeatTunnel benchmark
 
+> Historical validation record. This report describes earlier Python and/or native-C implementations and measurements. Some commands refer to retired tools and no longer run. Keep the results as evidence for the recorded revision only; use the current README, architecture, and simulator guides for supported workflows.
+
 ## Scope
 
 The optional C kernel handles the per-pixel ring calculations and RGBA writes

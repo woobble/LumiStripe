@@ -56,6 +56,6 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: Include OS, Python/Bun versions, and hardware/audio details when relevant.
+      description: Include OS, Rust/Bun versions, and hardware/audio details when relevant.
     validations:
       required: true

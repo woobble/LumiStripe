@@ -1,105 +1,94 @@
 # Contributing to LumiStripe
 
-Thanks for helping improve LumiStripe. Changes are welcome through pull requests against `main`.
+Changes are welcome through pull requests against `main`.
 
 ## Development setup
 
-The repository currently has Python compatibility/reference packages and a
-native Rust application. The Python suite needs Python 3.12 or newer and
-[uv](https://docs.astral.sh/uv/); frontend work needs the Bun version in
-`.bun-version` (currently 1.4.4). The Rust workspace requires Rust 1.88; the
-deployment profile installs Rust 1.88.0. Hardware is not required for mock
-tests, but Raspberry Pi GPIO, SPI, Bluetooth, and PipeWire behavior must be
-validated on the device.
+The supported application is native Rust. Development requires Rust 1.88 and
+the Bun version pinned in `.bun-version`. GPIO, SPI, Bluetooth, and PipeWire
+hardware are not needed for the default software checks.
 
-Clone the repository with its native dependency submodule:
+Clone the repository:
 
 ```bash
-git clone --recurse-submodules https://github.com/woobble/LumiStripe.git
+git clone https://github.com/woobble/LumiStripe.git
 cd LumiStripe
-LUMISTRIPE_BUILD_EXTENSIONS=audio uv sync --locked --all-extras --dev
-cd apps/lumistripe-web/frontend
-bun install --frozen-lockfile
-cd ../../..
 ```
-
-The normal test environment uses the explicit audio profile because the DSP
-tests exercise the native processor:
-
-Use `uv sync --locked --all-extras --dev` without the variable when you need to
-verify the default pure-Python installation, or see
-`packages/lumistripe-core/README.md` for the native profile commands.
-
-The optional ALSA development package is needed when building or testing hardware-gain support on Linux. Raspberry Pi-specific GPIO, SPI, Bluetooth, PipeWire, and Nginx behavior should be tested on suitable hardware or called out explicitly in the pull request.
 
 ## Checks before opening a pull request
 
-Run the checks relevant to your change. The CI workflow runs all of these:
+Run the checks relevant to your change. The hosted workflow checks the Rust
+workspace, frontend contracts/build, and deployment templates.
 
 ```bash
-uv run ruff check .
-uv run mypy \
-  packages/lumistripe-core/src/lumistripe \
-  apps/lumistripe-cli/src/lumistripe_cli \
-  apps/lumistripe-web/src/lumistripe_web \
-  packages/lumistripe-app-support/src/lumistripe_app_support
-uv run python -m pytest -q
+cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+cargo clippy --locked --manifest-path rust/Cargo.toml --workspace --all-targets
+cargo test --locked --manifest-path rust/Cargo.toml --workspace
+cargo build --locked --manifest-path rust/Cargo.toml --workspace
 
 cd apps/lumistripe-web/frontend
+bun install --frozen-lockfile
 bun run generate:api
+git diff --exit-code -- openapi.json src/generated/api.ts
 bun run lint
 bun run test
 bun run build
 cd ../../..
-
-uv build --all-packages --out-dir dist
 ```
 
-The frontend build writes generated static assets under the web package's ignored `static` directory. Do not commit generated build output. Keep `uv.lock` and `apps/lumistripe-web/frontend/bun.lock` in sync whenever dependency declarations change.
+The frontend build writes ignored assets to
+`apps/lumistripe-web/static`; do not commit the generated output. Rust is the
+source of REST models and OpenAPI. Regenerate both `openapi.json` and
+`src/generated/api.ts` through `bun run generate:api` when the contract
+changes.
 
-## Native Rust application workspace
-
-The Rust applications, shared crates, and real-time engine live in the Cargo
-workspace under `rust/`. The Rust web server can run in simulator mode with
-mock outputs; this browser simulator is the only supported simulator. The CLI
-uses the same engine and IPC protocol. Validate the workspace with:
+The deployment regression suite is a Python-only development tool. It checks
+shell scripts, systemd templates, and Docker deployment behavior; no Python
+application or runtime package is installed by LumiStripe. Run it with Python
+and uv:
 
 ```bash
-cargo fmt --manifest-path rust/Cargo.toml --all -- --check
-cargo test --locked --manifest-path rust/Cargo.toml --workspace
-cargo build --locked --manifest-path rust/Cargo.toml --workspace
+uv run --no-project --with pytest python -m pytest -q deploy/tests
 ```
 
-The Python web backend remains available for explicit rollback and differential
-tests; new installations use the Rust web application and install the Rust CLI
-as `lumistripe-cli`. See [the deployment guide](deploy/README.md) for the
-Rust-first installation and [the migration inventory](docs/migrations/python-retirement-inventory.md)
-for remaining legacy Python code and parity work.
+Do not run checks on the persistent Raspberry Pi runner or physical hardware
+unless the change specifically requires device validation and that work is
+authorized. For hardware-dependent changes, record exactly what was and was
+not exercised.
 
-For Python/Rust engine adapter tests that still exercise the compatibility
-runtime, build the engine binary first and then run:
+## Architecture and deployment
 
-```bash
-LUMISTRIPE_ENGINE_BINARY="$PWD/rust/target/debug/lumistripe-engine" \
-  uv run python -m pytest -q --no-cov \
-  apps/lumistripe-web/tests/test_rust_engine_adapter.py
-```
+The Rust web application, engine, CLI, and deployment helper live in
+`rust/`. The React frontend lives in
+`apps/lumistripe-web/frontend/`; its production build is served from
+`apps/lumistripe-web/static/`. See the
+[architecture guide](docs/architecture.md), [deployment guide](deploy/README.md),
+and [simulator guide](docs/simulator.md).
 
-See [the Rust engine migration guide](docs/migrations/rust-engine.md) and
-[the Rust web migration guide](docs/migrations/rust-web.md) for process
-ownership, IPC, API parity, and current migration status.
+Python app packages, the Python CLI, native C extension modules, and their
+production deployment profiles have been retired. Existing configuration with
+`LUMI_WEB_BACKEND=python` fails with migration instructions before the
+installer or updater changes environment or application data. The user must
+set the saved value to `rust` manually and rerun the operation.
 
 ## Pull requests
 
-Describe the user-visible or operational impact, include validation commands, and mention any hardware or deployment testing that was not available. Keep unrelated formatting or dependency updates out of feature pull requests. Dependency updates should normally be left to Dependabot unless they are required for the change.
+Describe the user-visible or operational impact, include the validation
+commands you ran, and mention hardware or deployment checks that were not
+available. Keep unrelated formatting and dependency updates out of feature
+pull requests.
 
-By submitting a contribution, you agree that it may be distributed under the repository's MIT license.
+By submitting a contribution, you agree that it may be distributed under the
+repository's MIT license.
 
 ## Maintainer settings
 
-The following repository settings keep the checked-in automation effective:
-
-- Protect `main` from force pushes and direct pushes, require pull requests, and require the `Python 3.12`, `Python 3.13`, `Python 3.14`, `Frontend and package build`, `Review dependency changes`, and CodeQL checks before merging.
-- Require an approving review and dismiss stale approvals when new commits are pushed.
-- Enable Dependabot alerts and security updates, secret scanning with push protection, and private vulnerability reporting when those features are available for the repository.
-- Keep GitHub Actions restricted to the permissions declared by each workflow and review any newly introduced action before merging.
+- Protect `main` from force pushes and direct pushes, require pull requests,
+  and require the Rust, frontend contract/build, deployment regression,
+  dependency review, and CodeQL checks before merging.
+- Require an approving review and dismiss stale approvals when new commits are
+  pushed.
+- Enable Dependabot alerts and security updates, secret scanning with push
+  protection, and private vulnerability reporting where available.
+- Keep GitHub Actions restricted to the permissions declared by each workflow
+  and review new actions before merging.

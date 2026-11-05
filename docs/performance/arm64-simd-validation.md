@@ -1,5 +1,7 @@
 # ARM64 SIMD validation
 
+> Historical validation record. This report describes earlier Python and/or native-C implementations and measurements. Some commands refer to retired tools and no longer run. Keep the results as evidence for the recorded revision only; use the current README, architecture, and simulator guides for supported workflows.
+
 ## Scope and machine
 
 This pass added an ARM64 Advanced SIMD implementation for the native RGBA

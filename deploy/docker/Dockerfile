@@ -41,6 +41,7 @@ RUN cargo build --locked --release --manifest-path rust/Cargo.toml \
 FROM debian:trixie-slim AS soloist
 
 ARG TARGETARCH
+ARG LUMI_SOLOIST_FIXTURE=0
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -48,22 +49,28 @@ COPY --from=rust-build \
     /src/rust/target/release/lumistripe-deploy-helper \
     /usr/local/bin/lumistripe-deploy-helper
 
-RUN apt-get update \
-    && apt-get install --yes --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
-    && case "${TARGETARCH}" in \
-        arm64) archive_arch=arm64 ;; \
-        amd64) archive_arch=x86_64 ;; \
-        arm) archive_arch=arm32 ;; \
-        *) echo "Unsupported Docker architecture: ${TARGETARCH}" >&2; exit 1 ;; \
-       esac \
-    && mkdir -p /tmp/soloist \
-    && /usr/local/bin/lumistripe-deploy-helper soloist-download \
-        --url "https://soloist-builds.spotifycdn.com/soloist_release_${archive_arch}.tar.gz" \
-        --archive /tmp/soloist/soloist.tar.gz \
-        --destination /tmp/soloist/soloist \
-    && test -x /tmp/soloist/soloist \
-    && rm -rf /tmp/soloist/soloist.tar.gz
+RUN if [ "${LUMI_SOLOIST_FIXTURE}" = "1" ]; then \
+        mkdir -p /tmp/soloist \
+        && printf '#!/bin/sh\nexit 0\n' > /tmp/soloist/soloist \
+        && chmod 755 /tmp/soloist/soloist; \
+    else \
+        apt-get update \
+        && apt-get install --yes --no-install-recommends ca-certificates \
+        && rm -rf /var/lib/apt/lists/* \
+        && case "${TARGETARCH}" in \
+            arm64) archive_arch=arm64 ;; \
+            amd64) archive_arch=x86_64 ;; \
+            arm) archive_arch=arm32 ;; \
+            *) echo "Unsupported Docker architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+           esac \
+        && mkdir -p /tmp/soloist \
+        && /usr/local/bin/lumistripe-deploy-helper soloist-download \
+            --url "https://soloist-builds.spotifycdn.com/soloist_release_${archive_arch}.tar.gz" \
+            --archive /tmp/soloist/soloist.tar.gz \
+            --destination /tmp/soloist/soloist \
+        && test -x /tmp/soloist/soloist \
+        && rm -rf /tmp/soloist/soloist.tar.gz; \
+    fi
 
 FROM debian:trixie-slim AS runtime
 
@@ -92,7 +99,7 @@ COPY --from=rust-build /src/rust/target/release/lumistripe-engine /usr/local/bin
 COPY --from=rust-build /src/rust/target/release/lumistripe /usr/local/bin/lumistripe-cli
 COPY --from=rust-build /src/rust/target/release/lumistripe-deploy-helper /usr/local/bin/lumistripe-deploy-helper
 COPY --from=frontend \
-    /src/apps/lumistripe-web/src/lumistripe_web/static/ \
+    /src/apps/lumistripe-web/static/ \
     /opt/lumistripe/static/
 COPY --from=soloist /tmp/soloist/soloist /usr/local/bin/soloist
 COPY deploy/docker/spotify-entrypoint.sh /usr/local/bin/lumistripe-spotify-entrypoint

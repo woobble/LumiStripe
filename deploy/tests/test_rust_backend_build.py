@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -136,16 +137,15 @@ def test_update_support_does_not_execute_environment_file(tmp_path: Path) -> Non
 
 
 @pytest.mark.parametrize(
-    ("requested", "contents", "expected", "needs_python"),
+    ("requested", "contents", "expected"),
     [
-        ("rust", "LUMI_WEB_BACKEND=python\n", "rust", "false"),
-        ("", "LUMI_WEB_BACKEND=rust\n", "rust", "false"),
-        ("", "", "rust", "false"),
-        ("python", "LUMI_WEB_BACKEND=rust\n", "python", "true"),
+        ("", "LUMI_WEB_BACKEND=rust\n", "rust"),
+        ("rust", "", "rust"),
+        ("", "", "rust"),
     ],
 )
-def test_backend_profile_selects_runtime_dependencies(
-    tmp_path: Path, requested: str, contents: str, expected: str, needs_python: str
+def test_resolve_web_backend_selects_rust_only(
+    tmp_path: Path, requested: str, contents: str, expected: str
 ) -> None:
     environment_file = tmp_path / "lumistripe-web.env"
     environment_file.write_text(contents, encoding="utf-8")
@@ -153,10 +153,7 @@ def test_backend_profile_selects_runtime_dependencies(
         [
             "bash",
             "-c",
-            (
-                'source "$1"; backend="$(resolve_web_backend "$2" "$3")"; '
-                'printf "%s\\n%s\\n" "$backend" "$(web_backend_requires_python "$backend" && echo true || echo false)"'
-            ),
+            'source "$1"; resolve_web_backend "$2" "$3"',
             "resolve-web-backend",
             str(UPDATE_SUPPORT),
             requested,
@@ -168,15 +165,52 @@ def test_backend_profile_selects_runtime_dependencies(
         timeout=10,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.splitlines() == [expected, needs_python]
+    assert result.stdout.strip() == expected
+
+
+@pytest.mark.parametrize("requested", ["", "rust"])
+def test_resolve_web_backend_rejects_python_without_changing_configuration(
+    tmp_path: Path, requested: str
+) -> None:
+    environment_file = tmp_path / "lumistripe-web.env"
+    original = "LUMI_PAIRING_CODE=1234\nLUMI_WEB_BACKEND=python\n"
+    environment_file.write_text(original, encoding="utf-8")
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; resolve_web_backend "$2" "$3"',
+            "resolve-web-backend",
+            str(UPDATE_SUPPORT),
+            requested,
+            str(environment_file),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode != 0
+    assert "LUMI_WEB_BACKEND=python is no longer supported" in result.stderr
+    assert "settings file" in result.stderr
+    assert environment_file.read_text(encoding="utf-8") == original
 
 
 def test_web_launcher_defaults_to_rust_and_requires_an_active_release(tmp_path: Path) -> None:
     home = tmp_path / "home"
     project = tmp_path / "project"
     project.mkdir()
+    (project / "deploy").mkdir()
+    (project / "deploy/update-support.sh").write_text(
+        UPDATE_SUPPORT.read_text(encoding="utf-8"), encoding="utf-8"
+    )
     empty_path = tmp_path / "empty-path"
     empty_path.mkdir()
+    for command in ("cat", "dirname"):
+        executable = shutil.which(command)
+        assert executable is not None
+        (empty_path / command).symlink_to(executable)
+    assert shutil.which("python", path=str(empty_path)) is None
     launch_log = tmp_path / "launch.log"
     environment = os.environ.copy()
     environment.pop("LUMI_WEB_BACKEND", None)
@@ -206,24 +240,25 @@ def test_web_launcher_defaults_to_rust_and_requires_an_active_release(tmp_path: 
     assert not launch_log.exists()
 
 
-def test_web_launcher_keeps_explicit_python_rollback(tmp_path: Path) -> None:
-    home = tmp_path / "home"
+def test_web_launcher_rejects_python_backend(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    uv_bin = home / ".local/bin/uv"
-    uv_bin.parent.mkdir(parents=True)
-    uv_bin.write_text(
-        '#!/bin/sh\nprintf \'%s\\n\' "$*" > "$LUMI_TEST_LAUNCH_LOG"\n',
-        encoding="utf-8",
+    (project / "deploy").mkdir()
+    (project / "deploy/update-support.sh").write_text(
+        UPDATE_SUPPORT.read_text(encoding="utf-8"), encoding="utf-8"
     )
-    uv_bin.chmod(0o755)
     empty_path = tmp_path / "empty-path"
     empty_path.mkdir()
+    for command in ("cat", "dirname"):
+        executable = shutil.which(command)
+        assert executable is not None
+        (empty_path / command).symlink_to(executable)
+    assert shutil.which("python", path=str(empty_path)) is None
     launch_log = tmp_path / "launch.log"
     environment = os.environ.copy()
     environment.update(
         {
-            "HOME": str(home),
+            "HOME": str(tmp_path / "home"),
             "PATH": str(empty_path),
             "LUMI_WEB_BACKEND": "python",
             "LUMI_PROJECT_DIR": str(project),
@@ -241,11 +276,9 @@ def test_web_launcher_keeps_explicit_python_rollback(tmp_path: Path) -> None:
         timeout=10,
     )
 
-    assert result.returncode == 0, result.stderr
-    invocation = launch_log.read_text(encoding="utf-8").strip()
-    assert invocation.startswith("run --directory ")
-    assert "--python 3.12" in invocation
-    assert "lumistripe-web --host 127.0.0.1 --hardware" in invocation
+    assert result.returncode == 78
+    assert "LUMI_WEB_BACKEND=python is no longer supported" in result.stderr
+    assert not launch_log.exists()
 
 
 def test_rust_cli_command_points_to_the_commit_matched_release(tmp_path: Path) -> None:
@@ -286,7 +319,7 @@ install_rust_cli_command "$2"
     assert marker.read_text(encoding="utf-8").strip() == "--help"
 
 
-def test_installer_preserves_explicit_python_configuration(tmp_path: Path) -> None:
+def test_installer_rejects_python_configuration_before_mutating_it(tmp_path: Path) -> None:
     environment_file = tmp_path / "lumistripe-web.env"
     original = (
         "LUMI_PAIRING_CODE=1234\n"
@@ -295,108 +328,47 @@ def test_installer_preserves_explicit_python_configuration(tmp_path: Path) -> No
     )
     environment_file.write_text(original, encoding="utf-8")
     installer = INSTALLER.read_text(encoding="utf-8")
-    definition = installer[
-        installer.index("create_environment_file() {"):
-        installer.index("create_spotify_environment_file() {")
-    ]
-    script = f"""
-set -Eeuo pipefail
-install() {{ :; }}
-chown() {{ :; }}
-chmod() {{ :; }}
-ENV_DIR={str(tmp_path)!r}
-ENV_FILE={str(environment_file)!r}
-SERVICE_USER=test
-SERVICE_GROUP=test
-WEB_BACKEND=python
-{definition}
-create_environment_file
-"""
+    assert installer.index('resolve_web_backend "${LUMI_WEB_BACKEND:-}" "$ENV_FILE"') < installer.index(
+        "create_environment_file\n"
+    )
     result = subprocess.run(
-        ["/bin/bash", "-c", script],
+        [
+            "bash",
+            "-c",
+            'source "$1"; resolve_web_backend "${LUMI_WEB_BACKEND:-}" "$2"',
+            "installer-preflight",
+            str(UPDATE_SUPPORT),
+            str(environment_file),
+        ],
         check=False,
         capture_output=True,
         text=True,
         timeout=10,
     )
 
-    assert result.returncode == 0, result.stderr
+    assert result.returncode != 0
+    assert "LUMI_WEB_BACKEND=python is no longer supported" in result.stderr
     assert environment_file.read_text(encoding="utf-8") == original
-    assert "LUMI_WEB_BACKEND=rust" in ENV_TEMPLATE.read_text(encoding="utf-8")
+    assert "LUMI_WEB_BACKEND=" not in ENV_TEMPLATE.read_text(encoding="utf-8")
 
 
 def test_rust_install_and_update_profiles_skip_python_tooling(tmp_path: Path) -> None:
     installer = INSTALLER.read_text(encoding="utf-8")
     updater = UPDATER.read_text(encoding="utf-8")
-
-    assert 'web_backend_requires_python "$WEB_BACKEND"' in installer
-    assert "Skipping Python packages and native extensions for the Rust-only backend." in installer
-    assert 'web_backend_requires_python "$WEB_BACKEND" || return 0' in updater
-    assert '[[ -x "$UV_BIN" ]] ||' in updater
-    assert 'if web_backend_requires_python "$WEB_BACKEND"; then' in updater
-
-    system_packages = installer[
-        installer.index("install_system_packages() {"):installer.index("install_mkcert() {")
-    ]
-    project_dependencies = installer[
-        installer.index("install_project_dependencies() {"):installer.index("build_rust_release() {")
-    ]
-    update_dependencies = updater[
-        updater.index("sync_dependencies() ("):updater.index("build_frontend() (")
-    ]
-    project_dir = tmp_path / "project"
-    frontend_dir = project_dir / "apps/lumistripe-web/frontend"
-    frontend_dir.mkdir(parents=True)
-    empty_path = tmp_path / "empty-path"
-    empty_path.mkdir()
-    call_log = tmp_path / "calls"
-    script = f"""
-set -Eeuo pipefail
-web_backend_requires_python() {{ [[ "${{1:-}}" == python ]]; }}
-apt-get() {{ printf 'apt-get %s\\n' "$*" >> "$CALL_LOG"; }}
-apt-cache() {{
-  printf 'apt-cache %s\\n' "$*" >> "$CALL_LOG"
-  [[ "$*" == 'show libgpiod3' ]]
-}}
-as_user() {{ printf 'as_user %s\\n' "$*" >> "$CALL_LOG"; }}
-as_user_with_env() {{ printf 'as_user_with_env %s\\n' "$*" >> "$CALL_LOG"; }}
-{system_packages}
-{project_dependencies}
-{update_dependencies}
-install_system_packages
-install_project_dependencies
-sync_dependencies
-"""
-    environment = {
-        "PATH": str(empty_path),
-        "CALL_LOG": str(call_log),
-        "PROJECT_DIR": str(project_dir),
-        "WEB_BACKEND": "rust",
-        "BUN_BIN": "bun",
-        "UV_BIN": "uv",
-        "PYTHON_VERSION": "3.12",
-    }
-    for interpreter in ("python", "python3"):
-        with pytest.raises(FileNotFoundError):
-            subprocess.run([interpreter], env=environment, check=False)
-
-    result = subprocess.run(
-        ["/bin/bash", "-c", script],
-        env=environment,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=10,
-    )
-    assert result.returncode == 0, result.stderr
-    calls = call_log.read_text(encoding="utf-8").splitlines()
-    install_command = next(call for call in calls if call.startswith("apt-get install "))
-    assert "python3" not in install_command
-    assert "python3-dev" not in install_command
-    assert "python3-venv" not in install_command
-    assert not any("uv" in call.lower() or "python" in call.lower() for call in calls)
-    assert "as_user bun install --frozen-lockfile" in calls
-    assert "as_user bun run build" in calls
+    for text in (installer, updater):
+        assert "uv " not in text
+        assert "python3" not in text
+        assert "LUMI_PYTHON_VERSION" not in text
+        assert "submodule" not in text.lower()
+    assert "sync_dependencies" not in updater
+    assert "build_frontend" in updater
+    assert "install_project_dependencies()" in installer
+    assert 'as_user "$BUN_BIN" install --frozen-lockfile' in installer
+    assert 'as_user "$BUN_BIN" run build' in installer
+    assert "resolve_web_backend" in installer
+    assert "resolve_web_backend" in updater
+    assert "build_rust_release" in installer
+    assert "build_rust_backend" in updater
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="builder intentionally rejects root")
@@ -405,6 +377,10 @@ def test_rust_update_build_promotes_a_complete_commit_matched_release(
 ) -> None:
     project = tmp_path / "project"
     (project / "rust").mkdir(parents=True)
+    (project / "deploy").mkdir()
+    (project / "deploy/update-support.sh").write_text(
+        UPDATE_SUPPORT.read_text(encoding="utf-8"), encoding="utf-8"
+    )
     (project / "rust" / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
     (project / ".gitignore").write_text("/rust/target/\n", encoding="utf-8")
     _git(project, "init", "--quiet")
@@ -412,7 +388,7 @@ def test_rust_update_build_promotes_a_complete_commit_matched_release(
     _git(project, "config", "user.email", "test@example.invalid")
     _git(project, "config", "commit.gpgsign", "false")
     _git(project, "config", "core.hooksPath", "/dev/null")
-    _git(project, "add", "rust/Cargo.toml", ".gitignore")
+    _git(project, "add", "rust/Cargo.toml", ".gitignore", "deploy/update-support.sh")
     first_commit = _commit(project, "first.txt")
     cargo_log = tmp_path / "cargo.log"
     environment = _builder_environment(tmp_path, cargo_log)

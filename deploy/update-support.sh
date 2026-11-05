@@ -17,20 +17,13 @@ canonical_project_directory() {
     return 1
   fi
   if [[ "$canonical" == "/" || "$canonical" == *$'\n'* || "$canonical" == *$'\r'* ||
-        ! -e "$canonical/.git" || ! -f "$canonical/pyproject.toml" ||
-        ! -d "$canonical/deploy" || ! -d "$canonical/apps/lumistripe-web" ||
-        ! -d "$canonical/packages/lumistripe-core" ]]; then
+        ! -e "$canonical/.git" || ! -f "$canonical/rust/Cargo.toml" ||
+        ! -d "$canonical/deploy" || ! -d "$canonical/apps/lumistripe-web/frontend" ||
+        ! -d "$canonical/rust/apps/lumistripe-web" ]]; then
     echo "Project directory is not a valid LumiStripe checkout: $canonical" >&2
     return 1
   fi
   printf '%s\n' "$canonical"
-}
-
-uv_version_at_least() {
-  local installed_version="$1"
-  local minimum_version="$2"
-  [[ -n "$installed_version" && -n "$minimum_version" ]] || return 1
-  [[ "$(printf '%s\n' "$minimum_version" "$installed_version" | sort -V | tail -n 1)" == "$installed_version" ]]
 }
 
 install_privileged_network_helper() {
@@ -109,19 +102,29 @@ read_web_backend() {
 resolve_web_backend() {
   local requested="${1:-}"
   local env_file="${2:-/etc/lumistripe/lumistripe-web.env}"
-  local backend="$requested"
-  if [[ -z "$backend" && -r "$env_file" ]]; then
-    backend="$(read_web_backend "$env_file")" || return 1
+  local configured=""
+  if [[ -r "$env_file" ]]; then
+    configured="$(read_web_backend "$env_file")" || return 1
   fi
-  [[ -n "$backend" ]] || backend=rust
-  case "$backend" in
-    python|rust) printf '%s\n' "$backend" ;;
-    *) echo "Unsupported LUMI_WEB_BACKEND: $backend" >&2; return 1 ;;
-  esac
+  require_rust_backend "$configured" || return 1
+  require_rust_backend "$requested" || return 1
+  printf 'rust\n'
 }
 
-web_backend_requires_python() {
-  [[ "${1:-}" == python ]]
+require_rust_backend() {
+  case "${1:-rust}" in
+    rust) return 0 ;;
+    python)
+      cat >&2 <<'EOF'
+LUMI_WEB_BACKEND=python is no longer supported. LumiStripe now runs the native Rust web application.
+This check left the environment file and application data unchanged. Review the existing
+settings file, set LUMI_WEB_BACKEND=rust manually in /etc/lumistripe/lumistripe-web.env,
+then rerun the installer or updater. Rust settings migrations preserve existing settings.
+EOF
+      return 1
+      ;;
+    *) echo "Unsupported LUMI_WEB_BACKEND: ${1:-} (expected rust)." >&2; return 1 ;;
+  esac
 }
 
 install_rust_cli_command() {

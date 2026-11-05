@@ -1,7 +1,16 @@
 # Rust renderer migration
 
-Goal 3 is in progress. The Python animation catalog remains canonical and the
-Python/C renderer remains the application fallback.
+> Historical migration report. Its reproduction commands use the retired Python core and native-C renderer. The recorded results describe the migration-era revisions only; current development and validation instructions are in the README and contributor guide.
+
+> **Current status:** Rust is the maintained engine and renderer. The Python
+> core, Python/C renderer, and their production fallback have been retired.
+> The material below records parity evidence from the migration stage; see the
+> [Python retirement inventory](migrations/python-retirement-inventory.md)
+> for current ownership and remaining development-only Python tools.
+
+At the time of this report, Goal 3 was in progress. The Python animation
+catalog remained canonical and the Python/C renderer remained the application
+fallback.
 
 ## Current implementation
 

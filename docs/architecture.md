@@ -1,248 +1,88 @@
 # LumiStripe architecture
 
-LumiStripe's primary application is native Rust with the existing React and
-TypeScript dashboard. The Rust workspace contains the Axum web server,
-real-time engine, CLI, browser simulator mode, and restricted deployment
-helper. Python remains for explicit legacy rollback and migration checks. There
-is no standalone simulator; the supported simulator is the Rust web application
-running with mock outputs. New installations use Rust by default. Remaining
-Python code and migration evidence are listed in the
-[Python retirement inventory](migrations/python-retirement-inventory.md).
+LumiStripe's production application is native Rust with a React and TypeScript
+dashboard. The Rust workspace owns the web server, real-time engine, CLI,
+simulator mode, and restricted deployment helper.
 
 ## Dependency direction
 
 ```text
 React / TypeScript frontend
             |
-        Rust Axum web ---- engine IPC ---- Rust real-time engine
-            |                                  |
-     deployment helper                  mock / SPI / GPIO
-                                               |
-                                         Rust CLI
+        Rust Axum web
+            |
+       versioned IPC
+            |
+      Rust real-time engine
+       /      |       \
+ audio DSP  renderer  SPI / GPIO
+            |
+       mock outputs
 
-Python FastAPI + Python core ---- compatibility and rollback path
-Browser simulator --------------- React frontend + Rust web + mock outputs
-Python compatibility ----------- FastAPI rollback + migration tooling
+Rust deployment helper
+   update state, NetworkManager, Spotify support
 ```
 
-The Rust engine owns pixel rendering, audio processing, playback scheduling,
-and configured hardware output. The Rust web app and CLI share it over the
-versioned engine IPC protocol; simulator mode uses mock outputs and the same
-dashboard. The deployment helper provides narrowly scoped update-state,
-NetworkManager, Spotify device-name, and Soloist operations.
+The web app owns HTTP/WebSocket handling, authentication, settings, and
+application coordination. It sends engine commands over the versioned local
+IPC protocol. The engine owns playback state, rendering, audio capture and DSP,
+and configured output devices. Mock outputs are used by simulator mode and
+software tests.
 
-The Python `lumistripe-core` and `lumistripe-app-support` packages continue to
-serve the FastAPI rollback path, optional legacy CLI deployments, and migration
-tests. They must not depend on browser code or application-specific web
-configuration.
-Rust REST models are the source for generated frontend contracts.
+The deployment helper contains narrowly scoped privileged operations. The
+installer and updater build the web server, engine, CLI, and helper from one
+commit, store them in a release directory, and atomically activate that release.
+The web launcher and supervised engine restarts stay pinned to the same
+commit-matched binaries.
 
-The frontend consumes the REST and WebSocket contracts and does not depend on
-either backend's implementation language. See the
-[Rust web migration](migrations/rust-web.md),
-[Rust engine migration](migrations/rust-engine.md), and
-[Python retirement inventory](migrations/python-retirement-inventory.md) for
-the current feature and cutover status.
+## REST and frontend contracts
 
-## Python compatibility runtime ownership
+Rust Axum request and response models are the REST contract source. The
+`export-openapi` command generates
+`apps/lumistripe-web/frontend/openapi.json`; the frontend generator then
+updates `src/generated/api.ts`. Do not hand-maintain a second backend schema.
 
-`LumiStripeRuntime` is the web façade. Commands enter through its queue and
-are executed by one worker, which owns mutable playback, controller, audio,
-and hardware state. API handlers may read immutable snapshots but must not
-mutate hardware directly.
+Frontend network boundaries use strict Zod validation for REST state, audio
+telemetry, Bluetooth responses, and preview messages. The preview binary
+protocol is versioned and documented in
+[the preview protocol](protocols/preview.md), with shared fixtures used by Rust
+and frontend tests. The WebSocket client is shared between JSON and binary
+streams. Canvas and WebGPU implementations remain behind the renderer
+interface.
 
-The worker bounds its pending command queue and the number of callers waiting
-on each coalesced brightness update. When either limit is reached, new work is
-rejected with `RuntimeUnavailableError` (HTTP 503 through the API). Shutdown
-rejects queued work and does not wait for a free queue slot; callers can retry
-after the runtime is available.
+## Engine ownership
 
-The runtime package is organized around this ownership boundary:
+The engine is the single writer for mutable playback, audio, controller, and
+hardware state. Web handlers validate requests and enqueue typed commands;
+they do not drive hardware directly. Audio callbacks do bounded buffer writes,
+while DSP and native device work run on worker-owned paths.
 
-- `runtime/facade.py`: public `LumiStripeRuntime` façade
-- `runtime/worker.py`: single-writer command loop and watchdog
-- `runtime/commands.py`: typed command messages
-- `runtime/state.py`: settings, snapshots, sessions, and factory protocols
-- `runtime/topology.py`: controller and persisted topology construction
-- `runtime/playback_service.py`: playback and animation policy operations
-- `runtime/audio_service.py`, `runtime/calibration_service.py`, and
-  `runtime/sync_calibration.py`: audio lifecycle, microphone calibration, and
-  synchronization measurements
-- `runtime/outputs.py`: output gates, power-limited frame processing, and reusable buffers
-- `runtime/preview.py` and `runtime/cadence.py`: preview frames and shared
-  dashboard, audio, and preview publication rates
-- `runtime/audio.py`: audio input construction
-- `runtime/__init__.py`: public re-exports
+The Rust workspace separates configuration, IPC, output drivers, runtime,
+audio, animation definitions/state, rendering, compositing, effects, and the
+standalone engine process. GPIO, SPI, Bluetooth, and audio-provider integrations
+are optional build features where practical; simulator mode uses mock output
+without opening physical LED devices.
 
-The API package follows the same feature boundary:
+## Deployment and stored settings
 
-- `api/routes/`: system, control, stripes, sequencer, transitions, audio,
-  Bluetooth, network, animations, startup, auth, and WebSocket routes
-- `api/dependencies.py`: runtime lookup and command error mapping
-- `api/protocols/preview.py`: binary preview framing
-- `contracts/`: feature-oriented Pydantic model namespaces
+Production deployment contains no Python web app, Python CLI, Python library
+packages, or native C extension build. The installer creates an environment
+file without selecting an application language. If an existing file sets
+`LUMI_WEB_BACKEND=python`, the installer and updater stop with migration
+instructions before changing that file or application data. An administrator
+must set the value to `rust` manually. Rust settings migrations preserve
+existing settings fields.
 
-Further service extraction should preserve the single-worker invariant.
+The current dashboard is served from the standalone build output at
+`apps/lumistripe-web/static`. The source frontend remains under
+`apps/lumistripe-web/frontend`; the Rust server's default static path and
+deployment launcher use the same output directory.
 
-### Renderer timing diagnostics
+## Historical migration records
 
-The worker records the duration of each completed render step and compares it
-with the effective animation interval returned by playback, clamped to the
-16 ms minimum frame interval. A frame deadline miss is therefore a rendering
-step that completes after its scheduled presentation budget; it is not the
-same as a stalled worker.
-
-`missed_frame_count` is cumulative for the current runtime session and is
-useful for historical telemetry. The Diagnostics page uses a separate rolling
-10-second window, requiring at least five misses and a 10% miss rate before it
-reports an active warning. This prevents a transient startup spike from
-remaining visible indefinitely while still surfacing sustained CPU, animation,
-or hardware-output pressure.
-
-The watchdog distinguishes frames from synchronous worker commands: a command
-may run for up to eight seconds before it is considered stalled, while frame
-heartbeat telemetry continues to describe completed render steps. Commands can
-still delay rendering during their execution; a command that exceeds the
-deadline requests the same process recovery as a stalled renderer.
-
-## Python core boundaries
-
-The core package keeps compatibility exports in `lumistripe.__init__`, while
-new integrations should use narrower modules:
-
-- `lumistripe.audio.types`, `.config`, `.capture`, `.dsp`, `.devices`,
-  `.calibration`, `.structure`, and `.timeline`; capture callbacks enqueue
-  bounded sample batches, the DSP worker owns native processing state, the
-  structure tracker classifies timestamped features for Dynamic playback, and
-  the timeline maps the beat clock onto an estimated 4/4 bar and phrase grid
-- `lumistripe.playback.config`, `.activity`, `.state`, `.renderer`, `.engine`,
-  and `.sequence`; Dynamic playback passes the current structure state to the
-  effect scheduler, while `PlaybackDecision` and `RenderPlan` remain pure
-  policy outputs
-- `lumistripe.animation.catalog`; `AnimationDefinition` is the single
-  registration record used to build the party player
-- `lumistripe.effects.definitions`, `.scheduler`, and `.renderer`
-- `lumistripe.output`
-
-The core package is pure Python by default. Native audio, GPIO, SPI, and render
-extensions are selected explicitly with `LUMISTRIPE_BUILD_EXTENSIONS`, and
-optimized `-march=native` builds are reserved for device-local use. See
-`docs/decisions/0003-native-extensions.md` for the release and CI policy.
-
-The optional render extension keeps the import path
-`lumistripe.render._native`. `_native.c` owns module initialization and method
-registration; `native_common.c` contains shared buffer validation and color
-utilities; and composite, pattern, particle, and reactive kernels live in
-their corresponding translation units. `native_common.h` is the shared
-internal boundary. The extension remains optional and its Python/NumPy paths
-remain available in the pure-Python profile.
-
-These modules are the intended seams for future implementation moves.
-
-### Native Rust application and engine
-
-The Rust engine, web server, CLI, deployment helper, and web simulator mode are
-documented in [the Rust engine migration guide](migrations/rust-engine.md),
-[the Rust web migration guide](migrations/rust-web.md), and
-[the Python retirement inventory](migrations/python-retirement-inventory.md).
-The normal installer builds a commit-matched Rust release and does not require
-Python application dependencies or `uv`. The Rust CLI and web simulator mode
-use the shared engine. An existing installation can explicitly retain the
-Python web backend for rollback. Hardware behavior remains a separate
-validation task; hosted and mock tests do not replace those checks.
-
-## Physical stripe zones
-
-Each stripe output can map one logical animation canvas across multiple
-physical zones. `ZoneMappingController` owns that logical canvas and expands it
-into the output's physical frame; repeat keeps each zone oriented the same way,
-while alternate reverses every second zone. Uneven divisions give remainder
-pixels to the earliest zones, and shorter zones resample the full logical
-pattern.
-
-The worker composes these controllers with the existing layouts: Mirrored
-scales one shared logical frame for each output, Continuous spans the combined
-logical outputs before each output expands its segment, and Independent renders
-through each output's existing player. The power limiter and live preview read
-expanded physical frames. Calibration and stripe identification continue to
-target physical output controllers.
-
-## Dynamic animation switch quantization
-
-Dynamic mode can defer automatic base-animation changes to the next confident
-beat, estimated bar, or estimated phrase boundary. `off` remains the default;
-manual animation selection and the other playback modes are unaffected. Bar
-alignment starts at the first observed beat and is an estimate, not detected
-downbeat information. Phrase length is configurable to 4, 8, or 16 bars.
-
-The authenticated `GET` and `PUT /api/sequencer/settings` endpoints expose the
-shared sequencer settings. Updates enter the runtime worker command queue,
-apply to all outputs without restarting playback, discard pending switches
-from the previous grid, and persist in dashboard settings version 10. Versions
-8 and 9 retain their sequence data. Version 7 retains sequencer choices and
-migrates with an empty sequence library; older settings receive the established
-defaults. Saved audio synchronization offsets remain intact.
-
-## Animation transition settings
-
-The authenticated `GET` and `PUT /api/transitions/settings` endpoints expose a
-global enable flag, a `crossfade`, `fade_black`, or `wipe` effect, and a duration
-from 100 to 1500 ms. Crossfade is the default effect; transitions are enabled by
-default at 300 ms. Updates run through the runtime worker and apply to the
-shared and independent playback engines, including engines created after a
-topology change. They affect transitions started after the update without
-resetting current playback or beat and sequence scheduling. Version 9 settings
-retain their enable and duration values and migrate to crossfade; earlier
-settings receive the default transition settings.
-
-Dashboard state reports per-output estimated beat, bar, and phrase positions,
-clock confidence, pending animation, remaining time to its switch, and whether
-the switch is waiting for confidence. These diagnostics are read-only and do
-not imply that the estimated grid has detected musical downbeats.
-
-## Core animation sequences
-
-`PlaybackConfig.animation_sequence` optionally enables a core-only Dynamic
-sequence. An `AnimationSequence` contains at most 32 ordered
-`AnimationSequenceStep` values, each using an eligible automatic Dynamic base
-animation for 1, 2, 4, or 8 estimated bars. The sequence starts on the next
-confident estimated bar boundary, applies the configured audio sync offset,
-and can repeat or return to the automatic Dynamic selector when it finishes.
-
-`AnimationSequenceCoordinator` freezes the current step while beat-clock
-confidence is low. On relock or after a stalled render skips bar boundaries,
-it reanchors the remaining duration to future boundaries without catching up
-or replaying missed steps. Its immutable `SequencePlaybackState` exposes the
-active step, remaining bars, waiting state, and next scheduled transition.
-Music Mode uses the activity gate to choose between reactive playback and a
-saved idle behavior: off, a solid color, or a separate animation player.
-The Dashboard stores idle choices for shared playback and each independent
-stripe target; existing settings default to off. The `PUT /api/music-idle`
-command updates those choices through the runtime worker, and dashboard state
-reports the effective selection. Idle output respects brightness and blackout.
-
-Sequence playback remains disabled by default and uses the same animation
-player crossfades and effect rendering path as ordinary Dynamic playback.
-
-The authenticated sequence API uses `GET` and `POST /api/sequencer/sequences`,
-`PUT` and `DELETE /api/sequencer/sequences/{id}`, and
-`PUT /api/sequencer/active`. It stores up to 20 definitions and the optional
-selected ID, but no playback clock state. Mutations go through the runtime
-worker and save atomically before applying the selected sequence to the shared
-and independent playback engines. Selecting `null` returns Dynamic mode to its
-automatic selector. A completed non-repeating sequence keeps its selection for
-the next active music session.
-
-The animation catalog response includes a display name, short description, and
-base/effect role for browsing. `sequence_eligible` is derived from the same core
-catalog rule used by playback validation. This is stricter than the general
-`dynamic_safe` flag, which can also be true for utility or effect animations
-that cannot be used as sequence steps. Each entry's `settings` array exposes
-the validated option definitions used by the animation editor; the settings
-read, update, and reset routes continue to use the existing versioned settings
-store and runtime worker.
-
-Dashboard state includes the saved sequence IDs and names, selected ID, and
-per-output progress: whether a sequence step is active, its zero-based step
-index and animation, remaining bars, clock-wait state, and a relative time to
-the next transition. Estimated bar alignment remains an estimate.
+Earlier migration documents record the Python-to-Rust transition and its
+intermediate test results. They are historical evidence, not instructions for
+running a Python backend. See the
+[Python retirement inventory](migrations/python-retirement-inventory.md),
+[Rust web migration record](migrations/rust-web.md), and
+[Rust engine migration record](migrations/rust-engine.md).

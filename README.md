@@ -1,232 +1,136 @@
 # LumiStripe
 
 [![CI](https://github.com/woobble/LumiStripe/actions/workflows/ci.yml/badge.svg)](https://github.com/woobble/LumiStripe/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/github/woobble/LumiStripe/graph/badge.svg?token=2ZJDBFMOOW)](https://codecov.io/github/woobble/LumiStripe)
 
-**Native Rust LED application with audio-reactive lighting and a React dashboard.**
+**Native Rust LED controller with a React dashboard and browser simulator.**
 
-The Rust web server, shared playback and audio engine, and CLI are LumiStripe's
-primary application. New installations use Rust by default and install the
-Rust CLI as `lumistripe-cli`. Python web and CLI implementations remain for
-explicit legacy rollback and migration checks.
-
-LumiStripe drives 2-wire addressable LED strips from a Raspberry Pi or other
-Linux single-board computer via GPIO bit-banging, and provides a rich animation
-engine with **54 catalogued animations**, real-time **FFT audio analysis**,
-**music-driven animation selection**, and a browser simulator powered by the
-Rust engine and React dashboard.
+LumiStripe runs its web application, playback engine, CLI, and deployment
+helpers from the Rust workspace. The dashboard is a React/TypeScript app whose
+REST types are generated from the Rust OpenAPI contract.
 
 ## Features
 
-- **GPIO Driver** — Bit-bangs a 2-wire protocol on any two GPIO lines using `libgpiod` (v2.x)
-- **54 Animations** — Fire, Rainbow, Confetti, Aurora, LightningStrike, PlasmaRave, and many more, with `tick` and `tick_audio` modes
-- **Audio Reactive** — Real-time FFT analysis with 8 frequency bands, beat detection, BPM estimation, and onset/transient detection
-- **Layered Dynamic Selection** — Selects a smooth base animation and independently schedules up to two compatible beat/drop effects from live music features
-- **Three Playback Modes** — Static, Cycling, and music-driven Dynamic playback in both the CLI and web simulator
-- **CLI** — Run the shared Rust engine headlessly with the installed `lumistripe-cli` command
-- **Simulator** — Run the Rust engine and React dashboard with mock outputs on x86_64 Linux or Raspberry Pi
+- Raspberry Pi SPI and GPIO LED output
+- Static, Cycling, and music-driven Dynamic playback
+- Rust audio capture, DSP, and calibration
+- Bluetooth and Spotify Connect audio routing through PipeWire
+- A dashboard and simulator backed by the same Rust engine
+- A CLI that controls the engine over versioned local IPC
 
-## Raspberry Pi party appliance
+## Raspberry Pi installation
 
-For a Raspberry Pi OS Trixie installation with physical LED output, the web
-dashboard, Bluetooth music input, PipeWire audio routing, and Nginx HTTPS
-access, run the self-contained installer from the checkout on the Pi:
+For Raspberry Pi OS Trixie, install from a reviewed checkout:
 
 ```bash
 sudo ./deploy/install.sh
 ```
 
-The installer installs the system packages and native build tools, Rust 1.88.0,
-Bun, and the locked frontend dependencies. It builds the frontend and the
-commit-matched Rust web, engine, CLI, and deployment helper, then configures
-Bluetooth/WirePlumber, Raspberry Pi SPI, Nginx, and the systemd service. It does
-not install Python application packages or `uv` for a Rust installation.
-It uses the non-root account invoking `sudo`; set `LUMI_SERVICE_USER` and
-`LUMI_PROJECT_DIR` when the checkout or service account differs. In an
-interactive terminal, the installer prompts for a four-digit pairing code and
-an optional Spotify API key when they are not supplied. Leave the pairing code
-blank to generate one; leave the Spotify key blank to skip Spotify. For
-unattended installation, set `LUMI_PAIRING_CODE` and optionally
-`LUMI_SPOTIFY_API_KEY` in the environment.
+The installer builds the frontend and commit-matched Rust web, engine, CLI,
+and deployment-helper binaries. It configures the systemd services, SPI,
+Bluetooth, PipeWire, Nginx, and HTTPS. Set `LUMI_SERVICE_USER` and
+`LUMI_PROJECT_DIR` when the service account or checkout path differs. The
+installer prompts for a four-digit pairing code and an optional Spotify API
+key, or accepts them from the provisioning environment.
 
-The HTTPS certificate is generated with mkcert. Trust the generated
-`rootCA.pem` (the installer prints its path) on each phone or PC that opens
-the dashboard. Pair a phone from **Setup → Audio**, then choose the Pi as the
-phone's audio output. The incoming stream is sent to the Pi's
-configured audio output (including a Bluetooth speaker) and analyzed for the
-music-reactive animation. The Audio setup page separates input sources from
-output devices and shows the role of each Bluetooth connection.
+Open `https://led.controller/` from a trusted network and pair from **Setup →
+Audio**. Install the generated mkcert CA on each client. See the
+[deployment guide](deploy/README.md) for trusted checkout setup, network/audio
+configuration, updates, recovery, and uninstallation.
 
-After installing a new revision, update the checkout and run:
+To update an installed checkout:
 
 ```bash
 sudo ./deploy/update.sh origin/main
 ```
 
-To remove the installed LumiStripe appliance while preserving shared system
-packages, the project checkout, and the service account, run:
+The updater builds and activates a complete release for one Git commit. If the
+web service fails its health check, it attempts to restore the previous
+release. To remove the appliance while preserving the checkout, shared system
+packages, and service account:
 
 ```bash
 sudo ./deploy/uninstall.sh
 ```
 
-See [`deploy/README.md`](deploy/README.md) for hardware wiring, output-sink
-selection, installation, uninstallation, certificate trust, troubleshooting,
-and manual recovery commands.
+## Rust CLI
 
-For local Linux development without LED hardware, a microphone, or Bluetooth,
-use the simulated Docker stack with Spotify Connect. Setup and commands are in
-[`deploy/README.md`](deploy/README.md#local-docker-development-with-spotify-connect).
-
-## Quick Start
+The installed `lumistripe-cli` command controls the matching engine release.
+For example:
 
 ```bash
-pip install lumistripe-core
+lumistripe-cli list-animations
+lumistripe-cli run --backend mock --pixels 80 --mode cycling
+lumistripe-cli run --backend mock --mode dynamic --audio-source demo
 ```
 
-Use the in-memory `Stripe` for testing without hardware:
+See the [CLI guide](rust/apps/lumistripe-cli/README.md) for playback,
+calibration, audio diagnostics, and hardware options.
 
-```python
-from lumistripe import AnimationPlayer, Stripe
+## Browser simulator
 
-stripe = Stripe(80)
-player = AnimationPlayer.party()
-player.step(stripe)  # renders one frame
-```
-
-## Hardware Setup
-
-For stable continuously animated output, connect a 2-wire strip to Raspberry
-Pi hardware SPI and install SPI support:
+The simulator runs the Rust web application with mock LED outputs and serves
+the same dashboard as production. It works without Raspberry Pi hardware:
 
 ```bash
-pip install lumistripe-core[spi]
-```
-
-```python
-from lumistripe import SPIConfig, SPIStripe
-
-stripe = SPIStripe(SPIConfig(device="/dev/spidev0.0"), 80)
-```
-
-On Raspberry Pi 4, SPI0 data is GPIO10 (physical pin 19) and clock is GPIO11
-(physical pin 23). The legacy bit-banged backend remains available through
-`GPIOStripe` and `lumistripe-core[gpio]`.
-
-## Audio Setup
-
-For audio-reactive animations, install with audio support:
-
-```bash
-pip install lumistripe-core[audio]
-```
-
-LumiStripe works with any microphone or line-in device supported by `sounddevice`.
-
-SPI and audio can be combined for audio-reactive lighting on real hardware:
-
-```bash
-pip install lumistripe-core[spi,audio]
-```
-
-```python
-from lumistripe import (AnimationPlayer, AudioInput, AudioSnapshot, SPIConfig,
-                        SPIStripe, PlaybackConfig, PlaybackEngine,
-                        PlaybackMode)
-
-stripe = SPIStripe(SPIConfig(), 80)
-player = AnimationPlayer.party()
-playback = PlaybackEngine(player, PlaybackConfig(mode=PlaybackMode.DYNAMIC))
-
-with AudioInput.new() as audio:
-    while True:
-        frame = audio.read()
-        snapshot = AudioSnapshot.from_parts(frame, audio.read_features())
-        playback.step(stripe, snapshot=snapshot)
-```
-
-## Animations
-
-All animations can be browsed in Static mode. Animation metadata describes suitable energy, BPM, spectrum, mood, beat/drop support, and whether an effect is safe for Dynamic's calm state.
-
-Dynamic mode composes one long-running base with at most one rhythmic and one
-accent layer. Automatic base changes crossfade, while manual and Cycling modes
-keep every standalone animation available. Strobe, Rainbow Strobe, and Police
-remain excluded from Dynamic selection.
-
-Dynamic base-animation changes are immediate by default. Core users can opt in
-to `SwitchQuantization.BEAT`, `.BAR`, or `.PHRASE` through
-`PlaybackConfig(switch_quantization=...)`; quantized changes require a confident
-beat clock and honor the configured audio sync offset. Bar and phrase positions
-use an estimated 4/4 alignment anchored to the first observed beat.
-
-## Simulator
-
-The browser simulator runs the shared Rust engine with mock LED outputs, live
-preview, demo or microphone audio, animation effects, topology, and power
-limits. It runs without Raspberry Pi hardware. See the
-[simulator guide](docs/simulator.md) for setup and launch instructions.
-
-```bash
+cd apps/lumistripe-web/frontend
+bun install --frozen-lockfile
+bun run build
+cd ../../..
+cargo build --locked --manifest-path rust/Cargo.toml \
+  -p lumistripe-engine -p lumistripe-web
 cargo run --locked --manifest-path rust/Cargo.toml -p lumistripe-web -- \
   --simulate --pixels 80 --pixels-2 24 \
   --engine-binary rust/target/debug/lumistripe-engine \
-  --static-dir apps/lumistripe-web/src/lumistripe_web/static
+  --static-dir apps/lumistripe-web/static
 ```
 
-## Audio Calibration
-
-Measure the selected microphone and print recommended tuning flags:
-
-```bash
-lumistripe-cli --calibrate-audio 3 --audio-device usb
-```
-
-Apply calibration automatically before starting Dynamic mode:
-
-```bash
-lumistripe-cli --mode dynamic --auto-calibrate-audio 3
-lumistripe-cli --audio-debug --auto-calibrate-audio 3
-```
-
-For live base-animation, effect-layer, selector, and scheduler diagnostics:
-
-```bash
-lumistripe-cli run --mode dynamic --debug-selector
-lumistripe-cli audio-debug --verbose
-```
+Open the local URL printed by the command. The
+[simulator guide](docs/simulator.md) covers settings isolation, demo audio,
+and microphone input.
 
 ## Development
 
+Requirements are Rust 1.88 and the Bun version pinned in `.bun-version`.
+Clone without submodules:
+
 ```bash
-# Normal native-audio development/test setup
-LUMISTRIPE_BUILD_EXTENSIONS=audio uv sync --locked --all-extras --dev
+git clone https://github.com/woobble/LumiStripe.git
+cd LumiStripe
+```
 
-# Run tests
-uv run python -m pytest -q
+Run the Rust checks:
 
-# Run tests with coverage report
-uv run python -m pytest -q --cov-report=term-missing --cov-report=xml
+```bash
+cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+cargo clippy --locked --manifest-path rust/Cargo.toml --workspace --all-targets
+cargo test --locked --manifest-path rust/Cargo.toml --workspace
+cargo build --locked --manifest-path rust/Cargo.toml --workspace
+```
 
-# Lint and type-check
-uv run ruff check .
-uv run mypy \
-  packages/lumistripe-core/src/lumistripe \
-  apps/lumistripe-cli/src/lumistripe_cli \
-  apps/lumistripe-web/src/lumistripe_web \
-  packages/lumistripe-app-support/src/lumistripe_app_support
+Run frontend checks from `apps/lumistripe-web/frontend/`:
 
-# Frontend checks
-cd apps/lumistripe-web/frontend
+```bash
 bun install --frozen-lockfile
 bun run generate:api
+git diff --exit-code -- openapi.json src/generated/api.ts
 bun run lint
 bun run test
 bun run build
-cd ../../..
-
-# Build all Python distributions after the frontend build
-uv build --all-packages --out-dir dist
 ```
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full development workflow and pull request expectations.
+The frontend build writes ignored static assets to
+`apps/lumistripe-web/static`. The Python-based deployment regression harness
+is development-only; run it with Python and uv:
+
+```bash
+uv run --no-project --with pytest python -m pytest -q deploy/tests
+```
+
+Python applications, Python package distributions, and native C extensions
+are retired. A saved `LUMI_WEB_BACKEND=python` setting is rejected with a
+migration instruction; the installer and updater leave that file and
+application data unchanged. See the
+[Python retirement inventory](docs/migrations/python-retirement-inventory.md)
+for the removed paths, retained fixtures, and validation boundaries.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow.

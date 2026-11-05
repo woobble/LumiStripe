@@ -43,7 +43,7 @@ Usage: sudo ./deploy/uninstall.sh [--yes]
 
 Removes LumiStripe services, configuration, generated dependencies, Soloist,
 and LumiStripe's Nginx/TLS artifacts. Shared OS packages, the service account,
-uv, Bun, mkcert, its CA, and the project checkout are preserved.
+Bun, mkcert, its CA, and the project checkout are preserved.
 EOF
 }
 
@@ -107,7 +107,7 @@ WIREPLUMBER_FILE="$SERVICE_HOME/.config/wireplumber/wireplumber.conf.d/90-lumist
 PIPEWIRE_FILE="$SERVICE_HOME/.config/pipewire/pipewire.conf.d/90-lumistripe-spotify.conf"
 SOLOIST_BIN="$SERVICE_HOME/.local/bin/soloist"
 USER_RUNTIME_DIR="/run/user/$SERVICE_UID"
-PROJECT_STATIC_DIR="$PROJECT_DIR/apps/lumistripe-web/src/lumistripe_web/static"
+PROJECT_STATIC_DIR="$PROJECT_DIR/apps/lumistripe-web/static"
 PROJECT_FRONTEND_DIR="$PROJECT_DIR/apps/lumistripe-web/frontend"
 
 spotify_data_dir=""
@@ -123,7 +123,7 @@ This will remove LumiStripe's installed services, configuration, Soloist,
 generated project dependencies/build output, Nginx site, and TLS certificate.
 
 It will preserve the project checkout, shared OS packages/services, the
-$SERVICE_USER account, uv, Bun, mkcert and its CA, and existing backups.
+$SERVICE_USER account, Bun, mkcert and its CA, and existing backups.
 Reinstalling will ask for a pairing code and an optional Spotify API key.
 
 EOF

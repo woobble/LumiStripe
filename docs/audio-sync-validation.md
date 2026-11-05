@@ -1,5 +1,7 @@
 # Audio-to-LED sync validation
 
+> Historical validation record. This report describes earlier Python and/or native-C implementations and measurements. Some commands refer to retired tools and no longer run. Keep the results as evidence for the recorded revision only; use the current README, architecture, and simulator guides for supported workflows.
+
 This procedure measures the physical path from the audio source through the
 capture and beat scheduler to the LEDs. The calibration cue is generated on the
 Pi through the PipeWire/Pulse default sink. Its PortAudio DAC clock is mapped to

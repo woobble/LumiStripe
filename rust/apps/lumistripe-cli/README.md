@@ -5,17 +5,20 @@ commit-matched deployment release. It starts the matching Rust engine as a
 child process and controls it over versioned local IPC. Playback, scheduling,
 rendering, audio capture, and hardware output remain owned by the engine.
 
-The `run` command defaults to the legacy hardware behavior: SPI output at
+The `run` command defaults to SPI output at
 `/dev/spidev0.0`, 80 pixels, and Static mode. Select `--backend mock` for
 hardware-free runs. It supports mock, mock SPI, SPI, and GPIO output; one or
 two outputs; animation settings; brightness; frame-rate limits; a shared
-power budget; sequential or shuffled cycling; and the legacy Dynamic selector,
+power budget; sequential or shuffled cycling; and the Dynamic selector,
 music gate, idle brightness, and microphone tuning options. Audio device
 discovery and capture use engine IPC. Dynamic playback defaults to microphone
 capture and also accepts the engine's demo source. `--audio-config` accepts a
 JSON object of shared Rust `AudioConfig` fields for tuning capture and DSP.
 Use `--engine-binary` or `LUMISTRIPE_ENGINE_BINARY` when the engine executable
 is not next to the CLI.
+
+From the repository root, enter `rust/` before running the examples below;
+they use the Rust workspace manifest.
 
 Legacy `--spi-device-2` and secondary GPIO pin flags create a second output
 with the primary pixel count when `--pixels-2` is omitted. The Rust-only
@@ -50,31 +53,30 @@ cargo run -p lumistripe-cli -- audio-devices
 cargo run -p lumistripe-cli -- capabilities
 ```
 
-The Python-free process test starts the CLI and a real Rust engine with a `PATH`
-that contains no commands:
+The process test starts the CLI and a real Rust engine with a `PATH` that
+contains no Python interpreter:
 
 ```bash
 cargo test -p lumistripe-cli --features test-engine
 ```
 
-The Python CLI remains available to explicitly configured legacy Python
-deployments. The installed `lumistripe-cli` command uses Rust without Python.
-Rust supports one-shot and automatic calibration, named or device-matched mic
+The installed `lumistripe-cli` command uses Rust without Python. It supports
+one-shot and automatic calibration, named or device-matched mic
 profiles, profile writing, and opt-in live engine performance reports through
 `run --stats`. Rust audio-debug recordings
 contain the engine's capture and DSP telemetry as JSONL; analysis accepts those
-files and the legacy CLI's compatible JSONL recordings.
-Dynamic playback uses the engine's generated effect catalog and the same
-default effect-scheduler tuning as the Python CLI. `--debug-selector` streams
+files and earlier compatible JSONL recordings.
+Dynamic playback uses the engine's generated effect catalog and its default
+effect-scheduler tuning. `--debug-selector` streams
 the selected animation, activity gate, selector reason, ranked scores and
 contributing factors, timing, recent history, beat clock, and effect state.
 `audio-debug --verbose` includes that selector data in its structured audio
 rows and JSONL recordings.
 
-For scripts that used the Python CLI's direct flags, `lumistripe run` accepts
-compatibility aliases such as `--output-backend`, `--chip`, `--cycle-interval`,
-`--spi-speed-2`, and `--auto-calibrate-audio`. The Python CLI's top-level
-audio actions are also available without a subcommand:
+For compatibility with older scripts, `lumistripe run` accepts aliases such
+as `--output-backend`, `--chip`, `--cycle-interval`, `--spi-speed-2`, and
+`--auto-calibrate-audio`. Top-level audio action aliases are also available
+without a subcommand:
 
 ```bash
 cargo run -p lumistripe-cli -- --list-audio-devices
@@ -84,8 +86,8 @@ cargo run -p lumistripe-cli -- --audio-debug --audio-debug-duration 30 \
 cargo run -p lumistripe-cli -- --analyze-audio-debug /tmp/lumi-audio.jsonl
 ```
 
-When multiple legacy action flags are supplied, dispatch follows the Python
-CLI's priority: analyze recordings, list devices, calibrate, write a mic
+When multiple action flags are supplied, dispatch follows the historical
+priority: analyze recordings, list devices, calibrate, write a mic
 profile, audio diagnostics, then playback. Use `--quiet` to suppress routine
 playback status.
 

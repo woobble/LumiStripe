@@ -38,7 +38,7 @@ export default defineConfig({
     }),
   ],
   build: {
-    outDir: '../src/lumistripe_web/static',
+    outDir: '../static',
     emptyOutDir: true,
   },
   resolve: {

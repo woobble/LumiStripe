@@ -1,4 +1,4 @@
-# Raspberry Pi audio setup
+# Raspberry Pi installation and audio setup
 
 The LumiStripe web runtime can receive music from a phone or other source over Bluetooth,
 or use Spotify Connect through Spotify's Soloist player. The Pi sends the selected
@@ -28,8 +28,8 @@ selected audio source work. Reboot and repeat these checks, including Bluetooth
 or Spotify reconnects if used. Before an update, keep console access and a
 backup of appliance configuration and settings. Afterward, check the dashboard
 and hardware again; if recovery fails, inspect the updater and web service
-journals and restore the previous checkout and its recursive submodules before
-rebuilding dependencies and restarting services.
+journals and restore the previous checkout before rebuilding dependencies and
+restarting services.
 
 Change the dashboard title and Spotify Connect player name from
 **Devices → Startup → Names**. Saving a Spotify name updates the Soloist
@@ -68,32 +68,20 @@ For unattended installation, provide `LUMI_PAIRING_CODE` and the optional
 Spotify key through the provisioning process environment. Keep their values
 out of shell history and command arguments.
 
-The installer provisions the appliance: Debian/Raspberry Pi OS packages and
-native build tools, D-Bus and PipeWire development headers, the service user
-and GPIO/SPI/audio permissions, Raspberry Pi SPI, Rust 1.88.0, Bun,
-NetworkManager and Wi-Fi adapter tools, the frontend production build, and
-Bluetooth/WirePlumber configuration. New installations use Rust and build
-commit-matched web, engine, CLI, and deployment-helper binaries. They do not
-install Python application packages, Python native extensions, or `uv`. Set
-`LUMI_WEB_BACKEND=python` only to retain or explicitly select the legacy
-rollback backend; that path installs `uv`, managed Python 3.12, and Python
-native extensions. The installer also installs the Spotify Soloist
-binary under the non-root service account when configured, plus a local mkcert
-CA and HTTPS certificate, Nginx, and the required systemd services. Without a
-Spotify key the Spotify service remains disabled. Existing
+The installer provisions the appliance with operating-system packages and
+native build tools, the service user and GPIO/SPI/audio permissions,
+Raspberry Pi SPI, Rust 1.88.0, Bun, NetworkManager tools, the frontend
+production build, and Bluetooth/WirePlumber configuration. It builds
+commit-matched Rust web, engine, CLI, and deployment-helper binaries. It does
+not install Python application packages, Python extensions, or uv. The
+installer also configures Spotify Soloist when an API key is provided, a local
+mkcert CA and HTTPS certificate, Nginx, and systemd services. Existing
 `/etc/lumistripe/lumistripe-web.env` and
 `/etc/lumistripe/lumistripe-spotify.env` files are preserved. Spotify's
 official builds are downloaded on the Pi and are not bundled or redistributed
 by LumiStripe. The updater streams the archive with a 512 MiB byte limit,
-permits HTTPS-only redirects, validates that it contains one regular
-`soloist` file, and installs it under the service user's `.local/bin`; it does
-not install the downloaded binary with root ownership.
-
-When `LUMI_WEB_BACKEND=python` is explicitly selected, the launcher uses the
-same Python version selected by the installer and syncs only production
-dependencies. Set `LUMI_PYTHON_VERSION` to choose another supported version
-for that rollback path. Rust installation, normal service operation, and
-Rust-only update and rollback do not require `uv` or a Python interpreter.
+allows HTTPS-only redirects, validates its contents, and installs the binary
+under the non-root service account.
 
 The installer uses the non-root account that invoked `sudo` (or the checkout
 owner when run from a root shell). To install for another account, set
@@ -118,56 +106,22 @@ The pairing code is stored in `/etc/lumistripe/lumistripe-web.env` with mode
 `600`. The systemd service passes it through the process environment, not its
 command-line arguments.
 
-## Backend selection and rollback
+## Rust backend and rollback
 
-Rust is the default for new installations. The installer writes
-`LUMI_WEB_BACKEND=rust` into a newly created environment file, builds the
-commit-matched release, and installs `lumistripe-cli` under the service user's
-`~/.local/bin`. That command and the systemd launcher resolve binaries through
-the same atomic release pointer, so CLI and service engine versions move with
-the updater. For an existing installation that remains explicitly configured
-for Python, the installer and updater retain that backend until an
-administrator changes it.
+The Rust application is the only supported backend. New environment files do
+not contain a backend selection. If an existing
+`/etc/lumistripe/lumistripe-web.env` sets `LUMI_WEB_BACKEND=python`, the
+installer and updater stop with a migration instruction before changing that
+file or application data. The web launcher also rejects that setting. The
+configuration remains untouched; an administrator must set
+`LUMI_WEB_BACKEND=rust` manually, then rerun the installer or updater.
+Existing settings are migrated and preserved by the Rust application.
 
-To select the legacy Python rollback backend for a new installation, set it
-explicitly:
-
-```bash
-sudo env LUMI_SERVICE_USER=woobb \
-  LUMI_PROJECT_DIR=/opt/lumistripe-install \
-  LUMI_WEB_BACKEND=python \
-  /opt/lumistripe-install/deploy/install.sh
-```
-
-The explicit Python profile keeps the FastAPI rollback backend and Python CLI
-available. It installs `uv` and Python dependencies for those existing
-consumers; it still builds the version-matched Rust release and installs the
-separate `lumistripe-cli` command. The updater reads the selected backend from
-`/etc/lumistripe/lumistripe-web.env`. Rust deployments skip Python dependency
-installation during updates and rollback.
-
-For an existing Python installation, Rust can be staged without changing the
-selected backend. From a clean checkout, build the commit-matched binaries as
-the service account:
-
-```bash
-sudo -H -u pi env \
-  HOME=/home/pi \
-  CARGO_HOME=/home/pi/.cargo \
-  RUSTUP_HOME=/home/pi/.rustup \
-  /opt/lumistripe-install/deploy/build-rust-backend.sh \
-  /opt/lumistripe-install
-```
-
-The normal installer and updater install the service user's Rust CLI command
-alongside the release. Running the builder directly only stages the binaries.
-Moving an existing Python installation to Rust is a separate administrator
-decision. Set `LUMI_WEB_BACKEND=rust` in
-`/etc/lumistripe/lumistripe-web.env` and run
-`deploy/update.sh`. The launcher fails with a repair command if a release is
-missing or does not match the checkout, and pins the running web process and
-engine restarts to one release. The updater stages a complete release, then
-checks service health and returns to the previous release if startup fails.
+The installer and updater build the web server, engine, CLI, and deployment
+helper from one source commit. They stage a complete release and atomically
+activate it. The web launcher and engine restarts use binaries from that same
+release. The updater checks the service health after restart and attempts to
+restore the previous release if the check fails.
 
 Run the installed CLI as the service user, for example:
 
@@ -176,23 +130,18 @@ sudo -H -u pi /home/pi/.local/bin/lumistripe-cli --help
 ```
 
 On Trixie the installer selects `libgpiod3`; older supported Debian-based Pi
-images are handled with `libgpiod2` when that is the available runtime package.
+images are handled with `libgpiod2` when that is the available runtime
+package.
 
 The installer needs internet access for apt, Rustup, Bun, mkcert, and package
-downloads. The Python profile also needs uv access. After installation the runtime checkout is service-user-writable,
+downloads. After installation the runtime checkout is service-user-writable,
 so it is no longer a trusted source for another root installer run. For a
 repair or reinstall, provide a fresh reviewed checkout under an
 administrator-controlled path; existing pairing and complete TLS files are
 kept. If either TLS file is missing or empty, the installer recreates the
-certificate and key using the existing CA.
-The generated CA is stored at the service
-user's mkcert CA path and must be installed/trusted on each phone or PC that
-opens the HTTPS dashboard.
-
-The installer and updater build native extensions on the target Pi with
-`LUMISTRIPE_NATIVE_OPTIMIZATION=1`. GCC therefore selects the local ARM CPU and
-emits the baseline Advanced SIMD instructions used by render correction.
-Release wheels keep portable flags and the renderer retains a scalar fallback.
+certificate and key using the existing CA. The generated CA is stored at the
+service user's mkcert CA path and must be installed and trusted on each phone
+or PC that opens the HTTPS dashboard.
 
 ## Connect the internet Wi-Fi adapter
 
@@ -331,7 +280,7 @@ PipeWire services is a recovery step, not normally required.
 
 To remove the LumiStripe appliance files and services while preserving the
 checkout, shared Debian packages, PipeWire/Bluetooth/Nginx services, the
-service account, Rust and Bun toolchains, optional Python tooling, mkcert, and
+service account, Rust and Bun toolchains, mkcert, and
 the mkcert CA, run:
 
 ```bash
@@ -346,7 +295,7 @@ sudo ./deploy/uninstall.sh --yes
 
 The uninstaller removes both LumiStripe systemd units, environment files,
 Soloist, LumiStripe's PipeWire/WirePlumber fragments, Nginx site and TLS
-files, generated Python/frontend dependencies, and Soloist's default data and
+files, generated frontend dependencies, and Soloist's default data and
 cache directories. It does not remove the project checkout, shared operating
 system packages, the service user, or custom Soloist data/cache paths. Existing
 non-empty backup directories are retained.
@@ -447,17 +396,11 @@ On the phone, forget/remove the Pi from Bluetooth settings. Then scan and pair
 again from the dashboard. The pairing operation registers BlueZ's automatic
 agent for the complete transaction and enables the controller's pairable mode.
 
-Start LumiStripe with the default automatic source policy:
-
-```bash
-uv run lumistripe-web --hardware --audio-source auto --pairing-code 0427
-```
-
-Automatic source selection prefers active Spotify Connect playback on
-LumiStripe, then a live Bluetooth stream, and finally the selected microphone.
-It returns to a higher-priority source when that source becomes active. Use
-`--audio-source bluetooth` to require Bluetooth, or choose a source from the
-dashboard.
+Start or restart the installed service with `sudo systemctl restart
+lumistripe-web.service`. Choose the input source from Setup → Audio in the
+dashboard. Automatic source selection prefers active Spotify Connect playback,
+then a live Bluetooth stream, and finally the selected microphone; it returns
+to a higher-priority source when that source becomes active.
 
 ## Spotify Connect
 

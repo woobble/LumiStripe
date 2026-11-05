@@ -1,5 +1,7 @@
 # OpenAPI as the REST contract source
 
+> Historical decision record. Rust OpenAPI is now the canonical REST contract; the FastAPI exporter and implementation have been retired.
+
 **Status:** Superseded by [ADR 0005](0005-rust-openapi-contract.md)
 
 At the time this decision was made, FastAPI/Pydantic models were the REST

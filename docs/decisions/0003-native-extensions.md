@@ -1,5 +1,7 @@
 # Native extension build profiles
 
+> Superseded decision record. Python native C extensions and the KISS FFT submodule have been removed. Rust is the supported engine and hardware integration path.
+
 `lumistripe-core` remains one distribution, but native extensions are opt-in
 profiles. The default `LUMISTRIPE_BUILD_EXTENSIONS=none` build is pure Python;
 `audio`, `gpio`, `spi`, `render`, and `all` select the corresponding extension set.

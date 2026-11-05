@@ -62,6 +62,7 @@ def test_docker_development_image_builds_rust_binaries_without_python() -> None:
     assert "--package lumistripe-cli" in dockerfile
     assert "--package lumistripe-deploy-helper" in dockerfile
     assert "--features bluez,pipewire" in dockerfile
+    assert "arg lumi_soloist_fixture=0" in dockerfile
     assert "soloist-download" in dockerfile
     assert "python" not in dockerfile
     assert "uv" not in dockerfile
@@ -117,6 +118,8 @@ def test_rust_docker_image_builds_and_starts_the_simulator(tmp_path: Path) -> No
                 "build",
                 "--tag",
                 image,
+                "--build-arg",
+                "LUMI_SOLOIST_FIXTURE=1",
                 "--file",
                 "Dockerfile",
                 "-",

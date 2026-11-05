@@ -1,5 +1,7 @@
 # Rust audio DSP comparison
 
+> Historical validation record. This report describes earlier Python and/or native-C implementations and measurements. Some commands refer to retired tools and no longer run. Keep the results as evidence for the recorded revision only; use the current README, architecture, and simulator guides for supported workflows.
+
 ## Synthetic x86_64 run
 
 Measured 2026-11-02 on Linux 7.2.11, x86_64, glibc 2.44, Python 3.12.15. The

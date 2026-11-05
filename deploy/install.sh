@@ -9,9 +9,6 @@ umask 022
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_DIR="${LUMI_PROJECT_DIR:-$(cd -- "$SCRIPT_DIR/.." && pwd -P)}"
 SERVICE_USER="${LUMI_SERVICE_USER:-${SUDO_USER:-}}"
-PYTHON_VERSION="${LUMI_PYTHON_VERSION:-3.12}"
-UV_VERSION="${LUMI_UV_VERSION:-0.13.0}"
-# The standalone installer may provide a newer version; UV_VERSION is a floor.
 
 ENV_DIR=/etc/lumistripe
 ENV_FILE="$ENV_DIR/lumistripe-web.env"
@@ -125,7 +122,7 @@ done
 # shellcheck source=deploy/update-support.sh
 source "$SCRIPT_DIR/update-support.sh"
 PROJECT_DIR="$(canonical_project_directory "$PROJECT_DIR")" || exit 1
-WEB_BACKEND="$(resolve_web_backend "${LUMI_WEB_BACKEND:-}" "$ENV_FILE")" || exit 1
+resolve_web_backend "${LUMI_WEB_BACKEND:-}" "$ENV_FILE" >/dev/null || exit 1
 
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
   echo "Creating service user $SERVICE_USER..."
@@ -140,7 +137,6 @@ SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
   exit 1
 }
 
-UV_BIN="$SERVICE_HOME/.local/bin/uv"
 BUN_BIN="$SERVICE_HOME/.bun/bin/bun"
 WIREPLUMBER_DIR="$SERVICE_HOME/.config/wireplumber/wireplumber.conf.d"
 WIREPLUMBER_FILE="$WIREPLUMBER_DIR/90-lumistripe-bluetooth.conf"
@@ -232,12 +228,6 @@ install_system_packages() {
     dbus-user-session
     util-linux
   )
-  if web_backend_requires_python "$WEB_BACKEND"; then
-    # Python is only needed for the rollback application and its native
-    # extensions. The Rust-only profile uses the Rust engine and web binary.
-    packages+=(python3 python3-dev python3-venv)
-  fi
-
   echo "Refreshing Raspberry Pi OS package lists..."
   apt-get update
 
@@ -342,24 +332,8 @@ download_and_run_as_user() {
 }
 
 install_toolchains() {
-  local installed_uv_version=
   install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 755 \
     "$SERVICE_HOME/.local/bin" "$SERVICE_HOME/.bun"
-
-  if web_backend_requires_python "$WEB_BACKEND"; then
-    if [[ -x "$UV_BIN" ]]; then
-      installed_uv_version="$(as_user "$UV_BIN" --version 2>/dev/null | awk '{ print $2 }' || true)"
-    fi
-    if ! uv_version_at_least "$installed_uv_version" "$UV_VERSION"; then
-      echo "Installing uv $UV_VERSION or newer for $SERVICE_USER..."
-      download_and_run_as_user "https://astral.sh/uv/install.sh" /bin/sh
-      installed_uv_version="$(as_user "$UV_BIN" --version 2>/dev/null | awk '{ print $2 }' || true)"
-    fi
-    uv_version_at_least "$installed_uv_version" "$UV_VERSION" || {
-      echo "Expected uv $UV_VERSION or newer at $UV_BIN; found ${installed_uv_version:-no usable uv binary}." >&2
-      exit 1
-    }
-  fi
 
   if [[ ! -x "$BUN_BIN" ]]; then
     echo "Installing Bun for $SERVICE_USER..."
@@ -375,23 +349,6 @@ install_toolchains() {
 }
 
 install_project_dependencies() {
-  if web_backend_requires_python "$WEB_BACKEND"; then
-    echo "Installing Python dependencies with uv (Python $PYTHON_VERSION)..."
-    pushd "$PROJECT_DIR" >/dev/null
-    as_user "$UV_BIN" python install "$PYTHON_VERSION"
-    as_user_with_env \
-      LUMISTRIPE_BUILD_EXTENSIONS=all \
-      LUMISTRIPE_NATIVE_OPTIMIZATION=1 \
-      UV_PYTHON_PREFERENCE=only-managed \
-      "$UV_BIN" sync --locked --python "$PYTHON_VERSION" --no-dev \
-      --extra hardware-gain --reinstall-package lumistripe-core
-    as_user "$PROJECT_DIR/.venv/bin/python" -c \
-      'import lumistripe.audio._audio, lumistripe.gpio._gpiomem, lumistripe.gpio._sm16716'
-    popd >/dev/null
-  else
-    echo "Skipping Python packages and native extensions for the Rust-only backend."
-  fi
-
   echo "Installing and building the frontend with Bun..."
   pushd "$PROJECT_DIR/apps/lumistripe-web/frontend" >/dev/null
   as_user "$BUN_BIN" install --frozen-lockfile
@@ -428,12 +385,6 @@ create_environment_file() {
     install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 600 \
       "$PROJECT_DIR/deploy/lumistripe-web.env.example" "$ENV_FILE"
     sed -i "s/^LUMI_PAIRING_CODE=.*/LUMI_PAIRING_CODE=$pairing_code/" "$ENV_FILE"
-  fi
-
-  if grep -q '^LUMI_WEB_BACKEND=' "$ENV_FILE"; then
-    sed -i "s/^LUMI_WEB_BACKEND=.*/LUMI_WEB_BACKEND=$WEB_BACKEND/" "$ENV_FILE"
-  else
-    printf 'LUMI_WEB_BACKEND=%s\n' "$WEB_BACKEND" >> "$ENV_FILE"
   fi
 
   chown "$SERVICE_USER:$SERVICE_GROUP" "$ENV_FILE"
@@ -564,14 +515,12 @@ render_service_unit() {
   local rendered_file
   local project_replacement
   local home_replacement
-  local python_replacement
   local user_replacement
   local group_replacement
   local uid_replacement
   rendered_file="$(mktemp /tmp/lumistripe-service.XXXXXX)"
   project_replacement="$(printf '%s' "$PROJECT_DIR" | sed 's/[&|\\]/\\&/g')"
   home_replacement="$(printf '%s' "$SERVICE_HOME" | sed 's/[&|\\]/\\&/g')"
-  python_replacement="$(printf '%s' "$PYTHON_VERSION" | sed 's/[&|\\]/\\&/g')"
   user_replacement="$(printf '%s' "$SERVICE_USER" | sed 's/[&|\\]/\\&/g')"
   group_replacement="$(printf '%s' "$SERVICE_GROUP" | sed 's/[&|\\]/\\&/g')"
   uid_replacement="$(printf '%s' "$SERVICE_UID" | sed 's/[&|\\]/\\&/g')"
@@ -581,7 +530,6 @@ render_service_unit() {
     -e "s|@LUMI_SERVICE_GROUP@|$group_replacement|g" \
     -e "s|@LUMI_PROJECT_DIR@|$project_replacement|g" \
     -e "s|@LUMI_HOME@|$home_replacement|g" \
-    -e "s|@LUMI_PYTHON_VERSION@|$python_replacement|g" \
     -e "s|@LUMI_SERVICE_UID@|$uid_replacement|g" \
     "$PROJECT_DIR/deploy/lumistripe-web.service" > "$rendered_file"
   if grep -q '@LUMI_[A-Z_]*@' "$rendered_file"; then

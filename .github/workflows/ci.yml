@@ -13,126 +13,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  python:
-    name: Python ${{ matrix.python-version }}
+  deployment-tests:
+    name: Deployment regression tests
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.12", "3.13", "3.14"]
-    env:
-      # The full suite imports and exercises audio, GPIO, and SPI native
-      # backends. Release builds are covered separately below with the default
-      # pure-Python profile and each supported native profile.
-      LUMISTRIPE_BUILD_EXTENSIONS: all
+    timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          submodules: recursive
 
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: true
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
           version: "0.13.5"
 
-      - name: Install native audio dependencies
-        run: >-
-          sudo apt-get update && sudo apt-get install --yes --no-install-recommends
-          pkg-config libasound2-dev libpipewire-0.3-dev libpulse-dev
-
-      - name: Install dependencies
-        run: uv sync --locked --all-extras --dev
-
-      - name: Lint Python
-        run: uv run ruff check .
-
-      - name: Type check Python
-        run: >-
-          uv run mypy
-          packages/lumistripe-core/src/lumistripe
-          apps/lumistripe-cli/src/lumistripe_cli
-          apps/lumistripe-web/src/lumistripe_web
-          packages/lumistripe-app-support/src/lumistripe_app_support
-
-      - name: Verify Rust renderer catalogs and golden fixtures
-        if: matrix.python-version == '3.12'
-        run: |
-          uv run --locked python scripts/export_rust_animation_catalog.py --check
-          uv run --locked python scripts/export_rust_animation_golden.py --check
-          uv run --locked python scripts/export_rust_effect_golden.py --check
-          uv run --locked python scripts/export_rust_layout_golden.py --check
-          uv run --locked python scripts/export_rust_transition_golden.py --check
-          uv run --locked python scripts/export_rust_power_golden.py --check
-
-      - name: Build Rust engine for Python IPC integration
-        if: matrix.python-version == '3.12'
-        run: >-
-          cargo build --locked --manifest-path rust/Cargo.toml
-          --package lumistripe-engine --bin lumistripe-engine
-
-      - name: Build Rust web backend and engine for Python API parity
-        if: matrix.python-version == '3.12'
-        run: >-
-          cargo build --locked --manifest-path rust/Cargo.toml
-          --package lumistripe-web --package lumistripe-engine
-
-      - name: Test Python
-        env:
-          LUMISTRIPE_RUST_WEB_BINARY: ${{ matrix.python-version == '3.12' && format('{0}/rust/target/debug/lumistripe-web', github.workspace) || '' }}
-        run: uv run python -m pytest -q --junitxml=junit.xml -o junit_family=legacy
-
-      - name: Check device-optimized native validation
-        if: matrix.python-version == '3.12'
-        env:
-          LUMISTRIPE_NATIVE_OPTIMIZATION: "1"
-        run: |
-          uv sync --locked --all-extras --dev --no-cache --reinstall-package lumistripe-core
-          uv run python -m pytest -q --no-cov \
-            packages/lumistripe-core/tests/test_audio.py::test_native_audio_rejects_invalid_configuration_and_unaligned_buffers \
-            packages/lumistripe-core/tests/test_audio.py::test_native_audio_nonfinite_samples_do_not_poison_statistics \
-            packages/lumistripe-core/tests/test_render_kernels.py::test_native_tunnel_rejects_nonfinite_geometry
-
-      - name: Upload coverage to Codecov
-        if: matrix.python-version == '3.12' && github.event_name != 'pull_request' && env.CODECOV_TOKEN != ''
-        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-        with:
-          files: ./coverage.xml
-          token: ${{ env.CODECOV_TOKEN }}
-          flags: py3.12
-          name: coverage-3.12
-          fail_ci_if_error: true
-
-      - name: Upload test results to Codecov
-        if: matrix.python-version == '3.12' && !cancelled() && github.event_name != 'pull_request' && env.CODECOV_TOKEN != ''
-        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-        with:
-          files: ./junit.xml
-          token: ${{ env.CODECOV_TOKEN }}
-          flags: py3.12
-          name: test-results-3.12
-          report_type: test_results
-          fail_ci_if_error: true
-
-      - name: Upload coverage artifact
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: coverage-${{ matrix.python-version }}
-          path: coverage.xml
-          if-no-files-found: warn
-          retention-days: 7
+      - name: Test deployment scripts and service templates
+        run: uv run --no-project --with pytest python -m pytest -q deploy/tests
 
   frontend:
-    name: Frontend and package build
+    name: Frontend contract and build
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -145,7 +47,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          submodules: recursive
 
       - name: Install Rust 1.88 toolchain
         run: rustup toolchain install 1.88.0 --profile minimal
@@ -168,13 +69,6 @@ jobs:
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          enable-cache: true
-          python-version: "3.12"
-          version: "0.13.5"
-
       - name: Verify generated REST contract
         run: bun run generate:api && git diff --exit-code -- openapi.json src/generated/api.ts
 
@@ -186,139 +80,6 @@ jobs:
 
       - name: Build frontend
         run: bun run build
-
-      - name: Build Python distributions
-        working-directory: .
-        run: uv build --all-packages --out-dir dist
-
-      - name: Upload Python distributions
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: python-distributions
-          path: dist/
-          if-no-files-found: error
-          retention-days: 7
-
-  core-distributions:
-    name: Core ${{ matrix.profile }} distribution
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        profile: [none, audio, render, all]
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          submodules: recursive
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          enable-cache: true
-          python-version: "3.12"
-          version: "0.13.5"
-
-      - name: Install native audio dependencies
-        if: matrix.profile == 'audio' || matrix.profile == 'all'
-        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libasound2-dev
-
-      - name: Build core wheel and source distribution
-        env:
-          LUMISTRIPE_BUILD_EXTENSIONS: ${{ matrix.profile }}
-        run: uv build --package lumistripe-core --out-dir "dist/${{ matrix.profile }}"
-
-      - name: Verify wheel profile
-        env:
-          PROFILE: ${{ matrix.profile }}
-        run: |
-          python - <<'PY'
-          import os
-          from pathlib import Path
-          from zipfile import ZipFile
-
-          profile = os.environ["PROFILE"]
-          wheel = next(Path("dist", profile).glob("*.whl"))
-          with ZipFile(wheel) as archive:
-              actual = {
-                  f"{Path(name).parent.as_posix()}/{Path(name).name.split('.')[0]}"
-                  for name in archive.namelist()
-                  if name.endswith(".so")
-              }
-          expected = {
-              "none": set(),
-              "audio": {"lumistripe/audio/_audio"},
-              "gpio": {"lumistripe/gpio/_gpiomem"},
-              "spi": {"lumistripe/gpio/_sm16716"},
-              "render": {"lumistripe/render/_native"},
-              "all": {
-                  "lumistripe/audio/_audio",
-                  "lumistripe/gpio/_gpiomem",
-                  "lumistripe/gpio/_sm16716",
-                  "lumistripe/render/_native",
-              },
-          }[profile]
-          if actual != expected:
-              raise SystemExit(
-                  f"profile {profile!r}: extensions {sorted(actual)}, expected {sorted(expected)}"
-              )
-          PY
-
-      - name: Verify native sources are included in the source distribution
-        run: |
-          python - <<'PY'
-          import tarfile
-          from pathlib import Path
-
-          archive = next(Path("dist", "${{ matrix.profile }}").glob("*.tar.gz"))
-          with tarfile.open(archive, "r:gz") as source:
-              names = source.getnames()
-              required = (
-                  "_native.c", "native_common.h", "native_common.c", "native_composite.c",
-                  "native_particles.c", "native_patterns.c", "native_reactive.c",
-              )
-              missing = [name for name in required if not any(
-                  entry.endswith(f"/src/lumistripe/render/{name}") for entry in names
-              )]
-              if missing:
-                  raise SystemExit(f"render extension sources missing from sdist: {missing}")
-              other_sources = (
-                  "audio/_audio.c", "audio/kissfft/kiss_fft.c", "audio/kissfft/kiss_fftr.c",
-                  "audio/kissfft/kiss_fft.h", "audio/kissfft/kiss_fftr.h",
-                  "gpio/_gpiomem.c", "gpio/_sm16716.c",
-              )
-              missing = [name for name in other_sources if not any(
-                  entry.endswith(f"/src/lumistripe/{name}") for entry in names
-              )]
-              if missing:
-                  raise SystemExit(f"native extension sources missing from sdist: {missing}")
-          PY
-
-      - name: Build all native extensions from the pure-profile sdist
-        if: matrix.profile == 'none'
-        env:
-          LUMISTRIPE_BUILD_EXTENSIONS: all
-        run: |
-          uv build --wheel dist/none/*.tar.gz --out-dir dist/cross-profile
-          python - <<'PY'
-          from pathlib import Path
-          from zipfile import ZipFile
-
-          wheel = next(Path("dist/cross-profile").glob("*.whl"))
-          with ZipFile(wheel) as archive:
-              actual = {
-                  f"{Path(name).parent.as_posix()}/{Path(name).name.split('.')[0]}"
-                  for name in archive.namelist() if name.endswith(".so")
-              }
-          expected = {
-              "lumistripe/audio/_audio", "lumistripe/gpio/_gpiomem",
-              "lumistripe/gpio/_sm16716", "lumistripe/render/_native",
-          }
-          if actual != expected:
-              raise SystemExit(f"cross-profile wheel has unexpected extensions: {sorted(actual)}")
-          PY
 
   rust-engine:
     name: Rust engine x86_64 (MSRV 1.88)
@@ -333,7 +94,7 @@ jobs:
           persist-credentials: false
 
       - name: Install MSRV Rust toolchain
-        run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt
+        run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt --component clippy
 
       - name: Verify Rust toolchain
         run: |
@@ -347,6 +108,9 @@ jobs:
 
       - name: Check Rust formatting
         run: cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+
+      - name: Run Rust Clippy
+        run: cargo clippy --locked --manifest-path rust/Cargo.toml --workspace --all-targets
 
       - name: Build Rust engine for web integration tests
         run: cargo build --locked --manifest-path rust/Cargo.toml --package lumistripe-engine --bin lumistripe-engine
@@ -444,7 +208,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          submodules: recursive
 
       - name: Install Rust 1.88 toolchain
         run: rustup toolchain install 1.88.0 --profile minimal
@@ -466,7 +229,6 @@ jobs:
           command -v cargo
           command -v rustc
           command -v pkg-config
-          command -v pactl
           cc --version
           rustc -vV | tee "$RUNNER_TEMP/rustc-version.txt"
           rustc --version | grep -Eq '^rustc 1\.88\.0([[:space:]]|$)'
@@ -479,89 +241,6 @@ jobs:
           pkg-config --exists dbus-1
           pkg-config --exists libpipewire-0.3
           pkg-config --exists libpulse
-          git submodule status --recursive
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          enable-cache: true
-          python-version: "3.12"
-          version: "0.13.5"
-
-      - name: Verify build environment
-        run: |
-          set -eu
-          uv --version
-
-      - name: Install Raspberry Pi native profile
-        env:
-          LUMISTRIPE_BUILD_EXTENSIONS: all
-          UV_CACHE_DIR: ${{ runner.temp }}/uv-cache
-          UV_LINK_MODE: copy
-        # The ARM64 runner is persistent. The native profile is a build-time
-        # setting, so a normal sync can incorrectly reuse a prior pure-Python
-        # editable install of lumistripe-core.
-        run: uv sync --locked --all-extras --dev --reinstall-package lumistripe-core
-
-      - name: Verify Raspberry Pi native extensions
-        env:
-          LUMISTRIPE_BUILD_EXTENSIONS: all
-        run: >-
-          uv run python -c
-          'from lumistripe.audio import _audio; from lumistripe.gpio import _sm16716;
-          print(_audio.__file__); print(_sm16716.__file__)'
-
-      - name: Verify Python environment
-        run: uv run python -c 'import platform, sys; print(sys.version); print(platform.platform()); assert sys.version_info[:2] == (3, 12)'
-
-      - name: Test native core on arm64
-        env:
-          LUMISTRIPE_BUILD_EXTENSIONS: all
-        run: uv run python -m pytest -q packages/lumistripe-core/tests
-
-      - name: Build and verify arm64 core distributions
-        env:
-          LUMISTRIPE_BUILD_EXTENSIONS: all
-        run: |
-          uv build --package lumistripe-core --out-dir dist/raspberry-pi
-          uv run python - <<'PY'
-          import platform
-          import tarfile
-          from pathlib import Path
-          from zipfile import ZipFile
-
-          if platform.machine() != "aarch64":
-              raise SystemExit(f"unexpected machine: {platform.machine()}")
-
-          output = Path("dist/raspberry-pi")
-          wheels = list(output.glob("*.whl"))
-          sdists = list(output.glob("*.tar.gz"))
-          if len(wheels) != 1 or len(sdists) != 1:
-              raise SystemExit(f"expected one wheel and sdist, found {wheels} and {sdists}")
-
-          with ZipFile(wheels[0]) as archive:
-              native = [name for name in archive.namelist() if name.endswith(".so")]
-              if not native:
-                  raise SystemExit("arm64 wheel does not contain native extensions")
-
-          required_sources = {
-              "kiss_fft.c",
-              "kiss_fft.h",
-              "kiss_fftr.c",
-              "kiss_fftr.h",
-              "_kiss_fft_guts.h",
-          }
-          with tarfile.open(sdists[0], "r:gz") as archive:
-              bundled = {
-                  Path(name).name
-                  for name in archive.getnames()
-                  if "/src/lumistripe/audio/kissfft/" in name
-              }
-          missing = required_sources - bundled
-          if missing:
-              raise SystemExit(f"sdist is missing KISS FFT sources: {sorted(missing)}")
-          print(f"verified {len(native)} native extensions and KISS FFT sources")
-          PY
 
       - name: Build Rust playback engine on Raspberry Pi
         run: >-
@@ -728,214 +407,3 @@ jobs:
             printf 'Live Wi-Fi scan skipped: wlan0, NetworkManager, or the restricted wrapper is unavailable.\n' \
               >> "$GITHUB_STEP_SUMMARY"
           fi
-
-      - name: Build native and scalar Rust renderer benchmarks
-        run: |
-          set -eu
-          mkdir -p "$RUNNER_TEMP/lumistripe-rust-renderer-benchmarks"
-          CARGO_TARGET_DIR="$RUNNER_TEMP/lumistripe-rust-renderer-llvm" \
-            RUSTFLAGS="-C target-cpu=native" \
-            cargo build --release --locked --manifest-path rust/Cargo.toml \
-              -p lumistripe-engine-animation-state --example benchmark_render
-          CARGO_TARGET_DIR="$RUNNER_TEMP/lumistripe-rust-renderer-scalar" \
-            RUSTFLAGS="-C target-cpu=native -C no-vectorize-loops -C no-vectorize-slp" \
-            cargo build --release --locked --manifest-path rust/Cargo.toml \
-              -p lumistripe-engine-animation-state --example benchmark_render
-
-      - name: Benchmark Python and Rust playback on Raspberry Pi with virtual output
-        env:
-          LUMISTRIPE_BUILD_EXTENSIONS: all
-          UV_CACHE_DIR: ${{ runner.temp }}/uv-cache
-        run: |
-          set -eu
-          benchmark_dir="$RUNNER_TEMP/lumistripe-rust-renderer-benchmarks"
-          mkdir -p "$benchmark_dir"
-          uv run --locked python scripts/benchmark_runtime_pipeline.py \
-            --led-counts 300 --output-counts 1 --layouts mirrored \
-            --zone-counts 1 --modes static,dynamic --power-limits off,on \
-            --engine-backends python,rust \
-            --engine-binary rust/target/release/lumistripe-engine \
-            --audio-source demo --warmup 1 --duration 5 \
-            --output "$benchmark_dir/runtime-pi5-virtual-smoke.json"
-          uv run --locked python - "$benchmark_dir/runtime-pi5-virtual-smoke.json" <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-
-          report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          if report["case_count"] != 8:
-              raise SystemExit(f"expected 8 runtime cases, got {report['case_count']}")
-          for case in report["results"]:
-              if case["effective_fps"] <= 0:
-                  raise SystemExit(f"runtime case produced no frames: {case}")
-              if (
-                  case["engine_backend"] == "rust"
-                  and case["output_effective_fps"] <= 0
-              ):
-                  raise SystemExit(f"Rust output produced no frames: {case}")
-              if case["output_failure_count"] or case["output_error"] is not None:
-                  raise SystemExit(f"runtime output failed: {case}")
-          PY
-
-      - name: Benchmark live Rust CPAL microphone or USB input on Raspberry Pi 5
-        if: ${{ vars.LUMISTRIPE_RUST_AUDIO_DEVICE != '' }}
-        env:
-          LUMISTRIPE_AUDIO_DEVICE: ${{ vars.LUMISTRIPE_RUST_AUDIO_DEVICE }}
-          LUMISTRIPE_BUILD_EXTENSIONS: all
-          UV_CACHE_DIR: ${{ runner.temp }}/uv-cache
-        run: |
-          set -eu
-          benchmark_dir="$RUNNER_TEMP/lumistripe-rust-renderer-benchmarks"
-          mkdir -p "$benchmark_dir"
-          uv run --locked python scripts/benchmark_runtime_pipeline.py \
-            --led-counts 300 --output-counts 1 --layouts mirrored \
-            --zone-counts 1 --modes dynamic --power-limits off \
-            --engine-backends rust --audio-backends rust \
-            --engine-binary rust/target/release/lumistripe-engine \
-            --audio-source mic --audio-device "$LUMISTRIPE_AUDIO_DEVICE" \
-            --warmup 2 --duration 20 \
-            --output "$benchmark_dir/runtime-pi5-rust-cpal-capture.json"
-          uv run --locked python - "$benchmark_dir/runtime-pi5-rust-cpal-capture.json" <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-
-          report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          if report["case_count"] != 1:
-              raise SystemExit(f"expected one CPAL runtime case, got {report['case_count']}")
-          case = report["results"][0]
-          capture = case["audio_capture"]
-          if not capture["active"] or capture["callback_count"] <= 0:
-              raise SystemExit(f"CPAL capture produced no callbacks: {capture}")
-          if not capture["sample_rate"] or capture["sample_rate"] <= 0:
-              raise SystemExit(f"CPAL reported an invalid sample rate: {capture}")
-          if capture["last_error"] is not None or any(
-              capture[field] for field in ("callback_errors", "overflowed_batches", "dropped_samples")
-          ):
-              raise SystemExit(f"CPAL capture reported errors or drops: {capture}")
-          if case["output_effective_fps"] <= 0:
-              raise SystemExit(f"Rust output produced no frames during capture: {case}")
-          PY
-
-      - name: Benchmark scalar C and Rust renderer profiles on Raspberry Pi 5
-        env:
-          LUMISTRIPE_BUILD_EXTENSIONS: render
-          LUMISTRIPE_NATIVE_OPTIMIZATION: "1"
-          LUMISTRIPE_DISABLE_RENDER_NEON: "1"
-        run: |
-          set -eu
-          uv run --directory packages/lumistripe-core --with setuptools \
-            python setup.py build_ext --inplace --force
-          uv run --locked python scripts/benchmark_rust_catalog_comparison.py \
-            --pixels 300 --frames 1000 --warmup 200 --audio --python --native-c \
-            --rust-binary llvm="$RUNNER_TEMP/lumistripe-rust-renderer-llvm/release/examples/benchmark_render" \
-            --rust-binary scalar="$RUNNER_TEMP/lumistripe-rust-renderer-scalar/release/examples/benchmark_render" \
-            --output "$RUNNER_TEMP/lumistripe-rust-renderer-benchmarks/c-scalar.json"
-          uv run --locked python - "$RUNNER_TEMP/lumistripe-rust-renderer-benchmarks/c-scalar.json" false <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-
-          report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          expected_neon = sys.argv[2] == "true"
-          if report["native_c_neon_enabled"] is not expected_neon:
-              raise SystemExit(
-                  f"expected native C NEON={expected_neon}, got "
-                  f"{report['native_c_neon_enabled']}"
-              )
-          for profile in ("native-c", "llvm", "scalar"):
-              available = report["summary"][profile]["available_cases"]
-              if available != report["animation_count"]:
-                  raise SystemExit(
-                      f"{profile} benchmark covers {available}/"
-                      f"{report['animation_count']} animations"
-                  )
-          PY
-
-      - name: Benchmark NEON C and Rust renderer profiles on Raspberry Pi 5
-        env:
-          LUMISTRIPE_BUILD_EXTENSIONS: render
-          LUMISTRIPE_NATIVE_OPTIMIZATION: "1"
-        run: |
-          set -eu
-          uv run --directory packages/lumistripe-core --with setuptools \
-            python setup.py build_ext --inplace --force
-          uv run --locked python scripts/benchmark_rust_catalog_comparison.py \
-            --pixels 300 --frames 1000 --warmup 200 --audio --python --native-c \
-            --rust-binary llvm="$RUNNER_TEMP/lumistripe-rust-renderer-llvm/release/examples/benchmark_render" \
-            --rust-binary scalar="$RUNNER_TEMP/lumistripe-rust-renderer-scalar/release/examples/benchmark_render" \
-            --output "$RUNNER_TEMP/lumistripe-rust-renderer-benchmarks/c-neon.json"
-          uv run --locked python - "$RUNNER_TEMP/lumistripe-rust-renderer-benchmarks/c-neon.json" true <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-
-          report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          expected_neon = sys.argv[2] == "true"
-          if report["native_c_neon_enabled"] is not expected_neon:
-              raise SystemExit(
-                  f"expected native C NEON={expected_neon}, got "
-                  f"{report['native_c_neon_enabled']}"
-              )
-          for profile in ("native-c", "llvm", "scalar"):
-              available = report["summary"][profile]["available_cases"]
-              if available != report["animation_count"]:
-                  raise SystemExit(
-                      f"{profile} benchmark covers {available}/"
-                      f"{report['animation_count']} animations"
-                  )
-          PY
-
-      - name: Benchmark Rust effect layers and allocation counts on Raspberry Pi 5
-        run: |
-          set -eu
-          uv run --locked python scripts/benchmark_rust_catalog.py \
-            --rust-binary llvm="$RUNNER_TEMP/lumistripe-rust-renderer-llvm/release/examples/benchmark_render" \
-            --rust-binary scalar="$RUNNER_TEMP/lumistripe-rust-renderer-scalar/release/examples/benchmark_render" \
-            --pixels 300 --frames 1000 --warmup 200 --audio --fail-on-allocation \
-            --output "$RUNNER_TEMP/lumistripe-rust-renderer-benchmarks/effects-and-allocations.json"
-
-      - name: Record Raspberry Pi renderer benchmark environment
-        if: always()
-        run: |
-          set -eu
-          mkdir -p "$RUNNER_TEMP/lumistripe-rust-renderer-benchmarks"
-          {
-            git rev-parse HEAD
-            uname -a
-            if test -r /proc/device-tree/model; then
-              printf 'board_model='
-              tr -d '\000' < /proc/device-tree/model
-              printf '\n'
-            fi
-            awk -F: '/^(Hardware|Model|CPU implementer|CPU part|Revision)[[:space:]]*:/ { print }' /proc/cpuinfo
-            if test -r /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor; then
-              printf 'cpu_governor='
-              cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
-            else
-              printf 'cpu_governor=unavailable\n'
-            fi
-            for temperature_file in /sys/class/thermal/thermal_zone*/temp; do
-              if test -r "$temperature_file"; then
-                printf '%s=' "$temperature_file"
-                awk '{ printf "%.3f C\n", $1 / 1000 }' "$temperature_file"
-              fi
-            done
-            if command -v rustc >/dev/null 2>&1; then rustc -vV; else echo 'rustc=unavailable'; fi
-            if command -v cc >/dev/null 2>&1; then cc --version; else echo 'cc=unavailable'; fi
-            if command -v uv >/dev/null 2>&1; then
-              uv --version
-              uv run --locked python -c 'import platform, sys; print(sys.version); print(platform.platform()); print(platform.processor())'
-            else
-              echo 'uv=unavailable'
-            fi
-          } > "$RUNNER_TEMP/lumistripe-rust-renderer-benchmarks/environment.txt"
-
-      - name: Upload Raspberry Pi renderer benchmark results
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: raspberry-pi-5-renderer-benchmarks-${{ github.run_id }}
-          path: ${{ runner.temp }}/lumistripe-rust-renderer-benchmarks/
-          if-no-files-found: warn
-          retention-days: 30

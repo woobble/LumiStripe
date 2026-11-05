@@ -1,5 +1,7 @@
 # Native animation renderer comparison
 
+> Historical validation record. This report describes earlier Python and/or native-C implementations and measurements. Some commands refer to retired tools and no longer run. Keep the results as evidence for the recorded revision only; use the current README, architecture, and simulator guides for supported workflows.
+
 ## Dispatch policy
 
 `AnimationPlayer` and `EffectLayerRenderer` use the native animation renderer

@@ -1,13 +1,18 @@
 # Incremental Rust engine migration
 
-> **Current deployment status:** this guide covers the Rust engine adapter in
-> the legacy Python compatibility application. New installations use the
-> native Rust web application, engine, and CLI by default. Python remains for
-> explicit rollback, differential checks, and migration work; see the
-> [Python retirement inventory](python-retirement-inventory.md) for the current
-> deployment state.
+> Historical migration and validation record. This report captures an earlier
+> stage of the Python-to-Rust transition; some commands and deployment details
+> below describe retired tools. Keep those results as evidence for their
+> recorded revisions, and use the current README, architecture, and simulator
+> guides for supported workflows.
 
-## Goal and current boundary
+> **Current status:** the Rust engine, web app, and CLI are the maintained
+> application implementation. The Python runtime, core packages, native
+> extensions, and production fallback have been retired. See the
+> [Python retirement inventory](python-retirement-inventory.md) for the
+> retained development-only Python tools.
+
+## Goal and boundary at the recorded stage
 
 The Python compatibility application's control plane can use the opt-in Rust
 engine for animation and visual-effect pixel rendering, reusable frame

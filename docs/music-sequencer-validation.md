@@ -1,5 +1,7 @@
 # Music structure and sequencer validation
 
+> Historical validation record. This report describes earlier Python and/or native-C implementations and measurements. Some commands refer to retired tools and no longer run. Keep the results as evidence for the recorded revision only; use the current README, architecture, and simulator guides for supported workflows.
+
 This workflow separates deterministic software results from measurements on a
 Raspberry Pi. The generated structure track tests the current feature detector;
 its labels are controlled references, not a claim about how arbitrary songs

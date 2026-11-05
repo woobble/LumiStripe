@@ -14,17 +14,15 @@ Group=@LUMI_SERVICE_GROUP@
 SupplementaryGroups=gpio spi audio
 WorkingDirectory=@LUMI_PROJECT_DIR@
 
-# Keep the toolchains available when systemd starts without a login shell.
+# Keep the Rust CLI and Bun paths available when systemd starts without a login shell.
 Environment=PATH=@LUMI_HOME@/.bun/bin:@LUMI_HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=HOME=@LUMI_HOME@
 Environment=LUMI_PROJECT_DIR=@LUMI_PROJECT_DIR@
 Environment=LUMI_DEPLOY_HELPER=@LUMI_PROJECT_DIR@/rust/target/rust-deploy/current/lumistripe-deploy-helper
-# Used only when the administrator explicitly selects the Python rollback backend.
-Environment=LUMI_PYTHON_VERSION=@LUMI_PYTHON_VERSION@
 Environment=LUMI_UPDATE_STATE_FILE=/var/lib/lumistripe/update/status.json
 # System services do not inherit the user's PipeWire runtime environment.
-# PortAudio's Pulse/ALSA bridge needs this socket to capture the Bluetooth
-# monitor, while bluetooth.py also uses it for wpctl/pactl probes.
+# Rust's audio and PipeWire providers use this socket to inspect the user's
+# audio graph and capture the selected source.
 Environment=XDG_RUNTIME_DIR=/run/user/@LUMI_SERVICE_UID@
 EnvironmentFile=/etc/lumistripe/lumistripe-web.env
 
@@ -37,8 +35,8 @@ ProtectKernelModules=yes
 ProtectControlGroups=yes
 ProtectHostname=yes
 
-# The Rust backend is the default. Set LUMI_WEB_BACKEND=python in the
-# environment file to select the legacy rollback backend explicitly.
+# The launcher uses the commit-matched native Rust release. It rejects an
+# existing explicit Python backend selection with a migration instruction.
 ExecStart=/bin/bash "@LUMI_PROJECT_DIR@/deploy/lumistripe-web-launcher.sh"
 
 Restart=on-failure
