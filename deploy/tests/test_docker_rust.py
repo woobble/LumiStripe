@@ -23,16 +23,47 @@ def _docker_context_archive() -> bytes:
     archive_buffer = io.BytesIO()
 
     def include_build_inputs(member: tarfile.TarInfo) -> tarfile.TarInfo | None:
-        excluded_parts = {".git", ".venv", "__pycache__", "dist", "node_modules", "target"}
+        excluded_parts = {
+            ".git",
+            ".venv",
+            "__pycache__",
+            "dist",
+            "graphify-out",
+            "node_modules",
+            "target",
+        }
         if any(part in excluded_parts for part in Path(member.name).parts):
+            return None
+        if member.name.endswith(".py"):
             return None
         return member
 
     with tarfile.open(fileobj=archive_buffer, mode="w:gz") as archive:
         archive.add(DOCKERFILE, arcname="Dockerfile")
+        for filename in ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml"):
+            archive.add(ROOT / filename, arcname=filename)
+        for app in (
+            "lumistripe-cli",
+            "lumistripe-engine",
+            "lumistripe-deploy-helper",
+        ):
+            archive.add(
+                ROOT / "apps" / app,
+                arcname=f"apps/{app}",
+                filter=include_build_inputs,
+            )
+        for component in ("Cargo.toml", "src", "tests"):
+            source = ROOT / "apps/lumistripe-web" / component
+            if source.exists():
+                archive.add(
+                    source,
+                    arcname=f"apps/lumistripe-web/{component}",
+                    filter=include_build_inputs,
+                )
+        archive.add(ROOT / "crates", arcname="crates", filter=include_build_inputs)
         archive.add(
-            ROOT / "rust",
-            arcname="rust",
+            ROOT / "tests/fixtures",
+            arcname="tests/fixtures",
             filter=include_build_inputs,
         )
         archive.add(
@@ -68,8 +99,12 @@ def test_docker_development_image_builds_rust_binaries_without_python() -> None:
     assert "uv" not in dockerfile
     assert "pip install" not in dockerfile
     assert "pip3 install" not in dockerfile
-    assert "!rust/**" in dockerignore
-    assert "rust/target/" in dockerignore
+    assert "!Cargo.toml" in dockerignore
+    assert "!apps/lumistripe-engine/src/*.rs" in dockerignore
+    assert "!crates/**" in dockerignore
+    assert "!tests/fixtures/**" in dockerignore
+    assert "!target/" not in dockerignore
+    assert "rust/Cargo.toml" not in dockerfile
     assert "!apps/lumistripe-web/frontend/**" in dockerignore
 
     assert ".venv" not in compose

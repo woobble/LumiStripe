@@ -4,9 +4,11 @@ Changes are welcome through pull requests against `main`.
 
 ## Development setup
 
-The supported application is native Rust. Development requires Rust 1.88 and
-the Bun version pinned in `.bun-version`. GPIO, SPI, Bluetooth, and PipeWire
-hardware are not needed for the default software checks.
+The supported application is native Rust. The root `Cargo.toml` is the
+workspace entry point; applications are under `apps/` and shared libraries
+under `crates/`. Development requires Rust 1.88 and the Bun version pinned in
+`.bun-version`. GPIO, SPI, Bluetooth, and PipeWire hardware are not needed for
+the default software checks.
 
 Clone the repository:
 
@@ -21,10 +23,10 @@ Run the checks relevant to your change. The hosted workflow checks the Rust
 workspace, frontend contracts/build, and deployment templates.
 
 ```bash
-cargo fmt --manifest-path rust/Cargo.toml --all -- --check
-cargo clippy --locked --manifest-path rust/Cargo.toml --workspace --all-targets
-cargo test --locked --manifest-path rust/Cargo.toml --workspace
-cargo build --locked --manifest-path rust/Cargo.toml --workspace
+cargo fmt --all -- --check
+cargo clippy --locked --workspace --all-targets
+cargo test --locked --workspace
+cargo build --locked --workspace
 
 cd apps/lumistripe-web/frontend
 bun install --frozen-lockfile
@@ -43,9 +45,9 @@ source of REST models and OpenAPI. Regenerate both `openapi.json` and
 changes.
 
 The deployment regression suite is a Python-only development tool. It checks
-shell scripts, systemd templates, and Docker deployment behavior; no Python
-application or runtime package is installed by LumiStripe. Run it with Python
-and uv:
+shell scripts, systemd templates, and Docker deployment behavior; Python is
+not part of the production application. `.python-version` pins the interpreter
+used by this harness. Run it with Python and uv:
 
 ```bash
 uv run --no-project --with pytest python -m pytest -q deploy/tests
@@ -59,7 +61,8 @@ not exercised.
 ## Architecture and deployment
 
 The Rust web application, engine, CLI, and deployment helper live in
-`rust/`. The React frontend lives in
+`apps/`. Shared Rust libraries live in `crates/`, and shared fixtures live in
+`tests/fixtures/`. The React frontend lives in
 `apps/lumistripe-web/frontend/`; its production build is served from
 `apps/lumistripe-web/static/`. See the
 [architecture guide](docs/architecture.md), [deployment guide](deploy/README.md),

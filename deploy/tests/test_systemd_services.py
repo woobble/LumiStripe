@@ -162,7 +162,7 @@ def test_systemd_analyze_accepts_rendered_service_units(tmp_path: Path) -> None:
         # command covered by the assertions above and substitute an installed
         # executable here so systemd-analyze can validate unit syntax offline.
         text = text.replace(
-            f"{tmp_path}/project/rust/target/rust-deploy/current/"
+            f"{tmp_path}/project/target/rust-deploy/current/"
             "lumistripe-deploy-helper",
             "/bin/true",
         )

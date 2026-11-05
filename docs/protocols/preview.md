@@ -31,6 +31,10 @@ The following version-1 packet is the cross-language golden example (sequence
 4c534650010017000000020001000000ff0001ff020000000203048009080700
 ```
 
-The backend encoder lives in `lumistripe_web.api.protocols.preview`; the
-frontend decoder must reject unknown magic, versions, truncated payloads, and
-non-RGBA output sizes.
+The backend encoder is in
+[`apps/lumistripe-web/src/preview.rs`](../../apps/lumistripe-web/src/preview.rs).
+The frontend decoder is in
+[`apps/lumistripe-web/frontend/src/lib/preview.ts`](../../apps/lumistripe-web/frontend/src/lib/preview.ts).
+Both sides use the checked-in
+[`preview-v1.json`](preview-v1.json) fixture. The decoder rejects unknown
+magic, versions, truncated payloads, and non-RGBA output sizes.

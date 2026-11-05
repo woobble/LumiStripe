@@ -27,9 +27,20 @@ def _release(project: Path, source_commit: str) -> Path:
     release = deploy_root / "releases" / source_commit
     release.mkdir(parents=True)
     (release / "source-commit").write_text(f"{source_commit}\n", encoding="utf-8")
-    binary = release / "lumistripe-deploy-helper"
-    binary.write_text("rust helper fixture\n", encoding="utf-8")
-    binary.chmod(0o755)
+    for name in (
+        "lumistripe-web",
+        "lumistripe-engine",
+        "lumistripe-deploy-helper",
+        "lumistripe",
+    ):
+        binary = release / name
+        contents = (
+            "rust helper fixture\n"
+            if name == "lumistripe-deploy-helper"
+            else "release fixture\n"
+        )
+        binary.write_text(contents, encoding="utf-8")
+        binary.chmod(0o755)
     (deploy_root / "current").symlink_to(Path("releases") / source_commit)
     return release
 

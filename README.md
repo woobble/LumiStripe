@@ -8,6 +8,9 @@ LumiStripe runs its web application, playback engine, CLI, and deployment
 helpers from the Rust workspace. The dashboard is a React/TypeScript app whose
 REST types are generated from the Rust OpenAPI contract.
 
+See the [documentation index](docs/README.md) for setup, configuration,
+architecture, protocols, and contribution guides.
+
 ## Features
 
 - Raspberry Pi SPI and GPIO LED output
@@ -63,7 +66,7 @@ lumistripe-cli run --backend mock --pixels 80 --mode cycling
 lumistripe-cli run --backend mock --mode dynamic --audio-source demo
 ```
 
-See the [CLI guide](rust/apps/lumistripe-cli/README.md) for playback,
+See the [CLI guide](apps/lumistripe-cli/README.md) for playback,
 calibration, audio diagnostics, and hardware options.
 
 ## Browser simulator
@@ -76,11 +79,11 @@ cd apps/lumistripe-web/frontend
 bun install --frozen-lockfile
 bun run build
 cd ../../..
-cargo build --locked --manifest-path rust/Cargo.toml \
+cargo build --locked \
   -p lumistripe-engine -p lumistripe-web
-cargo run --locked --manifest-path rust/Cargo.toml -p lumistripe-web -- \
+cargo run --locked -p lumistripe-web -- \
   --simulate --pixels 80 --pixels-2 24 \
-  --engine-binary rust/target/debug/lumistripe-engine \
+  --engine-binary target/debug/lumistripe-engine \
   --static-dir apps/lumistripe-web/static
 ```
 
@@ -101,10 +104,10 @@ cd LumiStripe
 Run the Rust checks:
 
 ```bash
-cargo fmt --manifest-path rust/Cargo.toml --all -- --check
-cargo clippy --locked --manifest-path rust/Cargo.toml --workspace --all-targets
-cargo test --locked --manifest-path rust/Cargo.toml --workspace
-cargo build --locked --manifest-path rust/Cargo.toml --workspace
+cargo fmt --all -- --check
+cargo clippy --locked --workspace --all-targets
+cargo test --locked --workspace
+cargo build --locked --workspace
 ```
 
 Run frontend checks from `apps/lumistripe-web/frontend/`:
@@ -126,11 +129,8 @@ is development-only; run it with Python and uv:
 uv run --no-project --with pytest python -m pytest -q deploy/tests
 ```
 
-Python applications, Python package distributions, and native C extensions
-are retired. A saved `LUMI_WEB_BACKEND=python` setting is rejected with a
-migration instruction; the installer and updater leave that file and
-application data unchanged. See the
-[Python retirement inventory](docs/migrations/python-retirement-inventory.md)
-for the removed paths, retained fixtures, and validation boundaries.
+The Python web backend and package distributions are retired. A saved
+`LUMI_WEB_BACKEND=python` setting is rejected with a migration instruction;
+the installer and updater leave that file and application data unchanged.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow.

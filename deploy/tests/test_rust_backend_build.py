@@ -76,6 +76,35 @@ def _builder_environment(tmp_path: Path, cargo_log: Path) -> dict[str, str]:
     return environment
 
 
+def _release(releases_dir: Path, commit: str, build_id: str) -> Path:
+    release = releases_dir / commit
+    release.mkdir(parents=True)
+    (release / "source-commit").write_text(f"{commit}\n", encoding="utf-8")
+    for name in (
+        "lumistripe-web",
+        "lumistripe-engine",
+        "lumistripe-deploy-helper",
+        "lumistripe",
+    ):
+        binary = release / name
+        binary.write_text(f"#!/bin/sh\nprintf '%s\\n' '{build_id}:{name}'\n", encoding="utf-8")
+        binary.chmod(0o755)
+    return release
+
+
+def _run_deploy_support(
+    project: Path, function: str, *arguments: str
+) -> subprocess.CompletedProcess[str]:
+    command = 'set -Eeuo pipefail; PROJECT_DIR="$1"; source "$2"; shift 2; ' + function + ' "$@"'
+    return subprocess.run(
+        ["bash", "-c", command, function, str(project), str(UPDATE_SUPPORT), *arguments],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+
 @pytest.mark.parametrize(
     ("contents", "expected"),
     [
@@ -284,9 +313,9 @@ def test_web_launcher_rejects_python_backend(tmp_path: Path) -> None:
 def test_rust_cli_command_points_to_the_commit_matched_release(tmp_path: Path) -> None:
     project = tmp_path / "project"
     home = tmp_path / "service-home"
-    release = project / "rust/target/rust-deploy/releases/0123456789abcdef"
+    release = project / "target/rust-deploy/releases/0123456789abcdef"
     release.mkdir(parents=True)
-    current = project / "rust/target/rust-deploy/current"
+    current = project / "target/rust-deploy/current"
     current.parent.mkdir(parents=True, exist_ok=True)
     current.symlink_to("releases/0123456789abcdef")
     binary = release / "lumistripe"
@@ -317,6 +346,89 @@ install_rust_cli_command "$2"
     assert command_path.is_symlink()
     assert command_path.resolve() == binary
     assert marker.read_text(encoding="utf-8").strip() == "--help"
+
+
+def test_legacy_release_migration_preserves_commit_matched_rollback_state(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    legacy_root = project / "rust/target/rust-deploy"
+    legacy_releases = legacy_root / "releases"
+    old_commit = "1" * 40
+    first_commit = "2" * 40
+    second_commit = "3" * 40
+    old_release = _release(legacy_releases, old_commit, "old")
+    (legacy_root / "current").symlink_to(f"releases/{old_commit}")
+
+    migrated = _run_deploy_support(project, "migrate_legacy_rust_deploy_root")
+    assert migrated.returncode == 0, migrated.stderr
+
+    root = project / "target/rust-deploy"
+    assert (root / ".layout-migrated-from-rust-target").read_text(
+        encoding="utf-8"
+    ).strip() == "layout-v1"
+    assert os.readlink(root / "current") == f"releases/{old_commit}"
+    for name in (
+        "lumistripe-web",
+        "lumistripe-engine",
+        "lumistripe-deploy-helper",
+        "lumistripe",
+        "source-commit",
+    ):
+        assert (root / "releases" / old_commit / name).read_bytes() == (
+            old_release / name
+        ).read_bytes()
+    assert (legacy_root / "releases" / old_commit).is_dir()
+
+    _release(root / "releases", first_commit, "first")
+    (root / "current").unlink()
+    (root / "current").symlink_to(f"releases/{first_commit}")
+    retained = _run_deploy_support(
+        project, "retire_legacy_rust_deploy_root", first_commit, old_commit
+    )
+    assert retained.returncode == 0, retained.stderr
+    assert (legacy_root / "releases" / old_commit).is_dir()
+
+    _release(root / "releases", second_commit, "second")
+    (root / "current").unlink()
+    (root / "current").symlink_to(f"releases/{second_commit}")
+    shutil.rmtree(root / "releases" / old_commit)
+    retired = _run_deploy_support(
+        project, "retire_legacy_rust_deploy_root", second_commit, first_commit
+    )
+    assert retired.returncode == 0, retired.stderr
+    assert not legacy_root.exists()
+    assert not (project / "rust").exists()
+    assert os.readlink(root / "current") == f"releases/{second_commit}"
+    assert not (root / "releases" / old_commit).exists()
+
+
+def test_legacy_release_migration_refuses_incomplete_or_conflicting_state(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    old_commit = "4" * 40
+    legacy_root = project / "rust/target/rust-deploy"
+    legacy_release = _release(legacy_root / "releases", old_commit, "legacy")
+    (legacy_release / "lumistripe-engine").unlink()
+    (legacy_root / "current").symlink_to(f"releases/{old_commit}")
+
+    incomplete = _run_deploy_support(project, "migrate_legacy_rust_deploy_root")
+    assert incomplete.returncode != 0
+    assert "left untouched" in incomplete.stderr
+    assert (legacy_root / "current").is_symlink()
+    assert not (project / "target/rust-deploy").exists()
+
+    (legacy_release / "lumistripe-engine").write_text("engine", encoding="utf-8")
+    (legacy_release / "lumistripe-engine").chmod(0o755)
+    root = project / "target/rust-deploy"
+    root.mkdir(parents=True)
+    (root / "current").write_text("unrecognized state", encoding="utf-8")
+    conflict = _run_deploy_support(project, "migrate_legacy_rust_deploy_root")
+    assert conflict.returncode != 0
+    assert "refusing to merge" in conflict.stderr
+    assert (legacy_root / "current").is_symlink()
+    assert (root / "current").read_text(encoding="utf-8") == "unrecognized state"
 
 
 def test_installer_rejects_python_configuration_before_mutating_it(tmp_path: Path) -> None:
@@ -376,19 +488,19 @@ def test_rust_update_build_promotes_a_complete_commit_matched_release(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "project"
-    (project / "rust").mkdir(parents=True)
+    project.mkdir(parents=True)
     (project / "deploy").mkdir()
     (project / "deploy/update-support.sh").write_text(
         UPDATE_SUPPORT.read_text(encoding="utf-8"), encoding="utf-8"
     )
-    (project / "rust" / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
-    (project / ".gitignore").write_text("/rust/target/\n", encoding="utf-8")
+    (project / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
+    (project / ".gitignore").write_text("/target/\n", encoding="utf-8")
     _git(project, "init", "--quiet")
     _git(project, "config", "user.name", "LumiStripe test")
     _git(project, "config", "user.email", "test@example.invalid")
     _git(project, "config", "commit.gpgsign", "false")
     _git(project, "config", "core.hooksPath", "/dev/null")
-    _git(project, "add", "rust/Cargo.toml", ".gitignore", "deploy/update-support.sh")
+    _git(project, "add", "Cargo.toml", ".gitignore", "deploy/update-support.sh")
     first_commit = _commit(project, "first.txt")
     cargo_log = tmp_path / "cargo.log"
     environment = _builder_environment(tmp_path, cargo_log)
@@ -402,7 +514,7 @@ def test_rust_update_build_promotes_a_complete_commit_matched_release(
     )
     assert result.returncode == 0, result.stderr
 
-    current = project / "rust" / "target" / "rust-deploy" / "current"
+    current = project / "target" / "rust-deploy" / "current"
     release = current.resolve()
     assert os.readlink(current) == f"releases/{first_commit}"
     assert (release / "source-commit").read_text(encoding="utf-8").strip() == first_commit
@@ -496,12 +608,7 @@ def test_rust_update_build_promotes_a_complete_commit_matched_release(
     assert failed.returncode == 17, failed.stderr
     assert os.readlink(current) == f"releases/{first_commit}"
     assert not (
-        project
-        / "rust"
-        / "target"
-        / "rust-deploy"
-        / "releases"
-        / second_commit
+        project / "target" / "rust-deploy" / "releases" / second_commit
     ).exists()
     assert "first:lumistripe-engine" in (
         current.resolve() / "lumistripe-engine"
@@ -517,15 +624,15 @@ def test_rust_update_build_refuses_sources_that_do_not_match_head(
     tmp_path: Path, dirty_kind: str
 ) -> None:
     project = tmp_path / "project"
-    (project / "rust").mkdir(parents=True)
-    (project / "rust" / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
-    (project / ".gitignore").write_text("/rust/target/\n", encoding="utf-8")
+    project.mkdir(parents=True)
+    (project / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
+    (project / ".gitignore").write_text("/target/\n", encoding="utf-8")
     _git(project, "init", "--quiet")
     _git(project, "config", "user.name", "LumiStripe test")
     _git(project, "config", "user.email", "test@example.invalid")
     _git(project, "config", "commit.gpgsign", "false")
     _git(project, "config", "core.hooksPath", "/dev/null")
-    _git(project, "add", "rust/Cargo.toml", ".gitignore")
+    _git(project, "add", "Cargo.toml", ".gitignore")
     _commit(project, "tracked.txt")
     if dirty_kind == "tracked":
         (project / "tracked.txt").write_text("modified source", encoding="utf-8")
@@ -544,4 +651,4 @@ def test_rust_update_build_refuses_sources_that_do_not_match_head(
     assert result.returncode == 1
     assert "clean checkout" in result.stderr
     assert not cargo_log.exists()
-    assert not (project / "rust" / "target" / "rust-deploy" / "current").exists()
+    assert not (project / "target" / "rust-deploy" / "current").exists()

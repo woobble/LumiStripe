@@ -30,7 +30,7 @@ install_spotify_soloist() (
   work_dir="$(as_user mktemp -d "$service_home/.cache/lumistripe/soloist.XXXXXX")"
   archive_file="$work_dir/soloist.tar.gz"
   executable_file="$work_dir/soloist"
-  deploy_helper="$PROJECT_DIR/rust/target/rust-deploy/current/lumistripe-deploy-helper"
+  deploy_helper="$PROJECT_DIR/target/rust-deploy/current/lumistripe-deploy-helper"
   trap 'as_user rm -rf -- "$work_dir" || true' EXIT
 
   echo "Downloading Spotify Soloist for $architecture as the service user..."

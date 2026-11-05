@@ -17,17 +17,235 @@ canonical_project_directory() {
     return 1
   fi
   if [[ "$canonical" == "/" || "$canonical" == *$'\n'* || "$canonical" == *$'\r'* ||
-        ! -e "$canonical/.git" || ! -f "$canonical/rust/Cargo.toml" ||
+        ! -e "$canonical/.git" || ! -f "$canonical/Cargo.toml" ||
         ! -d "$canonical/deploy" || ! -d "$canonical/apps/lumistripe-web/frontend" ||
-        ! -d "$canonical/rust/apps/lumistripe-web" ]]; then
+        ! -f "$canonical/apps/lumistripe-web/Cargo.toml" ]]; then
     echo "Project directory is not a valid LumiStripe checkout: $canonical" >&2
     return 1
   fi
   printf '%s\n' "$canonical"
 }
 
+validate_rust_release() {
+  local releases_dir="${1:-}"
+  local commit="${2:-}"
+  local release_dir="$releases_dir/$commit"
+  local binary
+
+  [[ "$commit" =~ ^[0-9a-f]{40}$ && -d "$release_dir" && ! -L "$release_dir" ]] || {
+    echo "Rust deployment release has an invalid commit directory: $release_dir" >&2
+    return 1
+  }
+  [[ -f "$release_dir/source-commit" && ! -L "$release_dir/source-commit" &&
+        "$(cat -- "$release_dir/source-commit" 2>/dev/null || true)" == "$commit" ]] || {
+    echo "Rust deployment release marker does not match $commit: $release_dir" >&2
+    return 1
+  }
+  for binary in lumistripe-web lumistripe-engine lumistripe-deploy-helper lumistripe; do
+    [[ -f "$release_dir/$binary" && ! -L "$release_dir/$binary" &&
+          -x "$release_dir/$binary" ]] || {
+      echo "Rust deployment release $commit is incomplete: $release_dir/$binary" >&2
+      return 1
+    }
+  done
+}
+
+validate_legacy_rust_deploy_root() {
+  local legacy_root="${1:-}"
+  local entry name commit resolved
+  local releases_dir="$legacy_root/releases"
+
+  [[ -d "$legacy_root" && ! -L "$legacy_root" ]] || {
+    echo "Legacy Rust deployment state is not a real directory: $legacy_root" >&2
+    return 1
+  }
+  for entry in "$legacy_root"/* "$legacy_root"/.[!.]* "$legacy_root"/..?*; do
+    [[ -e "$entry" || -L "$entry" ]] || continue
+    name="${entry##*/}"
+    case "$name" in
+      build)
+        [[ -d "$entry" && ! -L "$entry" ]] || {
+          echo "Legacy Rust build cache is not a real directory: $entry" >&2
+          return 1
+        }
+        ;;
+      releases)
+        [[ -d "$entry" && ! -L "$entry" ]] || {
+          echo "Legacy Rust releases are not a real directory: $entry" >&2
+          return 1
+        }
+        ;;
+      current)
+        [[ -L "$entry" ]] || {
+          echo "Legacy Rust current release pointer is not a symlink: $entry" >&2
+          return 1
+        }
+        ;;
+      *)
+        echo "Unknown entry in legacy Rust deployment state: $entry" >&2
+        return 1
+        ;;
+    esac
+  done
+
+  if [[ -d "$releases_dir" ]]; then
+    for entry in "$releases_dir"/* "$releases_dir"/.[!.]* "$releases_dir"/..?*; do
+      [[ -e "$entry" || -L "$entry" ]] || continue
+      name="${entry##*/}"
+      [[ "$name" =~ ^[0-9a-f]{40}$ ]] || {
+        echo "Legacy Rust release has an invalid directory name: $entry" >&2
+        return 1
+      }
+      validate_rust_release "$releases_dir" "$name" || return 1
+    done
+  fi
+
+  if [[ -L "$legacy_root/current" ]]; then
+    resolved="$(readlink -f -- "$legacy_root/current" 2>/dev/null || true)"
+    case "$resolved" in
+      "$releases_dir"/*) commit="${resolved##*/}" ;;
+      *)
+        echo "Legacy Rust release pointer resolves outside its release directory." >&2
+        return 1
+        ;;
+    esac
+    validate_rust_release "$releases_dir" "$commit" || return 1
+  fi
+}
+
+migrate_legacy_rust_deploy_root() {
+  local legacy_root="$PROJECT_DIR/rust/target/rust-deploy"
+  local deploy_root="$PROJECT_DIR/target/rust-deploy"
+  local marker="$deploy_root/.layout-migrated-from-rust-target"
+  local stage release_dir release_commit resolved
+
+  [[ -e "$legacy_root" || -L "$legacy_root" ]] || return 0
+  validate_legacy_rust_deploy_root "$legacy_root" || {
+    echo "Refusing to migrate invalid legacy Rust release state; the existing release was left untouched." >&2
+    return 1
+  }
+
+  if [[ -e "$deploy_root" || -L "$deploy_root" ]]; then
+    if [[ -f "$marker" && ! -L "$marker" &&
+          "$(cat -- "$marker" 2>/dev/null || true)" == "layout-v1" ]]; then
+      if [[ -d "$legacy_root/releases" ]]; then
+        for release_dir in "$legacy_root/releases"/*; do
+          [[ -e "$release_dir" || -L "$release_dir" ]] || continue
+          release_commit="${release_dir##*/}"
+          if [[ -e "$deploy_root/releases/$release_commit" ||
+                -L "$deploy_root/releases/$release_commit" ]]; then
+            [[ -d "$deploy_root/releases/$release_commit" &&
+                  ! -L "$deploy_root/releases/$release_commit" ]] || {
+              echo "Migrated release $release_commit is not a real directory in $deploy_root; refusing to use mixed release state." >&2
+              return 1
+            }
+            diff -qr -- "$release_dir" "$deploy_root/releases/$release_commit" >/dev/null || {
+              echo "Migrated release $release_commit differs from $deploy_root; refusing to use mixed release state." >&2
+              return 1
+            }
+          fi
+        done
+      fi
+      if [[ -e "$deploy_root/current" || -L "$deploy_root/current" ]]; then
+        [[ -L "$deploy_root/current" ]] || {
+          echo "The migrated Rust release pointer is not a symlink: $deploy_root/current" >&2
+          return 1
+        }
+        resolved="$(readlink -f -- "$deploy_root/current" 2>/dev/null || true)"
+        case "$resolved" in
+          "$deploy_root/releases/"*) release_commit="${resolved##*/}" ;;
+          *)
+            echo "The migrated Rust release pointer is outside its release directory." >&2
+            return 1
+            ;;
+        esac
+        validate_rust_release "$deploy_root/releases" "$release_commit" || return 1
+      fi
+      return 0
+    fi
+    echo "Both legacy and root Rust deployment directories exist without a migration marker; refusing to merge them." >&2
+    return 1
+  fi
+
+  mkdir -p -- "$PROJECT_DIR/target"
+  stage="$(mktemp -d "$PROJECT_DIR/target/.rust-deploy-migration.XXXXXX")" || return 1
+  if [[ -d "$legacy_root/releases" ]]; then
+    cp -a -- "$legacy_root/releases" "$stage/releases" || {
+      rm -rf -- "$stage"
+      return 1
+    }
+  fi
+  if [[ -L "$legacy_root/current" ]]; then
+    cp -a -- "$legacy_root/current" "$stage/current" || {
+      rm -rf -- "$stage"
+      return 1
+    }
+  fi
+  printf '%s\n' layout-v1 > "$stage/.layout-migrated-from-rust-target"
+  if ! mv -- "$stage" "$deploy_root"; then
+    rm -rf -- "$stage"
+    return 1
+  fi
+  echo "Copied validated legacy Rust releases to $deploy_root; the prior release directory remains available for rollback."
+}
+
+retire_legacy_rust_deploy_root() {
+  local active_commit="${1:-}"
+  local previous_commit="${2:-}"
+  local legacy_root="$PROJECT_DIR/rust/target/rust-deploy"
+  local deploy_root="$PROJECT_DIR/target/rust-deploy"
+  local marker="$deploy_root/.layout-migrated-from-rust-target"
+  local legacy_commit resolved requested_active="${1:-}"
+
+  [[ -e "$legacy_root" || -L "$legacy_root" ]] || return 0
+  migrate_legacy_rust_deploy_root || return 1
+  [[ -f "$marker" && ! -L "$marker" &&
+        "$(cat -- "$marker" 2>/dev/null || true)" == "layout-v1" ]] || {
+    echo "Legacy Rust deployment state has no verified migration marker; leaving it in place." >&2
+    return 1
+  }
+  validate_legacy_rust_deploy_root "$legacy_root" || return 1
+  [[ -L "$deploy_root/current" ]] || {
+    echo "The root Rust deployment has no active release pointer; keeping the legacy release for rollback." >&2
+    return 1
+  }
+  resolved="$(readlink -f -- "$deploy_root/current" 2>/dev/null || true)"
+  case "$resolved" in
+    "$deploy_root/releases/"*) active_commit="${resolved##*/}" ;;
+    *)
+      echo "The root Rust deployment pointer is outside its release directory; keeping the legacy release." >&2
+      return 1
+      ;;
+  esac
+  if [[ -n "$requested_active" && "$requested_active" != "$active_commit" ]]; then
+    echo "The root release pointer does not match the expected active commit; keeping the legacy release." >&2
+    return 1
+  fi
+  validate_rust_release "$deploy_root/releases" "$active_commit" || return 1
+  [[ "$previous_commit" =~ ^[0-9a-f]{40}$ ]] || {
+    echo "The previous source commit is not a full Git commit; keeping the legacy release." >&2
+    return 1
+  }
+  validate_rust_release "$deploy_root/releases" "$previous_commit" || {
+    echo "The previous commit-matched Rust release is unavailable; keeping the legacy release." >&2
+    return 1
+  }
+  if [[ -L "$legacy_root/current" ]]; then
+    resolved="$(readlink -f -- "$legacy_root/current" 2>/dev/null || true)"
+    legacy_commit="${resolved##*/}"
+    if [[ "$legacy_commit" == "$active_commit" || "$legacy_commit" == "$previous_commit" ]]; then
+      echo "The legacy Rust release is still needed for rollback; keeping it in place."
+      return 0
+    fi
+  fi
+
+  rm -rf -- "$legacy_root"
+  rmdir -- "$PROJECT_DIR/rust/target" "$PROJECT_DIR/rust" 2>/dev/null || true
+  echo "Retired the legacy Rust deployment directory after the active and previous root releases were verified."
+}
+
 install_privileged_network_helper() {
-  local deploy_root="$PROJECT_DIR/rust/target/rust-deploy"
+  local deploy_root="$PROJECT_DIR/target/rust-deploy"
   local current="$deploy_root/current"
   local release_dir
   local release_commit
@@ -35,6 +253,8 @@ install_privileged_network_helper() {
   local checkout_commit
   local source_binary
   local temporary
+
+  migrate_legacy_rust_deploy_root || return 1
 
   [[ -L "$current" ]] || {
     echo "The commit-matched Rust deployment helper is missing." >&2
@@ -130,7 +350,7 @@ EOF
 install_rust_cli_command() {
   local service_home="${1:-}"
   local command_path
-  local release_binary="$PROJECT_DIR/rust/target/rust-deploy/current/lumistripe"
+  local release_binary="$PROJECT_DIR/target/rust-deploy/current/lumistripe"
 
   [[ -n "$service_home" ]] || {
     echo "The LumiStripe service home is required to install the Rust CLI." >&2

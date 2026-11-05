@@ -117,12 +117,12 @@ def test_rust_rollback_skips_python_and_verifies_restored_web_health(
     builder = deploy_dir / "build-rust-backend.sh"
     builder.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     builder.chmod(0o755)
-    release = project_dir / "rust/target/rust-deploy/releases/previous-rust-commit"
+    release = project_dir / "target/rust-deploy/releases/previous-rust-commit"
     release.mkdir(parents=True)
     cli_binary = release / "lumistripe"
     cli_binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     cli_binary.chmod(0o755)
-    current_release = project_dir / "rust/target/rust-deploy/current"
+    current_release = project_dir / "target/rust-deploy/current"
     current_release.symlink_to("releases/previous-rust-commit")
     empty_path = tmp_path / "empty-path"
     empty_path.mkdir()

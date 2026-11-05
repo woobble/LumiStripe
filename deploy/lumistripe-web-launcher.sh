@@ -10,7 +10,7 @@ BACKEND="${LUMI_WEB_BACKEND:-rust}"
 source "$PROJECT_DIR/deploy/update-support.sh"
 require_rust_backend "$BACKEND" || exit 78
 
-RUST_DEPLOY_CURRENT="$PROJECT_DIR/rust/target/rust-deploy/current"
+RUST_DEPLOY_CURRENT="$PROJECT_DIR/target/rust-deploy/current"
 if [[ ! -L "$RUST_DEPLOY_CURRENT" ]]; then
   echo "The Rust release pointer is missing: $RUST_DEPLOY_CURRENT. Run deploy/install.sh or deploy/update.sh to build and activate a commit-matched release." >&2
   exit 127
@@ -22,7 +22,7 @@ if [[ ! "$PROJECT_COMMIT" =~ ^[0-9a-f]{40}$ || "$PROJECT_COMMIT" != "$DEPLOYED_C
   exit 127
 fi
 RUST_DEPLOY_RELEASE="$(readlink -f -- "$RUST_DEPLOY_CURRENT" 2>/dev/null || true)"
-EXPECTED_RELEASE="$PROJECT_DIR/rust/target/rust-deploy/releases/$PROJECT_COMMIT"
+EXPECTED_RELEASE="$PROJECT_DIR/target/rust-deploy/releases/$PROJECT_COMMIT"
 if [[ "$RUST_DEPLOY_RELEASE" != "$EXPECTED_RELEASE" ]]; then
   echo "Rust release pointer resolves outside the expected commit-matched release: $RUST_DEPLOY_CURRENT" >&2
   exit 127

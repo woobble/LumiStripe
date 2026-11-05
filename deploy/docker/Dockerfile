@@ -30,12 +30,20 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-COPY rust/ ./rust/
-RUN cargo build --locked --release --manifest-path rust/Cargo.toml \
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY apps/lumistripe-cli/ ./apps/lumistripe-cli/
+COPY apps/lumistripe-engine/ ./apps/lumistripe-engine/
+COPY apps/lumistripe-deploy-helper/ ./apps/lumistripe-deploy-helper/
+COPY apps/lumistripe-web/Cargo.toml ./apps/lumistripe-web/Cargo.toml
+COPY apps/lumistripe-web/src/ ./apps/lumistripe-web/src/
+COPY apps/lumistripe-web/tests/ ./apps/lumistripe-web/tests/
+COPY crates/ ./crates/
+COPY tests/fixtures/ ./tests/fixtures/
+RUN cargo build --locked --release \
         --package lumistripe-engine --bin lumistripe-engine \
         --package lumistripe-cli --bin lumistripe \
         --package lumistripe-deploy-helper --bin lumistripe-deploy-helper \
-    && cargo build --locked --release --manifest-path rust/Cargo.toml \
+    && cargo build --locked --release \
         --package lumistripe-web --bin lumistripe-web --features bluez,pipewire
 
 FROM debian:trixie-slim AS soloist
@@ -46,7 +54,7 @@ ARG LUMI_SOLOIST_FIXTURE=0
 ENV DEBIAN_FRONTEND=noninteractive
 
 COPY --from=rust-build \
-    /src/rust/target/release/lumistripe-deploy-helper \
+    /src/target/release/lumistripe-deploy-helper \
     /usr/local/bin/lumistripe-deploy-helper
 
 RUN if [ "${LUMI_SOLOIST_FIXTURE}" = "1" ]; then \
@@ -94,10 +102,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /opt/lumistripe/static /var/lib/lumistripe
 
-COPY --from=rust-build /src/rust/target/release/lumistripe-web /usr/local/bin/lumistripe-web
-COPY --from=rust-build /src/rust/target/release/lumistripe-engine /usr/local/bin/lumistripe-engine
-COPY --from=rust-build /src/rust/target/release/lumistripe /usr/local/bin/lumistripe-cli
-COPY --from=rust-build /src/rust/target/release/lumistripe-deploy-helper /usr/local/bin/lumistripe-deploy-helper
+COPY --from=rust-build /src/target/release/lumistripe-web /usr/local/bin/lumistripe-web
+COPY --from=rust-build /src/target/release/lumistripe-engine /usr/local/bin/lumistripe-engine
+COPY --from=rust-build /src/target/release/lumistripe /usr/local/bin/lumistripe-cli
+COPY --from=rust-build /src/target/release/lumistripe-deploy-helper /usr/local/bin/lumistripe-deploy-helper
 COPY --from=frontend \
     /src/apps/lumistripe-web/static/ \
     /opt/lumistripe/static/

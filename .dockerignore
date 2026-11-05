@@ -1,17 +1,46 @@
-# The image only needs the Rust workspace, frontend, and its Docker entrypoint.
-# Keeping an allowlist avoids scanning Python packages and generated repo data.
+# Keep the image context limited to the root Cargo workspace, frontend source,
+# and Docker entrypoint. In particular, never send local Cargo target output.
 **
-!rust/
-!rust/**
-rust/target/
-rust/**/target/
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain.toml
 !apps/
+!apps/lumistripe-cli/
+!apps/lumistripe-cli/Cargo.toml
+!apps/lumistripe-cli/src/
+!apps/lumistripe-cli/src/*.rs
+!apps/lumistripe-cli/tests/
+!apps/lumistripe-cli/tests/*.rs
+!apps/lumistripe-cli/tests/support/
+!apps/lumistripe-cli/tests/support/*.rs
+!apps/lumistripe-engine/
+!apps/lumistripe-engine/Cargo.toml
+!apps/lumistripe-engine/src/
+!apps/lumistripe-engine/src/*.rs
+!apps/lumistripe-deploy-helper/
+!apps/lumistripe-deploy-helper/Cargo.toml
+!apps/lumistripe-deploy-helper/src/
+!apps/lumistripe-deploy-helper/src/*.rs
+!apps/lumistripe-deploy-helper/tests/
+!apps/lumistripe-deploy-helper/tests/*.rs
 !apps/lumistripe-web/
+!apps/lumistripe-web/Cargo.toml
+!apps/lumistripe-web/src/
+!apps/lumistripe-web/src/*.rs
+!apps/lumistripe-web/src/bin/
+!apps/lumistripe-web/src/bin/*.rs
+!apps/lumistripe-web/tests/
+!apps/lumistripe-web/tests/*.rs
 !apps/lumistripe-web/frontend/
 !apps/lumistripe-web/frontend/**
 apps/lumistripe-web/frontend/node_modules/
 apps/lumistripe-web/frontend/dist/
-apps/lumistripe-web/frontend/src/lumistripe_web/static/
+apps/lumistripe-web/static/
+!crates/
+!crates/**
+!tests/
+!tests/fixtures/
+!tests/fixtures/**
 !deploy/
 !deploy/docker/
 !deploy/docker/spotify-entrypoint.sh

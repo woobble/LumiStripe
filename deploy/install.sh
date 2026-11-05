@@ -675,7 +675,7 @@ build_rust_release
 install_rust_cli_command "$SERVICE_HOME"
 install_privileged_network_helper
 if [[ ! -e /var/lib/lumistripe/update/status.json ]]; then
-  as_user "$PROJECT_DIR/rust/target/rust-deploy/current/lumistripe-deploy-helper" \
+  as_user "$PROJECT_DIR/target/rust-deploy/current/lumistripe-deploy-helper" \
     update-state initialize \
     --project-dir "$PROJECT_DIR" \
     --state-file /var/lib/lumistripe/update/status.json

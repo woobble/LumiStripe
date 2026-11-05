@@ -1,8 +1,8 @@
 # LumiStripe web application
 
-This directory contains the React dashboard source and its generated static
-build. The production web server is the Rust Axum application in
-`rust/apps/lumistripe-web`; the dashboard source is in `frontend/`.
+This directory contains the Rust Axum web server, React dashboard source, and
+generated static build. The REST contract is defined by the Rust application;
+the dashboard source is in `frontend/`.
 
 ## Build the dashboard
 
@@ -24,5 +24,5 @@ Rust request and response types are the REST contract source. Run
 keep their validation checks clean.
 
 For local Rust simulator startup and settings isolation, see
-[the simulator guide](../../docs/simulator.md). The retired FastAPI/Pydantic
-application and Python OpenAPI exporter are no longer part of this package.
+[the simulator guide](../../docs/simulator.md) and the
+[documentation index](../../docs/README.md).

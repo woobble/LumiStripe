@@ -9,7 +9,7 @@ def test_spotify_service_uses_the_version_matched_rust_preflight() -> None:
 
     preflight = next(line for line in service.splitlines() if line.startswith("ExecStartPre="))
     assert "/usr/bin/env -u LUMI_SPOTIFY_API_KEY" in preflight
-    assert "rust/target/rust-deploy/current/lumistripe-deploy-helper" in preflight
+    assert "target/rust-deploy/current/lumistripe-deploy-helper" in preflight
     assert "soloist-check --binary" in preflight
     assert "python" not in preflight
 

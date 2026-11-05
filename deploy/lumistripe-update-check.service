@@ -9,7 +9,7 @@ Group=@LUMI_SERVICE_GROUP@
 WorkingDirectory=@LUMI_PROJECT_DIR@
 Environment=HOME=@LUMI_SERVICE_HOME@
 Environment=PATH=@LUMI_SERVICE_HOME@/.bun/bin:@LUMI_SERVICE_HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart="@LUMI_PROJECT_DIR@/rust/target/rust-deploy/current/lumistripe-deploy-helper" update-state check --project-dir "@LUMI_PROJECT_DIR@" --state-file /var/lib/lumistripe/update/status.json
+ExecStart="@LUMI_PROJECT_DIR@/target/rust-deploy/current/lumistripe-deploy-helper" update-state check --project-dir "@LUMI_PROJECT_DIR@" --state-file /var/lib/lumistripe/update/status.json
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=full

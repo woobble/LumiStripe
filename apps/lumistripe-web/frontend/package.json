@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "generate:api": "cargo run --locked --manifest-path ../../../rust/Cargo.toml --package lumistripe-web --bin export-openapi > openapi.json && bunx --bun --package typescript@5.9.3 --package openapi-typescript@7.13.0 openapi-typescript openapi.json -o src/generated/api.ts",
+    "generate:api": "cargo run --locked --manifest-path ../../../Cargo.toml --package lumistripe-web --bin export-openapi > openapi.json && bunx --bun --package typescript@5.9.3 --package openapi-typescript@7.13.0 openapi-typescript openapi.json -o src/generated/api.ts",
     "lint": "oxlint",
     "test": "vitest run",
     "preview": "vite preview"

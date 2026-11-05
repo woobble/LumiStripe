@@ -11,7 +11,7 @@ if [[ -z "$PROJECT_DIR" ]] || ! PROJECT_DIR="$(cd -- "$PROJECT_DIR" 2>/dev/null 
   echo "Usage: $0 PROJECT_DIR" >&2
   exit 2
 fi
-[[ -f "$PROJECT_DIR/rust/Cargo.toml" ]] || {
+[[ -f "$PROJECT_DIR/Cargo.toml" ]] || {
   echo "Rust workspace not found under $PROJECT_DIR." >&2
   exit 1
 }
@@ -48,7 +48,13 @@ COMMIT="$(git -C "$PROJECT_DIR" rev-parse --verify HEAD)"
   exit 1
 }
 
-DEPLOY_ROOT="$PROJECT_DIR/rust/target/rust-deploy"
+# The updater installs the new release beside Cargo's root workspace output.
+# Keep one validated copy of legacy releases so a failed layout transition can
+# still restart the previous checkout.
+source "$PROJECT_DIR/deploy/update-support.sh"
+migrate_legacy_rust_deploy_root || exit 1
+
+DEPLOY_ROOT="$PROJECT_DIR/target/rust-deploy"
 BUILD_DIR="$DEPLOY_ROOT/build"
 RELEASES_DIR="$DEPLOY_ROOT/releases"
 RELEASE_DIR="$RELEASES_DIR/$COMMIT"
@@ -81,13 +87,13 @@ run_cargo() {
     "$CARGO_BIN" +1.88.0 "$@"
 }
 
-run_cargo build --locked --release --manifest-path "$PROJECT_DIR/rust/Cargo.toml" \
+run_cargo build --locked --release --manifest-path "$PROJECT_DIR/Cargo.toml" \
   --package lumistripe-engine --bin lumistripe-engine
-run_cargo build --locked --release --manifest-path "$PROJECT_DIR/rust/Cargo.toml" \
+run_cargo build --locked --release --manifest-path "$PROJECT_DIR/Cargo.toml" \
   --package lumistripe-web --bin lumistripe-web --features bluez,pipewire
-run_cargo build --locked --release --manifest-path "$PROJECT_DIR/rust/Cargo.toml" \
+run_cargo build --locked --release --manifest-path "$PROJECT_DIR/Cargo.toml" \
   --package lumistripe-deploy-helper --bin lumistripe-deploy-helper
-run_cargo build --locked --release --manifest-path "$PROJECT_DIR/rust/Cargo.toml" \
+run_cargo build --locked --release --manifest-path "$PROJECT_DIR/Cargo.toml" \
   --package lumistripe-cli --bin lumistripe
 
 BUILT_ENGINE="$BUILD_DIR/release/lumistripe-engine"

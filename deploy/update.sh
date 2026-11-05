@@ -155,7 +155,7 @@ build_rust_backend() {
 
 prune_rust_backend_releases() {
   local active_commit release_commit release_dir
-  local releases_dir="$PROJECT_DIR/rust/target/rust-deploy/releases"
+  local releases_dir="$PROJECT_DIR/target/rust-deploy/releases"
   [[ -d "$releases_dir" ]] || return 0
   active_commit="$(git_user rev-parse --verify HEAD)" || return 1
 
@@ -342,7 +342,7 @@ rollback() {
 }
 
 record_update_state() {
-  as_user "$PROJECT_DIR/rust/target/rust-deploy/current/lumistripe-deploy-helper" \
+  as_user "$PROJECT_DIR/target/rust-deploy/current/lumistripe-deploy-helper" \
     update-state "$1" \
     --project-dir "$PROJECT_DIR" \
     --state-file "$UPDATE_STATE_FILE" || true
@@ -389,6 +389,9 @@ systemctl is-active --quiet lumistripe-web.service
 if wait_for_web_service_health; then
   echo "LumiStripe updated to $(git_user rev-parse --short HEAD)."
   prune_rust_backend_releases || echo "Could not prune old Rust release binaries." >&2
+  ACTIVE_COMMIT="$(git_user rev-parse --verify HEAD)"
+  retire_legacy_rust_deploy_root "$ACTIVE_COMMIT" "$PREVIOUS_REF" || \
+    echo "Could not retire legacy Rust release state; it was left in place." >&2
   record_update_state install-succeeded
   trap - ERR
   exit 0

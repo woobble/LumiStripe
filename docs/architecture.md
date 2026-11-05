@@ -1,88 +1,72 @@
-# LumiStripe architecture
+# Architecture
 
-LumiStripe's production application is native Rust with a React and TypeScript
-dashboard. The Rust workspace owns the web server, real-time engine, CLI,
-simulator mode, and restricted deployment helper.
+LumiStripe is a Rust application with a React and TypeScript dashboard. The
+single Cargo workspace at the repository root builds the web server, playback
+engine, CLI, and deployment helper.
 
-## Dependency direction
+## Workspace layout
 
 ```text
-React / TypeScript frontend
-            |
-        Rust Axum web
-            |
-       versioned IPC
-            |
-      Rust real-time engine
-       /      |       \
- audio DSP  renderer  SPI / GPIO
-            |
-       mock outputs
-
-Rust deployment helper
-   update state, NetworkManager, Spotify support
+apps/lumistripe-web/       Axum server, REST API, WebSockets, React frontend
+apps/lumistripe-engine/    Engine process entry point
+apps/lumistripe-cli/       CLI entry point
+apps/lumistripe-deploy-helper/  Restricted privileged operations
+crates/                    Shared engine, protocol, audio, and output libraries
+tests/fixtures/             Shared protocol and regression fixtures
 ```
 
-The web app owns HTTP/WebSocket handling, authentication, settings, and
-application coordination. It sends engine commands over the versioned local
-IPC protocol. The engine owns playback state, rendering, audio capture and DSP,
-and configured output devices. Mock outputs are used by simulator mode and
-software tests.
+The web server owns HTTP and WebSocket handling, pairing, settings, and
+application coordination. It sends typed commands to the engine over a local
+Unix socket. The engine process owns playback scheduling, rendering, audio
+capture and DSP, and configured output devices. Web handlers enqueue commands
+and read published snapshots; they do not drive hardware directly.
 
-The deployment helper contains narrowly scoped privileged operations. The
-installer and updater build the web server, engine, CLI, and helper from one
-commit, store them in a release directory, and atomically activate that release.
-The web launcher and supervised engine restarts stay pinned to the same
-commit-matched binaries.
+## Rendering and output
 
-## REST and frontend contracts
+The engine output worker owns the configured device set and performs rendering,
+compositing, power finalization, and physical writes. Its frame queue is
+bounded and latest-wins: a fresh pending frame can replace stale work instead
+of building an unbounded backlog behind slow output. Audio capture callbacks
+write fixed batches to a bounded queue; a separate audio worker runs DSP and
+passes features to playback. SPI and GPIO integrations are optional. Mock
+outputs support the browser simulator and software tests without physical
+devices.
 
-Rust Axum request and response models are the REST contract source. The
-`export-openapi` command generates
-`apps/lumistripe-web/frontend/openapi.json`; the frontend generator then
-updates `src/generated/api.ts`. Do not hand-maintain a second backend schema.
+The Rust CLI controls the same engine over IPC. The deployment helper exposes
+narrow operations for NetworkManager, update state, and related privileged
+tasks; it does not own playback or settings policy.
 
-Frontend network boundaries use strict Zod validation for REST state, audio
-telemetry, Bluetooth responses, and preview messages. The preview binary
-protocol is versioned and documented in
-[the preview protocol](protocols/preview.md), with shared fixtures used by Rust
-and frontend tests. The WebSocket client is shared between JSON and binary
-streams. Canvas and WebGPU implementations remain behind the renderer
-interface.
+## Web and frontend contracts
 
-## Engine ownership
+Rust Axum models are the REST contract source. From the repository root,
+`cargo run --locked -p lumistripe-web --bin export-openapi` writes
+`apps/lumistripe-web/frontend/openapi.json`. Run `bun run generate:api` in the
+frontend directory to regenerate `src/generated/api.ts`. Network responses
+are validated at the frontend boundary. The JSON and binary WebSocket payloads
+have their own documented contracts.
 
-The engine is the single writer for mutable playback, audio, controller, and
-hardware state. Web handlers validate requests and enqueue typed commands;
-they do not drive hardware directly. Audio callbacks do bounded buffer writes,
-while DSP and native device work run on worker-owned paths.
+## Build output and deployment
 
-The Rust workspace separates configuration, IPC, output drivers, runtime,
-audio, animation definitions/state, rendering, compositing, effects, and the
-standalone engine process. GPIO, SPI, Bluetooth, and audio-provider integrations
-are optional build features where practical; simulator mode uses mock output
-without opening physical LED devices.
+Builds use the root `target/` directory. The web server serves the frontend
+from `apps/lumistripe-web/static` by default; the frontend source and build
+configuration live beside the Rust application under
+`apps/lumistripe-web/frontend`.
 
-## Deployment and stored settings
+The installer and updater stage the web server, engine, CLI, and deployment
+helper together under `target/rust-deploy/releases/<commit>/`. A release is
+activated only after its binaries are validated and share the same source
+commit. The active release pointer and previous release support rollback.
+Installations using the former `rust/target/rust-deploy` layout are migrated
+by copying and validating release state before the new updater uses it. Settings
+and application data remain outside the release tree.
 
-Production deployment contains no Python web app, Python CLI, Python library
-packages, or native C extension build. The installer creates an environment
-file without selecting an application language. If an existing file sets
-`LUMI_WEB_BACKEND=python`, the installer and updater stop with migration
-instructions before changing that file or application data. An administrator
-must set the value to `rust` manually. Rust settings migrations preserve
-existing settings fields.
+## Audio and hardware
 
-The current dashboard is served from the standalone build output at
-`apps/lumistripe-web/static`. The source frontend remains under
-`apps/lumistripe-web/frontend`; the Rust server's default static path and
-deployment launcher use the same output directory.
+The audio crate owns capture, configuration, DSP, and telemetry. The web layer
+selects sources and profiles, persists route-specific synchronization offsets,
+and sends audio commands to the engine. Source details and operator guidance
+are in the [audio guide](audio.md).
 
-## Historical migration records
-
-Earlier migration documents record the Python-to-Rust transition and its
-intermediate test results. They are historical evidence, not instructions for
-running a Python backend. See the
-[Python retirement inventory](migrations/python-retirement-inventory.md),
-[Rust web migration record](migrations/rust-web.md), and
-[Rust engine migration record](migrations/rust-engine.md).
+Production hardware use is documented in the [deployment guide](../deploy/README.md).
+The [browser simulator](simulator.md) uses mock outputs and does not verify
+physical SPI, GPIO, Bluetooth, microphone, or LED timing.

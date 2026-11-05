@@ -1,0 +1,5 @@
+CompileFlags:
+  Add:
+    - -I/usr/include/python3.14
+    - -I/usr/lib/python3.14/site-packages/numpy/_core/include
+    - -I/home/woobb/Projects/dc-stripe-py/third_party/kissfft

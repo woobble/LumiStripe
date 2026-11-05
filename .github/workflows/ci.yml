@@ -107,33 +107,33 @@ jobs:
           pkg-config libasound2-dev libclang-dev libdbus-1-dev libpipewire-0.3-dev libpulse-dev
 
       - name: Check Rust formatting
-        run: cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+        run: cargo fmt --all -- --check
 
       - name: Run Rust Clippy
-        run: cargo clippy --locked --manifest-path rust/Cargo.toml --workspace --all-targets
+        run: cargo clippy --locked --workspace --all-targets
 
       - name: Build Rust engine for web integration tests
-        run: cargo build --locked --manifest-path rust/Cargo.toml --package lumistripe-engine --bin lumistripe-engine
+        run: cargo build --locked --package lumistripe-engine --bin lumistripe-engine
 
       - name: Test Rust workspace
-        run: cargo test --locked --manifest-path rust/Cargo.toml --workspace
+        run: cargo test --locked --workspace
 
       - name: Test Rust CLI with Python unavailable
         run: >-
-          cargo test --locked --manifest-path rust/Cargo.toml
+          cargo test --locked
           --package lumistripe-cli --features test-engine
 
       - name: Test Rust web with native Bluetooth and PipeWire providers
         run: >-
-          cargo test --locked --manifest-path rust/Cargo.toml
+          cargo test --locked
           --package lumistripe-web --features bluez,pipewire
 
       - name: Build standalone Rust engine
-        run: cargo build --release --locked --manifest-path rust/Cargo.toml --workspace
+        run: cargo build --release --locked --workspace
 
       - name: Build Rust web with native Bluetooth and PipeWire providers
         run: >-
-          cargo build --release --locked --manifest-path rust/Cargo.toml
+          cargo build --release --locked
           --package lumistripe-web --features bluez,pipewire
 
   rust-engine-arm64:
@@ -167,31 +167,31 @@ jobs:
           pkg-config libasound2-dev libclang-dev libdbus-1-dev libpipewire-0.3-dev libpulse-dev
 
       - name: Build Rust engine for web integration tests
-        run: cargo build --locked --manifest-path rust/Cargo.toml --package lumistripe-engine --bin lumistripe-engine
+        run: cargo build --locked --package lumistripe-engine --bin lumistripe-engine
 
       - name: Test Rust workspace on ARM64
-        run: cargo test --locked --manifest-path rust/Cargo.toml --workspace
+        run: cargo test --locked --workspace
 
       - name: Test Rust CLI with Python unavailable on ARM64
         run: >-
-          cargo test --locked --manifest-path rust/Cargo.toml
+          cargo test --locked
           --package lumistripe-cli --features test-engine
 
       - name: Test Rust web native Bluetooth and PipeWire providers on ARM64
         run: >-
-          cargo test --locked --manifest-path rust/Cargo.toml
+          cargo test --locked
           --package lumistripe-web --features bluez,pipewire
 
       - name: Build and verify ARM64 engine
         run: |
-          cargo build --release --locked --manifest-path rust/Cargo.toml --workspace
-          file rust/target/release/lumistripe-engine | grep -q 'ARM aarch64'
+          cargo build --release --locked --workspace
+          file target/release/lumistripe-engine | grep -q 'ARM aarch64'
 
       - name: Build and verify ARM64 Rust web native providers
         run: |
-          cargo build --release --locked --manifest-path rust/Cargo.toml \
+          cargo build --release --locked \
             --package lumistripe-web --features bluez,pipewire
-          file rust/target/release/lumistripe-web | grep -q 'ARM aarch64'
+          file target/release/lumistripe-web | grep -q 'ARM aarch64'
 
   raspberry-pi:
     name: Raspberry Pi 5 arm64 native smoke
@@ -244,24 +244,24 @@ jobs:
 
       - name: Build Rust playback engine on Raspberry Pi
         run: >-
-          cargo build --release --locked --manifest-path rust/Cargo.toml
+          cargo build --release --locked
           --package lumistripe-engine --bin lumistripe-engine
 
       - name: Build Rust engine for web integration tests on Raspberry Pi
         run: >-
-          cargo build --locked --manifest-path rust/Cargo.toml
+          cargo build --locked
           --package lumistripe-engine --bin lumistripe-engine
 
       - name: Test Rust web with native Bluetooth and PipeWire providers on Raspberry Pi
         run: >-
-          cargo test --locked --manifest-path rust/Cargo.toml
+          cargo test --locked
           --package lumistripe-web --features bluez,pipewire
 
       - name: Verify live BlueZ snapshot on Raspberry Pi
         run: |
           set -eu
           if systemctl is-active --quiet bluetooth.service; then
-            cargo test --locked --manifest-path rust/Cargo.toml \
+            cargo test --locked \
               --package lumistripe-web --features bluez,pipewire \
               -- --ignored --exact \
               bluetooth_bluer::tests::live_bluez_snapshot
@@ -276,7 +276,7 @@ jobs:
           runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
           if test -S "$runtime_dir/pipewire-0"; then
             XDG_RUNTIME_DIR="$runtime_dir" cargo test --locked \
-              --manifest-path rust/Cargo.toml --package lumistripe-web \
+              --package lumistripe-web \
               --features bluez,pipewire \
               -- --ignored --exact pipewire_bindings::tests::live_pipewire_registry_snapshot
           else
@@ -291,7 +291,7 @@ jobs:
             && command -v nmcli >/dev/null 2>&1 \
             && command -v iw >/dev/null 2>&1 \
             && test -x /usr/local/libexec/lumistripe/network/lumistripe-network-helper; then
-            cargo test --locked --manifest-path rust/Cargo.toml \
+            cargo test --locked \
               --package lumistripe-web --features bluez,pipewire \
               -- --ignored --exact \
               network::tests::live_networkmanager_status_decodes_read_only_helper_snapshot
@@ -303,7 +303,7 @@ jobs:
       - name: Verify installed NetworkManager REST boundary on Raspberry Pi
         run: |
           set -eu
-          target_dir="${CARGO_TARGET_DIR:-rust/target}"
+          target_dir="${CARGO_TARGET_DIR:-target}"
           test_name=app::tests::live_networkmanager_status_route_uses_installed_restricted_wrapper
           if systemctl is-active --quiet NetworkManager.service \
             && id -u www-data >/dev/null 2>&1 \
@@ -342,7 +342,7 @@ jobs:
             && test -S "$runtime_dir/pipewire-0" \
             && XDG_RUNTIME_DIR="$runtime_dir" pactl info >/dev/null 2>&1; then
             XDG_RUNTIME_DIR="$runtime_dir" cargo test --locked \
-              --manifest-path rust/Cargo.toml --package lumistripe-web \
+              --package lumistripe-web \
               --features bluez,pipewire \
               -- --ignored --exact \
               app::tests::live_native_audio_status_uses_system_providers_with_mock_outputs
@@ -355,7 +355,7 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           set -eu
-          target_dir="${CARGO_TARGET_DIR:-rust/target}"
+          target_dir="${CARGO_TARGET_DIR:-target}"
           test_binary=
           for candidate in "$target_dir"/debug/deps/lumistripe_web-*; do
             if test -x "$candidate" \
