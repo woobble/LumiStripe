@@ -541,7 +541,8 @@ def test_offline_updates_use_only_the_previously_verified_cache() -> None:
 def test_offline_installs_require_a_cached_verified_commit() -> None:
     installer = INSTALLER.read_text(encoding="utf-8")
     package_setup = installer[
-        installer.index("install_system_packages() {"):installer.index("binary_target_supported() {")
+        installer.index("install_system_packages() {"):
+        installer.index("install_source_build_packages() {")
     ]
     stage_release = installer[
         installer.index("stage_prebuilt_release() {"):installer.index("create_environment_file() {")
@@ -555,6 +556,37 @@ def test_offline_installs_require_a_cached_verified_commit() -> None:
     assert "required system packages are already installed; skipping apt access" in package_setup
     assert package_setup.index("return 0") < package_setup.index("apt-get update")
     assert "leaves the existing Spotify Soloist executable unchanged" in installer
+
+
+@pytest.mark.parametrize(
+    ("architecture", "os_release", "supported"),
+    [
+        ("aarch64", "ID=ubuntu\nVERSION_CODENAME=resolute\n", True),
+        ("aarch64", "ID=raspbian\nVERSION_CODENAME=trixie\n", True),
+        ("aarch64", "ID=debian\nVERSION_CODENAME=bookworm\n", False),
+        ("armv7l", "ID=ubuntu\nVERSION_CODENAME=resolute\n", False),
+    ],
+)
+def test_shared_binary_target_support(
+    tmp_path: Path, architecture: str, os_release: str, supported: bool
+) -> None:
+    os_release_file = tmp_path / "os-release"
+    os_release_file.write_text(os_release, encoding="utf-8")
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; binary_target_supported "$2" "$3"',
+            "bash",
+            str(UPDATE_SUPPORT),
+            architecture,
+            str(os_release_file),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert (result.returncode == 0) is supported, result.stderr
 
 
 def test_privileged_update_refresh_reads_only_the_root_owned_snapshot() -> None:

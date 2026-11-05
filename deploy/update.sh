@@ -166,15 +166,6 @@ spotify_environment_ready() {
 
 git_user() { as_user git -C "$PROJECT_DIR" "$@"; }
 
-binary_target_supported() {
-  local architecture distribution codename
-  architecture="$(uname -m)"
-  distribution="$(. /etc/os-release && printf '%s' "${ID:-}")"
-  codename="$(. /etc/os-release && printf '%s' "${VERSION_CODENAME:-}")"
-  [[ "$architecture" == aarch64 && "$codename" == trixie &&
-      ( "$distribution" == debian || "$distribution" == raspbian ) ]]
-}
-
 install_release_verifier() {
   "$SCRIPT_DIR/install-github-cli.sh"
 }
@@ -467,7 +458,7 @@ ACTIVE_RELEASE="$(readlink -f -- "$PROJECT_DIR/target/rust-deploy/current" 2>/de
 
 if [[ "$DEPLOY_MODE" != source ]] && ! binary_target_supported; then
   if [[ "$DEPLOY_MODE" == binary ]]; then
-    echo "Prebuilt releases require aarch64 Debian or Raspberry Pi OS Trixie. Set LUMI_DEPLOY_MODE=source for a local build." >&2
+    echo "Prebuilt releases require aarch64 Debian or Raspberry Pi OS Trixie, or aarch64 Ubuntu. Set LUMI_DEPLOY_MODE=source for a local build." >&2
     exit 1
   fi
   EFFECTIVE_DEPLOY_MODE=source

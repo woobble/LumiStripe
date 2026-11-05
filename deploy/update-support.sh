@@ -5,6 +5,17 @@ UPDATE_LIBEXEC_DIR=/usr/local/libexec/lumistripe/deploy
 NETWORK_LIBEXEC_DIR=/usr/local/libexec/lumistripe/network
 RELEASE_CACHE_DIR=/var/cache/lumistripe/releases
 
+binary_target_supported() {
+  local architecture="${1:-$(uname -m)}"
+  local os_release_file="${2:-/etc/os-release}"
+  local distribution codename
+  distribution="$(. "$os_release_file" && printf '%s' "${ID:-}")"
+  codename="$(. "$os_release_file" && printf '%s' "${VERSION_CODENAME:-}")"
+  [[ "$architecture" == aarch64 &&
+      ( "$distribution" == ubuntu ||
+        ( "$codename" == trixie && ( "$distribution" == debian || "$distribution" == raspbian ) ) ) ]]
+}
+
 release_artifact_tool() {
   if [[ -f "$UPDATE_LIBEXEC_DIR/release_artifact.py" && ! -L "$UPDATE_LIBEXEC_DIR/release_artifact.py" ]]; then
     printf '%s\n' "$UPDATE_LIBEXEC_DIR/release_artifact.py"

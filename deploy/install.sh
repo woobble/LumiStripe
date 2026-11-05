@@ -198,7 +198,7 @@ source "$SCRIPT_DIR/soloist.sh"
 source "$SCRIPT_DIR/rust-toolchain.sh"
 
 command -v apt-get >/dev/null 2>&1 || {
-  echo "This installer requires apt-get (Raspberry Pi OS/Debian)." >&2
+  echo "This installer requires apt-get (Debian, Raspberry Pi OS, or Ubuntu)." >&2
   exit 1
 }
 command -v systemctl >/dev/null 2>&1 || {
@@ -232,7 +232,6 @@ install_system_packages() {
     pipewire-alsa
     libasound2-plugins
     libportaudio2
-    libasound2
     libatomic1
     libdbus-1-3
     libpipewire-0.3-0
@@ -258,6 +257,10 @@ install_system_packages() {
         missing+=("$package")
       fi
     done
+    if ! dpkg-query -W -f='${Status}' libasound2t64 2>/dev/null | grep -q 'install ok installed' &&
+       ! dpkg-query -W -f='${Status}' libasound2 2>/dev/null | grep -q 'install ok installed'; then
+      missing+=("libasound2t64 or libasound2")
+    fi
     if ! dpkg-query -W -f='${Status}' libgpiod3 2>/dev/null | grep -q 'install ok installed' &&
        ! dpkg-query -W -f='${Status}' libgpiod2 2>/dev/null | grep -q 'install ok installed'; then
       missing+=("libgpiod3 or libgpiod2")
@@ -273,8 +276,21 @@ install_system_packages() {
     return 0
   fi
 
-  echo "Refreshing Raspberry Pi OS package lists..."
+  echo "Refreshing apt package lists..."
   apt-get update
+
+  local alsa_runtime_package=
+  for candidate in libasound2t64 libasound2; do
+    if apt-cache show "$candidate" >/dev/null 2>&1; then
+      alsa_runtime_package="$candidate"
+      break
+    fi
+  done
+  [[ -n "$alsa_runtime_package" ]] || {
+    echo "Could not find a supported ALSA runtime package." >&2
+    exit 1
+  }
+  packages+=("$alsa_runtime_package")
 
   local gpiod_runtime_package=
   for candidate in libgpiod3 libgpiod2; do
@@ -290,7 +306,7 @@ install_system_packages() {
   packages+=("$gpiod_runtime_package")
 
   # Raspberry Pi OS images normally ship raspi-config, but keeping this
-  # conditional also supports minimal Debian-based Pi images.
+  # conditional also supports minimal Debian- or Ubuntu-based Pi images.
   if apt-cache show raspi-config >/dev/null 2>&1; then
     packages+=(raspi-config)
   fi
@@ -299,19 +315,8 @@ install_system_packages() {
     packages+=(mkcert)
   fi
 
-  echo "Installing Raspberry Pi OS packages..."
+  echo "Installing system packages..."
   apt-get install --yes --no-install-recommends "${packages[@]}"
-}
-
-binary_target_supported() {
-  local architecture
-  local distribution
-  local codename
-  architecture="$(uname -m)"
-  distribution="$(. /etc/os-release && printf '%s' "${ID:-}")"
-  codename="$(. /etc/os-release && printf '%s' "${VERSION_CODENAME:-}")"
-  [[ "$architecture" == aarch64 && "$codename" == trixie &&
-      ( "$distribution" == debian || "$distribution" == raspbian ) ]]
 }
 
 install_source_build_packages() {
@@ -749,7 +754,7 @@ write_install_state() {
 if [[ "$DEPLOY_MODE" != source ]]; then
   if ! binary_target_supported; then
     if [[ "$DEPLOY_MODE" == binary ]]; then
-      echo "Prebuilt releases require aarch64 Debian or Raspberry Pi OS Trixie. Set LUMI_DEPLOY_MODE=source for a local build." >&2
+      echo "Prebuilt releases require aarch64 Debian or Raspberry Pi OS Trixie, or aarch64 Ubuntu. Set LUMI_DEPLOY_MODE=source for a local build." >&2
       exit 1
     fi
     EFFECTIVE_DEPLOY_MODE=source

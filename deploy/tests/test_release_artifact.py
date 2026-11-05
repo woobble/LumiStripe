@@ -186,13 +186,21 @@ def test_legacy_frontend_migration_seals_the_existing_release(tmp_path: Path) ->
     assert (release / "static/assets/app.js").read_text(encoding="utf-8") == "legacy asset\n"
 
 
-def test_prebuilt_target_is_limited_to_aarch64_trixie(tmp_path: Path) -> None:
+def test_prebuilt_target_supports_aarch64_trixie_and_ubuntu(tmp_path: Path) -> None:
     target = {"ID": "raspbian", "VERSION_CODENAME": "trixie"}
     assert release_artifact.binary_target_supported(machine="aarch64", os_release=target)
     assert not release_artifact.binary_target_supported(machine="armv7l", os_release=target)
     assert not release_artifact.binary_target_supported(
         machine="aarch64",
         os_release={"ID": "debian", "VERSION_CODENAME": "bookworm"},
+    )
+    assert release_artifact.binary_target_supported(
+        machine="aarch64",
+        os_release={"ID": "ubuntu", "VERSION_CODENAME": "resolute"},
+    )
+    assert not release_artifact.binary_target_supported(
+        machine="armv7l",
+        os_release={"ID": "ubuntu", "VERSION_CODENAME": "resolute"},
     )
 
 

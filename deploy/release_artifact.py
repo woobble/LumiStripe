@@ -601,7 +601,9 @@ def binary_target_supported(
     os_release = os_release if os_release is not None else parse_os_release()
     codename = os_release.get("VERSION_CODENAME", "")
     distro = os_release.get("ID", "").lower()
-    return machine == "aarch64" and codename == "trixie" and distro in {"debian", "raspbian"}
+    return machine == "aarch64" and (
+        distro == "ubuntu" or (codename == "trixie" and distro in {"debian", "raspbian"})
+    )
 
 
 def _safe_url(url: str, *, allowed_hosts: set[str]) -> str:
@@ -953,7 +955,9 @@ def install_release(
     if not valid_commit(commit):
         raise VerificationError("release commit must be a full lowercase Git SHA")
     if require_supported_target and not binary_target_supported():
-        raise UnsupportedTarget("prebuilt releases require aarch64 Debian or Raspberry Pi OS Trixie")
+        raise UnsupportedTarget(
+            "prebuilt releases require aarch64 Debian or Raspberry Pi OS Trixie, or aarch64 Ubuntu"
+        )
 
     release_root.mkdir(parents=True, exist_ok=True, mode=0o755)
     if cache_root.is_symlink():

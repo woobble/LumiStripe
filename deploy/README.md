@@ -4,7 +4,9 @@ The LumiStripe web runtime can receive music from a phone or other source over B
 or use Spotify Connect through Spotify's Soloist player. The Pi sends the selected
 stream to the sound system and analyzes it for reactive animations.
 
-The supported target is Raspberry Pi OS Trixie using PipeWire/WirePlumber.
+Supported targets are Raspberry Pi OS Trixie and Ubuntu on ARM64, using
+PipeWire/WirePlumber. Prebuilt releases are available on both; source builds
+remain available through `LUMI_DEPLOY_MODE=source`.
 The Pi can send audio to USB, HDMI, wired, or Bluetooth speaker outputs. It
 can also receive music from phones and other Bluetooth audio sources; the
 same routed stream drives the music-reactive animation.
@@ -69,9 +71,9 @@ Spotify key through the provisioning process environment. Keep their values
 out of shell history and command arguments.
 
 The installer defaults to a commit-matched ARM64 binary release for Debian or
-Raspberry Pi OS Trixie. It downloads the GitHub release for the exact checkout
-commit, verifies its asset digests and GitHub Actions provenance, validates the
-manifest and runtime dependencies, then stages the web server, engine, CLI,
+Raspberry Pi OS Trixie, or Ubuntu on ARM64. It downloads the GitHub release for
+the exact checkout commit, verifies its asset digests and GitHub Actions
+provenance, validates the manifest and runtime dependencies, then stages the web server, engine, CLI,
 deployment helper, and frontend together. Binary installs do not compile Rust
 or build the frontend on the Pi. They do not install Rustup, Cargo, Bun, or
 native build headers. Python's standard library is used for bounded archive
@@ -202,9 +204,9 @@ Run the installed CLI as the service user, for example:
 sudo -H -u pi /home/pi/.local/bin/lumistripe-cli --help
 ```
 
-On Trixie the installer selects `libgpiod3`; older supported Debian-based Pi
-images are handled with `libgpiod2` when that is the available runtime
-package.
+The installer selects the available `libgpiod` runtime package and supports
+the `libasound2` and `libasound2t64` package names used by Debian-based
+systems.
 
 The installer needs internet access for apt, the matching GitHub release and
 provenance checks, mkcert, and optional Spotify Soloist downloads. Source mode
@@ -292,8 +294,9 @@ digest, or provenance failure.
 To update offline from a previously verified local bundle, the full commit
 must exist in the checkout and its root-protected cache entry must still be
 present under `/var/cache/lumistripe/releases/<commit>`. Keep the system on
-ARM64 Debian or Raspberry Pi OS Trixie with the runtime packages already
-installed, then run the normal updater in binary mode with that commit:
+ARM64 Debian or Raspberry Pi OS Trixie, or ARM64 Ubuntu, with the runtime
+packages already installed, then run the normal updater in binary mode with
+that commit:
 
 ```bash
 PROJECT_DIR=/opt/lumistripe-install
