@@ -23,6 +23,13 @@ def _rollback_fixture(tmp_path: Path, extra: str = "") -> tuple[str, Path, Path]
         """
 activate_rust_release() { printf 'activate %s\\n' "$1" >> "$CALL_LOG"; [[ "$FAIL_ROLLBACK_STEP" != activate_release ]]; }
 install_rust_cli_command() { printf 'install-cli %s\\n' "$1" >> "$CALL_LOG"; [[ "$FAIL_ROLLBACK_STEP" != install_cli ]]; }
+restart_spotify_service_if_needed() {
+  local restart_required="$1"
+  systemctl enable lumistripe-spotify.service
+  if [[ "$restart_required" == 1 ]] || ! systemctl is-active --quiet lumistripe-spotify.service; then
+    systemctl restart lumistripe-spotify.service
+  fi
+}
 """,
         encoding="utf-8",
     )
@@ -35,6 +42,10 @@ UPDATE_SWITCHED=1
 RELEASE_ACTIVATED=1
 PROJECT_DIR="$PROJECT_DIR"
 PROJECT_HOME="$PROJECT_HOME"
+SOLOIST_BINARY_CHANGED="${{SOLOIST_CHANGED:-0}}"
+SPOTIFY_SERVICE_FILE_CHANGED=0
+SPOTIFY_ENV_CHANGED=0
+WIREPLUMBER_CONFIG_CHANGED=0
 git_user() {{
   printf 'git %s\\n' "$*" >> "$CALL_LOG"
   if [[ "$1" == switch ]]; then [[ "$3" == "$PREVIOUS_REF" ]] || return 1; fi
@@ -74,6 +85,7 @@ def _run_rollback(
     service_active: bool = True,
     healthy: bool = True,
     spotify_configured: bool = False,
+    soloist_changed: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     call_log = tmp_path / "calls"
     project_dir = tmp_path / "project"
@@ -94,6 +106,7 @@ def _run_rollback(
             "SERVICE_ACTIVE": str(int(service_active)),
             "WEB_HEALTHY": str(int(healthy)),
             "SPOTIFY_CONFIGURED": str(int(spotify_configured)),
+            "SOLOIST_CHANGED": str(int(soloist_changed)),
         },
         capture_output=True,
         text=True,
@@ -105,12 +118,18 @@ def _run_rollback(
 
 
 @pytest.mark.parametrize(
-    ("spotify_configured", "failure_step", "return_code"),
-    [(False, "", 0), (True, "", 0), (False, "activate_release", 42)],
+    ("spotify_configured", "soloist_changed", "failure_step", "return_code"),
+    [
+        (False, False, "", 0),
+        (True, False, "", 0),
+        (True, True, "", 0),
+        (False, False, "activate_release", 42),
+    ],
 )
 def test_rollback_restores_the_previous_checkout_and_release_without_rebuilding(
     tmp_path: Path,
     spotify_configured: bool,
+    soloist_changed: bool,
     failure_step: str,
     return_code: int,
 ) -> None:
@@ -121,6 +140,7 @@ def test_rollback_restores_the_previous_checkout_and_release_without_rebuilding(
         script,
         fail_step=failure_step,
         spotify_configured=spotify_configured,
+        soloist_changed=soloist_changed,
     )
 
     assert result.returncode == return_code, result.stderr
@@ -133,7 +153,9 @@ def test_rollback_restores_the_previous_checkout_and_release_without_rebuilding(
     ]
     assert "systemctl is-active --quiet lumistripe-web.service" in calls
     assert "curl --disable --fail --silent --show-error --max-time 0.25 http://127.0.0.1:8000/api/health" in calls
-    assert ("systemctl restart lumistripe-spotify.service" in calls) is spotify_configured
+    assert ("systemctl restart lumistripe-spotify.service" in calls) is (
+        spotify_configured and soloist_changed
+    )
     assert not any("build" in call or "bun" in call.lower() or "cargo" in call.lower() for call in calls)
     if failure_step:
         assert "Rollback failed; manual recovery is required." in result.stderr

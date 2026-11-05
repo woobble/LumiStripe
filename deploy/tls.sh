@@ -1,5 +1,7 @@
 # Shared TLS certificate lifecycle for the systemd installer and updater.
 
+LUMI_TLS_CHANGED=0
+
 # Read generated files with the service account's permissions. The temporary
 # directory used by mkcert is writable by that account, so root must not follow
 # paths in it directly when importing files into the protected TLS directory.
@@ -82,9 +84,15 @@ ensure_lumistripe_tls_certificate() {
     fi
     rm -rf -- "$secure_tmp_dir"
     rm -rf -- "$cert_tmp_dir"
+    LUMI_TLS_CHANGED=1
   fi
 
-  chown root:root "$tls_cert" "$tls_key"
-  chmod 644 "$tls_cert"
-  chmod 600 "$tls_key"
+  if [[ "$(stat -c '%u:%g:%a' -- "$tls_cert")" != 0:0:644 ]]; then
+    chown root:root -- "$tls_cert"
+    chmod 644 -- "$tls_cert"
+  fi
+  if [[ "$(stat -c '%u:%g:%a' -- "$tls_key")" != 0:0:600 ]]; then
+    chown root:root -- "$tls_key"
+    chmod 600 -- "$tls_key"
+  fi
 }

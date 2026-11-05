@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -952,6 +953,10 @@ def install_release(
     require_supported_target: bool = True,
     cached_only: bool = False,
 ) -> Path:
+    download_elapsed_ns = 0
+    verification_elapsed_ns = 0
+    staging_elapsed_ns = 0
+    download_skipped = False
     if not valid_commit(commit):
         raise VerificationError("release commit must be a full lowercase Git SHA")
     if require_supported_target and not binary_target_supported():
@@ -973,10 +978,11 @@ def install_release(
         raise VerificationError("release cache root must be owned by root")
     cache_dir = cache_root / commit
     if cache_dir.exists():
-        _verify_cache_dir(cache_dir, commit)
+        download_skipped = True
     elif cached_only:
         raise MissingArtifact(f"no previously verified cached release exists for commit {commit}")
     else:
+        download_started_ns = time.monotonic_ns()
         release, assets = _release_assets(commit)
         archive_name = RELEASE_NAME.format(commit=commit)
         asset_names = {
@@ -1014,6 +1020,8 @@ def install_release(
                 sidecar_manifest,
                 max_size=SIDECAR_LIMIT,
             )
+            download_elapsed_ns += time.monotonic_ns() - download_started_ns
+            verification_started_ns = time.monotonic_ns()
             if _parse_checksum_file(checksum_path, archive_name) != archive_digest:
                 raise VerificationError("release SHA-256 sidecar does not match GitHub's asset digest")
             _verify_attestation(archive_path, bundle_path, commit, gh_path)
@@ -1054,10 +1062,25 @@ def install_release(
                 archive_digest,
                 manifest,
             )
+            verification_elapsed_ns += time.monotonic_ns() - verification_started_ns
 
+    verification_started_ns = time.monotonic_ns()
     cache_info = _verify_cache_dir(cache_dir, commit)
     _ = cache_info
-    return _release_to_target(cache_dir, release_root, commit, uid, gid)
+    verification_elapsed_ns += time.monotonic_ns() - verification_started_ns
+    staging_started_ns = time.monotonic_ns()
+    target = _release_to_target(cache_dir, release_root, commit, uid, gid)
+    staging_elapsed_ns += time.monotonic_ns() - staging_started_ns
+    if download_skipped:
+        print("Artifact download: skipped (verified cache)", file=sys.stderr)
+    else:
+        print(f"Artifact download: {download_elapsed_ns / 1_000_000_000:.2f} s", file=sys.stderr)
+    print(
+        f"Artifact verification: {verification_elapsed_ns / 1_000_000_000:.2f} s",
+        file=sys.stderr,
+    )
+    print(f"Release staging: {staging_elapsed_ns / 1_000_000_000:.2f} s", file=sys.stderr)
+    return target
 
 
 def _check_runtime_compatibility(manifest: dict[str, Any]) -> None:

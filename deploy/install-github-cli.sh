@@ -60,7 +60,9 @@ printf 'deb [arch=%s signed-by=%s] https://cli.github.com/packages stable main\n
 chmod 644 "$source_temporary"
 mv -fT -- "$source_temporary" "$SOURCE_PATH"
 
-apt-get update
+if [[ "${LUMI_APT_LISTS_UPDATED:-0}" != 1 ]]; then
+  apt-get update
+fi
 DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends gh
 is_supported_version || {
   echo "GitHub CLI 2.67 or newer is required for secure provenance verification." >&2

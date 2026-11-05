@@ -31,8 +31,15 @@ write_fake_rustup() {
   cat > "$SERVICE_HOME/.cargo/bin/rustup" <<'RUSTUP'
 #!/bin/sh
 printf '%s\n' "$*" >> "$RUSTUP_LOG"
+if [ "$1" = toolchain ] && [ "$2" = install ]; then
+  touch "$SERVICE_HOME/.toolchain-installed"
+fi
 if [ "$1" = run ]; then
-  printf 'rustc 1.88.0 (test build)\n'
+  if [ -f "$SERVICE_HOME/.toolchain-installed" ]; then
+    printf 'rustc 1.88.0 (test build)\n'
+  else
+    printf 'rustc 1.87.0 (test build)\n'
+  fi
 fi
 RUSTUP
   chmod 755 "$SERVICE_HOME/.cargo/bin/rustup"
@@ -59,8 +66,8 @@ install_rust_toolchain
         "https://sh.rustup.rs /bin/sh -y --default-toolchain 1.88.0 --profile minimal"
     ]
     assert rustup_log.read_text(encoding="utf-8").splitlines() == [
-        "toolchain install 1.88.0 --profile minimal",
         "run 1.88.0 rustc --version",
         "toolchain install 1.88.0 --profile minimal",
+        "run 1.88.0 rustc --version",
         "run 1.88.0 rustc --version",
     ]

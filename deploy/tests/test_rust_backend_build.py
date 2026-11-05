@@ -498,11 +498,8 @@ def test_binary_install_profile_skips_local_build_toolchains() -> None:
     assert 'if [[ "$EFFECTIVE_DEPLOY_MODE" == source ]]; then' in updater
     assert "resolve_web_backend" in installer
     assert "resolve_web_backend" in updater
-    assert (
-        'if [[ "$EFFECTIVE_DEPLOY_MODE" == source ]]; then\n'
-        "  install_toolchains\n  install_project_dependencies\n  build_rust_release\nelse\n"
-        "  if stage_prebuilt_release; then"
-    ) in installer
+    assert "  install_toolchains\n  install_project_dependencies\n  build_rust_release\n" in installer
+    assert "  if stage_prebuilt_release; then" in installer
     assert updater.index('stage_prebuilt_release "$TARGET_COMMIT"') < updater.rindex(
         "require_source_toolchains"
     )
@@ -534,7 +531,7 @@ def test_offline_updates_use_only_the_previously_verified_cache() -> None:
     assert 'OFFLINE_COMMIT="${LUMI_OFFLINE_COMMIT:-}"' in updater
     assert 'stage_prebuilt_release "$TARGET_COMMIT" --cached-only' in updater
     assert 'if [[ -z "$OFFLINE_COMMIT" ]]; then\n    install_release_verifier' in updater
-    assert 'if [[ -z "$OFFLINE_COMMIT" ]]; then\n    install_spotify_soloist' in updater
+    assert 'if [[ -n "$OFFLINE_COMMIT" ]]; then\n    if LUMI_SOLOIST_OFFLINE=1 install_spotify_soloist' in updater
     assert "fetch --prune" in updater
 
 
@@ -553,9 +550,11 @@ def test_offline_installs_require_a_cached_verified_commit() -> None:
     assert "install_args+=(--cached-only)" in stage_release
     assert '[[ "$DEPLOY_RELEASE_COMMIT" == "$OFFLINE_COMMIT" ]]' in stage_release
     assert 'if [[ -z "$OFFLINE_COMMIT" ]]; then\n    install_release_verifier' in installer
-    assert "required system packages are already installed; skipping apt access" in package_setup
-    assert package_setup.index("return 0") < package_setup.index("apt-get update")
-    assert "leaves the existing Spotify Soloist executable unchanged" in installer
+    assert 'if [[ -n "$OFFLINE_COMMIT" ]]; then' in package_setup
+    assert "package_is_satisfied \"$package\"" in package_setup
+    assert "Offline mode: required system packages are already installed; skipping APT." in package_setup
+    assert "LUMI_SOLOIST_OFFLINE=1 install_spotify_soloist" in installer
+    assert "Offline installation reused the existing Spotify Soloist executable." in installer
 
 
 @pytest.mark.parametrize(

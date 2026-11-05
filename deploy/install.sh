@@ -31,6 +31,14 @@ DEPLOY_MODE="${LUMI_DEPLOY_MODE:-binary}"
 EFFECTIVE_DEPLOY_MODE="$DEPLOY_MODE"
 DEPLOY_RELEASE_COMMIT=
 OFFLINE_COMMIT="${LUMI_OFFLINE_COMMIT:-}"
+WEB_ENV_CHANGED=0
+SPOTIFY_ENV_CHANGED=0
+WEB_SERVICE_FILE_CHANGED=0
+SPOTIFY_SERVICE_FILE_CHANGED=0
+WIREPLUMBER_CONFIG_CHANGED=0
+APP_RELEASE_CHANGED=0
+SOLOIST_BINARY_CHANGED=0
+NGINX_CONFIG_CHANGED=0
 
 case "$DEPLOY_MODE" in
   binary|source|auto) ;;
@@ -140,6 +148,10 @@ done
 
 # shellcheck source=deploy/update-support.sh
 source "$SCRIPT_DIR/update-support.sh"
+# shellcheck source=deploy/package-provisioning.sh
+source "$SCRIPT_DIR/package-provisioning.sh"
+# shellcheck source=deploy/timing.sh
+source "$SCRIPT_DIR/timing.sh"
 PROJECT_DIR="$(canonical_project_directory "$PROJECT_DIR")" || exit 1
 resolve_web_backend "${LUMI_WEB_BACKEND:-}" "$ENV_FILE" >/dev/null || exit 1
 migrate_legacy_rust_deploy_root || exit 1
@@ -183,7 +195,9 @@ for required_file in \
   "$PROJECT_DIR/deploy/lumistripe-spotify-service.sudoers" \
   "$PROJECT_DIR/deploy/nginx/led-controller.conf" \
   "$PROJECT_DIR/deploy/tls.sh" \
-  "$PROJECT_DIR/deploy/soloist.sh"; do
+  "$PROJECT_DIR/deploy/soloist.sh" \
+  "$PROJECT_DIR/deploy/package-provisioning.sh" \
+  "$PROJECT_DIR/deploy/timing.sh"; do
   [[ -f "$required_file" ]] || {
     echo "Required deployment file is missing: $required_file" >&2
     exit 1
@@ -222,106 +236,109 @@ as_user_with_env() {
 
 install_system_packages() {
   local packages=(
-    bluez
-    bluetooth
-    pipewire
-    pipewire-pulse
-    pulseaudio-utils
-    wireplumber
-    libspa-0.2-bluetooth
-    pipewire-alsa
-    libasound2-plugins
-    libportaudio2
-    libatomic1
-    libdbus-1-3
-    libpipewire-0.3-0
-    libpulse0
-    libspa-0.2-modules
-    network-manager
-    iw
-    nginx
-    libnss3-tools
-    curl
-    ca-certificates
-    git
-    unzip
-    dbus-user-session
-    util-linux
-    python3-minimal
+    bluez bluetooth pipewire pipewire-pulse pulseaudio-utils wireplumber
+    libspa-0.2-bluetooth pipewire-alsa libasound2-plugins libportaudio2
+    libatomic1 libdbus-1-3 libpipewire-0.3-0 libpulse0 libspa-0.2-modules
+    network-manager iw nginx libnss3-tools curl ca-certificates git unzip
+    dbus-user-session util-linux python3-minimal
   )
-  if [[ -n "$OFFLINE_COMMIT" ]]; then
-    local missing=()
-    local package
-    for package in "${packages[@]}"; do
-      if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q 'install ok installed'; then
-        missing+=("$package")
-      fi
-    done
-    if ! dpkg-query -W -f='${Status}' libasound2t64 2>/dev/null | grep -q 'install ok installed' &&
-       ! dpkg-query -W -f='${Status}' libasound2 2>/dev/null | grep -q 'install ok installed'; then
-      missing+=("libasound2t64 or libasound2")
-    fi
-    if ! dpkg-query -W -f='${Status}' libgpiod3 2>/dev/null | grep -q 'install ok installed' &&
-       ! dpkg-query -W -f='${Status}' libgpiod2 2>/dev/null | grep -q 'install ok installed'; then
-      missing+=("libgpiod3 or libgpiod2")
-    fi
-    if ! command -v mkcert >/dev/null 2>&1; then
-      missing+=("mkcert")
-    fi
-    if ((${#missing[@]} > 0)); then
-      echo "Offline installation requires these preinstalled packages/tools: ${missing[*]}" >&2
-      return 1
-    fi
-    echo "Offline mode: required system packages are already installed; skipping apt access."
-    return 0
-  fi
-
-  echo "Refreshing apt package lists..."
-  apt-get update
-
+  local -a missing=()
+  local package candidate
   local alsa_runtime_package=
+  local gpiod_runtime_package=
+  local needs_install=0
+
+  for package in "${packages[@]}"; do
+    if ! package_is_satisfied "$package"; then
+      missing+=("$package")
+      needs_install=1
+    fi
+  done
   for candidate in libasound2t64 libasound2; do
-    if apt-cache show "$candidate" >/dev/null 2>&1; then
+    if package_is_satisfied "$candidate"; then
       alsa_runtime_package="$candidate"
       break
     fi
   done
-  [[ -n "$alsa_runtime_package" ]] || {
-    echo "Could not find a supported ALSA runtime package." >&2
-    exit 1
-  }
-  packages+=("$alsa_runtime_package")
-
-  local gpiod_runtime_package=
   for candidate in libgpiod3 libgpiod2; do
-    if apt-cache show "$candidate" >/dev/null 2>&1; then
+    if package_is_satisfied "$candidate"; then
       gpiod_runtime_package="$candidate"
       break
     fi
   done
+
+  if [[ -n "$OFFLINE_COMMIT" ]]; then
+    [[ -n "$alsa_runtime_package" ]] || missing+=("libasound2t64 or libasound2")
+    [[ -n "$gpiod_runtime_package" ]] || missing+=("libgpiod3 or libgpiod2")
+    command -v mkcert >/dev/null 2>&1 || missing+=(mkcert)
+    if ((${#missing[@]} > 0)); then
+      echo "Offline installation requires these preinstalled packages/tools: ${missing[*]}" >&2
+      return 1
+    fi
+    echo "Offline mode: required system packages are already installed; skipping APT."
+    return 0
+  fi
+
+  if [[ -z "$alsa_runtime_package" || -z "$gpiod_runtime_package" ]]; then
+    needs_install=1
+  fi
+  if (( needs_install )); then
+    echo "Refreshing apt package lists because runtime packages are missing..."
+    apt_update_for_install
+    if [[ -z "$alsa_runtime_package" ]]; then
+      for candidate in libasound2t64 libasound2; do
+        if apt-cache show "$candidate" >/dev/null 2>&1; then
+          alsa_runtime_package="$candidate"
+          break
+        fi
+      done
+    fi
+    if [[ -z "$gpiod_runtime_package" ]]; then
+      for candidate in libgpiod3 libgpiod2; do
+        if apt-cache show "$candidate" >/dev/null 2>&1; then
+          gpiod_runtime_package="$candidate"
+          break
+        fi
+      done
+    fi
+  fi
+  [[ -n "$alsa_runtime_package" ]] || {
+    echo "Could not find a supported ALSA runtime package." >&2
+    return 1
+  }
   [[ -n "$gpiod_runtime_package" ]] || {
     echo "Could not find a supported libgpiod runtime package." >&2
-    exit 1
+    return 1
   }
-  packages+=("$gpiod_runtime_package")
+  packages+=("$alsa_runtime_package" "$gpiod_runtime_package")
 
-  # Raspberry Pi OS images normally ship raspi-config, but keeping this
-  # conditional also supports minimal Debian- or Ubuntu-based Pi images.
-  if apt-cache show raspi-config >/dev/null 2>&1; then
-    packages+=(raspi-config)
+  # raspi-config and the distro mkcert package remain optional on minimal
+  # Debian and Ubuntu images. Do not refresh apt only to look for either one.
+  if (( LUMI_APT_LISTS_UPDATED )); then
+    if apt-cache show raspi-config >/dev/null 2>&1; then
+      packages+=(raspi-config)
+    fi
+    if apt-cache show mkcert >/dev/null 2>&1; then
+      packages+=(mkcert)
+    fi
   fi
 
-  if apt-cache show mkcert >/dev/null 2>&1; then
-    packages+=(mkcert)
+  missing=()
+  for package in "${packages[@]}"; do
+    if ! package_is_satisfied "$package"; then
+      missing+=("$package")
+    fi
+  done
+  if ((${#missing[@]} == 0)); then
+    echo "All required runtime packages are installed; skipping APT."
+    return 0
   fi
-
-  echo "Installing system packages..."
-  apt-get install --yes --no-install-recommends "${packages[@]}"
+  echo "Installing missing runtime packages: ${missing[*]}"
+  apt-get install --yes --no-install-recommends "${missing[@]}"
 }
 
 install_source_build_packages() {
-  echo "Installing Rust source-build dependencies because LUMI_DEPLOY_MODE=$DEPLOY_MODE selected a local build..."
-  apt-get install --yes --no-install-recommends \
+  install_missing_apt_packages "Rust source-build dependencies" \
     build-essential pkg-config libasound2-dev libclang-dev libdbus-1-dev \
     libpipewire-0.3-dev libpulse-dev libgpiod-dev
 }
@@ -331,17 +348,24 @@ install_release_verifier() {
 }
 
 install_mkcert() {
+  local existing_version=
+  local version="${LUMI_MKCERT_VERSION:-v1.4.4}"
+  local minimum_version="${version#v}"
   if command -v mkcert >/dev/null 2>&1; then
-    return
+    existing_version="$(mkcert -version 2>/dev/null | sed -nE 's/^[^0-9]*([0-9]+\.[0-9]+(\.[0-9]+)?).*$/\1/p' | head -n 1)"
+    if version_at_least "$existing_version" "$minimum_version"; then
+      echo "Reusing mkcert $existing_version."
+      return 0
+    fi
+    echo "The installed mkcert version is unsupported; installing $version."
   fi
   if [[ -n "$OFFLINE_COMMIT" ]]; then
-    echo "Offline installation requires mkcert to be installed already." >&2
+    echo "Offline installation requires mkcert $minimum_version or newer to be installed already." >&2
     return 1
   fi
 
   local architecture
   local asset
-  local version="${LUMI_MKCERT_VERSION:-v1.4.4}"
   local installer_file
   architecture="$(dpkg --print-architecture)"
   case "$architecture" in
@@ -369,13 +393,24 @@ install_mkcert() {
 
 ensure_groups() {
   local group
+  local current_groups
+  local missing_groups=()
   for group in gpio spi audio; do
     if ! getent group "$group" >/dev/null 2>&1; then
       echo "Creating missing system group $group..."
       groupadd --system "$group"
     fi
   done
-  usermod --append --groups gpio,spi,audio "$SERVICE_USER"
+  current_groups=" $(id -nG "$SERVICE_USER") "
+  for group in gpio spi audio; do
+    if [[ "$current_groups" != *" $group "* ]]; then
+      missing_groups+=("$group")
+    fi
+  done
+  if ((${#missing_groups[@]} > 0)); then
+    local IFS=,
+    usermod --append --groups "${missing_groups[*]}" "$SERVICE_USER"
+  fi
 }
 
 enable_spi() {
@@ -408,17 +443,31 @@ download_and_run_as_user() {
 }
 
 install_toolchains() {
+  local required_bun_version
+  local installed_bun_version
+  required_bun_version="$(tr -d '\r\n' < "$PROJECT_DIR/.bun-version")"
+  [[ "$required_bun_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+    echo "The repository .bun-version does not contain a valid stable version." >&2
+    return 1
+  }
   install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 755 \
     "$SERVICE_HOME/.local/bin" "$SERVICE_HOME/.bun"
 
-  if [[ ! -x "$BUN_BIN" ]]; then
-    echo "Installing Bun for $SERVICE_USER..."
-    download_and_run_as_user "https://bun.sh/install" /bin/bash
+  installed_bun_version="$(as_user "$BUN_BIN" --version 2>/dev/null || true)"
+  if [[ "$installed_bun_version" != "$required_bun_version" ]]; then
+    echo "Installing Bun $required_bun_version for $SERVICE_USER..."
+    download_and_run_as_user \
+      "https://bun.sh/install" /bin/bash "bun-v$required_bun_version"
   fi
   [[ -x "$BUN_BIN" ]] || {
     echo "Bun installation did not produce $BUN_BIN. " \
       "This may be an unsupported 32-bit Pi image." >&2
     exit 1
+  }
+  installed_bun_version="$(as_user "$BUN_BIN" --version 2>/dev/null || true)"
+  [[ "$installed_bun_version" == "$required_bun_version" ]] || {
+    echo "Expected Bun $required_bun_version; found ${installed_bun_version:-an unusable Bun install}." >&2
+    return 1
   }
 
   install_rust_toolchain
@@ -466,6 +515,10 @@ stage_prebuilt_release() {
 
 create_environment_file() {
   install -d -m 755 "$ENV_DIR" /var/backups/lumistripe
+  [[ ! -L "$ENV_FILE" && ( ! -e "$ENV_FILE" || -f "$ENV_FILE" ) ]] || {
+    echo "LumiStripe web environment path must be a regular file: $ENV_FILE" >&2
+    return 1
+  }
 
   if [[ ! -e "$ENV_FILE" ]]; then
     local pairing_code="${LUMI_PAIRING_CODE:-}"
@@ -485,10 +538,13 @@ create_environment_file() {
     install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 600 \
       "$PROJECT_DIR/deploy/lumistripe-web.env.example" "$ENV_FILE"
     sed -i "s/^LUMI_PAIRING_CODE=.*/LUMI_PAIRING_CODE=$pairing_code/" "$ENV_FILE"
+    WEB_ENV_CHANGED=1
   fi
 
-  chown "$SERVICE_USER:$SERVICE_GROUP" "$ENV_FILE"
-  chmod 600 "$ENV_FILE"
+  if [[ "$(stat -c '%u:%g:%a' -- "$ENV_FILE")" != "$SERVICE_UID:$SERVICE_GID:600" ]]; then
+    chown --no-dereference "$SERVICE_USER:$SERVICE_GROUP" -- "$ENV_FILE"
+    chmod 600 -- "$ENV_FILE"
+  fi
   local pairing_code
   pairing_code="$(awk -F= '$1 == "LUMI_PAIRING_CODE" { print $2; exit }' "$ENV_FILE")"
   [[ "$pairing_code" =~ ^[0-9]{4}$ ]] || {
@@ -499,6 +555,11 @@ create_environment_file() {
 
 create_spotify_environment_file() {
   install -d -m 755 "$ENV_DIR"
+  [[ ! -L "$SPOTIFY_ENV_FILE" &&
+     ( ! -e "$SPOTIFY_ENV_FILE" || -f "$SPOTIFY_ENV_FILE" ) ]] || {
+    echo "Spotify environment path must be a regular file: $SPOTIFY_ENV_FILE" >&2
+    return 1
+  }
   if [[ ! -e "$SPOTIFY_ENV_FILE" ]]; then
     local api_key="${LUMI_SPOTIFY_API_KEY:-}"
     local line
@@ -538,10 +599,13 @@ create_spotify_environment_file() {
       return 1
     fi
     rm -f -- "$spotify_env_tmp"
+    SPOTIFY_ENV_CHANGED=1
   fi
 
-  chown "$SERVICE_USER:$SERVICE_GROUP" "$SPOTIFY_ENV_FILE"
-  chmod 600 "$SPOTIFY_ENV_FILE"
+  if [[ "$(stat -c '%u:%g:%a' -- "$SPOTIFY_ENV_FILE")" != "$SERVICE_UID:$SERVICE_GID:600" ]]; then
+    chown --no-dereference "$SERVICE_USER:$SERVICE_GROUP" -- "$SPOTIFY_ENV_FILE"
+    chmod 600 -- "$SPOTIFY_ENV_FILE"
+  fi
   local api_key_from_file
   api_key_from_file="$(awk -F= '$1 == "LUMI_SPOTIFY_API_KEY" { print substr($0, index($0, "=") + 1); exit }' "$SPOTIFY_ENV_FILE")"
   [[ -n "$api_key_from_file" && "$api_key_from_file" != REPLACE_WITH_* ]] || {
@@ -559,6 +623,8 @@ spotify_environment_ready() {
 
 start_deployment_services() {
   local unit
+  local spotify_restart_required=0
+  local web_restart_required=0
   for unit in lumistripe-web.service lumistripe-spotify.service; do
     # Freshly installed unit files may not be loaded by systemd yet.
     systemctl reset-failed "$unit" >/dev/null 2>&1 || true
@@ -566,22 +632,43 @@ start_deployment_services() {
 
   if spotify_environment_ready; then
     systemctl enable lumistripe-spotify.service
-    if ! systemctl restart lumistripe-spotify.service; then
-      echo "Spotify Soloist did not start. Inspect it with: systemctl status lumistripe-spotify.service" >&2
-      return 1
+    if [[ "$SPOTIFY_ENV_CHANGED" == 1 || "$SPOTIFY_SERVICE_FILE_CHANGED" == 1 ||
+          "$WIREPLUMBER_CONFIG_CHANGED" == 1 || "$SOLOIST_BINARY_CHANGED" == 1 ]]; then
+      spotify_restart_required=1
+    fi
+    if [[ "$spotify_restart_required" == 1 ]] || \
+      ! systemctl is-active --quiet lumistripe-spotify.service; then
+      if ! systemctl restart lumistripe-spotify.service; then
+        echo "Spotify Soloist did not start. Inspect it with: systemctl status lumistripe-spotify.service" >&2
+        return 1
+      fi
+    else
+      echo "Spotify configuration and executable are unchanged; skipping service restart."
     fi
     if ! systemctl is-active --quiet lumistripe-spotify.service; then
       echo "Spotify Soloist is not active. Inspect it with: systemctl status lumistripe-spotify.service" >&2
       return 1
     fi
   else
-    systemctl disable --now lumistripe-spotify.service >/dev/null 2>&1 || true
+    if systemctl is-enabled --quiet lumistripe-spotify.service || \
+      systemctl is-active --quiet lumistripe-spotify.service; then
+      systemctl disable --now lumistripe-spotify.service >/dev/null 2>&1 || true
+    fi
   fi
 
   systemctl enable lumistripe-web.service
-  if ! systemctl restart lumistripe-web.service; then
-    echo "LumiStripe web did not start. Inspect it with: systemctl status lumistripe-web.service" >&2
-    return 1
+  if [[ "$APP_RELEASE_CHANGED" == 1 || "$WEB_SERVICE_FILE_CHANGED" == 1 ||
+        "$WEB_ENV_CHANGED" == 1 ]]; then
+    web_restart_required=1
+  fi
+  if [[ "$web_restart_required" == 1 ]] || \
+    ! systemctl is-active --quiet lumistripe-web.service; then
+    if ! systemctl restart lumistripe-web.service; then
+      echo "LumiStripe web did not start. Inspect it with: systemctl status lumistripe-web.service" >&2
+      return 1
+    fi
+  else
+    echo "LumiStripe binaries and service configuration are unchanged; skipping service restart."
   fi
   if ! systemctl is-active --quiet lumistripe-web.service; then
     echo "LumiStripe web is not active. Inspect it with: systemctl status lumistripe-web.service" >&2
@@ -637,7 +724,11 @@ render_service_unit() {
     echo "The systemd service template contains unresolved placeholders." >&2
     exit 1
   fi
-  install -o root -g root -m 644 "$rendered_file" "$SERVICE_FILE"
+  install_file_if_changed "$rendered_file" "$SERVICE_FILE" root root 644 || {
+    rm -f -- "$rendered_file"
+    return 1
+  }
+  WEB_SERVICE_FILE_CHANGED="$FILE_CHANGED"
   rm -f -- "$rendered_file"
 }
 
@@ -667,17 +758,27 @@ render_spotify_service_unit() {
     echo "The Spotify systemd service template contains unresolved placeholders." >&2
     exit 1
   fi
-  install -o root -g root -m 644 "$rendered_file" "$SPOTIFY_SERVICE_FILE"
+  install_file_if_changed "$rendered_file" "$SPOTIFY_SERVICE_FILE" root root 644 || {
+    rm -f -- "$rendered_file"
+    return 1
+  }
+  SPOTIFY_SERVICE_FILE_CHANGED="$FILE_CHANGED"
   rm -f -- "$rendered_file"
 }
 
 install_wireplumber_config() {
   install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 755 "$WIREPLUMBER_DIR"
-  install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 644 \
-    "$PROJECT_DIR/deploy/90-lumistripe-bluetooth.conf" "$WIREPLUMBER_FILE"
+  install_user_file_if_changed \
+    "$PROJECT_DIR/deploy/90-lumistripe-bluetooth.conf" "$WIREPLUMBER_FILE" \
+    "$SERVICE_USER" "$SERVICE_GROUP" 644 || return 1
+  WIREPLUMBER_CONFIG_CHANGED="$FILE_CHANGED"
   install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 755 "$PIPEWIRE_DIR"
-  install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 644 \
-    "$PROJECT_DIR/deploy/90-lumistripe-spotify.conf" "$SPOTIFY_PIPEWIRE_FILE"
+  install_user_file_if_changed \
+    "$PROJECT_DIR/deploy/90-lumistripe-spotify.conf" "$SPOTIFY_PIPEWIRE_FILE" \
+    "$SERVICE_USER" "$SERVICE_GROUP" 644 || return 1
+  if [[ "$FILE_CHANGED" == 1 ]]; then
+    WIREPLUMBER_CONFIG_CHANGED=1
+  fi
 }
 
 start_bluetooth() {
@@ -690,6 +791,7 @@ start_bluetooth() {
 }
 
 start_user_audio() {
+  local audio_config_changed="$WIREPLUMBER_CONFIG_CHANGED"
   echo "Starting the PipeWire/WirePlumber user session for $SERVICE_USER..."
   loginctl enable-linger "$SERVICE_USER"
   systemctl start "user-runtime-dir@$SERVICE_UID.service" || true
@@ -705,32 +807,60 @@ start_user_audio() {
     exit 1
   }
 
-  as_user_with_env \
-    XDG_RUNTIME_DIR="$USER_RUNTIME_DIR" \
-    DBUS_SESSION_BUS_ADDRESS="unix:path=$USER_RUNTIME_DIR/bus" \
-    systemctl --user enable --now pipewire pipewire-pulse wireplumber
-  as_user_with_env \
-    XDG_RUNTIME_DIR="$USER_RUNTIME_DIR" \
-    DBUS_SESSION_BUS_ADDRESS="unix:path=$USER_RUNTIME_DIR/bus" \
-    systemctl --user restart pipewire pipewire-pulse wireplumber
+  if [[ "$audio_config_changed" == 1 ]]; then
+    as_user_with_env \
+      XDG_RUNTIME_DIR="$USER_RUNTIME_DIR" \
+      DBUS_SESSION_BUS_ADDRESS="unix:path=$USER_RUNTIME_DIR/bus" \
+      systemctl --user restart pipewire pipewire-pulse wireplumber
+  else
+    as_user_with_env \
+      XDG_RUNTIME_DIR="$USER_RUNTIME_DIR" \
+      DBUS_SESSION_BUS_ADDRESS="unix:path=$USER_RUNTIME_DIR/bus" \
+      systemctl --user enable --now pipewire pipewire-pulse wireplumber
+  fi
 }
 
 install_nginx() {
+  local nginx_was_active=0
   install -d -m 755 /etc/nginx/sites-available /etc/nginx/sites-enabled
-  install -o root -g root -m 644 \
-    "$PROJECT_DIR/deploy/nginx/led-controller.conf" "$NGINX_AVAILABLE"
-  ln -sfn "$NGINX_AVAILABLE" "$NGINX_ENABLED"
+  install_file_if_changed "$PROJECT_DIR/deploy/nginx/led-controller.conf" \
+    "$NGINX_AVAILABLE" root root 644 || return 1
+  if [[ "$FILE_CHANGED" == 1 ]]; then
+    NGINX_CONFIG_CHANGED=1
+  fi
+  if [[ -L "$NGINX_ENABLED" ]]; then
+    if [[ "$(readlink -f -- "$NGINX_ENABLED" 2>/dev/null || true)" != "$NGINX_AVAILABLE" ]]; then
+      ln -sfn "$NGINX_AVAILABLE" "$NGINX_ENABLED"
+      NGINX_CONFIG_CHANGED=1
+    fi
+  elif [[ -e "$NGINX_ENABLED" ]]; then
+    echo "Refusing to replace a user-managed Nginx site: $NGINX_ENABLED" >&2
+    return 1
+  else
+    ln -s "$NGINX_AVAILABLE" "$NGINX_ENABLED"
+    NGINX_CONFIG_CHANGED=1
+  fi
 
   # The bundled configuration owns port 80 as the captive-portal entrypoint.
   # Remove only Debian's stock symlink; never remove a user-created site.
   if [[ -L "$NGINX_DEFAULT" && "$(readlink -f "$NGINX_DEFAULT")" == "/etc/nginx/sites-available/default" ]]; then
     rm -f -- "$NGINX_DEFAULT"
     NGINX_DEFAULT_REMOVED=1
+    NGINX_CONFIG_CHANGED=1
   fi
 
   nginx -t
-  systemctl enable --now nginx.service
-  systemctl reload nginx.service
+  if systemctl is-active --quiet nginx.service; then
+    nginx_was_active=1
+  fi
+  systemctl enable nginx.service
+  if (( nginx_was_active )); then
+    if [[ "$NGINX_CONFIG_CHANGED" == 1 || "$LUMI_TLS_CHANGED" == 1 ]]; then
+      systemctl reload nginx.service
+    fi
+  else
+    systemctl start nginx.service
+  fi
 }
 
 write_install_state() {
@@ -747,7 +877,10 @@ write_install_state() {
     printf 'service_user=%s\n' "$SERVICE_USER"
     printf 'nginx_default_removed=%s\n' "$NGINX_DEFAULT_REMOVED"
   } > "$state_file"
-  install -o root -g root -m 600 "$state_file" "$STATE_FILE"
+  install_file_if_changed "$state_file" "$STATE_FILE" root root 600 || {
+    rm -f -- "$state_file"
+    return 1
+  }
   rm -f -- "$state_file"
 }
 
@@ -762,6 +895,7 @@ if [[ "$DEPLOY_MODE" != source ]]; then
   fi
 fi
 
+lumi_phase_start "Package provisioning"
 install_system_packages
 if [[ "$EFFECTIVE_DEPLOY_MODE" == source ]]; then
   install_source_build_packages
@@ -773,8 +907,10 @@ elif [[ "$DEPLOY_MODE" != source ]]; then
   fi
 fi
 install_mkcert
+lumi_phase_end "Package provisioning"
 ensure_groups
 enable_spi
+lumi_phase_start "Configuration"
 create_environment_file
 create_spotify_environment_file
 if [[ -n "$OFFLINE_COMMIT" ]] && spotify_environment_ready &&
@@ -789,28 +925,42 @@ install_update_support
 install_nginx
 install_wireplumber_config
 write_install_state
+lumi_phase_end "Configuration"
 
 # The service account gets a writable runtime checkout only after all files
 # copied into privileged system locations have been installed from the trusted
 # source above.
 chown -R "$SERVICE_USER:$SERVICE_GROUP" "$PROJECT_DIR"
+ACTIVE_RELEASE_BEFORE="$(readlink -f -- "$PROJECT_DIR/target/rust-deploy/current" 2>/dev/null || true)"
+ACTIVE_RELEASE_BEFORE_COMMIT="${ACTIVE_RELEASE_BEFORE##*/}"
 if [[ "$EFFECTIVE_DEPLOY_MODE" == source ]]; then
+  lumi_phase_start "Source build"
   install_toolchains
   install_project_dependencies
   build_rust_release
+  lumi_phase_end "Source build"
+  APP_RELEASE_CHANGED=1
 else
   if stage_prebuilt_release; then
     activate_rust_release "$DEPLOY_RELEASE_COMMIT"
     echo "Activated verified prebuilt release $DEPLOY_RELEASE_COMMIT."
+    if [[ "$ACTIVE_RELEASE_BEFORE_COMMIT" != "$DEPLOY_RELEASE_COMMIT" ]]; then
+      APP_RELEASE_CHANGED=1
+    fi
   else
     stage_status=$?
     if may_fallback_to_source "$DEPLOY_MODE" "$stage_status"; then
       echo "No compatible published release is available; auto mode is falling back to a local source build."
       EFFECTIVE_DEPLOY_MODE=source
+      lumi_phase_start "Package provisioning"
       install_source_build_packages
+      lumi_phase_end "Package provisioning"
+      lumi_phase_start "Source build"
       install_toolchains
       install_project_dependencies
       build_rust_release
+      lumi_phase_end "Source build"
+      APP_RELEASE_CHANGED=1
     else
       echo "Prebuilt release installation failed; the active Rust release was not switched." >&2
       exit "$stage_status"
@@ -825,22 +975,55 @@ if [[ ! -e /var/lib/lumistripe/update/status.json ]]; then
     --project-dir "$PROJECT_DIR" \
     --state-file /var/lib/lumistripe/update/status.json
 fi
+lumi_phase_start "Optional Soloist handling"
 if spotify_environment_ready; then
   if [[ -n "$OFFLINE_COMMIT" ]]; then
-    [[ -x "$SERVICE_HOME/.local/bin/soloist" ]] || {
-      echo "Offline installation with Spotify enabled requires the existing Soloist executable at $SERVICE_HOME/.local/bin/soloist." >&2
-      exit 1
-    }
-    echo "Offline installation leaves the existing Spotify Soloist executable unchanged."
+    if LUMI_SOLOIST_OFFLINE=1 install_spotify_soloist \
+      "$SERVICE_HOME" "$SERVICE_USER" "$SERVICE_GROUP"; then
+      SOLOIST_BINARY_CHANGED=1
+    else
+      soloist_status=$?
+      if (( soloist_status != 10 )); then
+        lumi_phase_end "Optional Soloist handling"
+        echo "Offline installation with Spotify enabled requires a valid existing Soloist executable." >&2
+        exit 1
+      fi
+    fi
+    echo "Offline installation reused the existing Spotify Soloist executable."
   else
-    install_spotify_soloist "$SERVICE_HOME"
+    if install_spotify_soloist "$SERVICE_HOME" "$SERVICE_USER" "$SERVICE_GROUP"; then
+      SOLOIST_BINARY_CHANGED=1
+    else
+      soloist_status=$?
+      if (( soloist_status != 10 )); then
+        if [[ "${LUMI_SOLOIST_REFRESH:-0}" == 1 ]] && \
+          spotify_soloist_installation_is_valid \
+            "$SERVICE_HOME" "$SERVICE_USER" "$SERVICE_GROUP"; then
+          echo "Warning: Spotify Soloist refresh failed; the valid installed executable was retained." >&2
+        else
+          lumi_phase_end "Optional Soloist handling"
+          echo "Spotify Soloist could not be installed or refreshed." >&2
+          exit 1
+        fi
+      fi
+    fi
   fi
+else
+  echo "Spotify is disabled; skipping optional Soloist setup."
 fi
+lumi_phase_end "Optional Soloist handling"
 start_bluetooth
 start_user_audio
 
-systemctl daemon-reload
+if [[ "${SYSTEMD_UNITS_CHANGED:-0}" == 1 ||
+      "$WEB_SERVICE_FILE_CHANGED" == 1 || "$SPOTIFY_SERVICE_FILE_CHANGED" == 1 ]]; then
+  systemctl daemon-reload
+fi
+lumi_phase_start "Service restart and health check"
 start_deployment_services
+lumi_phase_end "Service restart and health check"
+
+lumi_phase_report
 
 echo
 echo "LumiStripe deployment installed successfully."

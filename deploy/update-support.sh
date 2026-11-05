@@ -5,6 +5,89 @@ UPDATE_LIBEXEC_DIR=/usr/local/libexec/lumistripe/deploy
 NETWORK_LIBEXEC_DIR=/usr/local/libexec/lumistripe/network
 RELEASE_CACHE_DIR=/var/cache/lumistripe/releases
 
+FILE_CHANGED=0
+
+install_file_if_changed() {
+  local source_file="$1"
+  local destination_file="$2"
+  local owner="$3"
+  local group="$4"
+  local mode="$5"
+  local owner_uid
+  local group_gid
+  local destination_metadata
+
+  FILE_CHANGED=0
+  [[ -f "$source_file" && ! -L "$source_file" ]] || {
+    echo "Managed deployment source is not a regular file: $source_file" >&2
+    return 1
+  }
+  if [[ -L "$destination_file" ]]; then
+    echo "Managed deployment destination must not be a symlink: $destination_file" >&2
+    return 1
+  fi
+  owner_uid="$(id -u "$owner")" || return 1
+  group_gid="$(getent group "$group" | cut -d: -f3)"
+  [[ -n "$group_gid" ]] || {
+    echo "Could not resolve managed deployment group $group." >&2
+    return 1
+  }
+  if [[ -f "$destination_file" ]]; then
+    destination_metadata="$(stat -c '%u:%g:%a' -- "$destination_file")" || return 1
+    if [[ "$destination_metadata" == "$owner_uid:$group_gid:$mode" ]] && \
+      cmp -s -- "$source_file" "$destination_file"; then
+      return 0
+    fi
+  fi
+  install -o "$owner" -g "$group" -m "$mode" -- \
+    "$source_file" "$destination_file" || return 1
+  FILE_CHANGED=1
+}
+
+install_user_file_if_changed() {
+  local source_file="$1"
+  local destination_file="$2"
+  local owner="$3"
+  local group="$4"
+  local mode="$5"
+  local owner_uid
+  local group_gid
+  local destination_metadata
+
+  FILE_CHANGED=0
+  [[ -f "$source_file" && ! -L "$source_file" ]] || {
+    echo "Managed deployment source is not a regular file: $source_file" >&2
+    return 1
+  }
+  if [[ -L "$destination_file" ]]; then
+    echo "Managed user configuration must not be a symlink: $destination_file" >&2
+    return 1
+  fi
+  owner_uid="$(id -u "$owner")" || return 1
+  group_gid="$(getent group "$group" | cut -d: -f3)"
+  [[ -n "$group_gid" ]] || return 1
+  if [[ -f "$destination_file" ]]; then
+    destination_metadata="$(stat -c '%u:%g:%a' -- "$destination_file")" || return 1
+    if [[ "$destination_metadata" == "$owner_uid:$group_gid:$mode" ]] && \
+      as_user cmp -s -- "$source_file" "$destination_file"; then
+      return 0
+    fi
+  fi
+  as_user install -m "$mode" -- "$source_file" "$destination_file" || return 1
+  FILE_CHANGED=1
+}
+
+restart_spotify_service_if_needed() {
+  local restart_required="${1:-0}"
+  systemctl enable lumistripe-spotify.service || return 1
+  if [[ "$restart_required" == 1 ]] || \
+    ! systemctl is-active --quiet lumistripe-spotify.service; then
+    systemctl restart lumistripe-spotify.service
+  else
+    echo "Spotify configuration and executable are unchanged; skipping service restart."
+  fi
+}
+
 binary_target_supported() {
   local architecture="${1:-$(uname -m)}"
   local os_release_file="${2:-/etc/os-release}"
@@ -92,10 +175,17 @@ validate_rust_release() {
 activate_rust_release() {
   local commit="${1:-}"
   local deploy_root="$PROJECT_DIR/target/rust-deploy"
+  local current="$deploy_root/current"
   local temporary="$deploy_root/.current.$$.tmp"
   validate_rust_release "$deploy_root/releases" "$commit" || return 1
+  if [[ -L "$current" &&
+        "$(readlink -f -- "$current" 2>/dev/null || true)" == "$deploy_root/releases/$commit" ]]; then
+    RELEASE_POINTER_CHANGED=0
+    return 0
+  fi
   ln -s "releases/$commit" "$temporary" || return 1
-  mv -Tf -- "$temporary" "$deploy_root/current"
+  mv -Tf -- "$temporary" "$current" || return 1
+  RELEASE_POINTER_CHANGED=1
 }
 
 ensure_current_release_static() {
@@ -356,6 +446,8 @@ install_privileged_network_helper() {
   local checkout_commit
   local source_binary
   local temporary
+  local destination="$NETWORK_LIBEXEC_DIR/lumistripe-network-helper"
+  local destination_metadata
   local cached_stage=
   local tool
 
@@ -390,7 +482,10 @@ install_privileged_network_helper() {
   fi
 
   install -d -o root -g root -m 755 "$NETWORK_LIBEXEC_DIR"
-  temporary="$(mktemp "$NETWORK_LIBEXEC_DIR/.lumistripe-network-helper.XXXXXX")" || return 1
+  [[ ! -L "$destination" ]] || {
+    echo "The installed NetworkManager helper must not be a symlink: $destination" >&2
+    return 1
+  }
   if [[ -d "$RELEASE_CACHE_DIR/$release_commit" ]]; then
     tool="$(release_artifact_tool)" || return 1
     cached_stage="$(mktemp -d /tmp/lumistripe-verified-helper.XXXXXX)" || return 1
@@ -399,14 +494,27 @@ install_privileged_network_helper() {
       --commit "$release_commit" \
       --binary lumistripe-deploy-helper \
       --destination "$cached_stage/lumistripe-deploy-helper"; then
-      rm -f -- "$temporary"
       rm -rf -- "$cached_stage"
       return 1
     fi
     source_binary="$cached_stage/lumistripe-deploy-helper"
   fi
+  if [[ -f "$destination" ]]; then
+    destination_metadata="$(stat -c '%u:%g:%a' -- "$destination")" || {
+      [[ -z "$cached_stage" ]] || rm -rf -- "$cached_stage"
+      return 1
+    }
+    if [[ "$destination_metadata" == 0:0:755 ]] && cmp -s -- "$source_binary" "$destination"; then
+      [[ -z "$cached_stage" ]] || rm -rf -- "$cached_stage"
+      return 0
+    fi
+  fi
+  temporary="$(mktemp "$NETWORK_LIBEXEC_DIR/.lumistripe-network-helper.XXXXXX")" || {
+    [[ -z "$cached_stage" ]] || rm -rf -- "$cached_stage"
+    return 1
+  }
   if ! install -o root -g root -m 755 "$source_binary" "$temporary" ||
-     ! mv -fT -- "$temporary" "$NETWORK_LIBEXEC_DIR/lumistripe-network-helper"; then
+     ! mv -fT -- "$temporary" "$destination"; then
     rm -f -- "$temporary"
     [[ -z "$cached_stage" ]] || rm -rf -- "$cached_stage"
     return 1
@@ -489,6 +597,9 @@ install_rust_cli_command() {
     echo "Refusing to replace an existing non-symlink CLI command: $command_path" >&2
     return 1
   fi
+  if [[ -L "$command_path" && "$(readlink -- "$command_path")" == "$release_binary" ]]; then
+    return 0
+  fi
   as_user ln -sfn "$release_binary" "$command_path"
 }
 
@@ -513,6 +624,7 @@ migrate_spotify_device_name_override() {
 }
 
 install_update_support() {
+  SYSTEMD_UNITS_CHANGED=0
   local rendered_dir
   local rendered_file
   local user_replacement
@@ -522,6 +634,7 @@ install_update_support() {
   local template
   local source_file
   local destination_file
+  local state_metadata
 
   command -v visudo >/dev/null 2>&1 || {
     echo "visudo is required to install the LumiStripe update permission." >&2
@@ -542,7 +655,7 @@ install_update_support() {
   install -d -o root -g root -m 755 "$NETWORK_LIBEXEC_DIR"
   rm -f -- "$NETWORK_LIBEXEC_DIR/lumistripe_network.py"
   for template in \
-    update.sh update-support.sh tls.sh soloist.sh \
+    update.sh update-support.sh tls.sh soloist.sh package-provisioning.sh timing.sh \
     build-rust-backend.sh release_artifact.py install-github-cli.sh rust-toolchain.sh \
     lumistripe-network lumistripe-network.sudoers \
     lumistripe-spotify-service.sudoers \
@@ -564,19 +677,29 @@ install_update_support() {
       return 1
     }
     [[ "$source_file" == "$destination_file" ]] && continue
-    install -o root -g root -m "$mode" \
-      "$source_file" "$destination_file"
+    install_file_if_changed "$source_file" "$destination_file" \
+      root root "$mode" || {
+        rm -rf -- "$rendered_dir"
+        return 1
+      }
   done
 
   install -d -o root -g root -m 755 "$UPDATE_LIBEXEC_DIR/nginx"
   source_file="$SCRIPT_DIR/nginx/led-controller.conf"
   destination_file="$UPDATE_LIBEXEC_DIR/nginx/led-controller.conf"
   if [[ "$source_file" != "$destination_file" ]]; then
-    install -o root -g root -m 644 "$source_file" "$destination_file"
+    install_file_if_changed "$source_file" "$destination_file" root root 644 || {
+      rm -rf -- "$rendered_dir"
+      return 1
+    }
   fi
 
-  install -o root -g root -m 755 \
-    "$UPDATE_LIBEXEC_DIR/lumistripe-network" /usr/local/sbin/lumistripe-network
+  install_file_if_changed \
+    "$UPDATE_LIBEXEC_DIR/lumistripe-network" /usr/local/sbin/lumistripe-network \
+    root root 755 || {
+      rm -rf -- "$rendered_dir"
+      return 1
+    }
   sed \
     -e "s|@LUMI_SERVICE_USER@|$user_replacement|g" \
     "$UPDATE_LIBEXEC_DIR/lumistripe-spotify-service.sudoers" \
@@ -587,9 +710,12 @@ install_update_support() {
     echo "The Spotify service restart permission did not pass visudo validation." >&2
     return 1
   fi
-  install -o root -g root -m 440 \
+  install_file_if_changed \
     "$rendered_dir/lumistripe-spotify-service.sudoers" \
-    /etc/sudoers.d/lumistripe-spotify-service
+    /etc/sudoers.d/lumistripe-spotify-service root root 440 || {
+      rm -rf -- "$rendered_dir"
+      return 1
+    }
   sed \
     -e "s|@LUMI_SERVICE_USER@|$user_replacement|g" \
     "$UPDATE_LIBEXEC_DIR/lumistripe-network.sudoers" \
@@ -600,9 +726,11 @@ install_update_support() {
     echo "The LumiStripe network permission did not pass visudo validation." >&2
     return 1
   fi
-  install -o root -g root -m 440 \
-    "$rendered_dir/lumistripe-network.sudoers" \
-    /etc/sudoers.d/lumistripe-network
+  install_file_if_changed "$rendered_dir/lumistripe-network.sudoers" \
+    /etc/sudoers.d/lumistripe-network root root 440 || {
+      rm -rf -- "$rendered_dir"
+      return 1
+    }
 
   for template in lumistripe-update-check.service lumistripe-update.service; do
     rendered_file="$rendered_dir/$template"
@@ -617,14 +745,26 @@ install_update_support() {
       echo "An updater service template contains unresolved placeholders." >&2
       return 1
     fi
-    install -o root -g root -m 644 "$rendered_file" "/etc/systemd/system/$template"
+    install_file_if_changed "$rendered_file" "/etc/systemd/system/$template" \
+      root root 644 || {
+        rm -rf -- "$rendered_dir"
+        return 1
+      }
+    if [[ "$FILE_CHANGED" == 1 ]]; then
+      SYSTEMD_UNITS_CHANGED=1
+    fi
   done
 
   migrate_spotify_device_name_override
 
-  install -o root -g root -m 644 \
-    "$UPDATE_LIBEXEC_DIR/lumistripe-update-check.timer" \
-    /etc/systemd/system/lumistripe-update-check.timer
+  install_file_if_changed "$UPDATE_LIBEXEC_DIR/lumistripe-update-check.timer" \
+    /etc/systemd/system/lumistripe-update-check.timer root root 644 || {
+      rm -rf -- "$rendered_dir"
+      return 1
+    }
+  if [[ "$FILE_CHANGED" == 1 ]]; then
+    SYSTEMD_UNITS_CHANGED=1
+  fi
   install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 755 \
     /var/lib/lumistripe/update
   for state_path in \
@@ -639,14 +779,19 @@ install_update_support() {
         echo "Updater state path must be a regular file: $state_path" >&2
         return 1
       }
-      chown --no-dereference "$SERVICE_USER:$SERVICE_GROUP" "$state_path"
-      chmod 644 "$state_path"
+      state_metadata="$(stat -c '%u:%g:%a' -- "$state_path")"
+      if [[ "$state_metadata" != "$(id -u "$SERVICE_USER"):$(id -g "$SERVICE_USER"):644" ]]; then
+        chown --no-dereference "$SERVICE_USER:$SERVICE_GROUP" "$state_path"
+        chmod 644 "$state_path"
+      fi
     fi
   done
 
-  install -o root -g root -m 755 \
-    "$UPDATE_LIBEXEC_DIR/lumistripe-update-trigger" \
-    /usr/local/sbin/lumistripe-update-trigger
+  install_file_if_changed "$UPDATE_LIBEXEC_DIR/lumistripe-update-trigger" \
+    /usr/local/sbin/lumistripe-update-trigger root root 755 || {
+      rm -rf -- "$rendered_dir"
+      return 1
+    }
   sed \
     -e "s|@LUMI_SERVICE_USER@|$user_replacement|g" \
     "$UPDATE_LIBEXEC_DIR/lumistripe-update.sudoers" > "$rendered_dir/lumistripe-update.sudoers"
@@ -656,9 +801,11 @@ install_update_support() {
     echo "The LumiStripe updater sudoers file did not pass visudo validation." >&2
     return 1
   fi
-  install -o root -g root -m 440 \
-    "$rendered_dir/lumistripe-update.sudoers" \
-    /etc/sudoers.d/lumistripe-update
+  install_file_if_changed "$rendered_dir/lumistripe-update.sudoers" \
+    /etc/sudoers.d/lumistripe-update root root 440 || {
+      rm -rf -- "$rendered_dir"
+      return 1
+    }
   rm -rf -- "$rendered_dir"
   rm -f -- /etc/sudoers.d/lumistripe-spotify-name
   rm -f -- /usr/local/sbin/lumistripe-spotify-device-name

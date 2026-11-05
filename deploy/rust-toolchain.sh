@@ -17,8 +17,14 @@ install_rust_toolchain() {
     return 1
   }
 
-  as_user "$rustup_bin" toolchain install "$RUST_TOOLCHAIN_VERSION" --profile minimal
   installed_version="$(as_user "$rustup_bin" run "$RUST_TOOLCHAIN_VERSION" rustc --version 2>/dev/null | awk '{ print $2 }' || true)"
+  if [[ "$installed_version" != "$RUST_TOOLCHAIN_VERSION" ]]; then
+    echo "Installing Rust $RUST_TOOLCHAIN_VERSION for $SERVICE_USER..."
+    as_user "$rustup_bin" toolchain install "$RUST_TOOLCHAIN_VERSION" --profile minimal
+    installed_version="$(as_user "$rustup_bin" run "$RUST_TOOLCHAIN_VERSION" rustc --version 2>/dev/null | awk '{ print $2 }' || true)"
+  else
+    echo "Reusing the installed Rust $RUST_TOOLCHAIN_VERSION toolchain."
+  fi
   [[ "$installed_version" == "$RUST_TOOLCHAIN_VERSION" ]] || {
     echo "Expected Rust $RUST_TOOLCHAIN_VERSION for $SERVICE_USER; found ${installed_version:-no usable rustc}." >&2
     return 1

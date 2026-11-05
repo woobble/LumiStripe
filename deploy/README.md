@@ -208,6 +208,44 @@ The installer selects the available `libgpiod` runtime package and supports
 the `libasound2` and `libasound2t64` package names used by Debian-based
 systems.
 
+## Repeat setup and refresh Spotify Soloist
+
+The updater can be rerun safely; rerun the installer from a fresh,
+administrator-controlled checkout when repairing or reinstalling. Both skip
+APT when required packages are already present, preserve existing environment
+files and service-owned data, and only rewrite changed managed configuration.
+The source installer checks its Rust and Bun pins and reuses matching
+toolchains. Unchanged application and Spotify files do not trigger service
+restarts. Each successful run prints monotonic timings for package
+provisioning, configuration, Soloist handling, and service health checks;
+source builds are timed separately.
+
+Spotify Soloist is reused during routine setup. To ask the updater to check the
+official Spotify archive, set `LUMI_SOLOIST_REFRESH=1`. The updater compares
+the verified candidate with the installed executable and replaces it only when
+the candidate is newer. Replacement is an atomic rename, so a failed download,
+archive check, or executable check leaves the existing binary intact. A valid
+existing executable is also retained if an explicit refresh cannot complete.
+Spotify documents the official architecture-specific archives and the build
+metadata reported by `soloist --version` in its [downloads and updates
+reference](https://developer.spotify.com/documentation/soloist/reference/downloads-and-updates).
+For a refresh without advancing the LumiStripe checkout, pass its current
+commit as the updater target:
+
+```bash
+PROJECT_DIR=/home/pi/LumiStripe
+CURRENT_COMMIT="$(git -C "$PROJECT_DIR" rev-parse HEAD)"
+sudo env LUMI_SERVICE_USER=pi LUMI_PROJECT_DIR="$PROJECT_DIR" \
+  LUMI_SOLOIST_REFRESH=1 \
+  /usr/local/libexec/lumistripe/deploy/update.sh "$CURRENT_COMMIT"
+```
+
+The Pi self-hosted native validation workflow is separate from normal CI and
+runs only when manually dispatched for `main`. Hosted CI remains responsible
+for routine pull request and push validation. Dispatch the **Raspberry Pi
+Validation** workflow from the repository Actions page with the branch set to
+`main` when trusted hardware validation is needed.
+
 The installer needs internet access for apt, the matching GitHub release and
 provenance checks, mkcert, and optional Spotify Soloist downloads. Source mode
 also downloads Rustup and Bun. After installation the runtime checkout is
