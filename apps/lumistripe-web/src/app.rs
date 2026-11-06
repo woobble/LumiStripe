@@ -475,22 +475,29 @@ impl WebApplication {
                 );
                 drop(engine);
             } else {
-                match timeout_at(
-                    deadline,
-                    tokio::task::spawn_blocking(move || engine.shutdown()),
-                )
-                .await
-                {
-                    Ok(Ok(Ok(()))) => {}
-                    Ok(Ok(Err(error))) => {
-                        tracing::error!(error = %error, "Rust engine shutdown failed")
+                // EngineRuntime::shutdown joins engine threads; a timed-out
+                // spawn_blocking task would still hold up Tokio runtime teardown.
+                let (shutdown_sender, shutdown_receiver) = tokio::sync::oneshot::channel();
+                match std::thread::Builder::new()
+                    .name("lumistripe-web-engine-shutdown".to_owned())
+                    .spawn(move || {
+                        let _ = shutdown_sender.send(engine.shutdown());
+                    }) {
+                    Ok(_shutdown_thread) => match timeout_at(deadline, shutdown_receiver).await {
+                        Ok(Ok(Ok(()))) => {}
+                        Ok(Ok(Err(error))) => {
+                            tracing::error!(error = %error, "Rust engine shutdown failed")
+                        }
+                        Ok(Err(_)) => {
+                            tracing::error!("Rust engine shutdown thread stopped without a result")
+                        }
+                        Err(_) => tracing::warn!(
+                            "Rust engine shutdown did not finish before the application shutdown deadline"
+                        ),
+                    },
+                    Err(error) => {
+                        tracing::error!(error = %error, "Rust engine shutdown thread failed to start")
                     }
-                    Ok(Err(error)) => {
-                        tracing::error!(error = %error, "Rust engine shutdown task failed")
-                    }
-                    Err(_) => tracing::warn!(
-                        "Rust engine shutdown did not finish before the application shutdown deadline"
-                    ),
                 }
             }
         }
