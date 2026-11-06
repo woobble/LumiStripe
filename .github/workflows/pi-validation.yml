@@ -49,7 +49,7 @@ jobs:
           command -v pkg-config
           cc --version
           rustc -vV | tee "$RUNNER_TEMP/rustc-version.txt"
-          rustc --version | grep -Eq '^rustc 1\.88\.0([[:space:]]|$)'
+          rustc --version | grep -Eq '^rustc 1\.99\.1([[:space:]]|$)'
           rust_host="$(sed -n 's/^host: //p' "$RUNNER_TEMP/rustc-version.txt")"
           test "$rust_host" = "aarch64-unknown-linux-gnu"
           cargo --version

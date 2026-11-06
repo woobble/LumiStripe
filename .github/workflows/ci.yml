@@ -71,7 +71,7 @@ jobs:
       - name: Verify Rust toolchain
         run: |
           cargo --version
-          rustc --version | grep -Eq '^rustc 1\.88\.0([[:space:]]|$)'
+          rustc --version | grep -Eq '^rustc 1\.99\.1([[:space:]]|$)'
 
       - name: Install Rust OpenAPI exporter dependencies
         run: >-
