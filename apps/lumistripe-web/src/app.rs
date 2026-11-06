@@ -3932,6 +3932,9 @@ mod tests {
         }
     }
 
+    const BLUETOOTH_WIFI_API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+    const BLUETOOTH_WIFI_TEST_TIMEOUT: Duration = Duration::from_secs(120);
+
     async fn api_request(
         app: &WebApplication,
         method: &str,
@@ -3958,10 +3961,30 @@ mod tests {
         (status, serde_json::from_slice(&body).unwrap())
     }
 
+    async fn bounded_bluetooth_wifi_api_request(
+        app: &WebApplication,
+        method: &str,
+        uri: &str,
+        body: Option<Value>,
+    ) -> (StatusCode, Value) {
+        timeout(
+            BLUETOOTH_WIFI_API_REQUEST_TIMEOUT,
+            api_request(app, method, uri, body),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "API request exceeded the {:?} test deadline: {method} {uri}",
+                BLUETOOTH_WIFI_API_REQUEST_TIMEOUT
+            )
+        })
+    }
+
     async fn wait_for_completed_bluetooth_operation(app: &WebApplication) -> Value {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
         while tokio::time::Instant::now() < deadline {
-            let (status, body) = api_request(app, "GET", "/api/audio/bluetooth", None).await;
+            let (status, body) =
+                bounded_bluetooth_wifi_api_request(app, "GET", "/api/audio/bluetooth", None).await;
             assert_eq!(status, StatusCode::OK);
             match body["operation_state"].as_str() {
                 Some("complete") => return body,
@@ -3975,7 +3998,8 @@ mod tests {
     async fn wait_for_failed_bluetooth_operation(app: &WebApplication) -> Value {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
         while tokio::time::Instant::now() < deadline {
-            let (status, body) = api_request(app, "GET", "/api/audio/bluetooth", None).await;
+            let (status, body) =
+                bounded_bluetooth_wifi_api_request(app, "GET", "/api/audio/bluetooth", None).await;
             assert_eq!(status, StatusCode::OK);
             match body["operation_state"].as_str() {
                 Some("failed") => return body,
@@ -4083,7 +4107,7 @@ mod tests {
         let body = case.get("body").cloned();
         let busy_deadline = tokio::time::Instant::now() + Duration::from_secs(1);
         let (status, response) = loop {
-            let result = api_request(app, method, uri, body.clone()).await;
+            let result = bounded_bluetooth_wifi_api_request(app, method, uri, body.clone()).await;
             if result.0 == StatusCode::CONFLICT
                 && result.1["detail"] == "another Bluetooth operation is already running"
             {
@@ -4530,6 +4554,16 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn bluetooth_output_and_wifi_routes_execute_injected_providers() {
+        timeout(
+            BLUETOOTH_WIFI_TEST_TIMEOUT,
+            bluetooth_output_and_wifi_routes_execute_injected_providers_inner(),
+        )
+        .await
+        .expect("Bluetooth and Wi-Fi route integration test exceeded its 120 second deadline");
+    }
+
+    #[cfg(unix)]
+    async fn bluetooth_output_and_wifi_routes_execute_injected_providers_inner() {
         let directory = tempdir().unwrap();
         let (bluez_sender, mut bluez_commands) = mpsc::unbounded_channel();
         let (pipewire_sender, mut pipewire_commands) = mpsc::unbounded_channel();
@@ -4629,7 +4663,8 @@ esac
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
         loop {
-            let (status, body) = api_request(&app, "GET", "/api/audio/bluetooth", None).await;
+            let (status, body) =
+                bounded_bluetooth_wifi_api_request(&app, "GET", "/api/audio/bluetooth", None).await;
             assert_eq!(status, StatusCode::OK);
             if body["available"] == true && body["default_sink"] == "speaker_main" {
                 break;
@@ -4660,7 +4695,7 @@ esac
         let failure_case: Value =
             serde_json::from_slice(&std::fs::read(failure_fixture_path).unwrap()).unwrap();
         fail_next_pair.store(true, Ordering::Release);
-        let (status, body) = api_request(
+        let (status, body) = bounded_bluetooth_wifi_api_request(
             &app,
             failure_case["method"].as_str().unwrap(),
             failure_case["path"].as_str().unwrap(),
@@ -4673,7 +4708,8 @@ esac
 
         let failure_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
         let failed_status = loop {
-            let (status, current) = api_request(&app, "GET", "/api/audio/bluetooth", None).await;
+            let (status, current) =
+                bounded_bluetooth_wifi_api_request(&app, "GET", "/api/audio/bluetooth", None).await;
             assert_eq!(status, StatusCode::OK);
             if current["operation_state"] == "failed" {
                 break current;
@@ -4694,7 +4730,7 @@ esac
                 case["operation"].as_str().unwrap().to_owned(),
                 case["error"].as_str().unwrap().to_owned(),
             ));
-            let (status, body) = api_request(
+            let (status, body) = bounded_bluetooth_wifi_api_request(
                 &app,
                 case["method"].as_str().unwrap(),
                 case["path"].as_str().unwrap(),
@@ -4723,7 +4759,7 @@ esac
         let output_failure_case: Value =
             serde_json::from_slice(&std::fs::read(output_failure_path).unwrap()).unwrap();
         fail_next_default_sink.store(true, Ordering::Release);
-        let (status, body) = api_request(
+        let (status, body) = bounded_bluetooth_wifi_api_request(
             &app,
             output_failure_case["method"].as_str().unwrap(),
             output_failure_case["path"].as_str().unwrap(),
@@ -4734,7 +4770,8 @@ esac
         assert_eq!(body["detail"], output_failure_case["error"]);
         assert!(!fail_next_default_sink.load(Ordering::Acquire));
         assert!(pipewire_commands.try_recv().is_err());
-        let (status, body) = api_request(&app, "GET", "/api/audio/bluetooth", None).await;
+        let (status, body) =
+            bounded_bluetooth_wifi_api_request(&app, "GET", "/api/audio/bluetooth", None).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["default_sink"], "speaker_main");
 
@@ -4748,7 +4785,7 @@ esac
                 case["operation"].as_str().unwrap().to_owned(),
                 case["error"].as_str().unwrap().to_owned(),
             ));
-            let (status, body) = api_request(
+            let (status, body) = bounded_bluetooth_wifi_api_request(
                 &app,
                 case["method"].as_str().unwrap(),
                 case["path"].as_str().unwrap(),
@@ -4758,7 +4795,8 @@ esac
             assert_eq!(status.as_u16(), case["status"]);
             assert_eq!(body["detail"], case["error"]);
             assert!(pipewire_commands.try_recv().is_err());
-            let (status, current) = api_request(&app, "GET", "/api/audio/bluetooth", None).await;
+            let (status, current) =
+                bounded_bluetooth_wifi_api_request(&app, "GET", "/api/audio/bluetooth", None).await;
             assert_eq!(status, StatusCode::OK);
             assert_eq!(current["default_sink"], "speaker_main");
             assert_eq!(current["output_volume"], 0.75);
@@ -4771,7 +4809,7 @@ esac
         let start_case = &conflict_fixture["start"];
         let conflict_case = &conflict_fixture["conflict"];
         block_next_pair.store(true, Ordering::Release);
-        let (status, body) = api_request(
+        let (status, body) = bounded_bluetooth_wifi_api_request(
             &app,
             start_case["method"].as_str().unwrap(),
             start_case["path"].as_str().unwrap(),
@@ -4790,7 +4828,7 @@ esac
             BlueZCommand::Pair(address)
                 if address == start_case["body"]["address"].as_str().unwrap()
         ));
-        let (status, body) = api_request(
+        let (status, body) = bounded_bluetooth_wifi_api_request(
             &app,
             conflict_case["method"].as_str().unwrap(),
             conflict_case["path"].as_str().unwrap(),
@@ -4804,12 +4842,13 @@ esac
         let completed_pair = wait_for_completed_bluetooth_operation(&app).await;
         assert_eq!(completed_pair["operation_state"], "complete");
 
-        let (status, body) = api_request(&app, "GET", "/api/network/status", None).await;
+        let (status, body) =
+            bounded_bluetooth_wifi_api_request(&app, "GET", "/api/network/status", None).await;
         assert_eq!(status, StatusCode::OK, "network status: {body}");
         assert_eq!(body["manager_available"], true);
         assert_eq!(body["adapters"], json!([]));
 
-        let (status, body) = api_request(
+        let (status, body) = bounded_bluetooth_wifi_api_request(
             &app,
             "POST",
             "/api/network/scan",
@@ -4830,7 +4869,7 @@ esac
             })
         );
 
-        let (status, body) = api_request(
+        let (status, body) = bounded_bluetooth_wifi_api_request(
             &app,
             "POST",
             "/api/network/connect",
@@ -4855,7 +4894,7 @@ esac
             .join("../../tests/fixtures/network-api-connect-failure-v1.json");
         let network_failure_case: Value =
             serde_json::from_slice(&std::fs::read(network_failure_path).unwrap()).unwrap();
-        let (status, body) = api_request(
+        let (status, body) = bounded_bluetooth_wifi_api_request(
             &app,
             network_failure_case["method"].as_str().unwrap(),
             network_failure_case["path"].as_str().unwrap(),
@@ -4878,7 +4917,7 @@ esac
             if case["name"] == "helper_unspawnable" {
                 std::fs::remove_file(&network_helper).unwrap();
             }
-            let (status, body) = api_request(
+            let (status, body) = bounded_bluetooth_wifi_api_request(
                 &app,
                 case["method"].as_str().unwrap(),
                 case["path"].as_str().unwrap(),
@@ -4892,6 +4931,8 @@ esac
             }
         }
 
-        app.shutdown().await;
+        timeout(Duration::from_secs(10), app.shutdown())
+            .await
+            .expect("application shutdown exceeded its 10 second test deadline");
     }
 }
