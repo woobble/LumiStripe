@@ -29,6 +29,7 @@ lumistripe-engine-animation-definitions.workspace = true
 lumistripe-engine-config.workspace = true
 lumistripe-engine-protocol.workspace = true
 lumistripe-engine-runtime.workspace = true
+lumistripe-spotify.workspace = true
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -2,7 +2,7 @@ use crate::audio;
 use crate::bluetooth::BluetoothService;
 use crate::bluetooth::SPOTIFY_MONITOR_SOURCE;
 use crate::bluetooth_process::BluetoothError;
-use crate::config::EngineOutputOptions;
+use crate::config::{EngineOutputOptions, SpotifyBackend};
 use crate::error::ApiError;
 use crate::settings::{
     AudioTuningProfile, ColorCorrection, DashboardSettings, MAX_SAVED_ANIMATION_SEQUENCES,
@@ -497,7 +497,7 @@ impl ControlPlane {
                     _ = state_tick.tick() => {
                         if should_poll_automatic_audio_source(
                             model.config.runtime_kind,
-                            model.config.spotify_provider_enabled,
+                            model.config.spotify_backend.is_enabled(),
                         )
                             && matches!(model.audio_source.as_str(), "auto" | "bluetooth" | "spotify")
                         {
@@ -1162,6 +1162,7 @@ async fn apply_command(
                 settings_store,
                 &application_name,
                 &spotify_device_name,
+                spotify,
                 spotify_device_name_helper,
             )
             .await;
@@ -2772,6 +2773,7 @@ async fn set_identity_settings(
     settings_store: &mut SettingsStore,
     application_name: &str,
     spotify_device_name: &str,
+    spotify: Option<&dyn SpotifyProvider>,
     spotify_device_name_helper: &SpotifyDeviceNameHelper,
 ) -> Result<(), ApiError> {
     for (field, value) in [
@@ -2820,12 +2822,30 @@ async fn set_identity_settings(
                 error.to_string(),
             )
         })?;
-    let spotify_restart_requested = if model.config.runtime_kind == "hardware"
-        && model.settings.spotify_device_name != candidate.spotify_device_name
-    {
-        spotify_device_name_helper
-            .apply(&candidate.spotify_device_name)
-            .await?
+    let spotify_name_changed = model.settings.spotify_device_name != candidate.spotify_device_name;
+    let spotify_restart_requested = if spotify_name_changed {
+        match model.config.spotify_backend {
+            SpotifyBackend::Librespot => {
+                let provider = spotify.ok_or_else(|| {
+                    ApiError::new(
+                        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                        "Spotify provider is unavailable.",
+                    )
+                })?;
+                provider
+                    .set_device_name(&candidate.spotify_device_name)
+                    .map_err(|error| {
+                        ApiError::new(axum::http::StatusCode::UNPROCESSABLE_ENTITY, error.message)
+                    })?;
+                false
+            }
+            SpotifyBackend::Soloist if model.config.runtime_kind == "hardware" => {
+                spotify_device_name_helper
+                    .apply(&candidate.spotify_device_name)
+                    .await?
+            }
+            SpotifyBackend::Soloist | SpotifyBackend::Disabled => false,
+        }
     } else {
         false
     };
@@ -3266,7 +3286,7 @@ async fn maintain_configured_audio_source(
     let automatic = model.audio_source == "auto"
         && should_poll_automatic_audio_source(
             model.config.runtime_kind,
-            model.config.spotify_provider_enabled,
+            model.config.spotify_backend.is_enabled(),
         );
     if automatic {
         let spotify_status = spotify.map(SpotifyProvider::status);
@@ -4186,6 +4206,7 @@ mod tests {
     use crate::bluetooth_providers::{
         BlueZCommand, BlueZProvider, BlueZSnapshot, PipeWireCommand, PipeWireProvider,
     };
+    use crate::config::SpotifyBackend;
     use crate::settings::{AudioTuningProfile, ColorCorrection, DashboardSettings, SettingsStore};
     use crate::spotify::{
         SpotifyControlAction, SpotifyError, SpotifyPlaybackStatus, SpotifyProvider, SpotifyRepeat,
@@ -4249,6 +4270,7 @@ mod tests {
         );
         let mut config = test_config(directory.path().join("settings.json"));
         config.runtime_kind = "hardware";
+        config.spotify_backend = SpotifyBackend::Soloist;
         let mut settings_store = SettingsStore::open(&config.settings_file).unwrap();
         let mut model = ControlModel::new(config, DashboardSettings::default());
 
@@ -4257,6 +4279,7 @@ mod tests {
             &mut settings_store,
             "Studio lights",
             "Studio player",
+            None,
             &helper,
         )
         .await
@@ -4281,6 +4304,7 @@ mod tests {
         );
         let mut config = test_config(directory.path().join("settings.json"));
         config.runtime_kind = "hardware";
+        config.spotify_backend = SpotifyBackend::Soloist;
         let mut settings_store = SettingsStore::open(&config.settings_file).unwrap();
         let mut model = ControlModel::new(config, DashboardSettings::default());
 
@@ -4289,6 +4313,7 @@ mod tests {
             &mut settings_store,
             "Studio lights",
             "Studio player",
+            None,
             &helper,
         )
         .await
@@ -4318,6 +4343,7 @@ mod tests {
             &mut settings_store,
             "Studio lights",
             "Studio player",
+            None,
             &helper,
         )
         .await
@@ -4345,6 +4371,7 @@ mod tests {
             &mut settings_store,
             "Studio lights",
             "Studio player",
+            None,
             &helper,
         )
         .await
@@ -4373,6 +4400,7 @@ mod tests {
             &mut settings_store,
             "Studio lights",
             "LumiStripe",
+            None,
             &helper,
         )
         .await
@@ -5426,7 +5454,8 @@ mod tests {
             spi_speed_hz: None,
             audio_device: None,
             spotify_ws_uri: "127.0.0.1:9090".to_owned(),
-            spotify_provider_enabled: false,
+            spotify_backend: crate::config::SpotifyBackend::Disabled,
+            spotify_data_dir: std::path::PathBuf::new(),
             bluetooth_max_inputs: 1,
             bluetooth_max_outputs: 1,
             secure_cookie: false,
@@ -5495,7 +5524,8 @@ mod tests {
             spi_speed_hz: None,
             audio_device: None,
             spotify_ws_uri: "127.0.0.1:9090".to_owned(),
-            spotify_provider_enabled: false,
+            spotify_backend: crate::config::SpotifyBackend::Disabled,
+            spotify_data_dir: std::path::PathBuf::new(),
             bluetooth_max_inputs: 1,
             bluetooth_max_outputs: 1,
             secure_cookie: false,
@@ -5935,7 +5965,8 @@ mod tests {
             spi_speed_hz: None,
             audio_device: None,
             spotify_ws_uri: "127.0.0.1:9090".to_owned(),
-            spotify_provider_enabled: false,
+            spotify_backend: crate::config::SpotifyBackend::Disabled,
+            spotify_data_dir: std::path::PathBuf::new(),
             bluetooth_max_inputs: 1,
             bluetooth_max_outputs: 1,
             secure_cookie: false,

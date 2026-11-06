@@ -1,0 +1,23 @@
+[package]
+name = "lumistripe-spotify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+futures-util.workspace = true
+libc.workspace = true
+librespot = { version = "=0.8.0", default-features = false, features = [
+    "pulseaudio-backend",
+    "rustls-tls-native-roots",
+    "with-libmdns",
+] }
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

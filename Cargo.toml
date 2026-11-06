@@ -15,6 +15,7 @@ members = [
     "crates/lumistripe-engine-compositing",
     "crates/lumistripe-engine-effects",
     "crates/lumistripe-engine-audio",
+    "crates/lumistripe-spotify",
 ]
 resolver = "3"
 
@@ -68,3 +69,4 @@ lumistripe-engine-animation-state = { path = "crates/lumistripe-engine-animation
 lumistripe-engine-compositing = { path = "crates/lumistripe-engine-compositing" }
 lumistripe-engine-effects = { path = "crates/lumistripe-engine-effects" }
 lumistripe-engine-audio = { path = "crates/lumistripe-engine-audio" }
+lumistripe-spotify = { path = "crates/lumistripe-spotify" }

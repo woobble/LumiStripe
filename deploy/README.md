@@ -1,8 +1,9 @@
 # Raspberry Pi installation and audio setup
 
 The LumiStripe web runtime can receive music from a phone or other source over Bluetooth,
-or use Spotify Connect through Spotify's Soloist player. The Pi sends the selected
-stream to the sound system and analyzes it for reactive animations.
+or use Spotify Connect through the native librespot provider or the retained
+Spotify Soloist migration provider. The Pi sends the selected stream to the
+sound system and analyzes it for reactive animations.
 
 Supported targets are Raspberry Pi OS Trixie and Ubuntu on ARM64, using
 PipeWire/WirePlumber. Prebuilt releases are available on both; source builds
@@ -34,11 +35,11 @@ journals and restore the previous checkout before rebuilding dependencies and
 restarting services.
 
 Change the dashboard title and Spotify Connect player name from
-**Devices → Startup → Names**. Saving a Spotify name updates the Soloist
-service configuration and requests a service restart so Connect advertises it.
-On appliances installed before this naming control was added, rerun the
-trusted `lumistripe-admin install` command as described below to install its
-restricted restart helper and the Soloist service override path.
+**Devices → Startup → Names**. The selected provider advertises the saved name;
+librespot refreshes local discovery and Soloist requests its existing service
+restart. On appliances installed before this naming control was added, rerun
+the trusted `lumistripe-admin install` command as described below to install
+the restricted Soloist restart helper when that provider is selected.
 
 ## Administrative command quick start
 
@@ -118,11 +119,29 @@ disable that old trigger during this upgrade; see
 
 Interactive installation asks for a four-digit pairing code and optional
 Spotify Soloist API key. Leave the pairing-code prompt blank to generate a
-random code and the Spotify prompt blank to skip Spotify. For unattended
+random code. The Soloist key prompt is shown only when Soloist is selected;
+choose `librespot` to pair from Spotify without a Soloist key. For unattended
 installation, the existing `LUMI_PAIRING_CODE` and Spotify environment-file
 handling remains available; keep secrets out of shell history and command
 arguments. The command does not accept pairing passwords or API keys as CLI
 options.
+
+Choose the Spotify provider explicitly when installing or repairing an
+appliance:
+
+```bash
+sudo lumistripe-admin install --spotify-backend librespot
+sudo lumistripe-admin install --spotify-backend soloist
+sudo lumistripe-admin install --spotify-backend disabled
+sudo lumistripe-admin repair --source /opt/lumistripe-repair \
+  --user pi --spotify-backend librespot
+```
+
+Omitting the option preserves the saved setting. Older installations without
+`LUMI_SPOTIFY_BACKEND` stay on Soloist. Switching to `librespot` or `disabled`
+stops the Soloist service and leaves its existing credentials, binary, and data
+in place for a later switch back. See the [Spotify provider guide](../docs/spotify.md)
+for pairing, audio routing, limitations, policy notes, and manual acceptance.
 
 ### Advanced deployment options
 
@@ -467,6 +486,18 @@ while Soloist routes it to the host's default speaker output. LumiStripe
 settings and Soloist session/cache data persist under `.docker-dev/data/`;
 the local API key and all development state are ignored by Git.
 
+To exercise the native receiver in the simulator, select it explicitly and
+leave the Soloist profile off:
+
+```bash
+LUMI_SPOTIFY_BACKEND=librespot docker compose --project-name lumistripe-dev \
+  -f deploy/docker-compose.dev.yml up --build
+```
+
+Compose passes the selection to both services. If the Soloist profile is
+started while `librespot` or `disabled` is selected, its entrypoint exits
+before launching the legacy receiver.
+
 Stop the stack with `Ctrl+C` or:
 
 ```bash
@@ -474,9 +505,11 @@ docker compose --project-name lumistripe-dev \
   -f deploy/docker-compose.dev.yml down
 ```
 
-The Rust image builds the web, engine, CLI, and restricted deployment helper
-with the pinned Rust toolchain and builds the dashboard with Bun. Its normal
-build, runtime, and Soloist archive setup do not use Python, `pip`, or `uv`.
+The default Rust image builds the web, engine, CLI, and restricted deployment
+helper with the pinned Rust toolchain and builds the dashboard with Bun. It
+contains the native provider and does not download Soloist. The optional
+development-only `runtime-soloist` target downloads the Soloist archive for the
+separate legacy sidecar. These build paths do not use Python, `pip`, or `uv`.
 The Compose file uses host networking so the web runtime can connect to
 Soloist's local WebSocket on `127.0.0.1:9090`. It binds the dashboard to
 `127.0.0.1:8000`, runs both containers as the current user's UID/GID with a
@@ -622,29 +655,30 @@ to a higher-priority source when that source becomes active.
 
 ## Spotify Connect
 
-The installer runs Spotify Soloist as the separate
-`lumistripe-spotify.service`. Soloist writes to the dedicated
-`lumistripe_spotify` PipeWire sink. When Spotify is selected as the LumiStripe
-audio source, the runtime captures that sink's monitor for analysis and creates
-a loopback to the current default output. Changing the output in Setup → Audio
-therefore also moves Spotify to a wired, HDMI, USB, or Bluetooth speaker.
-On systems where PortAudio exposes only the shared `pulse` or `pipewire`
-capture device, LumiStripe temporarily selects the Spotify monitor as that
-device's default source and restores the previous source when Spotify is
-deselected.
+Both providers use the dedicated `lumistripe_spotify` PipeWire sink. When
+Spotify is selected as the LumiStripe audio source, the runtime captures that
+sink's monitor and routes sound to the selected physical output. Changing the
+output in Setup → Audio therefore also moves Spotify to a wired, HDMI, USB, or
+Bluetooth speaker. On systems where PortAudio exposes only the shared `pulse`
+or `pipewire` capture device, LumiStripe temporarily selects the Spotify
+monitor and restores the previous source when Spotify is deselected.
 
-After installation, open Setup → Audio, choose **Spotify Connect**, and use the
-playback controls. Pair the device by opening Spotify on a phone or computer
-and choosing the configured device name (default: `LumiStripe`). The dashboard
-shows the connection state, current track, position, volume, shuffle, and
-repeat controls.
-
-Useful service checks:
+Open Setup → Audio, choose **Spotify Connect**, and select LumiStripe in
+Spotify on a phone or computer on the same local network. The dashboard shows
+connection state, current track, position, volume, shuffle, and repeat
+controls. With the native backend, no separate Spotify service is required.
+With Soloist, inspect its service and local WebSocket with:
 
 ```bash
 sudo systemctl status lumistripe-spotify.service
 sudo journalctl -u lumistripe-spotify.service -f
+```
+
+For either provider, inspect the audio route with:
+
+```bash
 pactl list short sinks | grep lumistripe_spotify
+pactl list short sources | grep lumistripe_spotify
 ```
 
 Soloist's local WebSocket control endpoint is bound to `127.0.0.1:9090` by
@@ -666,13 +700,17 @@ that port outside the Pi.
 - The Audio page says no PipeWire/Pulse capture device is visible: install
   `pipewire-alsa` and `libasound2-plugins`, restart LumiStripe, select
   `Automatic` or `Bluetooth`, and press **Save audio source**.
-- Spotify is unavailable: check that `/etc/lumistripe/lumistripe-spotify.env`
-  contains a valid `LUMI_SPOTIFY_API_KEY`, then restart
-  `lumistripe-spotify.service`. If the Soloist build has expired, rerun
+- Spotify is unavailable with Soloist: check that
+  `/etc/lumistripe/lumistripe-spotify.env` contains a valid
+  `LUMI_SPOTIFY_API_KEY`, then restart `lumistripe-spotify.service`. If the
+  Soloist build has expired, rerun
   `sudo lumistripe-admin update --refresh-soloist` to download the current
-  official build. The service checks
-  the installed build timestamp before startup and reports missing, malformed,
-  or expired builds in `journalctl -u lumistripe-spotify.service`.
+  official build. The service checks its build timestamp and reports missing,
+  malformed, or expired builds in its journal.
+- Spotify is unavailable with librespot: check the web service journal and the
+  configured protected data directory. Confirm Spotify and LumiStripe share a
+  local network that permits Connect discovery, then select LumiStripe again
+  to pair or restore credentials.
 - Spotify plays but the Stripe is quiet: confirm that the dedicated sink and
   monitor are present with `pactl list short sinks` and
   `pactl list short sources`, then reselect Spotify in Setup → Audio.

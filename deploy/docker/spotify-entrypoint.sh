@@ -1,6 +1,12 @@
 #!/bin/sh
 set -eu
 
+spotify_backend="${LUMI_SPOTIFY_BACKEND:-soloist}"
+if [ "$spotify_backend" != "soloist" ]; then
+  echo "Soloist sidecar requires LUMI_SPOTIFY_BACKEND=soloist (selected: $spotify_backend)." >&2
+  exit 1
+fi
+
 api_key_file="${LUMI_SPOTIFY_API_KEY_FILE:-/run/secrets/spotify_api_key}"
 if [ ! -r "$api_key_file" ]; then
   echo "Spotify API key file is not readable: $api_key_file" >&2

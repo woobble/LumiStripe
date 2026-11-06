@@ -85,6 +85,7 @@ SERVICE_HOME="$PROJECT_HOME"
 SERVICE_GROUP="$PROJECT_GROUP"
 UPDATE_STATE_FILE="${LUMI_UPDATE_STATE_FILE:-/var/lib/lumistripe/update/status.json}"
 WEB_ENV_FILE=/etc/lumistripe/lumistripe-web.env
+SELECTED_SPOTIFY_BACKEND=
 BUN_BIN="$PROJECT_HOME/.bun/bin/bun"
 WIREPLUMBER_DIR="$PROJECT_HOME/.config/wireplumber/wireplumber.conf.d"
 WIREPLUMBER_FILE="$WIREPLUMBER_DIR/90-lumistripe-bluetooth.conf"
@@ -98,6 +99,7 @@ command -v flock >/dev/null || { echo "flock is required (install util-linux)" >
 command -v curl >/dev/null || { echo "curl is required" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "Python 3 is required for safe release validation." >&2; exit 1; }
 resolve_web_backend "" "$WEB_ENV_FILE" >/dev/null || exit 1
+SELECTED_SPOTIFY_BACKEND="$(resolve_spotify_backend "" "$WEB_ENV_FILE")" || exit 1
 
 install -d -o root -g root -m 755 "$LOCK_DIR"
 exec 9>"$LOCK_FILE"
@@ -119,10 +121,14 @@ as_user_with_env() {
 
 install_audio_bridge_packages() {
   install_missing_apt_packages "PipeWire/ALSA capture packages" \
-    pipewire-alsa libasound2-plugins libatomic1
+    pipewire-alsa libasound2-plugins libatomic1 libpulse0
 }
 
 create_spotify_environment_file() {
+  if [[ "$SELECTED_SPOTIFY_BACKEND" != soloist ]]; then
+    echo "Spotify backend is $SELECTED_SPOTIFY_BACKEND; preserving Soloist credentials without installing or starting Soloist."
+    return 0
+  fi
   install -d -m 755 /etc/lumistripe
   [[ ! -L "$SPOTIFY_ENV_FILE" &&
      ( ! -e "$SPOTIFY_ENV_FILE" || -f "$SPOTIFY_ENV_FILE" ) ]] || {
@@ -161,6 +167,7 @@ create_spotify_environment_file() {
 }
 
 spotify_environment_ready() {
+  [[ "$SELECTED_SPOTIFY_BACKEND" == soloist ]] || return 1
   [[ -f "$SPOTIFY_ENV_FILE" ]] || return 1
   local api_key
   api_key="$(awk -F= '$1 == "LUMI_SPOTIFY_API_KEY" { print substr($0, index($0, "=") + 1); exit }' "$SPOTIFY_ENV_FILE")"

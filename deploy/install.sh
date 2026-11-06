@@ -590,6 +590,10 @@ create_environment_file() {
 }
 
 create_spotify_environment_file() {
+  if [[ "$SELECTED_SPOTIFY_BACKEND" != soloist ]]; then
+    echo "Spotify backend is $SELECTED_SPOTIFY_BACKEND; preserving Soloist credentials without installing or starting Soloist."
+    return 0
+  fi
   install -d -m 755 "$ENV_DIR"
   [[ ! -L "$SPOTIFY_ENV_FILE" &&
      ( ! -e "$SPOTIFY_ENV_FILE" || -f "$SPOTIFY_ENV_FILE" ) ]] || {
@@ -651,6 +655,7 @@ create_spotify_environment_file() {
 }
 
 spotify_environment_ready() {
+  [[ "$SELECTED_SPOTIFY_BACKEND" == soloist ]] || return 1
   [[ -f "$SPOTIFY_ENV_FILE" ]] || return 1
   local api_key
   api_key="$(awk -F= '$1 == "LUMI_SPOTIFY_API_KEY" { print substr($0, index($0, "=") + 1); exit }' "$SPOTIFY_ENV_FILE")"
@@ -932,6 +937,9 @@ ensure_groups
 enable_spi
 lumi_phase_start "Configuration"
 create_environment_file
+  SELECTED_SPOTIFY_BACKEND="$(resolve_spotify_backend "${LUMI_SPOTIFY_BACKEND:-}" "$ENV_FILE")"
+  write_spotify_backend_setting \
+    "$ENV_FILE" "$SELECTED_SPOTIFY_BACKEND" "$SERVICE_USER" "$SERVICE_GROUP"
 create_spotify_environment_file
 if [[ -n "$OFFLINE_COMMIT" ]] && spotify_environment_ready &&
    [[ ! -x "$SERVICE_HOME/.local/bin/soloist" ]]; then

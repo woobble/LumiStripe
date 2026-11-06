@@ -11,7 +11,7 @@ apps/lumistripe-web/       Axum server, REST API, WebSockets, React frontend
 apps/lumistripe-engine/    Engine process entry point
 apps/lumistripe-cli/       CLI entry point
 apps/lumistripe-deploy-helper/  Restricted privileged operations
-crates/                    Shared engine, protocol, audio, and output libraries
+crates/                    Shared engine, audio, output, and Spotify libraries
 tests/fixtures/             Shared protocol and regression fixtures
 ```
 
@@ -78,8 +78,11 @@ and application data remain outside the release tree.
 
 The audio crate owns capture, configuration, DSP, and telemetry. The web layer
 selects sources and profiles, persists route-specific synchronization offsets,
-and sends audio commands to the engine. Source details and operator guidance
-are in the [audio guide](audio.md).
+and sends audio commands to the engine. The optional native Spotify Connect
+provider is isolated in `crates/lumistripe-spotify`; the web app selects it
+through the existing provider boundary and leaves REST status/control shapes
+unchanged. Both it and the retained Soloist provider use the dedicated Spotify
+PipeWire sink. See the [audio guide](audio.md) and [Spotify provider guide](spotify.md).
 
 Production hardware use is documented in the [deployment guide](../deploy/README.md).
 The [browser simulator](simulator.md) uses mock outputs and does not verify

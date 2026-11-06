@@ -45,6 +45,10 @@ pub struct CliOptions {
     pub static_dir: Option<PathBuf>,
     #[arg(long, env = "LUMISTRIPE_SETTINGS_FILE")]
     pub settings_file: Option<PathBuf>,
+    #[arg(long, value_enum, env = "LUMI_SPOTIFY_BACKEND")]
+    pub spotify_backend: Option<SpotifyBackend>,
+    #[arg(long = "spotify-data-dir", env = "LUMI_SPOTIFY_LIBRESPOT_DATA_DIR")]
+    pub spotify_data_dir: Option<PathBuf>,
     #[arg(long, env = "LUMISTRIPE_AUDIO_DEVICE")]
     pub audio_device: Option<String>,
     #[arg(
@@ -75,6 +79,19 @@ pub enum OutputBackendArg {
     Gpio,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum SpotifyBackend {
+    Librespot,
+    Soloist,
+    Disabled,
+}
+
+impl SpotifyBackend {
+    pub fn is_enabled(self) -> bool {
+        self != Self::Disabled
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct EngineOutputOptions {
     pub id: String,
@@ -98,7 +115,8 @@ pub struct AppConfig {
     pub spi_speed_hz: Option<u32>,
     pub audio_device: Option<String>,
     pub spotify_ws_uri: String,
-    pub spotify_provider_enabled: bool,
+    pub spotify_backend: SpotifyBackend,
+    pub spotify_data_dir: PathBuf,
     pub bluetooth_max_inputs: usize,
     pub bluetooth_max_outputs: usize,
     pub secure_cookie: bool,
@@ -192,6 +210,13 @@ impl CliOptions {
                     ("hardware", "gpio", primary, secondary)
                 }
             };
+        let spotify_backend = match self.spotify_backend {
+            Some(backend) => backend,
+            None if self.spotify_provider_enabled || runtime_kind == "hardware" => {
+                SpotifyBackend::Soloist
+            }
+            None => SpotifyBackend::Disabled,
+        };
         let mut outputs = vec![EngineOutputOptions {
             id: "primary".to_owned(),
             name: "Primary".to_owned(),
@@ -233,7 +258,10 @@ impl CliOptions {
                 spi_speed_hz,
                 audio_device: self.audio_device,
                 spotify_ws_uri: self.spotify_ws_uri,
-                spotify_provider_enabled: self.spotify_provider_enabled,
+                spotify_backend,
+                spotify_data_dir: self
+                    .spotify_data_dir
+                    .unwrap_or_else(default_spotify_data_dir),
                 bluetooth_max_inputs: self.bluetooth_max_inputs,
                 bluetooth_max_outputs: self.bluetooth_max_outputs,
                 secure_cookie: self.secure_cookie,
@@ -370,6 +398,13 @@ fn default_settings_file() -> PathBuf {
     PathBuf::from(".config/lumistripe/settings.json")
 }
 
+fn default_spotify_data_dir() -> PathBuf {
+    if let Some(path) = std::env::var_os("HOME").filter(|path| !path.is_empty()) {
+        return PathBuf::from(path).join(".local/share/lumistripe/spotify");
+    }
+    PathBuf::from(".local/share/lumistripe/spotify")
+}
+
 fn default_simulator_settings_file() -> PathBuf {
     if let Some(path) = std::env::var_os("XDG_CONFIG_HOME").filter(|path| !path.is_empty()) {
         return PathBuf::from(path).join("lumistripe/simulator-settings.json");
@@ -382,7 +417,7 @@ fn default_simulator_settings_file() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppConfig, CliOptions, EngineOutputOptions};
+    use super::{AppConfig, CliOptions, EngineOutputOptions, SpotifyBackend};
     use crate::settings::{
         StripeBackend, StripeOutputSettings, StripeTopologySettings, ZonePattern,
     };
@@ -411,7 +446,8 @@ mod tests {
             spi_speed_hz: None,
             audio_device: None,
             spotify_ws_uri: "127.0.0.1:9090".to_owned(),
-            spotify_provider_enabled: false,
+            spotify_backend: SpotifyBackend::Disabled,
+            spotify_data_dir: PathBuf::new(),
             bluetooth_max_inputs: 1,
             bluetooth_max_outputs: 1,
             secure_cookie: false,
@@ -494,7 +530,54 @@ mod tests {
         .unwrap();
         let (config, _, _) = options.into_config().unwrap();
         assert_eq!(config.spotify_ws_uri, "ws://127.0.0.1:9123");
-        assert!(config.spotify_provider_enabled);
+        assert_eq!(config.spotify_backend, SpotifyBackend::Soloist);
+    }
+
+    #[test]
+    fn spotify_backend_selection_is_explicit_and_preserves_hardware_migration_default() {
+        let options = CliOptions::try_parse_from([
+            "lumistripe-web",
+            "--spotify-backend",
+            "librespot",
+            "--spotify-data-dir",
+            "/tmp/lumistripe-spotify",
+        ])
+        .unwrap();
+        let (config, _, _) = options.into_config().unwrap();
+        assert_eq!(config.spotify_backend, SpotifyBackend::Librespot);
+        assert_eq!(
+            config.spotify_data_dir,
+            PathBuf::from("/tmp/lumistripe-spotify")
+        );
+
+        let options =
+            CliOptions::try_parse_from(["lumistripe-web", "--output-backend", "spi"]).unwrap();
+        let (config, _, _) = options.into_config().unwrap();
+        assert_eq!(config.spotify_backend, SpotifyBackend::Soloist);
+
+        let options = CliOptions::try_parse_from([
+            "lumistripe-web",
+            "--output-backend",
+            "spi",
+            "--spotify-backend",
+            "disabled",
+        ])
+        .unwrap();
+        let (config, _, _) = options.into_config().unwrap();
+        assert_eq!(config.spotify_backend, SpotifyBackend::Disabled);
+    }
+
+    #[test]
+    fn explicit_spotify_backend_takes_precedence_over_legacy_enable_flag() {
+        let options = CliOptions::try_parse_from([
+            "lumistripe-web",
+            "--spotify-backend",
+            "librespot",
+            "--enable-spotify",
+        ])
+        .unwrap();
+        let (config, _, _) = options.into_config().unwrap();
+        assert_eq!(config.spotify_backend, SpotifyBackend::Librespot);
     }
 
     #[test]

@@ -1,6 +1,11 @@
-//! Provider boundary and Tokio client for the local Spotify Soloist service.
+//! Provider boundary and Spotify Soloist/librespot clients.
 
 use futures_util::{SinkExt, StreamExt};
+use lumistripe_spotify::{
+    Command as LibrespotCommand, ConnectProvider, PlaybackState as LibrespotPlaybackState,
+    ProviderError as LibrespotError, RepeatMode as LibrespotRepeat, Snapshot as LibrespotSnapshot,
+    SpotifyConnectConfig,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::future::Future;
@@ -146,7 +151,7 @@ impl SpotifyError {
     }
 
     fn disconnected() -> Self {
-        Self::new("disconnected", "Spotify Soloist is not connected.")
+        Self::new("disconnected", "Spotify is not connected.")
     }
 
     fn command_timeout(ambiguous: bool) -> Self {
@@ -167,11 +172,199 @@ pub(crate) trait SpotifyProvider: Send + Sync {
     fn start(&self);
     fn stop(&self);
     fn status(&self) -> SpotifyStatus;
+    fn set_device_name(&self, _name: &str) -> Result<bool, SpotifyError> {
+        Ok(false)
+    }
     fn control<'a>(
         &'a self,
         action: SpotifyControlAction,
         value: Option<Value>,
     ) -> ProviderFuture<'a>;
+}
+
+pub(crate) struct LibrespotBackend {
+    provider: ConnectProvider,
+}
+
+impl LibrespotBackend {
+    pub(crate) fn new(
+        config: SpotifyConnectConfig,
+        cancellation: CancellationToken,
+    ) -> (Self, JoinHandle<()>) {
+        let (provider, task) = ConnectProvider::new(config, cancellation);
+        (Self { provider }, task)
+    }
+}
+
+impl SpotifyProvider for LibrespotBackend {
+    fn start(&self) {
+        self.provider.start();
+    }
+
+    fn stop(&self) {
+        self.provider.stop();
+    }
+
+    fn status(&self) -> SpotifyStatus {
+        map_librespot_status(self.provider.status())
+    }
+
+    fn set_device_name(&self, name: &str) -> Result<bool, SpotifyError> {
+        self.provider
+            .set_device_name(name)
+            .map_err(map_librespot_error)
+    }
+
+    fn control<'a>(
+        &'a self,
+        action: SpotifyControlAction,
+        value: Option<Value>,
+    ) -> ProviderFuture<'a> {
+        Box::pin(async move {
+            let command = librespot_command(action, value)?;
+            self.provider
+                .control(command)
+                .await
+                .map(map_librespot_status)
+                .map_err(map_librespot_error)
+        })
+    }
+}
+
+pub(crate) struct DisabledSpotifyBackend;
+
+impl SpotifyProvider for DisabledSpotifyBackend {
+    fn start(&self) {}
+
+    fn stop(&self) {}
+
+    fn status(&self) -> SpotifyStatus {
+        SpotifyStatus::initial(false)
+    }
+
+    fn control<'a>(
+        &'a self,
+        _action: SpotifyControlAction,
+        _value: Option<Value>,
+    ) -> ProviderFuture<'a> {
+        Box::pin(async {
+            Err(SpotifyError::new(
+                "unavailable",
+                "Spotify is disabled for this installation.",
+            ))
+        })
+    }
+}
+
+fn map_librespot_error(error: LibrespotError) -> SpotifyError {
+    SpotifyError::new(error.code, error.message)
+}
+
+fn map_librespot_status(status: LibrespotSnapshot) -> SpotifyStatus {
+    SpotifyStatus {
+        configured: status.configured,
+        connected: status.connected,
+        logged_in: status.logged_in,
+        is_active: status.is_active,
+        device_name: status.device_name,
+        status: match status.state {
+            LibrespotPlaybackState::Idle => SpotifyPlaybackStatus::Idle,
+            LibrespotPlaybackState::Playing => SpotifyPlaybackStatus::Playing,
+            LibrespotPlaybackState::Paused => SpotifyPlaybackStatus::Paused,
+            LibrespotPlaybackState::Buffering => SpotifyPlaybackStatus::Buffering,
+        },
+        track: status.track.map(|track| SpotifyTrack {
+            uri: track.uri,
+            name: track.name,
+            artists: track.artists,
+            album: track.album,
+            cover_url: track.cover_url,
+            duration_ms: track.duration_ms,
+        }),
+        position_ms: status.position_ms,
+        duration_ms: status.duration_ms,
+        volume: status.volume,
+        shuffle: status.shuffle,
+        repeat: match status.repeat {
+            LibrespotRepeat::Off => SpotifyRepeat::Off,
+            LibrespotRepeat::Context => SpotifyRepeat::Context,
+            LibrespotRepeat::Track => SpotifyRepeat::Track,
+        },
+        error: status.error,
+    }
+}
+
+fn librespot_command(
+    action: SpotifyControlAction,
+    value: Option<Value>,
+) -> Result<LibrespotCommand, SpotifyError> {
+    match action {
+        SpotifyControlAction::Play
+        | SpotifyControlAction::Pause
+        | SpotifyControlAction::SkipNext
+        | SpotifyControlAction::SkipPrev => {
+            if value.is_some() {
+                return Err(SpotifyError::new(
+                    "invalid",
+                    "This Spotify action does not accept a value.",
+                ));
+            }
+            Ok(match action {
+                SpotifyControlAction::Play => LibrespotCommand::Play,
+                SpotifyControlAction::Pause => LibrespotCommand::Pause,
+                SpotifyControlAction::SkipNext => LibrespotCommand::SkipNext,
+                SpotifyControlAction::SkipPrev => LibrespotCommand::SkipPrevious,
+                _ => unreachable!(),
+            })
+        }
+        SpotifyControlAction::Seek => {
+            let position = required_number(value.as_ref(), "seek position")?;
+            if position < 0.0 || position > u32::MAX as f64 {
+                return Err(SpotifyError::new(
+                    "invalid",
+                    "Seek position is outside the supported range.",
+                ));
+            }
+            Ok(LibrespotCommand::Seek(position as u64))
+        }
+        SpotifyControlAction::SetVolume => {
+            let volume = required_number(value.as_ref(), "volume")?;
+            if !(0.0..=100.0).contains(&volume) {
+                return Err(SpotifyError::new(
+                    "invalid",
+                    "volume must be between 0 and 100",
+                ));
+            }
+            Ok(LibrespotCommand::SetVolume(volume as u8))
+        }
+        SpotifyControlAction::SetShuffle => match value {
+            Some(Value::Bool(enabled)) => Ok(LibrespotCommand::SetShuffle(enabled)),
+            _ => Err(SpotifyError::new(
+                "invalid",
+                "shuffle requires a boolean value",
+            )),
+        },
+        SpotifyControlAction::SetRepeat => match value {
+            Some(Value::String(value)) => {
+                let repeat = match value.as_str() {
+                    "off" => LibrespotRepeat::Off,
+                    "context" => LibrespotRepeat::Context,
+                    "track" => LibrespotRepeat::Track,
+                    _ => {
+                        return Err(SpotifyError::new(
+                            "invalid",
+                            "repeat must be off, context, or track",
+                        ));
+                    }
+                };
+                Ok(LibrespotCommand::SetRepeat(repeat))
+            }
+            _ => Err(SpotifyError::new(
+                "invalid",
+                "repeat must be off, context, or track",
+            )),
+        },
+    }
 }
 
 #[derive(Clone)]
@@ -1069,9 +1262,14 @@ mod tests {
     use super::{
         MAX_PENDING_COMMANDS, PlaybackClock, SoloistBackend, SoloistCommand, SpotifyControlAction,
         SpotifyPlaybackStatus, SpotifyProvider, SpotifyRepeat, SpotifyStatus, apply_event,
-        control_payloads, normalize_soloist_uri, publish_position, run_soloist_session,
+        control_payloads, librespot_command, map_librespot_status, normalize_soloist_uri,
+        publish_position, run_soloist_session,
     };
     use futures_util::{SinkExt, StreamExt};
+    use lumistripe_spotify::{
+        Command as LibrespotCommand, PlaybackState as LibrespotPlaybackState,
+        RepeatMode as LibrespotRepeat, Snapshot as LibrespotSnapshot, Track as LibrespotTrack,
+    };
     use serde_json::{Value, json};
     use std::time::Duration;
     use tokio::net::TcpListener;
@@ -1232,6 +1430,101 @@ mod tests {
         assert!(control_payloads(SpotifyControlAction::Seek, Some(json!(-1))).is_err());
         assert!(control_payloads(SpotifyControlAction::SetVolume, Some(json!(101))).is_err());
         assert!(control_payloads(SpotifyControlAction::SetShuffle, Some(json!("yes"))).is_err());
+    }
+
+    #[test]
+    fn native_control_validation_maps_every_dashboard_action() {
+        assert_eq!(
+            librespot_command(SpotifyControlAction::Play, None).unwrap(),
+            LibrespotCommand::Play
+        );
+        assert_eq!(
+            librespot_command(SpotifyControlAction::Pause, None).unwrap(),
+            LibrespotCommand::Pause
+        );
+        assert_eq!(
+            librespot_command(SpotifyControlAction::SkipNext, None).unwrap(),
+            LibrespotCommand::SkipNext
+        );
+        assert_eq!(
+            librespot_command(SpotifyControlAction::SkipPrev, None).unwrap(),
+            LibrespotCommand::SkipPrevious
+        );
+        assert_eq!(
+            librespot_command(SpotifyControlAction::Seek, Some(json!(12_345))).unwrap(),
+            LibrespotCommand::Seek(12_345)
+        );
+        assert_eq!(
+            librespot_command(SpotifyControlAction::SetVolume, Some(json!(72))).unwrap(),
+            LibrespotCommand::SetVolume(72)
+        );
+        assert_eq!(
+            librespot_command(SpotifyControlAction::SetShuffle, Some(json!(true))).unwrap(),
+            LibrespotCommand::SetShuffle(true)
+        );
+        for (name, mode) in [
+            ("off", LibrespotRepeat::Off),
+            ("context", LibrespotRepeat::Context),
+            ("track", LibrespotRepeat::Track),
+        ] {
+            assert_eq!(
+                librespot_command(SpotifyControlAction::SetRepeat, Some(json!(name))).unwrap(),
+                LibrespotCommand::SetRepeat(mode)
+            );
+        }
+        assert!(librespot_command(SpotifyControlAction::Seek, Some(json!(-1))).is_err());
+        assert!(librespot_command(SpotifyControlAction::SetVolume, Some(json!(101))).is_err());
+        assert!(librespot_command(SpotifyControlAction::SetShuffle, Some(json!("yes"))).is_err());
+        assert!(
+            librespot_command(SpotifyControlAction::SetRepeat, Some(json!("context_loop")))
+                .is_err()
+        );
+        assert!(librespot_command(SpotifyControlAction::Play, Some(json!(true))).is_err());
+    }
+
+    #[test]
+    fn native_snapshot_maps_to_the_existing_dashboard_contract() {
+        let status = map_librespot_status(LibrespotSnapshot {
+            configured: true,
+            connected: true,
+            logged_in: true,
+            is_active: true,
+            device_name: Some("LumiStripe".to_owned()),
+            state: LibrespotPlaybackState::Playing,
+            track: Some(LibrespotTrack {
+                uri: "spotify:track:example".to_owned(),
+                name: "Example track".to_owned(),
+                artists: vec!["Example artist".to_owned()],
+                album: Some("Example album".to_owned()),
+                cover_url: Some("https://images.example/cover.jpg".to_owned()),
+                duration_ms: Some(180_000),
+            }),
+            position_ms: 4_200,
+            duration_ms: Some(180_000),
+            volume: 68,
+            shuffle: true,
+            repeat: LibrespotRepeat::Context,
+            error: None,
+        });
+
+        let response = serde_json::to_value(status).unwrap();
+        assert_eq!(response["configured"], true);
+        assert_eq!(response["connected"], true);
+        assert_eq!(response["logged_in"], true);
+        assert_eq!(response["is_active"], true);
+        assert_eq!(response["device_name"], "LumiStripe");
+        assert_eq!(response["status"], "playing");
+        assert_eq!(response["track"]["uri"], "spotify:track:example");
+        assert_eq!(response["track"]["artists"][0], "Example artist");
+        assert_eq!(
+            response["track"]["cover_url"],
+            "https://images.example/cover.jpg"
+        );
+        assert_eq!(response["position_ms"], 4_200);
+        assert_eq!(response["volume"], 68);
+        assert_eq!(response["shuffle"], true);
+        assert_eq!(response["repeat"], "context");
+        assert_eq!(response.as_object().unwrap().len(), 13);
     }
 
     #[test]

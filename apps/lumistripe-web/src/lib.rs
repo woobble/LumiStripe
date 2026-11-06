@@ -30,7 +30,7 @@ mod updates;
 
 pub use app::{ApiDoc, WebApplication};
 pub use auth::PairingAuth;
-pub use config::{AppConfig, CliOptions, EngineOutputOptions, OutputBackendArg};
+pub use config::{AppConfig, CliOptions, EngineOutputOptions, OutputBackendArg, SpotifyBackend};
 pub use control::ControlPlane;
 pub use error::ApiError;
 pub use settings::{

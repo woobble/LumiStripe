@@ -139,7 +139,7 @@ RUN if [ "${LUMI_SOLOIST_FIXTURE}" = "1" ]; then \
         && rm -rf /tmp/soloist/soloist.tar.gz; \
     fi
 
-FROM debian:trixie-slim AS runtime
+FROM debian:trixie-slim AS runtime-common
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -168,17 +168,23 @@ COPY --from=rust-build /src/target/release/lumistripe-deploy-helper /usr/local/b
 COPY --from=frontend \
     /src/apps/lumistripe-web/static/ \
     /opt/lumistripe/static/
-COPY --from=soloist /tmp/soloist/soloist /usr/local/bin/soloist
-COPY deploy/docker/spotify-entrypoint.sh /usr/local/bin/lumistripe-spotify-entrypoint
 
-RUN chmod 755 /usr/local/bin/lumistripe-spotify-entrypoint \
-    && groupadd --system --gid 10001 lumistripe \
+RUN groupadd --system --gid 10001 lumistripe \
     && useradd --system --uid 10001 --gid lumistripe \
         --home-dir /var/lib/lumistripe --no-create-home lumistripe \
     && chown -R lumistripe:lumistripe /var/lib/lumistripe
 
 WORKDIR /opt/lumistripe
 USER 10001:10001
+
+# Optional migration target for the development-only Soloist sidecar. Building
+# the default runtime image never downloads or includes Soloist.
+FROM runtime-common AS runtime-soloist
+COPY --from=soloist /tmp/soloist/soloist /usr/local/bin/soloist
+COPY deploy/docker/spotify-entrypoint.sh /usr/local/bin/lumistripe-spotify-entrypoint
+RUN chmod 755 /usr/local/bin/lumistripe-spotify-entrypoint
+
+FROM runtime-common AS runtime
 
 ENTRYPOINT ["/usr/local/bin/lumistripe-web"]
 CMD ["--simulate", "--host", "127.0.0.1", "--port", "8000", "--static-dir", "/opt/lumistripe/static", "--settings-file", "/var/lib/lumistripe/settings.json"]

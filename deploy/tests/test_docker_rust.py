@@ -96,6 +96,9 @@ def test_docker_development_image_builds_rust_binaries_without_python() -> None:
     assert "--engine-binary" not in dockerfile
     assert "arg lumi_soloist_fixture=0" in dockerfile
     assert "soloist-download" in dockerfile
+    assert "from runtime-common as runtime-soloist" in dockerfile
+    runtime_stage = dockerfile.rsplit("from runtime-common as runtime", 1)[-1]
+    assert "copy --from=soloist" not in runtime_stage
     assert "python" not in dockerfile
     assert "uv" not in dockerfile
     assert "pip install" not in dockerfile
@@ -113,12 +116,20 @@ def test_docker_development_image_builds_rust_binaries_without_python() -> None:
     assert "python" not in compose
     assert "curl --fail" in compose
     assert 'profiles: ["spotify"]' in compose
+    assert "target: runtime-soloist" in compose
+    assert "lumi_spotify_backend: ${lumi_spotify_backend:-soloist}" in compose
     assert "depends_on:" not in compose
     assert "/var/lib/lumistripe/settings.json" in compose
     assert "--engine-binary" not in compose
     assert ".docker-dev/data/soloist" in compose
     assert "/run/secrets/spotify_api_key" in compose
     assert "user: " in compose
+
+    entrypoint = (ROOT / "deploy/docker/spotify-entrypoint.sh").read_text(
+        encoding="utf-8"
+    )
+    assert 'spotify_backend="${LUMI_SPOTIFY_BACKEND:-soloist}"' in entrypoint
+    assert 'if [ "$spotify_backend" != "soloist" ]; then' in entrypoint
 
 
 def test_rust_docker_image_builds_and_starts_the_simulator(tmp_path: Path) -> None:

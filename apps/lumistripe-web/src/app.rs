@@ -15,7 +15,7 @@ use crate::bluetooth_models::{
 };
 use crate::bluetooth_process::BluetoothError;
 use crate::bluetooth_providers::{BlueZProvider, PipeWireProvider};
-use crate::config::AppConfig;
+use crate::config::{AppConfig, SpotifyBackend};
 use crate::control::{ControlPlane, EngineAccess};
 use crate::error::ApiError;
 use crate::network::{
@@ -30,7 +30,10 @@ use crate::settings::{
     SavedAnimationSequenceStep, SettingsStore, StripeBackend, StripeLayout, StripeOutputSettings,
     StripeTopologySettings, SwitchQuantization, TransitionEffect, TransitionSettings, ZonePattern,
 };
-use crate::spotify::{SoloistBackend, SpotifyControlAction, SpotifyProvider, SpotifyStatus};
+use crate::spotify::{
+    DisabledSpotifyBackend, LibrespotBackend, SoloistBackend, SpotifyControlAction,
+    SpotifyProvider, SpotifyStatus,
+};
 use crate::state::{ControlModel, PlaybackMode, animation_list};
 use crate::streams::{
     AudioTelemetryReceiver, PreviewReceiver, spawn_audio_telemetry_publisher,
@@ -51,6 +54,7 @@ use axum::{Router, middleware as axum_middleware};
 use lumistripe_engine_animation_definitions::catalog;
 use lumistripe_engine_protocol::{RequestCommand, ResponseResult};
 use lumistripe_engine_runtime::{EngineHandle, EngineRuntime};
+use lumistripe_spotify::SpotifyConnectConfig;
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value, json};
 use std::path::PathBuf;
@@ -229,6 +233,7 @@ impl WebApplication {
         let settings_store =
             SettingsStore::open(&config.settings_file).map_err(|error| error.to_string())?;
         let settings = settings_store.settings().clone();
+        let spotify_device_name = settings.spotify_device_name.clone();
         if let Some(topology) = &settings.stripe_topology {
             config.apply_topology(topology)?;
         }
@@ -323,13 +328,9 @@ impl WebApplication {
                 Err(error) => model.set_audio_status(Err(error.to_string())),
             }
         }
-        let (spotify_backend, spotify_task) = SoloistBackend::new(
-            config.spotify_ws_uri.clone(),
-            spotify_enabled(&config),
-            cancellation.clone(),
-        );
-        spotify_backend.start();
-        let spotify: Arc<dyn SpotifyProvider> = Arc::new(spotify_backend);
+        let (spotify, spotify_task) =
+            create_spotify_provider(&config, spotify_device_name, cancellation.clone());
+        spotify.start();
         let bluetooth_enabled = config.runtime_kind == "hardware";
         let spotify_audio_routing_enabled = bluetooth_enabled || spotify_enabled(&config);
         let (bluetooth, bluetooth_task) = match bluetooth_providers {
@@ -389,7 +390,7 @@ impl WebApplication {
             secure_cookie: config.secure_cookie,
         };
         let router = build_router(app_state, config.static_dir.clone());
-        let tasks = vec![
+        let mut tasks = vec![
             control_task,
             dashboard_state_task,
             spawn_health_publisher(client.clone(), cancellation.clone(), health_sender),
@@ -402,9 +403,11 @@ impl WebApplication {
             spawn_preview_publisher(health, cancellation.clone(), preview_sender),
             telemetry_task,
             system_stats_task,
-            spotify_task,
-            bluetooth_task,
         ];
+        if let Some(spotify_task) = spotify_task {
+            tasks.push(spotify_task);
+        }
+        tasks.push(bluetooth_task);
         Ok(Self {
             router,
             cancellation,
@@ -764,7 +767,28 @@ fn spotify_status_value(status: &SpotifyStatus) -> Value {
 }
 
 fn spotify_enabled(config: &AppConfig) -> bool {
-    config.runtime_kind == "hardware" || config.spotify_provider_enabled
+    config.spotify_backend.is_enabled()
+}
+
+fn create_spotify_provider(
+    config: &AppConfig,
+    device_name: String,
+    cancellation: CancellationToken,
+) -> (Arc<dyn SpotifyProvider>, Option<JoinHandle<()>>) {
+    match config.spotify_backend {
+        SpotifyBackend::Librespot => {
+            let native_config =
+                SpotifyConnectConfig::new(config.spotify_data_dir.clone(), device_name);
+            let (provider, task) = LibrespotBackend::new(native_config, cancellation);
+            (Arc::new(provider), Some(task))
+        }
+        SpotifyBackend::Soloist => {
+            let (provider, task) =
+                SoloistBackend::new(config.spotify_ws_uri.clone(), true, cancellation);
+            (Arc::new(provider), Some(task))
+        }
+        SpotifyBackend::Disabled => (Arc::new(DisabledSpotifyBackend), None),
+    }
 }
 
 fn with_spotify_status(response: Value, state: &AppState) -> Value {
@@ -3506,8 +3530,8 @@ fn spawn_audio_status_publisher(
 #[cfg(test)]
 mod tests {
     use super::{
-        NetworkManagerService, WebApplication, spawn_dashboard_state_publisher,
-        websocket_origin_allowed,
+        NetworkManagerService, WebApplication, create_spotify_provider,
+        spawn_dashboard_state_publisher, websocket_origin_allowed,
     };
     use crate::bluetooth::BluetoothService;
     use crate::bluetooth_process::BluetoothError;
@@ -3523,10 +3547,12 @@ mod tests {
     use crate::updates::UpdateError;
     use axum::body::Body;
     use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
+    use clap::Parser;
     use futures_util::future::BoxFuture;
     use serde_json::{Value, json};
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
@@ -3548,6 +3574,57 @@ mod tests {
             error.detail(),
             &json!("Could not start the system updater. Check the Pi installation.")
         );
+    }
+
+    #[tokio::test]
+    async fn spotify_provider_factory_starts_exactly_the_selected_backend() {
+        let directory = tempdir().unwrap();
+        for (backend, expected_task, expected_configured) in [
+            ("librespot", true, true),
+            ("soloist", true, true),
+            ("disabled", false, false),
+        ] {
+            let settings_path = directory.path().join(format!("{backend}.json"));
+            let data_path = directory.path().join(format!("{backend}-spotify"));
+            let options = crate::config::CliOptions::try_parse_from([
+                "lumistripe-web",
+                "--spotify-backend",
+                backend,
+                "--settings-file",
+                settings_path.to_str().unwrap(),
+                "--spotify-data-dir",
+                data_path.to_str().unwrap(),
+            ])
+            .unwrap();
+            let (config, _, _) = options.into_config().unwrap();
+            let cancellation = CancellationToken::new();
+            let (provider, task) = create_spotify_provider(
+                &config,
+                "Test LumiStripe".to_owned(),
+                cancellation.clone(),
+            );
+
+            assert_eq!(task.is_some(), expected_task, "backend: {backend}");
+            assert_eq!(
+                provider.status().configured,
+                expected_configured,
+                "backend: {backend}"
+            );
+            if backend == "librespot" {
+                assert_eq!(
+                    provider.status().device_name.as_deref(),
+                    Some("Test LumiStripe")
+                );
+            }
+            provider.stop();
+            if let Some(task) = task {
+                timeout(Duration::from_secs(1), task)
+                    .await
+                    .expect("selected Spotify provider should stop promptly")
+                    .unwrap();
+            }
+            cancellation.cancel();
+        }
     }
 
     struct PendingBlueZDisconnect {
@@ -4118,7 +4195,8 @@ mod tests {
             spi_speed_hz: None,
             audio_device: None,
             spotify_ws_uri: "127.0.0.1:9090".to_owned(),
-            spotify_provider_enabled: false,
+            spotify_backend: crate::config::SpotifyBackend::Disabled,
+            spotify_data_dir: PathBuf::new(),
             bluetooth_max_inputs: 1,
             bluetooth_max_outputs: 1,
             secure_cookie: false,
@@ -4192,7 +4270,8 @@ mod tests {
             spi_speed_hz: None,
             audio_device: None,
             spotify_ws_uri: "127.0.0.1:9090".to_owned(),
-            spotify_provider_enabled: false,
+            spotify_backend: crate::config::SpotifyBackend::Disabled,
+            spotify_data_dir: PathBuf::new(),
             bluetooth_max_inputs: 1,
             bluetooth_max_outputs: 1,
             secure_cookie: false,
@@ -4266,7 +4345,8 @@ mod tests {
             spi_speed_hz: None,
             audio_device: None,
             spotify_ws_uri: "127.0.0.1:9090".to_owned(),
-            spotify_provider_enabled: false,
+            spotify_backend: crate::config::SpotifyBackend::Disabled,
+            spotify_data_dir: PathBuf::new(),
             bluetooth_max_inputs: 1,
             bluetooth_max_outputs: 1,
             secure_cookie: false,
@@ -4329,7 +4409,8 @@ mod tests {
             spi_speed_hz: None,
             audio_device: None,
             spotify_ws_uri: "127.0.0.1:9090".to_owned(),
-            spotify_provider_enabled: false,
+            spotify_backend: crate::config::SpotifyBackend::Disabled,
+            spotify_data_dir: PathBuf::new(),
             bluetooth_max_inputs: 1,
             bluetooth_max_outputs: 1,
             secure_cookie: false,
@@ -4467,7 +4548,8 @@ esac
             spi_speed_hz: None,
             audio_device: None,
             spotify_ws_uri: "127.0.0.1:9090".to_owned(),
-            spotify_provider_enabled: false,
+            spotify_backend: crate::config::SpotifyBackend::Disabled,
+            spotify_data_dir: PathBuf::new(),
             bluetooth_max_inputs: 1,
             bluetooth_max_outputs: 1,
             secure_cookie: false,

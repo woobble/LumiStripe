@@ -22,7 +22,8 @@ def _parse(*arguments: str) -> subprocess.CompletedProcess[str]:
         '"$parse_status" "$ADMIN_COMMAND" "$ADMIN_USER_OPTION" "$ADMIN_PROJECT_OPTION"; '
         'printf "mode=%s\\noffline=%s\\nrefresh=%s\\nyes=%s\\nsource=%s\\n" '
         '"$ADMIN_MODE" "$ADMIN_OFFLINE" "$ADMIN_REFRESH_SOLOIST" '
-        '"$ADMIN_ASSUME_YES" "$ADMIN_SOURCE_OPTION"'
+        '"$ADMIN_ASSUME_YES" "$ADMIN_SOURCE_OPTION"; '
+        'printf "spotify_backend=%s\\n" "$ADMIN_SPOTIFY_BACKEND"'
     )
     return subprocess.run(
         ["bash", "-c", command, "bash", str(ADMIN), *arguments],
@@ -56,6 +57,25 @@ def _source_call(
     )
 
 
+def _support_call(
+    script: str, *arguments: str
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; shift; ' + script,
+            "bash",
+            str(DEPLOY / "update-support.sh"),
+            *arguments,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=5,
+    )
+
+
 def _mock_child(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -64,6 +84,7 @@ def _mock_child(path: Path) -> None:
         "printf 'CHILD_PROJECT=%s\\n' \"${LUMI_PROJECT_DIR:-}\"\n"
         "printf 'CHILD_USER=%s\\n' \"${LUMI_SERVICE_USER:-}\"\n"
         "printf 'CHILD_MODE=%s\\n' \"${LUMI_DEPLOY_MODE:-}\"\n"
+        "printf 'CHILD_SPOTIFY_BACKEND=%s\\n' \"${LUMI_SPOTIFY_BACKEND:-}\"\n"
         "printf 'CHILD_OFFLINE=%s\\n' \"${LUMI_OFFLINE_COMMIT:-}\"\n"
         "printf 'CHILD_REFRESH=%s\\n' \"${LUMI_SOLOIST_REFRESH:-}\"\n",
         encoding="utf-8",
@@ -82,9 +103,13 @@ def test_command_help_documents_the_supported_admin_interface() -> None:
     assert "--mode binary|auto|source" in update_help.stdout
     assert "--offline COMMIT" in update_help.stdout
 
+    install_help = _help("install", "--help")
+    assert "--spotify-backend librespot|soloist|disabled" in install_help.stdout
+
     repair_help = _help("repair", "--help")
     assert repair_help.returncode == 0
     assert "--source PATH" in repair_help.stdout
+    assert "--spotify-backend librespot|soloist|disabled" in repair_help.stdout
 
 
 def test_parser_defaults_and_forwards_supported_values() -> None:
@@ -107,6 +132,10 @@ def test_parser_defaults_and_forwards_supported_values() -> None:
     assert "project=/opt/lumistripe" in custom.stdout
     assert "mode=source" in custom.stdout
     assert "refresh=1" in custom.stdout
+
+    selected_backend = _parse("install", "--spotify-backend", "librespot")
+    assert "parse_status=0" in selected_backend.stdout
+    assert "spotify_backend=librespot" in selected_backend.stdout
 
     offline = _parse(
         "update",
@@ -136,6 +165,8 @@ def test_parser_defaults_and_forwards_supported_values() -> None:
         ("update", "--offline", "0123456789abcdef0123456789abcdef01234567", "--mode", "source"),
         ("update", "--user", "not a user"),
         ("update", "--api-key", "secret"),
+        ("install", "--spotify-backend", "unknown"),
+        ("update", "--spotify-backend", "librespot"),
         ("status", "--mode", "binary"),
         ("repair",),
         ("install", "--yes"),
@@ -149,6 +180,86 @@ def test_parser_rejects_unknown_invalid_and_conflicting_options(
     result = _parse(*arguments)
     assert "parse_status=2" in result.stdout
     assert "Error:" in result.stderr
+
+
+def test_spotify_backend_selection_preserves_legacy_default_and_validates_overrides(
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / "lumistripe-web.env"
+    env_file.write_text("LUMI_SPOTIFY_BACKEND=librespot\n", encoding="utf-8")
+    configured = _support_call('resolve_spotify_backend "" "$1"', str(env_file))
+    assert configured.returncode == 0
+    assert configured.stdout.strip() == "librespot"
+
+    explicit = _support_call(
+        'resolve_spotify_backend "$1" "$2"', "disabled", str(env_file)
+    )
+    assert explicit.returncode == 0
+    assert explicit.stdout.strip() == "disabled"
+
+    env_file.write_text("LUMI_PAIRING_CODE=1234\n", encoding="utf-8")
+    legacy = _support_call('resolve_spotify_backend "" "$1"', str(env_file))
+    assert legacy.returncode == 0
+    assert legacy.stdout.strip() == "soloist"
+
+    env_file.write_text("LUMI_SPOTIFY_BACKEND=unknown\n", encoding="utf-8")
+    invalid = _support_call('resolve_spotify_backend "" "$1"', str(env_file))
+    assert invalid.returncode != 0
+    assert "expected librespot, soloist, or disabled" in invalid.stderr
+
+
+def test_spotify_backend_setting_rewrites_atomically_and_preserves_other_values(
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / "lumistripe-web.env"
+    env_file.write_text(
+        "LUMI_PAIRING_CODE=1234\n"
+        "LUMI_SPOTIFY_BACKEND=soloist\n"
+        "LUMI_SPOTIFY_BACKEND=soloist\n",
+        encoding="utf-8",
+    )
+    owner = subprocess.check_output(["id", "-un"], text=True).strip()
+    group = subprocess.check_output(["id", "-gn"], text=True).strip()
+    result = _support_call(
+        'write_spotify_backend_setting "$1" disabled "$2" "$3"; '
+        'printf "changed=%s\\n" "$WEB_ENV_CHANGED"',
+        str(env_file),
+        owner,
+        group,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "changed=1" in result.stdout
+    assert env_file.read_text(encoding="utf-8") == (
+        "LUMI_PAIRING_CODE=1234\nLUMI_SPOTIFY_BACKEND=disabled\n"
+    )
+    assert env_file.stat().st_mode & 0o777 == 0o600
+
+    unchanged = _support_call(
+        'write_spotify_backend_setting "$1" disabled "$2" "$3"; '
+        'printf "changed=%s\\n" "$WEB_ENV_CHANGED"',
+        str(env_file),
+        owner,
+        group,
+    )
+    assert unchanged.returncode == 0, unchanged.stderr
+    assert "changed=0" in unchanged.stdout
+
+
+def test_native_deployment_skips_soloist_setup_and_keeps_runtime_audio_library() -> None:
+    assert 'LUMI_SPOTIFY_BACKEND=soloist' in (DEPLOY / "lumistripe-web.env.example").read_text(
+        encoding="utf-8"
+    )
+    assert 'if [[ "$SELECTED_SPOTIFY_BACKEND" != soloist ]]' in INSTALLER
+    assert '[[ "$SELECTED_SPOTIFY_BACKEND" == soloist ]] || return 1' in INSTALLER
+    assert '[[ "$SELECTED_SPOTIFY_BACKEND" == soloist ]] || return 1' in (
+        DEPLOY / "update.sh"
+    ).read_text(encoding="utf-8")
+    assert "libatomic1 libpulse0" in (DEPLOY / "update.sh").read_text(
+        encoding="utf-8"
+    )
+    web_unit = (DEPLOY / "lumistripe-web.service").read_text(encoding="utf-8")
+    assert "Wants=network-online.target bluetooth.service" in web_unit
+    assert "lumistripe-spotify.service" not in web_unit
 
 
 def test_project_discovery_migrates_from_trusted_systemd_configuration() -> None:
@@ -271,7 +382,8 @@ def test_install_delegation_uses_selected_checkout_and_options(tmp_path: Path) -
     installer = project / "deploy" / "install.sh"
     _mock_child(installer)
     command = (
-        'admin_parse_arguments install --user pi --project-dir "$1" --mode source || exit $?; '
+        'admin_parse_arguments install --user pi --project-dir "$1" --mode source '
+        '--spotify-backend librespot || exit $?; '
         'ADMIN_PROJECT_DIR="$1"; ADMIN_PROJECT_VALID=1; ADMIN_SERVICE_USER=pi; '
         'admin_check_platform() { return 0; }; '
         'admin_validate_trusted_checkout() { return 0; }; '
@@ -283,6 +395,7 @@ def test_install_delegation_uses_selected_checkout_and_options(tmp_path: Path) -
     assert "CHILD_PROJECT=" + str(project) in result.stdout
     assert "CHILD_USER=pi" in result.stdout
     assert "CHILD_MODE=source" in result.stdout
+    assert "CHILD_SPOTIFY_BACKEND=librespot" in result.stdout
 
 
 def test_repeated_install_delegates_to_the_root_owned_snapshot(tmp_path: Path) -> None:
@@ -342,7 +455,8 @@ def test_repair_requires_and_delegates_to_trusted_source_checkout(tmp_path: Path
     )
     service_user = subprocess.check_output(["id", "-un"], text=True).strip()
     command = (
-        'admin_parse_arguments repair --source "$1" --user "$2" || exit $?; '
+        'admin_parse_arguments repair --source "$1" --user "$2" '
+        '--spotify-backend disabled || exit $?; '
         'ADMIN_SERVICE_USER="$2"; ADMIN_INSTALLATION_DETECTED=1; '
         'admin_check_platform() { return 0; }; '
         'admin_validate_trusted_checkout() { return 0; }; '
@@ -353,6 +467,7 @@ def test_repair_requires_and_delegates_to_trusted_source_checkout(tmp_path: Path
     assert result.returncode == 0, result.stderr
     assert f"CHILD_PROJECT={project}" in result.stdout
     assert f"CHILD_USER={service_user}" in result.stdout
+    assert "CHILD_SPOTIFY_BACKEND=disabled" in result.stdout
 
 
 @pytest.mark.parametrize(("assume_yes", "expected_args"), [("0", ""), ("1", "--yes")])

@@ -9,7 +9,8 @@
 ## Configure audio and outputs
 
 - [Audio sources, tuning, and sync calibration](audio.md)
-- [Bluetooth, PipeWire, and Spotify Connect](../deploy/README.md#pair-a-bluetooth-device)
+- [Bluetooth and PipeWire setup](../deploy/README.md#pair-a-bluetooth-device)
+- [Spotify Connect providers and native pairing](spotify.md)
 - [Supported hardware and runtime boundaries](architecture.md#rendering-and-output)
 
 ## Understand the system

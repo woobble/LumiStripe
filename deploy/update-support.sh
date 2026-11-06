@@ -659,6 +659,89 @@ read_web_backend() {
   ' "$env_file"
 }
 
+read_spotify_backend() {
+  local env_file="${1:-/etc/lumistripe/lumistripe-web.env}"
+  [[ -r "$env_file" ]] || return 0
+  awk '
+    /^[[:space:]]*#/ { next }
+    {
+      line = $0
+      sub(/^[[:space:]]*/, "", line)
+      if (line !~ /^LUMI_SPOTIFY_BACKEND[[:space:]]*=/) next
+      sub(/^[^=]*=/, "", line)
+      sub(/^[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
+      first = substr(line, 1, 1)
+      last = substr(line, length(line), 1)
+      if ((first == "\"" && last == "\"") ||
+          (first == sprintf("%c", 39) && last == sprintf("%c", 39))) {
+        line = substr(line, 2, length(line) - 2)
+      }
+      backend = line
+    }
+    END { print backend }
+  ' "$env_file"
+}
+
+resolve_spotify_backend() {
+  local requested="${1:-}"
+  local env_file="${2:-/etc/lumistripe/lumistripe-web.env}"
+  local configured="" selected
+  if [[ -r "$env_file" ]]; then
+    configured="$(read_spotify_backend "$env_file")" || return 1
+  fi
+  selected="${requested:-${configured:-soloist}}"
+  case "$selected" in
+    librespot|soloist|disabled) printf '%s\n' "$selected" ;;
+    *) echo "Unsupported LUMI_SPOTIFY_BACKEND: $selected (expected librespot, soloist, or disabled)." >&2; return 1 ;;
+  esac
+}
+
+write_spotify_backend_setting() {
+  local env_file="$1"
+  local backend="$2"
+  local owner="$3"
+  local group="$4"
+  local temporary
+  case "$backend" in
+    librespot|soloist|disabled) ;;
+    *) echo "Unsupported Spotify backend: $backend." >&2; return 1 ;;
+  esac
+  [[ -f "$env_file" && ! -L "$env_file" ]] || {
+    echo "Spotify backend configuration must be a regular file: $env_file" >&2
+    return 1
+  }
+  temporary="$(mktemp "$(dirname -- "$env_file")/.lumistripe-web-env.XXXXXX")" || return 1
+  if ! awk -v backend="$backend" '
+    {
+      line = $0
+      sub(/^[[:space:]]*/, "", line)
+      if (line ~ /^LUMI_SPOTIFY_BACKEND[[:space:]]*=/) {
+        if (!written) print "LUMI_SPOTIFY_BACKEND=" backend
+        written = 1
+        next
+      }
+      print $0
+    }
+    END { if (!written) print "LUMI_SPOTIFY_BACKEND=" backend }
+  ' "$env_file" > "$temporary"; then
+    rm -f -- "$temporary"
+    return 1
+  fi
+  if cmp -s -- "$temporary" "$env_file"; then
+    rm -f -- "$temporary"
+    WEB_ENV_CHANGED=0
+    return 0
+  fi
+  chown --no-dereference "$owner:$group" -- "$temporary" &&
+    chmod 600 -- "$temporary" &&
+    mv -fT -- "$temporary" "$env_file" || {
+      rm -f -- "$temporary"
+      return 1
+    }
+  WEB_ENV_CHANGED=1
+}
+
 resolve_web_backend() {
   local requested="${1:-}"
   local env_file="${2:-/etc/lumistripe/lumistripe-web.env}"

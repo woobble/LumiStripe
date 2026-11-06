@@ -4,7 +4,7 @@ use axum::http::{Method, Request, StatusCode, header};
 use futures_util::{SinkExt, StreamExt};
 use http_body_util::BodyExt;
 use lumistripe_engine_config::OutputBackend;
-use lumistripe_web::{ApiDoc, AppConfig, EngineOutputOptions, WebApplication};
+use lumistripe_web::{ApiDoc, AppConfig, EngineOutputOptions, SpotifyBackend, WebApplication};
 use serde_json::{Value, json};
 use std::fs;
 use std::path::PathBuf;
@@ -693,7 +693,8 @@ fn app_config(static_dir: PathBuf) -> AppConfig {
         spi_speed_hz: None,
         audio_device: None,
         spotify_ws_uri: "127.0.0.1:9090".to_owned(),
-        spotify_provider_enabled: false,
+        spotify_backend: SpotifyBackend::Disabled,
+        spotify_data_dir: PathBuf::new(),
         bluetooth_max_inputs: 1,
         bluetooth_max_outputs: 1,
         secure_cookie: false,
@@ -2875,7 +2876,7 @@ async fn spotify_playback_and_application_shutdown_release_engine_resources() {
 
     let mut config = app_config(static_dir.path().to_path_buf());
     config.spotify_ws_uri = spotify_uri;
-    config.spotify_provider_enabled = true;
+    config.spotify_backend = SpotifyBackend::Soloist;
     let mut app = WebApplication::start(config, Some("1234".to_owned()))
         .await
         .expect("web application should start with the injected Soloist endpoint");

@@ -21,6 +21,7 @@ ADMIN_USER_OPTION=
 ADMIN_PROJECT_OPTION=
 ADMIN_SOURCE_OPTION=
 ADMIN_MODE=binary
+ADMIN_SPOTIFY_BACKEND=
 ADMIN_OFFLINE=
 ADMIN_REFRESH_SOLOIST=0
 ADMIN_ASSUME_YES=0
@@ -67,6 +68,7 @@ admin_command_help() {
 Usage: lumistripe-admin install [--user USER] [--project-dir PATH]
                                 [--mode binary|auto|source]
                                 [--offline COMMIT] [--refresh-soloist]
+                                [--spotify-backend librespot|soloist|disabled]
 
 Install from an administrator-controlled LumiStripe checkout. On first
 installation, invoke this script from that checkout; subsequent installs use
@@ -74,6 +76,8 @@ the installed root-owned deployment snapshot. First install defaults to binary
 mode; later installs preserve the saved mode unless --mode is supplied.
 Pairing and optional Spotify credentials remain interactive or environment-file
 configured.
+Use --spotify-backend to select the provider; existing installations keep
+their saved selection when this option is omitted.
 EOF
       ;;
     update)
@@ -99,6 +103,7 @@ EOF
 Usage: sudo lumistripe-admin repair --source PATH [--user USER]
                                     [--mode binary|auto|source]
                                     [--offline COMMIT] [--refresh-soloist]
+                                    [--spotify-backend librespot|soloist|disabled]
 
 Reapplies the existing installer setup from an administrator-controlled
 checkout. The checkout must not be writable by the service account or invoking
@@ -133,6 +138,10 @@ admin_validate_mode_value() {
   [[ "$1" == binary || "$1" == auto || "$1" == source ]]
 }
 
+admin_validate_spotify_backend_value() {
+  [[ "$1" == librespot || "$1" == soloist || "$1" == disabled ]]
+}
+
 admin_validate_commit_value() {
   [[ "$1" =~ ^[0-9a-f]{40}$ ]]
 }
@@ -160,6 +169,7 @@ admin_parse_arguments() {
   ADMIN_PROJECT_OPTION=
   ADMIN_SOURCE_OPTION=
   ADMIN_MODE=binary
+  ADMIN_SPOTIFY_BACKEND=
   ADMIN_OFFLINE=
   ADMIN_REFRESH_SOLOIST=0
   ADMIN_ASSUME_YES=0
@@ -180,7 +190,7 @@ admin_parse_arguments() {
     argument="$1"
     shift
     case "$argument" in
-      --user|--project-dir|--source|--mode|--offline)
+      --user|--project-dir|--source|--mode|--offline|--spotify-backend)
         key="${argument#--}"
         if ((${#@} == 0)) || [[ "$1" == --* ]]; then
           admin_error "$argument requires a value"
@@ -189,7 +199,7 @@ admin_parse_arguments() {
         value="$1"
         shift
         ;;
-      --user=*|--project-dir=*|--source=*|--mode=*|--offline=*)
+      --user=*|--project-dir=*|--source=*|--mode=*|--offline=*|--spotify-backend=*)
         key="${argument%%=*}"
         key="${key#--}"
         value="${argument#*=}"
@@ -233,6 +243,13 @@ admin_parse_arguments() {
         admin_validate_mode_value "$value" || { admin_error "--mode must be binary, auto, or source"; return 2; }
         ADMIN_MODE="$value"
         ;;
+      spotify-backend)
+        admin_validate_spotify_backend_value "$value" || {
+          admin_error "--spotify-backend must be librespot, soloist, or disabled"
+          return 2
+        }
+        ADMIN_SPOTIFY_BACKEND="$value"
+        ;;
       offline)
         admin_validate_commit_value "$value" || { admin_error "--offline requires a full lowercase 40-character commit SHA"; return 2; }
         ADMIN_OFFLINE="$value"
@@ -252,15 +269,23 @@ admin_parse_arguments() {
   fi
 
   case "$ADMIN_COMMAND" in
-    install|update)
+    install)
       [[ -z "$ADMIN_SOURCE_OPTION" && "$ADMIN_ASSUME_YES" == 0 ]] || {
-        admin_error "--source and --yes are not supported by $ADMIN_COMMAND"
+        admin_error "--source and --yes are not supported by install"
+        return 2
+      }
+      ;;
+    update)
+      [[ -z "$ADMIN_SOURCE_OPTION" && "$ADMIN_ASSUME_YES" == 0 &&
+         -z "$ADMIN_SPOTIFY_BACKEND" ]] || {
+        admin_error "update accepts provider changes during install or repair; use install --spotify-backend"
         return 2
       }
       ;;
     status)
       [[ -z "${ADMIN_SEEN_OPTIONS[source]:-}" && -z "${ADMIN_SEEN_OPTIONS[offline]:-}" &&
          -z "${ADMIN_SEEN_OPTIONS[mode]:-}" &&
+         -z "${ADMIN_SPOTIFY_BACKEND}" &&
          "$ADMIN_REFRESH_SOLOIST" == 0 && "$ADMIN_ASSUME_YES" == 0 ]] || {
         admin_error "status accepts only --user and --project-dir"
         return 2
@@ -273,6 +298,7 @@ admin_parse_arguments() {
     uninstall)
       [[ -z "${ADMIN_SEEN_OPTIONS[source]:-}" && -z "${ADMIN_SEEN_OPTIONS[offline]:-}" &&
          -z "${ADMIN_SEEN_OPTIONS[mode]:-}" &&
+         -z "${ADMIN_SPOTIFY_BACKEND}" &&
          "$ADMIN_REFRESH_SOLOIST" == 0 ]] || {
         admin_error "uninstall accepts only --user, --project-dir, and --yes"
         return 2
@@ -646,6 +672,9 @@ admin_clear_unapproved_environment() {
   export LUMI_PROJECT_DIR="$ADMIN_PROJECT_DIR"
   export LUMI_SERVICE_USER="$ADMIN_SERVICE_USER"
   export LUMI_DEPLOY_MODE="$ADMIN_MODE"
+  if [[ -n "$ADMIN_SPOTIFY_BACKEND" ]]; then
+    export LUMI_SPOTIFY_BACKEND="$ADMIN_SPOTIFY_BACKEND"
+  fi
   if [[ -n "$ADMIN_OFFLINE" ]]; then export LUMI_OFFLINE_COMMIT="$ADMIN_OFFLINE"; fi
   if [[ "$ADMIN_REFRESH_SOLOIST" == 1 ]]; then export LUMI_SOLOIST_REFRESH=1; fi
 }
