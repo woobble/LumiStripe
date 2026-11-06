@@ -3934,6 +3934,13 @@ mod tests {
 
     const BLUETOOTH_WIFI_API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
     const BLUETOOTH_WIFI_TEST_TIMEOUT: Duration = Duration::from_secs(120);
+    const BLUETOOTH_WIFI_TEST_TRACE_ENV: &str = "LUMISTRIPE_TRACE_BLUETOOTH_WIFI_TEST";
+
+    fn trace_bluetooth_wifi_test(message: impl std::fmt::Display) {
+        if std::env::var_os(BLUETOOTH_WIFI_TEST_TRACE_ENV).is_some() {
+            eprintln!("[bluetooth-wifi-test] {message}");
+        }
+    }
 
     async fn api_request(
         app: &WebApplication,
@@ -3967,7 +3974,8 @@ mod tests {
         uri: &str,
         body: Option<Value>,
     ) -> (StatusCode, Value) {
-        timeout(
+        trace_bluetooth_wifi_test(format_args!("request started: {method} {uri}"));
+        let response = timeout(
             BLUETOOTH_WIFI_API_REQUEST_TIMEOUT,
             api_request(app, method, uri, body),
         )
@@ -3977,7 +3985,9 @@ mod tests {
                 "API request exceeded the {:?} test deadline: {method} {uri}",
                 BLUETOOTH_WIFI_API_REQUEST_TIMEOUT
             )
-        })
+        });
+        trace_bluetooth_wifi_test(format_args!("request completed: {method} {uri}"));
+        response
     }
 
     async fn wait_for_completed_bluetooth_operation(app: &WebApplication) -> Value {
@@ -4564,6 +4574,7 @@ mod tests {
 
     #[cfg(unix)]
     async fn bluetooth_output_and_wifi_routes_execute_injected_providers_inner() {
+        trace_bluetooth_wifi_test("creating provider and Wi-Fi fixtures");
         let directory = tempdir().unwrap();
         let (bluez_sender, mut bluez_commands) = mpsc::unbounded_channel();
         let (pipewire_sender, mut pipewire_commands) = mpsc::unbounded_channel();
@@ -4660,6 +4671,7 @@ esac
         )
         .await
         .expect("web application should start with injected providers");
+        trace_bluetooth_wifi_test("application started; waiting for initial Bluetooth snapshot");
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
         loop {
@@ -4675,6 +4687,7 @@ esac
             );
             sleep(Duration::from_millis(10)).await;
         }
+        trace_bluetooth_wifi_test("initial Bluetooth snapshot ready");
 
         let fixture_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/bluetooth-api-mutations-v1.json");
@@ -4682,6 +4695,12 @@ esac
             serde_json::from_slice(&std::fs::read(&fixture_path).unwrap()).unwrap();
         assert_eq!(mutation_cases.len(), 10);
         for case in &mutation_cases {
+            trace_bluetooth_wifi_test(format_args!(
+                "running Bluetooth mutation fixture: {} {} ({})",
+                case["method"].as_str().unwrap_or("?"),
+                case["path"].as_str().unwrap_or("?"),
+                case["operation"].as_str().unwrap_or("?")
+            ));
             assert_bluetooth_route_fixture_case(
                 &app,
                 &mut bluez_commands,
@@ -4690,6 +4709,7 @@ esac
             )
             .await;
         }
+        trace_bluetooth_wifi_test("Bluetooth mutation fixtures complete");
 
         let failure_fixture_path = fixture_path.with_file_name("bluetooth-api-failure-v1.json");
         let failure_case: Value =
@@ -4721,11 +4741,18 @@ esac
             sleep(Duration::from_millis(5)).await;
         };
         assert_eq!(failed_status["error"], failure_case["error"]);
+        trace_bluetooth_wifi_test("Bluetooth provider failure fixture complete");
 
         let api_failures_path = fixture_path.with_file_name("bluetooth-api-failures-v1.json");
         let api_failure_cases: Vec<Value> =
             serde_json::from_slice(&std::fs::read(api_failures_path).unwrap()).unwrap();
         for case in &api_failure_cases {
+            trace_bluetooth_wifi_test(format_args!(
+                "running Bluetooth failure fixture: {} {} ({})",
+                case["method"].as_str().unwrap_or("?"),
+                case["path"].as_str().unwrap_or("?"),
+                case["operation"].as_str().unwrap_or("?")
+            ));
             *fail_next_bluez_operation.lock().unwrap() = Some((
                 case["operation"].as_str().unwrap().to_owned(),
                 case["error"].as_str().unwrap().to_owned(),
@@ -4753,6 +4780,7 @@ esac
             assert_eq!(failed_status["operation_state"], "failed");
             assert_eq!(failed_status["error"], case["error"]);
         }
+        trace_bluetooth_wifi_test("Bluetooth API failure fixtures complete");
 
         let output_failure_path =
             fixture_path.with_file_name("bluetooth-api-output-failure-v1.json");
@@ -4774,6 +4802,7 @@ esac
             bounded_bluetooth_wifi_api_request(&app, "GET", "/api/audio/bluetooth", None).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["default_sink"], "speaker_main");
+        trace_bluetooth_wifi_test("PipeWire output rollback fixture complete");
 
         let output_operation_failures_path =
             fixture_path.with_file_name("bluetooth-api-output-operation-failures-v1.json");
@@ -4781,6 +4810,12 @@ esac
             serde_json::from_slice(&std::fs::read(output_operation_failures_path).unwrap())
                 .unwrap();
         for case in &output_operation_failure_cases {
+            trace_bluetooth_wifi_test(format_args!(
+                "running PipeWire failure fixture: {} {} ({})",
+                case["method"].as_str().unwrap_or("?"),
+                case["path"].as_str().unwrap_or("?"),
+                case["operation"].as_str().unwrap_or("?")
+            ));
             *fail_next_pipewire_operation.lock().unwrap() = Some((
                 case["operation"].as_str().unwrap().to_owned(),
                 case["error"].as_str().unwrap().to_owned(),
@@ -4802,12 +4837,14 @@ esac
             assert_eq!(current["output_volume"], 0.75);
             assert_eq!(current["output_muted"], false);
         }
+        trace_bluetooth_wifi_test("PipeWire failure fixtures complete");
 
         let conflict_fixture_path = fixture_path.with_file_name("bluetooth-api-conflict-v1.json");
         let conflict_fixture: Value =
             serde_json::from_slice(&std::fs::read(conflict_fixture_path).unwrap()).unwrap();
         let start_case = &conflict_fixture["start"];
         let conflict_case = &conflict_fixture["conflict"];
+        trace_bluetooth_wifi_test("starting pending Bluetooth operation conflict fixture");
         block_next_pair.store(true, Ordering::Release);
         let (status, body) = bounded_bluetooth_wifi_api_request(
             &app,
@@ -4841,7 +4878,9 @@ esac
         pair_gate.add_permits(1);
         let completed_pair = wait_for_completed_bluetooth_operation(&app).await;
         assert_eq!(completed_pair["operation_state"], "complete");
+        trace_bluetooth_wifi_test("Bluetooth operation conflict fixture complete");
 
+        trace_bluetooth_wifi_test("running Wi-Fi status, scan, and connect routes");
         let (status, body) =
             bounded_bluetooth_wifi_api_request(&app, "GET", "/api/network/status", None).await;
         assert_eq!(status, StatusCode::OK, "network status: {body}");
@@ -4908,12 +4947,17 @@ esac
                 .to_string()
                 .contains(network_failure_case["body"]["password"].as_str().unwrap())
         );
+        trace_bluetooth_wifi_test("Wi-Fi connect failure fixture complete");
 
         let network_helper_errors_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/network-api-helper-errors-v1.json");
         let network_helper_errors: Vec<Value> =
             serde_json::from_slice(&std::fs::read(network_helper_errors_path).unwrap()).unwrap();
         for case in network_helper_errors {
+            trace_bluetooth_wifi_test(format_args!(
+                "running Wi-Fi helper error fixture: {}",
+                case["name"].as_str().unwrap_or("?")
+            ));
             if case["name"] == "helper_unspawnable" {
                 std::fs::remove_file(&network_helper).unwrap();
             }
@@ -4931,8 +4975,12 @@ esac
             }
         }
 
+        trace_bluetooth_wifi_test(
+            "Wi-Fi helper error fixtures complete; shutting down application",
+        );
         timeout(Duration::from_secs(10), app.shutdown())
             .await
             .expect("application shutdown exceeded its 10 second test deadline");
+        trace_bluetooth_wifi_test("application shutdown complete");
     }
 }

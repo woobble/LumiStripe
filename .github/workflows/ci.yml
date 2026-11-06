@@ -144,7 +144,9 @@ jobs:
         run: cargo build --locked --package lumistripe-engine --bin lumistripe-engine
 
       - name: Test Rust workspace
-        run: cargo test --locked --workspace
+        run: >-
+          LUMISTRIPE_TRACE_BLUETOOTH_WIFI_TEST=1
+          cargo test --locked --workspace -- --nocapture
 
       - name: Test Rust CLI with Python unavailable
         run: >-
@@ -209,7 +211,9 @@ jobs:
         run: cargo build --locked --package lumistripe-engine --bin lumistripe-engine
 
       - name: Test Rust workspace on ARM64
-        run: cargo test --locked --workspace
+        run: >-
+          LUMISTRIPE_TRACE_BLUETOOTH_WIFI_TEST=1
+          cargo test --locked --workspace -- --nocapture
 
       - name: Test Rust CLI with Python unavailable on ARM64
         run: >-
