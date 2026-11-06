@@ -48,6 +48,87 @@ export function getAudioDiagnostics(input: AudioDiagnosticsInput): AudioDiagnost
   const expectedSignal = expectsInput && !activeIsIntentionalSilence
   const activeSourceMissing = expectedSignal && (!monitoring || activeSource == null || activeSource === "off")
   const isSilent = streamFresh && monitoring && !activeIsIntentionalSilence && telemetry.input_peak < 0.001
+  const specificInputState = [
+    "direct_pcm_waiting",
+    "direct_pcm_overloaded",
+    "direct_pcm_stalled",
+    "dsp_processing_stalled",
+    "spotify_paused",
+    "monitor_fallback_unavailable",
+    "capture_stalled",
+  ].includes(telemetry.input_state)
+
+  const inputStateDiagnostic = (() => {
+    switch (telemetry.input_state) {
+      case "direct_pcm_waiting":
+        return {
+          id: "spotify-pcm-waiting",
+          severity: "info" as const,
+          title: "Waiting for Spotify audio",
+          message: "Spotify Connect is selected, but the native decoder has not delivered PCM samples yet.",
+          action: { type: "link" as const, label: "Check Spotify source", to: "/setup/audio" },
+        }
+      case "direct_pcm_overloaded":
+        return {
+          id: "spotify-pcm-overloaded",
+          severity: "warning" as const,
+          title: "Spotify audio analysis is overloaded",
+          message: "The bounded PCM queue is dropping samples. Speaker playback continues while LED analysis catches up.",
+          action: { type: "link" as const, label: "Open audio diagnostics", to: "/setup/audio/tuning" },
+        }
+      case "direct_pcm_stalled":
+        return {
+          id: "spotify-pcm-stalled",
+          severity: "warning" as const,
+          title: "Spotify audio samples stopped",
+          message: sourceError(audioStatus) ?? "The Spotify decoder stopped delivering PCM. LumiStripe will try the monitor fallback when it is available.",
+          action: { type: "link" as const, label: "Check Spotify source", to: "/setup/audio" },
+        }
+      case "dsp_processing_stalled":
+        return {
+          id: "audio-dsp-stalled",
+          severity: "warning" as const,
+          title: "Audio analysis stopped updating",
+          message: "Input samples are arriving, but the Rust DSP worker is not publishing fresh features.",
+          action: { type: "link" as const, label: "Open audio diagnostics", to: "/setup/audio/tuning" },
+        }
+      case "spotify_paused":
+        return {
+          id: "spotify-paused",
+          severity: "info" as const,
+          title: "Spotify playback is paused",
+          message: "Direct PCM analysis is idle until playback resumes. Monitor fallback is not started for an intentional pause.",
+          action: null,
+        }
+      case "monitor_fallback_active":
+        return {
+          id: "monitor-fallback-active",
+          severity: "info" as const,
+          title: "Spotify monitor fallback is active",
+          message: "Decoded PCM is unavailable, so LumiStripe is analyzing the PipeWire monitor stream while direct PCM recovery is probed periodically.",
+          action: null,
+        }
+      case "monitor_fallback_unavailable":
+        return {
+          id: "monitor-fallback-unavailable",
+          severity: "warning" as const,
+          title: "Spotify monitor fallback is unavailable",
+          message: sourceError(audioStatus) ?? "Neither decoded PCM nor the PipeWire monitor is currently feeding audio analysis.",
+          action: { type: "link" as const, label: "Check audio sources", to: "/setup/audio" },
+        }
+      case "capture_stalled":
+        return {
+          id: "capture-stalled",
+          severity: "warning" as const,
+          title: "Audio capture stopped",
+          message: sourceError(audioStatus) ?? "The selected capture device stopped delivering samples.",
+          action: { type: "link" as const, label: "Check audio sources", to: "/setup/audio" },
+        }
+      default:
+        return null
+    }
+  })()
+  if (inputStateDiagnostic) issues.push(inputStateDiagnostic)
 
   if (!configuredKnown && settingsLoading) {
     issues.push({
@@ -59,7 +140,7 @@ export function getAudioDiagnostics(input: AudioDiagnosticsInput): AudioDiagnost
     })
   }
 
-  if (expectedSignal && activeSourceMissing) {
+  if (!specificInputState && expectedSignal && activeSourceMissing) {
     issues.push({
       id: "input-unavailable",
       severity: startup ? "info" : "warning",
@@ -67,7 +148,7 @@ export function getAudioDiagnostics(input: AudioDiagnosticsInput): AudioDiagnost
       message: startup ? "Waiting for the selected source to become active." : sourceError(audioStatus) ?? "The configured source is not currently feeding audio analysis.",
       action: startup ? null : { type: "link", label: "Check sources", to: "/setup/audio" },
     })
-  } else if (expectedSignal && (!streamFresh || !monitoring)) {
+  } else if (!specificInputState && expectedSignal && (!streamFresh || !monitoring)) {
     issues.push({
       id: "input-stale",
       severity: startup ? "info" : "warning",
@@ -75,7 +156,7 @@ export function getAudioDiagnostics(input: AudioDiagnosticsInput): AudioDiagnost
       message: startup ? "Live samples will appear when the source starts." : sourceError(audioStatus) ?? "The audio stream is not delivering fresh input samples.",
       action: startup ? null : { type: "link", label: "Check sources", to: "/setup/audio" },
     })
-  } else if (expectedSignal && (audioHealth === "degraded" || audioHealth === "unavailable") && !isSilent) {
+  } else if (!specificInputState && expectedSignal && (audioHealth === "degraded" || audioHealth === "unavailable") && !isSilent) {
     issues.push({
       id: "input-health",
       severity: "warning",
@@ -83,7 +164,7 @@ export function getAudioDiagnostics(input: AudioDiagnosticsInput): AudioDiagnost
       message: sourceError(audioStatus) ?? "The runtime reports degraded or unavailable audio capture.",
       action: { type: "link", label: "Check sources", to: "/setup/audio" },
     })
-  } else if (isSilent) {
+  } else if (!specificInputState && isSilent) {
     issues.push({
       id: "input-silent",
       severity: "warning",
@@ -125,12 +206,20 @@ export function getAudioDiagnostics(input: AudioDiagnosticsInput): AudioDiagnost
   if (spotifySelected && settings?.spotify) {
     const spotify = settings.spotify
     if (!spotify.configured || !spotify.connected || !spotify.logged_in || spotify.error) {
+      const message = spotify.error
+        ?? (!spotify.configured ? "Spotify playback is not configured." : !spotify.connected ? "The Spotify Connect service is disconnected." : "Select LumiStripe in Spotify Connect to sign in.")
+      const title = /authentication (is )?required|credentials expired|revoked|sign in/i.test(message)
+        ? "Spotify authentication required"
+        : /audio output is unavailable/i.test(message)
+          ? "Spotify audio output is unavailable"
+          : !spotify.connected
+            ? "Spotify Connect is disconnected"
+            : "Spotify source is not ready"
       issues.push({
         id: "spotify-configuration",
         severity: "warning",
-        title: "Spotify source is not ready",
-        message: spotify.error
-          ?? (!spotify.configured ? "Spotify playback is not configured." : !spotify.connected ? "The Spotify Connect service is disconnected." : "Select LumiStripe in Spotify Connect to sign in."),
+        title,
+        message,
         action: { type: "link", label: "Open source settings", to: "/setup/audio" },
       })
     }

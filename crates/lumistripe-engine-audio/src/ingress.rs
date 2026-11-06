@@ -8,7 +8,7 @@ use crate::capture::MAX_CAPTURE_BATCH_SAMPLES;
 use rtrb::{Consumer, Producer, RingBuffer};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, TryLockError};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 
 pub const PCM_INGRESS_QUEUE_CAPACITY: usize = 8;
 
@@ -94,8 +94,10 @@ pub struct PcmIngressStats {
 
 struct IngressShared {
     enabled: AtomicBool,
+    generation_exhausted: AtomicBool,
     playback_state: AtomicU8,
     generation: AtomicU64,
+    generation_transition: Mutex<()>,
     queue_occupancy: AtomicU64,
     batches_received: AtomicU64,
     samples_received: AtomicU64,
@@ -116,8 +118,10 @@ impl Default for IngressShared {
     fn default() -> Self {
         Self {
             enabled: AtomicBool::new(false),
+            generation_exhausted: AtomicBool::new(false),
             playback_state: AtomicU8::new(PcmPlaybackState::Idle as u8),
             generation: AtomicU64::new(0),
+            generation_transition: Mutex::new(()),
             queue_occupancy: AtomicU64::new(0),
             batches_received: AtomicU64::new(0),
             samples_received: AtomicU64::new(0),
@@ -183,9 +187,14 @@ pub fn bounded_pcm_ingress() -> (PcmIngressSender, PcmIngressReceiver) {
 impl PcmIngressSender {
     /// Enable or disable analysis and invalidate batches from the prior mode.
     pub fn set_enabled(&self, enabled: bool) -> u64 {
+        let _transition = lock_unpoisoned(&self.shared.generation_transition);
+        if enabled && self.shared.generation_exhausted.load(Ordering::Acquire) {
+            self.shared.enabled.store(false, Ordering::Release);
+            return self.generation();
+        }
         let previous = self.shared.enabled.swap(enabled, Ordering::AcqRel);
         if previous != enabled {
-            self.begin_generation()
+            self.advance_generation()
         } else {
             self.generation()
         }
@@ -193,10 +202,28 @@ impl PcmIngressSender {
 
     /// Mark a seek, track transition, or source restart as a new PCM stream.
     pub fn begin_generation(&self) -> u64 {
+        let _transition = lock_unpoisoned(&self.shared.generation_transition);
+        self.advance_generation()
+    }
+
+    fn advance_generation(&self) -> u64 {
         self.shared
             .pending_dropped_samples
             .store(0, Ordering::Release);
-        self.shared.generation.fetch_add(1, Ordering::AcqRel) + 1
+        match self.shared.generation.fetch_update(
+            Ordering::AcqRel,
+            Ordering::Acquire,
+            |generation| generation.checked_add(1),
+        ) {
+            Ok(previous) => previous + 1,
+            Err(generation) => {
+                self.shared
+                    .generation_exhausted
+                    .store(true, Ordering::Release);
+                self.shared.enabled.store(false, Ordering::Release);
+                generation
+            }
+        }
     }
 
     pub fn generation(&self) -> u64 {
@@ -209,11 +236,31 @@ impl PcmIngressSender {
             .store(state as u8, Ordering::Release);
     }
 
+    /// Run one consumer update while its generation is current.
+    ///
+    /// Generation transitions wait for this bounded DSP update to finish, so
+    /// a stream transition cannot interleave with processing or publishing an
+    /// obsolete batch. Playback producers do not take this lock.
+    pub fn process_current_generation<R>(
+        &self,
+        stream_generation: u64,
+        process: impl FnOnce() -> R,
+    ) -> Option<R> {
+        let _transition = lock_unpoisoned(&self.shared.generation_transition);
+        if !self.shared.enabled.load(Ordering::Acquire) || stream_generation != self.generation() {
+            return None;
+        }
+        Some(process())
+    }
+
     /// Count a decoder packet format that the analysis tap cannot consume.
     pub fn record_unsupported_packet(&self) {
-        self.shared
-            .unsupported_packets
-            .fetch_add(1, Ordering::Relaxed);
+        atomic_saturating_add(&self.shared.unsupported_packets, 1);
+    }
+
+    /// Record a packet discarded because its sample position cannot be used.
+    pub fn record_discontinuity(&self, samples: u64) {
+        self.record_drop(samples);
     }
 
     /// Convert interleaved decoded f64 samples to bounded mono f32 batches.
@@ -243,20 +290,33 @@ impl PcmIngressSender {
             return false;
         }
 
+        if channels > 2 {
+            self.record_unsupported_packet();
+            self.record_drop(samples.len().div_ceil(channels) as u64);
+            return false;
+        }
+
+        if samples.is_empty() {
+            return true;
+        }
+
         let frame_count = samples.len() / channels;
-        self.shared.batches_received.fetch_add(1, Ordering::Relaxed);
-        self.shared
-            .samples_received
-            .fetch_add(frame_count as u64, Ordering::Relaxed);
+        let Some(end_position) = sample_position.checked_add(frame_count as u64) else {
+            self.record_drop(frame_count as u64);
+            return false;
+        };
+        if !store_monotonic_timestamp(&self.shared.last_input_timestamp_ns, submitted_at_ns) {
+            self.record_drop(frame_count as u64);
+            return false;
+        }
+        atomic_saturating_add(&self.shared.batches_received, 1);
+        atomic_saturating_add(&self.shared.samples_received, frame_count as u64);
         self.shared
             .sample_rate
             .store(u64::from(sample_rate), Ordering::Relaxed);
         self.shared
             .channels
             .store(channels as u16, Ordering::Relaxed);
-        self.shared
-            .last_input_timestamp_ns
-            .store(submitted_at_ns, Ordering::Relaxed);
 
         let mut offset = 0;
         while offset < frame_count {
@@ -269,7 +329,7 @@ impl PcmIngressSender {
             let batch_frames = (frame_count - offset).min(MAX_CAPTURE_BATCH_SAMPLES);
             let mut batch = AudioPcmBatch::empty(sample_rate, channels as u16);
             batch.len = batch_frames;
-            batch.sample_position = sample_position.saturating_add(offset as u64);
+            batch.sample_position = sample_position + offset as u64;
             batch.stream_generation = stream_generation;
             batch.submitted_at_ns = submitted_at_ns;
             batch.capture_end_ns = submitted_at_ns.saturating_sub(
@@ -293,7 +353,7 @@ impl PcmIngressSender {
                     batch.samples[frame] = mono;
                 } else {
                     batch.samples[frame] = 0.0;
-                    self.shared.invalid_samples.fetch_add(1, Ordering::Relaxed);
+                    atomic_saturating_add(&self.shared.invalid_samples, 1);
                 }
             }
             batch.dropped_samples_before = self
@@ -305,13 +365,12 @@ impl PcmIngressSender {
                 offset += batch_frames;
             } else {
                 let dropped_frames = (frame_count - offset) as u64;
-                self.shared
-                    .pending_dropped_samples
-                    .fetch_add(previous_drops, Ordering::Relaxed);
+                atomic_saturating_add(&self.shared.pending_dropped_samples, previous_drops);
                 self.record_drop(dropped_frames);
                 return false;
             }
         }
+        debug_assert_eq!(end_position, sample_position + frame_count as u64);
         true
     }
 
@@ -321,32 +380,26 @@ impl PcmIngressSender {
             Err(TryLockError::Poisoned(error)) => error.into_inner(),
             Err(TryLockError::WouldBlock) => return false,
         };
-        self.shared.queue_occupancy.fetch_add(1, Ordering::Relaxed);
+        atomic_saturating_add(&self.shared.queue_occupancy, 1);
         if producer.push(batch).is_ok() {
             true
         } else {
-            self.shared.queue_occupancy.fetch_sub(1, Ordering::Relaxed);
+            atomic_saturating_sub(&self.shared.queue_occupancy, 1);
             false
         }
     }
 
     fn record_drop(&self, samples: u64) {
-        self.shared.dropped_batches.fetch_add(1, Ordering::Relaxed);
-        self.shared
-            .dropped_samples
-            .fetch_add(samples, Ordering::Relaxed);
-        self.shared
-            .pending_dropped_samples
-            .fetch_add(samples, Ordering::Relaxed);
-        self.shared.discontinuities.fetch_add(1, Ordering::Relaxed);
+        atomic_saturating_add(&self.shared.dropped_batches, 1);
+        atomic_saturating_add(&self.shared.dropped_samples, samples);
+        atomic_saturating_add(&self.shared.pending_dropped_samples, samples);
+        atomic_saturating_add(&self.shared.discontinuities, 1);
     }
 
     fn record_stale_samples(&self, sample_count: usize, channels: u16) {
         let samples = sample_count.div_ceil(usize::from(channels.max(1))) as u64;
-        self.shared.stale_batches.fetch_add(1, Ordering::Relaxed);
-        self.shared
-            .stale_samples
-            .fetch_add(samples, Ordering::Relaxed);
+        atomic_saturating_add(&self.shared.stale_batches, 1);
+        atomic_saturating_add(&self.shared.stale_samples, samples);
     }
 
     pub fn stats(&self) -> PcmIngressStats {
@@ -358,14 +411,12 @@ impl PcmIngressReceiver {
     pub fn try_pop(&mut self) -> Option<AudioPcmBatch> {
         loop {
             let batch = self.consumer.pop().ok()?;
-            self.shared.queue_occupancy.fetch_sub(1, Ordering::Relaxed);
+            atomic_saturating_sub(&self.shared.queue_occupancy, 1);
             if !self.shared.enabled.load(Ordering::Acquire)
                 || batch.stream_generation != self.shared.generation.load(Ordering::Acquire)
             {
-                self.shared.stale_batches.fetch_add(1, Ordering::Relaxed);
-                self.shared
-                    .stale_samples
-                    .fetch_add(batch.len as u64, Ordering::Relaxed);
+                atomic_saturating_add(&self.shared.stale_batches, 1);
+                atomic_saturating_add(&self.shared.stale_samples, batch.len as u64);
                 continue;
             }
             return Some(batch);
@@ -374,11 +425,9 @@ impl PcmIngressReceiver {
 
     pub fn discard_queued(&mut self) {
         while let Ok(batch) = self.consumer.pop() {
-            self.shared.queue_occupancy.fetch_sub(1, Ordering::Relaxed);
-            self.shared.stale_batches.fetch_add(1, Ordering::Relaxed);
-            self.shared
-                .stale_samples
-                .fetch_add(batch.len as u64, Ordering::Relaxed);
+            atomic_saturating_sub(&self.shared.queue_occupancy, 1);
+            atomic_saturating_add(&self.shared.stale_batches, 1);
+            atomic_saturating_add(&self.shared.stale_samples, batch.len as u64);
         }
     }
 
@@ -387,9 +436,46 @@ impl PcmIngressReceiver {
     }
 }
 
+fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn atomic_saturating_add(counter: &AtomicU64, amount: u64) {
+    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+        Some(value.saturating_add(amount))
+    });
+}
+
+fn atomic_saturating_sub(counter: &AtomicU64, amount: u64) {
+    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+        Some(value.saturating_sub(amount))
+    });
+}
+
+fn store_monotonic_timestamp(timestamp: &AtomicU64, value: u64) -> bool {
+    let mut previous = timestamp.load(Ordering::Relaxed);
+    loop {
+        if value < previous {
+            return false;
+        }
+        match timestamp.compare_exchange_weak(previous, value, Ordering::Relaxed, Ordering::Relaxed)
+        {
+            Ok(_) => return true,
+            Err(current) => previous = current,
+        }
+    }
+}
+
 fn stats(shared: &IngressShared) -> PcmIngressStats {
     let sample_rate = shared.sample_rate.load(Ordering::Relaxed) as u32;
-    let queue_occupancy = shared.queue_occupancy.load(Ordering::Relaxed) as usize;
+    // The producer reserves occupancy before push, so a concurrent snapshot
+    // can observe one speculative slot when the bounded queue is full.
+    let queue_occupancy = shared
+        .queue_occupancy
+        .load(Ordering::Relaxed)
+        .min(PCM_INGRESS_QUEUE_CAPACITY as u64) as usize;
     let estimated_ingress_delay_ns = if sample_rate == 0 {
         0
     } else {
@@ -422,8 +508,10 @@ fn stats(shared: &IngressShared) -> PcmIngressStats {
 
 #[cfg(test)]
 mod tests {
-    use super::{PcmPlaybackState, bounded_pcm_ingress};
+    use super::{PCM_INGRESS_QUEUE_CAPACITY, PcmPlaybackState, bounded_pcm_ingress};
     use crate::capture::MAX_CAPTURE_BATCH_SAMPLES;
+    use std::sync::{Arc, Barrier, mpsc};
+    use std::thread;
 
     fn enabled_ingress() -> (super::PcmIngressSender, super::PcmIngressReceiver, u64) {
         let (sender, receiver) = bounded_pcm_ingress();
@@ -551,5 +639,141 @@ mod tests {
         assert_eq!(receiver.stats().playback_state, PcmPlaybackState::Paused);
         let next_generation = sender.set_enabled(true);
         assert!(next_generation > generation);
+    }
+
+    #[test]
+    fn rejects_unsupported_channel_layouts_and_malformed_packets() {
+        let (sender, mut receiver, generation) = enabled_ingress();
+
+        assert!(!sender.submit_interleaved_f64_at(
+            &[0.1, 0.2, 0.3],
+            44_100,
+            3,
+            generation,
+            0,
+            1_000,
+        ));
+        assert!(!sender.submit_interleaved_f64_at(
+            &[0.1, 0.2, 0.3],
+            44_100,
+            2,
+            generation,
+            0,
+            2_000,
+        ));
+
+        let stats = sender.stats();
+        assert_eq!(stats.unsupported_packets, 1);
+        assert_eq!(stats.dropped_batches, 2);
+        assert_eq!(stats.dropped_samples, 3);
+        assert_eq!(stats.discontinuities, 2);
+        assert_eq!(stats.queue_occupancy, 0);
+        assert!(receiver.try_pop().is_none());
+    }
+
+    #[test]
+    fn rejects_timestamp_regressions_without_rewinding_last_input_time() {
+        let (sender, mut receiver, generation) = enabled_ingress();
+        assert!(sender.submit_interleaved_f64_at(&[0.1, 0.1], 44_100, 2, generation, 0, 20_000,));
+        assert!(!sender.submit_interleaved_f64_at(&[0.2, 0.2], 44_100, 2, generation, 1, 19_999,));
+
+        let stats = sender.stats();
+        assert_eq!(stats.last_input_timestamp_ns, Some(20_000));
+        assert_eq!(stats.dropped_samples, 1);
+        assert_eq!(stats.discontinuities, 1);
+        assert_eq!(receiver.try_pop().unwrap().sample_position, 0);
+        assert!(receiver.try_pop().is_none());
+    }
+
+    #[test]
+    fn busy_producer_lock_drops_instead_of_waiting() {
+        let (sender, _receiver, generation) = enabled_ingress();
+        let _producer = sender.producer.lock().unwrap();
+        assert!(!sender.submit_interleaved_f64_at(&[0.25, 0.25], 44_100, 2, generation, 0, 1_000,));
+        assert_eq!(sender.stats().queue_occupancy, 0);
+        assert_eq!(sender.stats().dropped_samples, 1);
+        assert_eq!(sender.stats().discontinuities, 1);
+    }
+
+    #[test]
+    fn generation_exhaustion_disables_ingress_without_wrapping() {
+        let (sender, mut receiver, _) = enabled_ingress();
+        sender
+            .shared
+            .generation
+            .store(u64::MAX, std::sync::atomic::Ordering::Release);
+
+        assert_eq!(sender.begin_generation(), u64::MAX);
+        assert!(
+            sender
+                .shared
+                .generation_exhausted
+                .load(std::sync::atomic::Ordering::Acquire)
+        );
+        assert!(!sender.stats().enabled);
+        assert_eq!(sender.set_enabled(true), u64::MAX);
+        assert!(!sender.submit_interleaved_f64_at(&[0.1, 0.1], 44_100, 2, u64::MAX, 0, 1_000,));
+        assert!(receiver.try_pop().is_none());
+    }
+
+    #[test]
+    fn a_generation_transition_waits_for_the_current_consumer_update() {
+        let (sender, mut receiver, generation) = enabled_ingress();
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let processing_sender = sender.clone();
+        let processing_entered = Arc::clone(&entered);
+        let processing_release = Arc::clone(&release);
+        let processed = thread::spawn(move || {
+            processing_sender.process_current_generation(generation, || {
+                processing_entered.wait();
+                processing_release.wait();
+            })
+        });
+
+        entered.wait();
+        let producer_sender = sender.clone();
+        let (submitted_tx, submitted_rx) = mpsc::channel();
+        let producer = thread::spawn(move || {
+            let mut accepted = 0;
+            for position in 0..=PCM_INGRESS_QUEUE_CAPACITY {
+                accepted += usize::from(producer_sender.submit_interleaved_f64_at(
+                    &[0.2],
+                    44_100,
+                    1,
+                    generation,
+                    position as u64,
+                    100 + position as u64,
+                ));
+            }
+            submitted_tx.send(accepted).unwrap();
+        });
+        let accepted = submitted_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("PCM producer must not wait for a slow consumer update");
+        producer.join().unwrap();
+        assert_eq!(accepted, PCM_INGRESS_QUEUE_CAPACITY);
+        assert_eq!(sender.stats().queue_occupancy, PCM_INGRESS_QUEUE_CAPACITY);
+        assert_eq!(sender.stats().dropped_samples, 1);
+
+        let transitioning_sender = sender.clone();
+        let (started_tx, started_rx) = mpsc::channel();
+        let transition = thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            transitioning_sender.begin_generation()
+        });
+        started_rx.recv().unwrap();
+        release.wait();
+
+        assert!(processed.join().unwrap().is_some());
+        let new_generation = transition.join().unwrap();
+        assert!(new_generation > generation);
+        assert!(receiver.try_pop().is_none());
+        assert_eq!(receiver.stats().queue_occupancy, 0);
+        assert!(
+            sender
+                .process_current_generation(generation, || panic!("obsolete generation processed"))
+                .is_none()
+        );
     }
 }

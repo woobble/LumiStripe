@@ -738,6 +738,12 @@ const audioTelemetrySchema = z.object({
   sync_offset_ms: z.number().min(-500).max(500).optional().default(0),
   sync_route: z.string().optional().default("mic|unknown|default"),
   input_transport: z.enum(["off", "capture_device", "direct_pcm", "monitor_fallback", "demo"]).optional().default("off"),
+  input_state: z.enum([
+    "inactive", "capture_waiting", "capture_healthy", "capture_stalled",
+    "direct_pcm_waiting", "direct_pcm_healthy", "direct_pcm_overloaded", "direct_pcm_stalled",
+    "dsp_processing_stalled", "spotify_paused", "monitor_fallback_active",
+    "monitor_fallback_unavailable", "demo_active",
+  ]).optional().default("inactive"),
   input_sample_rate: z.number().int().nonnegative().optional().default(0),
   input_channels: z.number().int().nonnegative().optional().default(0),
   pcm_ingress: pcmIngressSchema.optional().default(defaultPcmIngress),

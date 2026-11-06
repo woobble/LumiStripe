@@ -30,6 +30,9 @@ const AUDIO_INITIAL_CALLBACK_TIMEOUT_NS: u64 = 3_000_000_000;
 const AUDIO_RECOVERY_DELAY_NS: u64 = 1_000_000_000;
 const DIRECT_PCM_FIRST_BATCH_TIMEOUT_NS: u64 = 3_000_000_000;
 const DIRECT_PCM_STALL_TIMEOUT_NS: u64 = 1_500_000_000;
+const DIRECT_PCM_RECOVERY_PROBE_INTERVAL_NS: u64 = 5_000_000_000;
+const DIRECT_PCM_RECOVERY_PROBE_TIMEOUT_NS: u64 = 3_000_000_000;
+const DIRECT_PCM_RECOVERY_CONFIRM_BATCHES: usize = 8;
 const DSP_TIMING_WINDOW: usize = 64;
 const DEMO_FRAME_INTERVAL_NS: u64 = 40_000_000;
 
@@ -222,6 +225,8 @@ struct AudioSession {
     sample_rate: u32,
     stream_generation: Option<u64>,
     sample_position_origin: Option<u64>,
+    timestamp_sample_position_end: Option<u64>,
+    timestamp_end_ns: Option<u64>,
     last_input_timestamp_ns: Option<u64>,
     frame: AudioFrame,
     features: MusicFeatures,
@@ -326,6 +331,13 @@ struct WorkerState {
     direct_requested: bool,
     fallback_active: bool,
     fallback_selector: Option<String>,
+    next_direct_probe_ns: u64,
+    direct_probe_generation: Option<u64>,
+    direct_probe_started_ns: u64,
+    direct_probe_expected_position: Option<u64>,
+    direct_probe_contiguous_batches: usize,
+    last_direct_playback_state: Option<PcmPlaybackState>,
+    direct_playback_started_ns: Option<u64>,
     pcm_ingress: PcmIngressSender,
     pcm_receiver: PcmIngressReceiver,
     capture_factory: Arc<dyn AudioCaptureFactory>,
@@ -335,6 +347,8 @@ struct WorkerState {
     retry_at_ns: u64,
     last_error: Option<String>,
     audio_update_sequence: u64,
+    last_audio_update_timestamp_ns: u64,
+    last_feature_timestamp_ns: Option<u64>,
     feature_sequence: u64,
     beat_event_sequence: u64,
     structure_event_sequence: u64,
@@ -377,6 +391,13 @@ impl WorkerState {
             direct_requested: false,
             fallback_active: false,
             fallback_selector: None,
+            next_direct_probe_ns: 0,
+            direct_probe_generation: None,
+            direct_probe_started_ns: 0,
+            direct_probe_expected_position: None,
+            direct_probe_contiguous_batches: 0,
+            last_direct_playback_state: None,
+            direct_playback_started_ns: None,
             pcm_ingress,
             pcm_receiver,
             capture_factory,
@@ -386,6 +407,8 @@ impl WorkerState {
             retry_at_ns: 0,
             last_error: None,
             audio_update_sequence: 0,
+            last_audio_update_timestamp_ns: 0,
+            last_feature_timestamp_ns: None,
             feature_sequence: 0,
             beat_event_sequence: 0,
             structure_event_sequence: 0,
@@ -414,6 +437,7 @@ fn audio_worker_loop(
                 reply,
             }) => {
                 let result = state.start(selector, config);
+                state.clear_output_audio(&output);
                 write_status(&state, &status);
                 let _ = reply.send(result);
             }
@@ -423,27 +447,32 @@ fn audio_worker_loop(
                 reply,
             }) => {
                 let result = state.start_direct(fallback_selector, config);
+                state.clear_output_audio(&output);
                 write_status(&state, &status);
                 let _ = reply.send(result);
             }
             Ok(AudioCommand::Configure { config, reply }) => {
                 let result = state.configure(config);
+                state.clear_output_audio(&output);
                 write_status(&state, &status);
                 let _ = reply.send(result);
             }
             Ok(AudioCommand::Stop { reply }) => {
                 state.stop();
+                state.clear_output_audio(&output);
                 write_status(&state, &status);
                 let _ = reply.send(());
             }
             Ok(AudioCommand::Shutdown { reply }) => {
                 state.stop();
+                state.clear_output_audio(&output);
                 write_status(&state, &status);
                 let _ = reply.send(());
                 shutdown = true;
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 state.stop();
+                state.clear_output_audio(&output);
                 shutdown = true;
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -452,7 +481,7 @@ fn audio_worker_loop(
         if !shutdown {
             state.process_available_audio(&output);
             state.process_demo_audio(&output);
-            state.recover_stalled_capture();
+            state.recover_stalled_capture(&output);
             write_status(&state, &status);
         }
     }
@@ -467,6 +496,9 @@ impl WorkerState {
         self.direct_requested = false;
         self.fallback_active = false;
         self.fallback_selector = None;
+        self.reset_direct_probe(0);
+        self.last_direct_playback_state = None;
+        self.direct_playback_started_ns = None;
         self.demo_active = selector.as_deref() == Some("demo");
         self.selector = if self.demo_active { None } else { selector };
         self.config = config;
@@ -496,6 +528,9 @@ impl WorkerState {
         self.direct_requested = true;
         self.fallback_active = false;
         self.fallback_selector = fallback_selector.clone();
+        self.reset_direct_probe(0);
+        self.last_direct_playback_state = None;
+        self.direct_playback_started_ns = None;
         self.selector = fallback_selector;
         self.config = config;
         self.desired_active = true;
@@ -525,6 +560,9 @@ impl WorkerState {
         self.direct_requested = false;
         self.fallback_active = false;
         self.fallback_selector = None;
+        self.reset_direct_probe(0);
+        self.last_direct_playback_state = None;
+        self.direct_playback_started_ns = None;
         self.pcm_ingress.set_enabled(false);
         self.pcm_receiver.discard_queued();
         self.stop_session();
@@ -541,6 +579,36 @@ impl WorkerState {
         self.pending_structure.clear();
     }
 
+    fn clear_output_audio(&mut self, output: &OutputAudioHandle) {
+        if self.audio_update_sequence == u64::MAX {
+            self.dropped_audio_updates = self.dropped_audio_updates.saturating_add(1);
+            return;
+        }
+        self.audio_update_sequence += 1;
+        let timestamp_ns = monotonic_time_ns().max(self.last_audio_update_timestamp_ns);
+        self.last_audio_update_timestamp_ns = timestamp_ns;
+        self.last_feature_timestamp_ns = Some(timestamp_ns);
+        match output.submit_audio_update(RenderAudioUpdate {
+            sequence: self.audio_update_sequence,
+            timestamp_ns,
+            audio: None,
+        }) {
+            Ok(_) | Err(crate::FrameAckStatus::NotConfigured) => {}
+            Err(crate::FrameAckStatus::ShuttingDown) => {}
+            Err(crate::FrameAckStatus::InvalidFrame | crate::FrameAckStatus::Accepted) => {
+                self.dropped_audio_updates = self.dropped_audio_updates.saturating_add(1);
+            }
+        }
+    }
+
+    fn reset_direct_probe(&mut self, next_probe_ns: u64) {
+        self.direct_probe_generation = None;
+        self.direct_probe_started_ns = 0;
+        self.direct_probe_expected_position = None;
+        self.direct_probe_contiguous_batches = 0;
+        self.next_direct_probe_ns = next_probe_ns;
+    }
+
     fn publish_error(&mut self, error: Option<String>) {
         self.last_error = error;
     }
@@ -550,25 +618,15 @@ impl WorkerState {
             self.pcm_ingress.set_enabled(true);
             self.pcm_receiver.discard_queued();
             self.pcm_ingress.begin_generation();
-            AudioProcessor::new(self.config, AUDIO_SAMPLE_RATE)
-                .map(|processor| AudioSession {
-                    input: AudioInput::DirectPcm,
-                    processor,
-                    tracker: MusicStructureTracker::new(),
-                    sample_rate: AUDIO_SAMPLE_RATE as u32,
-                    stream_generation: None,
-                    sample_position_origin: None,
-                    last_input_timestamp_ns: None,
-                    frame: AudioFrame::default(),
-                    features: MusicFeatures::default(),
-                    structure: MusicStructureState::default(),
-                    opened_at_ns: monotonic_time_ns(),
-                    last_frame_ns: None,
-                })
-                .map_err(|error| error.to_string())
+            self.build_direct_session()
         } else {
             self.pcm_ingress.set_enabled(false);
             self.pcm_receiver.discard_queued();
+            self.reset_direct_probe(if self.direct_requested {
+                monotonic_time_ns().saturating_add(DIRECT_PCM_RECOVERY_PROBE_INTERVAL_NS)
+            } else {
+                0
+            });
             self.build_capture_session(if self.direct_requested {
                 AudioInputTransport::MonitorFallback
             } else {
@@ -598,6 +656,27 @@ impl WorkerState {
         }
     }
 
+    fn build_direct_session(&self) -> Result<AudioSession, String> {
+        let processor = AudioProcessor::new(self.config, AUDIO_SAMPLE_RATE)
+            .map_err(|error| error.to_string())?;
+        Ok(AudioSession {
+            input: AudioInput::DirectPcm,
+            processor,
+            tracker: MusicStructureTracker::new(),
+            sample_rate: AUDIO_SAMPLE_RATE as u32,
+            stream_generation: Some(self.pcm_ingress.generation()),
+            sample_position_origin: None,
+            timestamp_sample_position_end: None,
+            timestamp_end_ns: None,
+            last_input_timestamp_ns: None,
+            frame: AudioFrame::default(),
+            features: MusicFeatures::default(),
+            structure: MusicStructureState::default(),
+            opened_at_ns: monotonic_time_ns(),
+            last_frame_ns: None,
+        })
+    }
+
     fn build_capture_session(
         &self,
         transport: AudioInputTransport,
@@ -617,6 +696,8 @@ impl WorkerState {
             sample_rate,
             stream_generation: None,
             sample_position_origin: None,
+            timestamp_sample_position_end: None,
+            timestamp_end_ns: None,
             last_input_timestamp_ns: None,
             frame: AudioFrame::default(),
             features: MusicFeatures::default(),
@@ -661,6 +742,27 @@ impl WorkerState {
     }
 
     fn process_batch(&mut self, output: &OutputAudioHandle, batch: AudioPcmBatch) {
+        let direct_pcm = self
+            .session
+            .as_ref()
+            .is_some_and(|session| matches!(&session.input, AudioInput::DirectPcm));
+        if direct_pcm {
+            let generation = batch.stream_generation;
+            let ingress = self.pcm_ingress.clone();
+            if ingress
+                .process_current_generation(generation, || self.process_batch_inner(output, batch))
+                .is_none()
+            {
+                self.pending_beats.clear();
+                self.pending_structure.clear();
+                self.clear_output_audio(output);
+            }
+            return;
+        }
+        self.process_batch_inner(output, batch);
+    }
+
+    fn process_batch_inner(&mut self, output: &OutputAudioHandle, batch: AudioPcmBatch) {
         if batch.sample_rate == 0 {
             self.publish_error(Some("audio input reported a zero sample rate".to_owned()));
             return;
@@ -693,6 +795,8 @@ impl WorkerState {
             session.sample_rate = batch.sample_rate;
             session.stream_generation = Some(batch.stream_generation);
             session.sample_position_origin = Some(batch.sample_position);
+            session.timestamp_sample_position_end = None;
+            session.timestamp_end_ns = None;
             session.last_input_timestamp_ns = None;
             session.frame = AudioFrame::default();
             session.features = MusicFeatures::default();
@@ -704,31 +808,98 @@ impl WorkerState {
         let sample_position_origin = *session
             .sample_position_origin
             .get_or_insert(batch.sample_position);
-        let relative_sample_position = batch.sample_position.saturating_sub(sample_position_origin);
+        let direct_pcm = matches!(&session.input, AudioInput::DirectPcm);
+        let Some(relative_sample_position) =
+            batch.sample_position.checked_sub(sample_position_origin)
+        else {
+            self.pcm_ingress.record_discontinuity(batch.len as u64);
+            return;
+        };
         let seen = session.processor.stats().samples_seen;
-        if relative_sample_position > seen {
-            let _ = session
-                .processor
-                .mark_discontinuity(relative_sample_position - seen);
+        if relative_sample_position < seen {
+            self.pcm_ingress.record_discontinuity(batch.len as u64);
+            return;
         }
+        if relative_sample_position > seen {
+            if direct_pcm && batch.dropped_samples_before == 0 {
+                self.pcm_ingress
+                    .record_discontinuity(relative_sample_position - seen);
+            }
+            self.pending_beats.clear();
+            self.pending_structure.clear();
+            session.tracker.reset();
+            session.structure = MusicStructureState::default();
+            if let Err(error) = session
+                .processor
+                .mark_discontinuity(relative_sample_position - seen)
+            {
+                self.publish_error(Some(format!(
+                    "audio sample gap could not be applied: {error}"
+                )));
+                return;
+            }
+        }
+        let capture_end_ns = if direct_pcm {
+            let Some(batch_end_position) = batch.sample_position.checked_add(batch.len as u64)
+            else {
+                self.pcm_ingress.record_discontinuity(batch.len as u64);
+                return;
+            };
+            if session
+                .timestamp_sample_position_end
+                .is_some_and(|previous_end| batch.sample_position < previous_end)
+            {
+                self.pcm_ingress.record_discontinuity(batch.len as u64);
+                return;
+            }
+            let projected_end_ns = match (
+                session.timestamp_sample_position_end,
+                session.timestamp_end_ns,
+            ) {
+                (Some(previous_end_position), Some(previous_end_ns)) => {
+                    let elapsed_ns = ((batch_end_position - previous_end_position) as u128
+                        * 1_000_000_000_u128
+                        / u128::from(batch.sample_rate))
+                    .min(u64::MAX as u128) as u64;
+                    previous_end_ns.saturating_add(elapsed_ns)
+                }
+                _ => batch.capture_end_ns,
+            };
+            let capture_end_ns = batch
+                .capture_end_ns
+                .max(projected_end_ns)
+                .max(session.last_input_timestamp_ns.unwrap_or_default());
+            session.timestamp_sample_position_end = Some(batch_end_position);
+            session.timestamp_end_ns = Some(capture_end_ns);
+            capture_end_ns
+        } else {
+            batch
+                .capture_end_ns
+                .max(session.last_input_timestamp_ns.unwrap_or_default())
+        };
 
         let mut observed: [Option<ObservedFrame>; 8] = [None; 8];
         let mut observed_count = 0;
         let mut structure = session.structure;
         let tracker = &mut session.tracker;
-        let capture_end_ns = batch
-            .capture_end_ns
-            .max(session.last_input_timestamp_ns.unwrap_or_default());
         session.last_input_timestamp_ns = Some(capture_end_ns);
         let capture_end_seconds = capture_end_ns as f64 / 1_000_000_000.0;
+        let mut tracker_error = None;
         let processing_started = std::time::Instant::now();
         let result = session.processor.feed_samples_with_observer(
             &batch.samples[..batch.len],
             capture_end_seconds,
             |frame, features| {
-                let update = tracker
-                    .update(&features, frame.timestamp)
-                    .expect("capture timestamps are monotonic");
+                if tracker_error.is_some() {
+                    return;
+                }
+                let update = match tracker.update(&features, frame.timestamp) {
+                    Ok(update) => update,
+                    Err(error) => {
+                        tracker_error = Some(error.to_string());
+                        return;
+                    }
+                };
                 structure = update.state;
                 if observed_count < observed.len() {
                     observed[observed_count] = Some(ObservedFrame {
@@ -752,6 +923,20 @@ impl WorkerState {
             self.publish_error(Some(format!("Rust audio DSP failed: {error}")));
             return;
         }
+        if let Some(error) = tracker_error {
+            self.pending_beats.clear();
+            self.pending_structure.clear();
+            let mut ignored_events = [AudioBeatEvent::default(); MAX_AUDIO_BEAT_EVENTS];
+            let _ = session
+                .processor
+                .drain_beat_events_into(&mut ignored_events);
+            session.tracker.reset();
+            session.structure = MusicStructureState::default();
+            self.publish_error(Some(format!(
+                "Music structure timestamps regressed; tracker reset: {error}"
+            )));
+            return;
+        }
         let mut beat_events = [AudioBeatEvent::default(); MAX_AUDIO_BEAT_EVENTS];
         let beat_event_count = session.processor.drain_beat_events_into(&mut beat_events);
         for event in beat_events.into_iter().take(beat_event_count) {
@@ -760,13 +945,15 @@ impl WorkerState {
                 continue;
             }
             self.beat_event_sequence += 1;
+            let event_timestamp_ns = seconds_to_ns(event.timestamp)
+                .max(self.last_feature_timestamp_ns.unwrap_or_default());
             if self.pending_beats.len() == AUDIO_EVENT_HISTORY_CAPACITY {
                 self.pending_beats.pop_front();
                 self.dropped_audio_updates = self.dropped_audio_updates.saturating_add(1);
             }
             self.pending_beats.push_back(RenderBeatEvent {
                 sequence: self.beat_event_sequence,
-                timestamp_ns: seconds_to_ns(event.timestamp),
+                timestamp_ns: event_timestamp_ns,
                 strength: event.strength as f64,
             });
         }
@@ -776,7 +963,12 @@ impl WorkerState {
             self.feature_sequence = self.feature_sequence.saturating_add(1);
             let mut frame = observed.frame;
             frame.sequence = self.feature_sequence;
-            let timestamp_ns = seconds_to_ns(frame.timestamp);
+            let timestamp_ns = self.last_feature_timestamp_ns.map_or_else(
+                || seconds_to_ns(frame.timestamp),
+                |last| seconds_to_ns(frame.timestamp).max(last.saturating_add(1)),
+            );
+            frame.timestamp = timestamp_ns as f64 / 1_000_000_000.0;
+            self.last_feature_timestamp_ns = Some(timestamp_ns);
             let structure_edge = observed.features.section_change
                 || observed.structure.drop_event
                 || observed.phase_changed;
@@ -818,6 +1010,8 @@ impl WorkerState {
             return;
         }
         self.audio_update_sequence += 1;
+        let timestamp_ns = seconds_to_ns(frame.timestamp).max(self.last_audio_update_timestamp_ns);
+        self.last_audio_update_timestamp_ns = timestamp_ns;
         let (output_count, beat_ack, structure_ack) = output.audio_acknowledgments();
         while self
             .pending_beats
@@ -870,7 +1064,7 @@ impl WorkerState {
             bands: frame.bands.map(f64::from),
             beat: frame.beat,
             beat_strength: frame.beat_strength as f64,
-            feature_timestamp_ns: Some(seconds_to_ns(frame.timestamp)),
+            feature_timestamp_ns: Some(timestamp_ns),
             feature_sequence: Some(frame.sequence),
             fallback_bpm: Some(features.bpm as f64),
             beat_events: self.pending_beats.iter().copied().collect(),
@@ -900,7 +1094,7 @@ impl WorkerState {
         };
         match output.submit_audio_update(RenderAudioUpdate {
             sequence: self.audio_update_sequence,
-            timestamp_ns: seconds_to_ns(frame.timestamp),
+            timestamp_ns,
             audio: Some(audio),
         }) {
             Ok(_) | Err(crate::FrameAckStatus::NotConfigured) => {}
@@ -911,8 +1105,52 @@ impl WorkerState {
         }
     }
 
-    fn recover_stalled_capture(&mut self) {
-        let now = monotonic_time_ns();
+    fn recover_stalled_capture(&mut self, output: &OutputAudioHandle) {
+        self.recover_stalled_capture_at(output, monotonic_time_ns());
+    }
+
+    fn recover_stalled_capture_at(&mut self, output: &OutputAudioHandle, now: u64) {
+        if self.session.as_ref().is_some_and(|session| {
+            matches!(&session.input, AudioInput::DirectPcm)
+                && session.stream_generation != Some(self.pcm_ingress.generation())
+        }) {
+            self.pending_beats.clear();
+            self.pending_structure.clear();
+            match self.build_direct_session() {
+                Ok(session) => {
+                    self.session = Some(session);
+                    self.publish_error(None);
+                    self.clear_output_audio(output);
+                }
+                Err(error) => {
+                    self.session = None;
+                    self.publish_error(Some(format!(
+                        "Spotify decoded PCM session could not restart: {error}"
+                    )));
+                }
+            }
+        }
+
+        let playback = self.pcm_ingress.stats().playback_state;
+        if self.direct_requested {
+            if playback == PcmPlaybackState::Playing
+                && self.last_direct_playback_state != Some(PcmPlaybackState::Playing)
+            {
+                self.direct_playback_started_ns = Some(now);
+            } else if playback != PcmPlaybackState::Playing {
+                self.direct_playback_started_ns = None;
+            }
+        }
+        if self.direct_requested
+            && matches!(playback, PcmPlaybackState::Paused | PcmPlaybackState::Idle)
+            && self.last_direct_playback_state != Some(playback)
+        {
+            self.pending_beats.clear();
+            self.pending_structure.clear();
+            self.clear_output_audio(output);
+        }
+        self.last_direct_playback_state = Some(playback);
+
         let direct_stalled = self.session.as_ref().is_some_and(|session| {
             if !matches!(&session.input, AudioInput::DirectPcm) {
                 return false;
@@ -924,41 +1162,61 @@ impl WorkerState {
             if pcm.playback_state != PcmPlaybackState::Playing {
                 return false;
             }
-            let last_input = pcm.last_input_timestamp_ns.unwrap_or(session.opened_at_ns);
-            let timeout = if pcm.last_input_timestamp_ns.is_some() {
-                DIRECT_PCM_STALL_TIMEOUT_NS
-            } else {
-                DIRECT_PCM_FIRST_BATCH_TIMEOUT_NS
-            };
-            now.saturating_sub(last_input) > timeout
+            let playback_started = self
+                .direct_playback_started_ns
+                .unwrap_or(session.opened_at_ns);
+            let recent_input = pcm
+                .last_input_timestamp_ns
+                .filter(|timestamp| *timestamp >= playback_started);
+            // Give resumed playback a first-batch window; pre-pause timestamps are stale.
+            let (reference_timestamp, timeout) = recent_input.map_or(
+                (playback_started, DIRECT_PCM_FIRST_BATCH_TIMEOUT_NS),
+                |timestamp| (timestamp, DIRECT_PCM_STALL_TIMEOUT_NS),
+            );
+            now.saturating_sub(reference_timestamp) > timeout
         });
         if direct_stalled && now >= self.retry_at_ns {
-            self.activate_monitor_fallback(now);
+            self.activate_monitor_fallback(now, output);
         }
 
         let capture_stalled = self.session.as_ref().and_then(|session| {
             session.input.capture().map(|capture| {
                 let stats = capture.stats();
-                let callback_stalled = match stats.last_callback_ns {
+                match stats.last_callback_ns {
                     Some(last) => now.saturating_sub(last) > AUDIO_STALL_TIMEOUT_NS,
                     None => {
                         now.saturating_sub(session.opened_at_ns) > AUDIO_INITIAL_CALLBACK_TIMEOUT_NS
                     }
-                };
-                callback_stalled
+                }
             })
         });
         if capture_stalled == Some(true) {
+            let monitor_fallback = self
+                .session
+                .as_ref()
+                .is_some_and(|session| matches!(&session.input, AudioInput::MonitorFallback(_)));
             self.session = None;
+            self.pending_beats.clear();
+            self.pending_structure.clear();
             self.retry_at_ns = now.saturating_add(AUDIO_RECOVERY_DELAY_NS);
-            self.publish_error(Some(
-                "audio capture stopped producing callbacks; retrying".to_owned(),
-            ));
+            self.publish_error(Some(if monitor_fallback {
+                "Spotify monitor fallback stopped producing callbacks; retrying".to_owned()
+            } else {
+                "audio capture stopped producing callbacks; retrying".to_owned()
+            }));
+            self.clear_output_audio(output);
         }
+
+        if self.direct_requested && self.fallback_active {
+            self.probe_direct_recovery(now, output);
+        }
+
+        let waiting_for_probe = self.direct_probe_generation.is_some();
         if self.desired_active
             && !self.demo_active
             && self.session.is_none()
             && now >= self.retry_at_ns
+            && !waiting_for_probe
         {
             if let Err(error) = self.open_session() {
                 self.publish_error(Some(format!("audio device recovery failed: {error}")));
@@ -966,13 +1224,116 @@ impl WorkerState {
         }
     }
 
-    fn activate_monitor_fallback(&mut self, now_ns: u64) {
+    fn probe_direct_recovery(&mut self, now: u64, output: &OutputAudioHandle) {
+        let playback = self.pcm_ingress.stats().playback_state;
+        if playback != PcmPlaybackState::Playing {
+            if self.direct_probe_generation.is_some() {
+                self.pcm_ingress.set_enabled(false);
+                self.pcm_receiver.discard_queued();
+                self.reset_direct_probe(now.saturating_add(DIRECT_PCM_RECOVERY_PROBE_INTERVAL_NS));
+            }
+            return;
+        }
+
+        if self.direct_probe_generation.is_none() && now >= self.next_direct_probe_ns {
+            self.pcm_ingress.set_enabled(true);
+            self.pcm_receiver.discard_queued();
+            self.direct_probe_generation = Some(self.pcm_ingress.generation());
+            self.direct_probe_started_ns = now;
+            self.direct_probe_expected_position = None;
+            self.direct_probe_contiguous_batches = 0;
+        }
+
+        let Some(probe_generation) = self.direct_probe_generation else {
+            return;
+        };
+        if probe_generation != self.pcm_ingress.generation() {
+            self.direct_probe_generation = Some(self.pcm_ingress.generation());
+            self.direct_probe_started_ns = now;
+            self.direct_probe_expected_position = None;
+            self.direct_probe_contiguous_batches = 0;
+        }
+
+        while let Some(batch) = self.pcm_receiver.try_pop() {
+            if batch.stream_generation != self.pcm_ingress.generation() {
+                continue;
+            }
+            let contiguous = batch.dropped_samples_before == 0
+                && self
+                    .direct_probe_expected_position
+                    .is_none_or(|expected| expected == batch.sample_position);
+            let Some(end_position) = batch.sample_position.checked_add(batch.len as u64) else {
+                self.direct_probe_expected_position = None;
+                self.direct_probe_contiguous_batches = 0;
+                continue;
+            };
+            self.direct_probe_contiguous_batches = if contiguous {
+                self.direct_probe_contiguous_batches.saturating_add(1)
+            } else {
+                1
+            };
+            self.direct_probe_expected_position = Some(end_position);
+            if self.direct_probe_contiguous_batches >= DIRECT_PCM_RECOVERY_CONFIRM_BATCHES {
+                self.activate_direct_after_probe(now, output);
+                return;
+            }
+        }
+
+        let stats = self.pcm_ingress.stats();
+        let last_input = stats
+            .last_input_timestamp_ns
+            .unwrap_or(self.direct_probe_started_ns);
+        let input_is_current = last_input >= self.direct_probe_started_ns;
+        let probe_failed = now.saturating_sub(self.direct_probe_started_ns)
+            > DIRECT_PCM_RECOVERY_PROBE_TIMEOUT_NS
+            || (input_is_current && now.saturating_sub(last_input) > DIRECT_PCM_STALL_TIMEOUT_NS);
+        if probe_failed {
+            self.pcm_ingress.set_enabled(false);
+            self.pcm_receiver.discard_queued();
+            self.reset_direct_probe(now.saturating_add(DIRECT_PCM_RECOVERY_PROBE_INTERVAL_NS));
+            if self.session.is_none() {
+                self.retry_at_ns = now;
+            }
+        }
+    }
+
+    fn activate_direct_after_probe(&mut self, now: u64, output: &OutputAudioHandle) {
+        self.pcm_ingress.begin_generation();
+        self.pcm_receiver.discard_queued();
+        self.pending_beats.clear();
+        self.pending_structure.clear();
+        match self.build_direct_session() {
+            Ok(session) => {
+                self.session = Some(session);
+                self.fallback_active = false;
+                self.retry_at_ns = 0;
+                self.reset_direct_probe(now.saturating_add(DIRECT_PCM_RECOVERY_PROBE_INTERVAL_NS));
+                self.publish_error(None);
+                self.clear_output_audio(output);
+            }
+            Err(error) => {
+                self.pcm_ingress.set_enabled(false);
+                self.session = None;
+                self.retry_at_ns = now.saturating_add(AUDIO_RECOVERY_DELAY_NS);
+                self.reset_direct_probe(now.saturating_add(DIRECT_PCM_RECOVERY_PROBE_INTERVAL_NS));
+                self.publish_error(Some(format!(
+                    "Spotify decoded PCM recovery failed: {error}"
+                )));
+            }
+        }
+    }
+
+    fn activate_monitor_fallback(&mut self, now_ns: u64, output: &OutputAudioHandle) {
         self.pcm_ingress.set_enabled(false);
         self.pcm_receiver.discard_queued();
+        self.pending_beats.clear();
+        self.pending_structure.clear();
+        self.fallback_active = true;
+        self.reset_direct_probe(now_ns.saturating_add(DIRECT_PCM_RECOVERY_PROBE_INTERVAL_NS));
+        self.clear_output_audio(output);
         match self.build_capture_session(AudioInputTransport::MonitorFallback) {
             Ok(session) => {
                 self.session = Some(session);
-                self.fallback_active = true;
                 self.retry_at_ns = 0;
                 self.publish_error(Some(
                     "Spotify decoded PCM is unavailable; using PipeWire monitor capture."
@@ -980,8 +1341,7 @@ impl WorkerState {
                 ));
             }
             Err(error) => {
-                self.pcm_ingress.set_enabled(true);
-                self.pcm_receiver.discard_queued();
+                self.session = None;
                 self.retry_at_ns = now_ns.saturating_add(AUDIO_RECOVERY_DELAY_NS);
                 self.publish_error(Some(format!(
                     "Spotify decoded PCM failed and monitor fallback could not open: {error}"
@@ -1172,14 +1532,17 @@ fn seconds_to_ns(seconds: f64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        AudioBatchSource, AudioCaptureFactory, AudioInput, WorkerState, demo_snapshot, write_status,
+        AudioBatchSource, AudioCaptureFactory, AudioInput, PendingStructureEdge, WorkerState,
+        demo_snapshot, write_status,
     };
     use crate::OutputWorker;
     use lumistripe_engine_audio::{
         AudioCaptureStats, AudioConfig, AudioPcmBatch, InputAudioDevice, PcmIngressReceiver,
         PcmIngressSender, PcmPlaybackState, bounded_pcm_ingress, monotonic_time_ns,
     };
-    use lumistripe_engine_protocol::{AudioInputTransport, EngineAudioStatus};
+    use lumistripe_engine_protocol::{
+        AudioInputTransport, EngineAudioStatus, RenderBeatEvent, RenderMusicStructurePhase,
+    };
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
@@ -1388,7 +1751,9 @@ mod tests {
                 .unwrap()
         );
         sender.set_playback_state(PcmPlaybackState::Failed);
-        state.recover_stalled_capture();
+        let output = OutputWorker::new().unwrap();
+        let output_audio = output.audio_handle();
+        state.recover_stalled_capture(&output_audio);
 
         assert!(state.fallback_active);
         assert!(matches!(
@@ -1400,6 +1765,7 @@ mod tests {
             state.session.as_ref().unwrap().input.transport(),
             AudioInputTransport::MonitorFallback
         );
+        let _ = output.shutdown();
     }
 
     #[test]
@@ -1415,7 +1781,9 @@ mod tests {
                 .unwrap()
         );
         sender.set_playback_state(PcmPlaybackState::Paused);
-        state.recover_stalled_capture();
+        let output = OutputWorker::new().unwrap();
+        let output_audio = output.audio_handle();
+        state.recover_stalled_capture(&output_audio);
 
         assert!(!state.fallback_active);
         assert_eq!(
@@ -1423,5 +1791,350 @@ mod tests {
             AudioInputTransport::DirectPcm
         );
         assert!(sender.stats().enabled);
+        let paused_generation = sender.generation();
+        sender.set_playback_state(PcmPlaybackState::Playing);
+        state.recover_stalled_capture_at(&output_audio, monotonic_time_ns());
+        assert_eq!(sender.generation(), paused_generation);
+        assert!(!state.fallback_active);
+        assert!(matches!(
+            state.session.as_ref().unwrap().input,
+            AudioInput::DirectPcm
+        ));
+        let _ = output.shutdown();
+    }
+
+    #[test]
+    fn resumed_direct_input_gets_first_batch_timeout_after_a_long_pause() {
+        let (sender, receiver) = bounded_pcm_ingress();
+        let mut state = worker_state(sender.clone(), receiver, Vec::new());
+        assert!(
+            state
+                .start_direct(
+                    Some("mock:spotify-monitor".to_owned()),
+                    AudioConfig::default()
+                )
+                .unwrap()
+        );
+        let output = OutputWorker::new().unwrap();
+        let output_audio = output.audio_handle();
+        let initial_playback_start = monotonic_time_ns();
+
+        sender.set_playback_state(PcmPlaybackState::Playing);
+        state.recover_stalled_capture_at(&output_audio, initial_playback_start);
+        let generation = sender.generation();
+        assert!(sender.submit_interleaved_f64_at(
+            &[0.2; 512],
+            44_100,
+            1,
+            generation,
+            0,
+            initial_playback_start + 1,
+        ));
+        state.process_available_audio(&output_audio);
+
+        let resumed_playback_start = initial_playback_start + 60_000_000_000;
+        sender.set_playback_state(PcmPlaybackState::Paused);
+        state.recover_stalled_capture_at(&output_audio, resumed_playback_start - 10_000_000_000);
+        sender.set_playback_state(PcmPlaybackState::Playing);
+        state.recover_stalled_capture_at(&output_audio, resumed_playback_start);
+
+        state.recover_stalled_capture_at(
+            &output_audio,
+            resumed_playback_start + super::DIRECT_PCM_FIRST_BATCH_TIMEOUT_NS - 1,
+        );
+        assert!(!state.fallback_active);
+        assert!(matches!(
+            state.session.as_ref().unwrap().input,
+            AudioInput::DirectPcm
+        ));
+
+        state.recover_stalled_capture_at(
+            &output_audio,
+            resumed_playback_start + super::DIRECT_PCM_FIRST_BATCH_TIMEOUT_NS + 1,
+        );
+        assert!(state.fallback_active);
+        let _ = output.shutdown();
+    }
+
+    #[test]
+    fn switching_to_capture_and_back_invalidates_old_direct_pcm() {
+        let (sender, receiver) = bounded_pcm_ingress();
+        let mut state = worker_state(sender.clone(), receiver, Vec::new());
+        assert!(
+            state
+                .start_direct(
+                    Some("mock:spotify-monitor".to_owned()),
+                    AudioConfig::default()
+                )
+                .unwrap()
+        );
+        let old_generation = sender.generation();
+        assert!(sender.submit_interleaved_f64_at(
+            &[0.25, 0.25],
+            44_100,
+            2,
+            old_generation,
+            0,
+            monotonic_time_ns(),
+        ));
+
+        assert!(
+            state
+                .start(Some("mock:microphone".to_owned()), AudioConfig::default())
+                .unwrap()
+        );
+        assert!(!state.direct_requested);
+        assert!(!sender.stats().enabled);
+        assert_eq!(
+            state.session.as_ref().unwrap().input.transport(),
+            AudioInputTransport::CaptureDevice
+        );
+        assert!(sender.stats().stale_samples >= 1);
+
+        assert!(
+            state
+                .start_direct(
+                    Some("mock:spotify-monitor".to_owned()),
+                    AudioConfig::default()
+                )
+                .unwrap()
+        );
+        assert!(sender.generation() > old_generation);
+        assert!(!sender.submit_interleaved_f64_at(
+            &[0.5, 0.5],
+            44_100,
+            2,
+            old_generation,
+            1,
+            monotonic_time_ns().saturating_add(1),
+        ));
+        assert_eq!(sender.stats().queue_occupancy, 0);
+        assert_eq!(
+            state
+                .session
+                .as_ref()
+                .unwrap()
+                .processor
+                .stats()
+                .samples_seen,
+            0
+        );
+    }
+
+    #[test]
+    fn direct_pcm_overlap_is_dropped_and_forward_gap_is_counted_once() {
+        let (sender, receiver) = bounded_pcm_ingress();
+        let mut state = worker_state(sender.clone(), receiver, Vec::new());
+        assert!(
+            state
+                .start_direct(
+                    Some("mock:spotify-monitor".to_owned()),
+                    AudioConfig::default()
+                )
+                .unwrap()
+        );
+        let output = OutputWorker::new().unwrap();
+        let output_audio = output.audio_handle();
+        let generation = sender.generation();
+        let packet = [0.2_f64; 512];
+        let timestamp = monotonic_time_ns();
+
+        assert!(sender.submit_interleaved_f64_at(&packet, 44_100, 1, generation, 0, timestamp,));
+        state.process_available_audio(&output_audio);
+        assert_eq!(
+            state
+                .session
+                .as_ref()
+                .unwrap()
+                .processor
+                .stats()
+                .samples_seen,
+            512
+        );
+
+        assert!(
+            sender.submit_interleaved_f64_at(&packet, 44_100, 1, generation, 0, timestamp + 1,)
+        );
+        state.process_available_audio(&output_audio);
+        assert_eq!(
+            state
+                .session
+                .as_ref()
+                .unwrap()
+                .processor
+                .stats()
+                .samples_seen,
+            512
+        );
+
+        assert!(sender.submit_interleaved_f64_at(
+            &packet,
+            44_100,
+            1,
+            generation,
+            1_024,
+            timestamp + 2,
+        ));
+        state.process_available_audio(&output_audio);
+
+        assert_eq!(
+            state
+                .session
+                .as_ref()
+                .unwrap()
+                .processor
+                .stats()
+                .samples_seen,
+            1_536
+        );
+        assert_eq!(sender.stats().dropped_samples, 512);
+        assert_eq!(sender.stats().discontinuities, 1);
+        assert_eq!(sender.stats().queue_occupancy, 0);
+        let _ = output.shutdown();
+    }
+
+    #[test]
+    fn monitor_fallback_probes_direct_pcm_and_clears_transition_events() {
+        let (sender, receiver) = bounded_pcm_ingress();
+        let mut state = worker_state(sender.clone(), receiver, Vec::new());
+        assert!(
+            state
+                .start_direct(
+                    Some("mock:spotify-monitor".to_owned()),
+                    AudioConfig::default()
+                )
+                .unwrap()
+        );
+        let output = OutputWorker::new().unwrap();
+        let output_audio = output.audio_handle();
+        state.pending_beats.push_back(RenderBeatEvent {
+            sequence: 1,
+            timestamp_ns: 1,
+            strength: 1.0,
+        });
+        state.pending_structure.push_back(PendingStructureEdge {
+            sequence: 1,
+            timestamp_ns: 1,
+            phase: RenderMusicStructurePhase::Drop,
+            confidence: 1.0,
+            buildup_progress: 0.0,
+            drop_event: true,
+            section_change: false,
+            phase_change: true,
+        });
+
+        let now = monotonic_time_ns();
+        sender.set_playback_state(PcmPlaybackState::Failed);
+        state.recover_stalled_capture_at(&output_audio, now);
+        assert!(state.fallback_active);
+        assert!(state.pending_beats.is_empty());
+        assert!(state.pending_structure.is_empty());
+        assert_eq!(state.audio_update_sequence, 1);
+        assert!(matches!(
+            state.session.as_ref().unwrap().input,
+            AudioInput::MonitorFallback(_)
+        ));
+
+        sender.set_playback_state(PcmPlaybackState::Playing);
+        state.next_direct_probe_ns = now;
+        state.recover_stalled_capture_at(&output_audio, now);
+        assert!(state.direct_probe_generation.is_some());
+        let probe_generation = sender.generation();
+        let probe_packet = [0.2_f64; 512];
+        for batch_index in 0..super::DIRECT_PCM_RECOVERY_CONFIRM_BATCHES {
+            assert!(sender.submit_interleaved_f64_at(
+                &probe_packet,
+                44_100,
+                1,
+                probe_generation,
+                (batch_index * probe_packet.len()) as u64,
+                now + batch_index as u64 + 1,
+            ));
+        }
+        state.recover_stalled_capture_at(&output_audio, now + 100_000_000);
+
+        assert!(!state.fallback_active);
+        assert!(state.direct_probe_generation.is_none());
+        assert!(matches!(
+            state.session.as_ref().unwrap().input,
+            AudioInput::DirectPcm
+        ));
+        assert_eq!(
+            state
+                .session
+                .as_ref()
+                .unwrap()
+                .processor
+                .stats()
+                .samples_seen,
+            0
+        );
+        assert!(state.pending_beats.is_empty());
+        assert!(state.pending_structure.is_empty());
+        assert_eq!(state.audio_update_sequence, 2);
+        assert_eq!(sender.stats().queue_occupancy, 0);
+
+        let generation = sender.generation();
+        assert!(sender.submit_interleaved_f64_at(
+            &probe_packet,
+            44_100,
+            1,
+            generation,
+            0,
+            now + 200_000_000,
+        ));
+        state.process_available_audio(&output_audio);
+        assert_eq!(
+            state
+                .session
+                .as_ref()
+                .unwrap()
+                .processor
+                .stats()
+                .samples_seen,
+            512
+        );
+        let _ = output.shutdown();
+    }
+
+    #[test]
+    fn failed_recovery_probe_keeps_monitor_as_the_only_analysis_source() {
+        let (sender, receiver) = bounded_pcm_ingress();
+        let mut state = worker_state(sender.clone(), receiver, Vec::new());
+        assert!(
+            state
+                .start_direct(
+                    Some("mock:spotify-monitor".to_owned()),
+                    AudioConfig::default()
+                )
+                .unwrap()
+        );
+        let output = OutputWorker::new().unwrap();
+        let output_audio = output.audio_handle();
+        let now = monotonic_time_ns();
+        sender.set_playback_state(PcmPlaybackState::Failed);
+        state.recover_stalled_capture_at(&output_audio, now);
+        sender.set_playback_state(PcmPlaybackState::Playing);
+        state.next_direct_probe_ns = now;
+        state.recover_stalled_capture_at(&output_audio, now);
+
+        state.direct_probe_started_ns =
+            now.saturating_sub(super::DIRECT_PCM_RECOVERY_PROBE_TIMEOUT_NS + 1);
+        state.recover_stalled_capture_at(&output_audio, now);
+
+        assert!(state.fallback_active);
+        assert!(state.direct_probe_generation.is_none());
+        assert!(matches!(
+            state.session.as_ref().unwrap().input,
+            AudioInput::MonitorFallback(_)
+        ));
+        assert!(!sender.stats().enabled);
+        assert!(
+            state
+                .last_error
+                .as_deref()
+                .is_some_and(|error| { error.contains("using PipeWire monitor capture") })
+        );
+        let _ = output.shutdown();
     }
 }

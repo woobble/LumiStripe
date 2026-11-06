@@ -52,6 +52,7 @@ export const emptyTelemetry: AudioTelemetry = {
   sync_offset_ms: 0,
   sync_route: "mic|unknown|default",
   input_transport: "off",
+  input_state: "inactive",
   input_sample_rate: 0,
   input_channels: 0,
   pcm_ingress: {

@@ -2700,6 +2700,7 @@ async fn serves_compatible_http_websockets_with_an_in_process_engine() {
             "sync_offset_ms",
             "sync_route",
             "input_transport",
+            "input_state",
             "input_sample_rate",
             "input_channels",
             "pcm_ingress",

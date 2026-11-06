@@ -56,6 +56,20 @@ export interface AudioTelemetry {
   sync_offset_ms: number
   sync_route: string
   input_transport: "off" | "capture_device" | "direct_pcm" | "monitor_fallback" | "demo"
+  input_state:
+    | "inactive"
+    | "capture_waiting"
+    | "capture_healthy"
+    | "capture_stalled"
+    | "direct_pcm_waiting"
+    | "direct_pcm_healthy"
+    | "direct_pcm_overloaded"
+    | "direct_pcm_stalled"
+    | "dsp_processing_stalled"
+    | "spotify_paused"
+    | "monitor_fallback_active"
+    | "monitor_fallback_unavailable"
+    | "demo_active"
   input_sample_rate: number
   input_channels: number
   pcm_ingress: PcmIngressResponse

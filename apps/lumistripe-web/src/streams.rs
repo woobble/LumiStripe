@@ -9,8 +9,8 @@ use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
-use lumistripe_engine_audio::MusicStructurePhase;
-use lumistripe_engine_protocol::{EngineAudioStatus, ResponseResult};
+use lumistripe_engine_audio::{MusicStructurePhase, PcmPlaybackState};
+use lumistripe_engine_protocol::{AudioInputTransport, EngineAudioStatus, ResponseResult};
 use lumistripe_engine_runtime::EngineHandle;
 use serde_json::{Value, json};
 use std::collections::VecDeque;
@@ -96,6 +96,7 @@ pub fn spawn_audio_telemetry_publisher(
         let mut was_drop = false;
         let mut noise_samples = VecDeque::with_capacity(300);
         let mut last_audio_sequence = None;
+        let mut pcm_drop_diagnostics = PcmDropDiagnostics::default();
         let mut previous_context: Option<AudioStreamContext> = None;
         let mut last_error: Option<String> = None;
         loop {
@@ -130,6 +131,8 @@ pub fn spawn_audio_telemetry_publisher(
                                 estimated_noise_floor(&noise_samples),
                                 &mut drop_count,
                                 &mut was_drop,
+                                &mut pcm_drop_diagnostics,
+                                crate::state::monotonic_time_ns(),
                             );
                             Ok(Arc::new(telemetry))
                         }
@@ -208,6 +211,8 @@ fn audio_telemetry(
     estimated_noise_floor: f64,
     drop_count: &mut u64,
     was_drop: &mut bool,
+    pcm_drop_diagnostics: &mut PcmDropDiagnostics,
+    now_ns: u64,
 ) -> Value {
     let frame = status.frame;
     let features = status.features;
@@ -238,6 +243,7 @@ fn audio_telemetry(
     let scheduler_late_coalesced = scheduler.map_or(0, |state| state.late_ticks_coalesced);
     let scheduler_lateness_ms =
         scheduler.map_or(0.0, |state| state.beat_lateness_p95_ns as f64 / 1_000_000.0);
+    let input_state = audio_input_state(status, pcm_drop_diagnostics, now_ns);
     let spectral_balance = {
         let total = features.bass_energy + features.mid_energy + features.treble_energy;
         if total > 0.0 {
@@ -282,6 +288,7 @@ fn audio_telemetry(
         "sync_offset_ms": context.sync_offset_ms,
         "sync_route": context.sync_route,
         "input_transport": status.input_transport,
+        "input_state": input_state,
         "input_sample_rate": status.device.as_ref().map_or(status.pcm_ingress.sample_rate, |device| device.sample_rate),
         "input_channels": status.device.as_ref().map_or(status.pcm_ingress.channels, |device| device.channels),
         "pcm_ingress": status.pcm_ingress,
@@ -313,6 +320,92 @@ fn audio_telemetry(
         "drop_accent_reason": scheduler.and_then(|state| state.drop_accent_reason.as_deref()),
         "health": if active { "ok" } else if status.last_error.is_some() { "unavailable" } else { "inactive" },
     })
+}
+
+#[derive(Default)]
+struct PcmDropDiagnostics {
+    last_dropped_samples: u64,
+    last_drop_at_ns: Option<u64>,
+}
+
+fn audio_input_state(
+    status: &EngineAudioStatus,
+    drop_diagnostics: &mut PcmDropDiagnostics,
+    now_ns: u64,
+) -> &'static str {
+    const AUDIO_HEALTH_TIMEOUT_NS: u64 = 1_500_000_000;
+    const RECENT_DROP_TIMEOUT_NS: u64 = 5_000_000_000;
+
+    if status.pcm_ingress.dropped_samples > drop_diagnostics.last_dropped_samples {
+        drop_diagnostics.last_dropped_samples = status.pcm_ingress.dropped_samples;
+        drop_diagnostics.last_drop_at_ns = Some(now_ns);
+    }
+    let recently_dropped = drop_diagnostics
+        .last_drop_at_ns
+        .is_some_and(|last_drop| now_ns.saturating_sub(last_drop) <= RECENT_DROP_TIMEOUT_NS);
+    let feature_stale = status
+        .last_frame_ns
+        .is_some_and(|last_frame| now_ns.saturating_sub(last_frame) > AUDIO_HEALTH_TIMEOUT_NS);
+    match status.input_transport {
+        AudioInputTransport::Off => {
+            if status.last_error.as_deref().is_some_and(|error| {
+                error.starts_with("Spotify decoded PCM failed and monitor fallback")
+                    || error.starts_with("Spotify monitor fallback stopped")
+            }) {
+                "monitor_fallback_unavailable"
+            } else {
+                "inactive"
+            }
+        }
+        AudioInputTransport::Demo => "demo_active",
+        AudioInputTransport::DirectPcm => match status.pcm_ingress.playback_state {
+            PcmPlaybackState::Paused => "spotify_paused",
+            PcmPlaybackState::Failed => "direct_pcm_stalled",
+            PcmPlaybackState::Idle | PcmPlaybackState::Loading => "direct_pcm_waiting",
+            PcmPlaybackState::Playing => {
+                let input_fresh =
+                    status
+                        .pcm_ingress
+                        .last_input_timestamp_ns
+                        .is_some_and(|last_input| {
+                            now_ns.saturating_sub(last_input) <= AUDIO_HEALTH_TIMEOUT_NS
+                        });
+                if !input_fresh {
+                    "direct_pcm_stalled"
+                } else if recently_dropped
+                    || status.pcm_ingress.queue_occupancy >= status.pcm_ingress.queue_capacity
+                {
+                    "direct_pcm_overloaded"
+                } else if status.processor.samples_seen > 0 && feature_stale {
+                    "dsp_processing_stalled"
+                } else if status.last_frame_ns.is_none() {
+                    "direct_pcm_waiting"
+                } else {
+                    "direct_pcm_healthy"
+                }
+            }
+        },
+        AudioInputTransport::MonitorFallback => "monitor_fallback_active",
+        AudioInputTransport::CaptureDevice => {
+            let callback_fresh = status
+                .capture
+                .last_callback_ns
+                .is_some_and(|last_callback| {
+                    now_ns.saturating_sub(last_callback) <= AUDIO_HEALTH_TIMEOUT_NS
+                });
+            if callback_fresh && !feature_stale {
+                "capture_healthy"
+            } else if status.capture.callback_count == 0 {
+                "capture_waiting"
+            } else if callback_fresh && status.processor.samples_seen > 0 && feature_stale {
+                "dsp_processing_stalled"
+            } else if callback_fresh {
+                "capture_waiting"
+            } else {
+                "capture_stalled"
+            }
+        }
+    }
 }
 
 fn record_noise_sample(
@@ -686,10 +779,11 @@ async fn send_state_watch(
 #[cfg(test)]
 mod tests {
     use super::{
-        audio_telemetry, estimated_noise_floor, record_noise_sample, spawn_engine_failure_monitor,
+        PcmDropDiagnostics, audio_input_state, audio_telemetry, estimated_noise_floor,
+        record_noise_sample, spawn_engine_failure_monitor,
     };
     use crate::audio::AudioStreamContext;
-    use lumistripe_engine_audio::{AudioFrame, AudioProcessorStats};
+    use lumistripe_engine_audio::{AudioFrame, AudioProcessorStats, PcmPlaybackState};
     use lumistripe_engine_protocol::{AudioInputTransport, EngineAudioStatus};
     use std::collections::VecDeque;
     use std::sync::Arc;
@@ -784,6 +878,7 @@ mod tests {
         };
         let mut drop_count = 0;
         let mut was_drop = false;
+        let mut pcm_drop_diagnostics = PcmDropDiagnostics::default();
 
         let telemetry = audio_telemetry(
             &status,
@@ -792,6 +887,8 @@ mod tests {
             0.03,
             &mut drop_count,
             &mut was_drop,
+            &mut pcm_drop_diagnostics,
+            crate::state::monotonic_time_ns(),
         );
 
         assert_eq!(telemetry["configured_input_noise_floor"], 0.02);
@@ -810,5 +907,66 @@ mod tests {
         assert_eq!(telemetry["dsp_processing_p50_ns"], 200_000);
         assert_eq!(telemetry["dsp_processing_p95_ns"], 650_000);
         assert_eq!(telemetry["last_feature_timestamp_ns"], 1_234_000_000_u64);
+    }
+
+    #[test]
+    fn input_path_diagnostics_distinguish_pause_overload_stall_and_fallback() {
+        let now = crate::state::monotonic_time_ns();
+        let mut drops = PcmDropDiagnostics::default();
+        let mut status = EngineAudioStatus {
+            active: true,
+            input_transport: AudioInputTransport::DirectPcm,
+            pcm_ingress: lumistripe_engine_audio::PcmIngressStats {
+                enabled: true,
+                playback_state: PcmPlaybackState::Playing,
+                last_input_timestamp_ns: Some(now),
+                queue_capacity: 8,
+                ..Default::default()
+            },
+            processor: AudioProcessorStats {
+                samples_seen: 2_048,
+                ..Default::default()
+            },
+            last_frame_ns: Some(now),
+            ..Default::default()
+        };
+        assert_eq!(
+            audio_input_state(&status, &mut drops, now),
+            "direct_pcm_healthy"
+        );
+
+        status.pcm_ingress.playback_state = PcmPlaybackState::Paused;
+        assert_eq!(
+            audio_input_state(&status, &mut drops, now),
+            "spotify_paused"
+        );
+        status.pcm_ingress.playback_state = PcmPlaybackState::Playing;
+        status.pcm_ingress.dropped_samples = 1;
+        assert_eq!(
+            audio_input_state(&status, &mut drops, now),
+            "direct_pcm_overloaded"
+        );
+
+        drops.last_drop_at_ns = Some(now.saturating_sub(6_000_000_000));
+        status.last_frame_ns = Some(now.saturating_sub(2_000_000_000));
+        assert_eq!(
+            audio_input_state(&status, &mut drops, now),
+            "dsp_processing_stalled"
+        );
+
+        status.input_transport = AudioInputTransport::MonitorFallback;
+        assert_eq!(
+            audio_input_state(&status, &mut drops, now),
+            "monitor_fallback_active"
+        );
+
+        status.input_transport = AudioInputTransport::Off;
+        status.active = false;
+        status.last_error =
+            Some("Spotify decoded PCM failed and monitor fallback could not open: test".to_owned());
+        assert_eq!(
+            audio_input_state(&status, &mut drops, now),
+            "monitor_fallback_unavailable"
+        );
     }
 }

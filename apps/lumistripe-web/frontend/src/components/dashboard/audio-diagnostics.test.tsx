@@ -98,6 +98,60 @@ describe("audio diagnostics", () => {
     expect(missing[0]).toMatchObject({ id: "input-unavailable", message: "Microphone unavailable: device missing" })
   })
 
+  it("reports native Spotify PCM states and fallback transitions", () => {
+    const paused = getAudioDiagnostics(input({
+      configuredSource: "spotify",
+      activeSource: "spotify",
+      telemetry: { ...emptyTelemetry, input_state: "spotify_paused" },
+    }))
+    expect(paused).toMatchObject([{ id: "spotify-paused", severity: "info" }])
+
+    const overloaded = getAudioDiagnostics(input({
+      configuredSource: "spotify",
+      activeSource: "spotify",
+      telemetry: { ...emptyTelemetry, input_state: "direct_pcm_overloaded" },
+    }))
+    expect(overloaded).toMatchObject([{ id: "spotify-pcm-overloaded", severity: "warning" }])
+
+    const fallback = getAudioDiagnostics(input({
+      configuredSource: "spotify",
+      activeSource: "spotify",
+      telemetry: { ...emptyTelemetry, input_state: "monitor_fallback_active", fresh: true, input_peak: 0.1 },
+    }))
+    expect(fallback.map((issue) => issue.id)).toContain("monitor-fallback-active")
+  })
+
+  it("names Spotify authentication and output failures directly", () => {
+    const settings = {
+      spotify: {
+        configured: true,
+        connected: false,
+        logged_in: false,
+        is_active: false,
+        status: "disconnected",
+        position_ms: 0,
+        volume: 0,
+        shuffle: false,
+        repeat: "off",
+        error: "Spotify authentication is required; select LumiStripe in Spotify Connect to pair.",
+      },
+    } as unknown as AudioSettingsResponse
+    expect(getAudioDiagnostics(input({ settings, configuredSource: "spotify" })))
+      .toContainEqual(expect.objectContaining({ id: "spotify-configuration", title: "Spotify authentication required" }))
+
+    const outputSettings = {
+      ...settings,
+      spotify: {
+        ...settings.spotify,
+        connected: true,
+        logged_in: true,
+        error: "Spotify audio output is unavailable; check the PipeWire Spotify sink.",
+      },
+    } as AudioSettingsResponse
+    expect(getAudioDiagnostics(input({ settings: outputSettings, configuredSource: "spotify" })))
+      .toContainEqual(expect.objectContaining({ id: "spotify-configuration", title: "Spotify audio output is unavailable" }))
+  })
+
   it("distinguishes live silence and clipping and links to tuning", () => {
     const silent = getAudioDiagnostics(input({ telemetry: { ...emptyTelemetry, sequence: 5, fresh: true, input_peak: 0 } }))
     expect(silent).toMatchObject([{ id: "input-silent", action: { type: "link", to: "/setup/audio/tuning" } }])

@@ -20,4 +20,9 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+lumistripe-engine-audio = { path = "../lumistripe-engine-audio" }
+lumistripe-engine-config = { path = "../lumistripe-engine-config" }
+lumistripe-engine-protocol = { path = "../lumistripe-engine-protocol" }
+lumistripe-engine-runtime = { path = "../lumistripe-engine-runtime" }
+serde_json.workspace = true
 tempfile.workspace = true

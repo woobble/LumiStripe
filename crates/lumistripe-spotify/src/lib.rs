@@ -30,6 +30,7 @@ use std::{
     fmt,
     fs::{self, OpenOptions},
     io,
+    panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -425,7 +426,10 @@ async fn supervise(
 
         update_status(&status, |snapshot| {
             snapshot.device_name = Some(name.clone());
-            snapshot.error = None;
+            snapshot.error = pending_credentials.is_none().then(|| {
+                "Spotify authentication is required; select LumiStripe in Spotify Connect to pair."
+                    .to_owned()
+            });
         });
 
         'discovery: loop {
@@ -801,60 +805,116 @@ struct DecodedPcmSink {
     tap: Arc<dyn DecodedPcmTap>,
     generation: u64,
     sample_position: u64,
+    tap_failed: bool,
 }
 
 impl DecodedPcmSink {
     fn new(output: Box<dyn Sink>, tap: Arc<dyn DecodedPcmTap>) -> Self {
-        let generation = tap.stream_generation();
-        Self {
+        let mut sink = Self {
             output,
             tap,
-            generation,
+            generation: 0,
             sample_position: 0,
+            tap_failed: false,
+        };
+        if sink.run_tap(|tap| tap.begin_generation()).is_none() {
+            return sink;
         }
+        if let Some(generation) = sink.run_tap(|tap| tap.stream_generation()) {
+            sink.generation = generation;
+        }
+        sink
+    }
+
+    fn run_tap<R>(&mut self, operation: impl FnOnce(&dyn DecodedPcmTap) -> R) -> Option<R> {
+        if self.tap_failed {
+            return None;
+        }
+        match catch_unwind(AssertUnwindSafe(|| operation(self.tap.as_ref()))) {
+            Ok(value) => Some(value),
+            Err(_) => {
+                self.mark_tap_failed();
+                None
+            }
+        }
+    }
+
+    fn mark_tap_failed(&mut self) {
+        if self.tap_failed {
+            return;
+        }
+        self.tap_failed = true;
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            self.tap.set_playback_state(DecodedPcmPlaybackState::Failed)
+        }));
+        tracing::warn!("Spotify decoded PCM analysis tap failed; speaker playback continues");
     }
 }
 
 impl Sink for DecodedPcmSink {
     fn start(&mut self) -> SinkResult<()> {
-        self.output.start()
+        let result = self.output.start();
+        if result.is_err() {
+            self.mark_tap_failed();
+        }
+        result
     }
 
     fn stop(&mut self) -> SinkResult<()> {
-        self.output.stop()
+        let result = self.output.stop();
+        if result.is_err() {
+            self.mark_tap_failed();
+        }
+        result
     }
 
     fn write(&mut self, packet: AudioPacket, converter: &mut Converter) -> SinkResult<()> {
-        let result = match packet {
+        let mut next_generation = self.generation;
+        let mut next_position = self.sample_position;
+        let tap_result = self.run_tap(|tap| match &packet {
             AudioPacket::Samples(samples) => {
                 let channel_count = usize::from(NUM_CHANNELS);
                 if samples.len() % channel_count == 0 {
-                    let generation = self.tap.stream_generation();
-                    if generation != self.generation {
-                        self.generation = generation;
-                        self.sample_position = 0;
-                    }
                     let frame_count = samples.len() / channel_count;
-                    self.tap.submit_interleaved_f64(
-                        &samples,
+                    let generation = tap.stream_generation();
+                    if generation != next_generation {
+                        next_generation = generation;
+                        next_position = 0;
+                    }
+                    tap.submit_interleaved_f64(
+                        samples,
                         SAMPLE_RATE,
                         u16::from(NUM_CHANNELS),
                         generation,
-                        self.sample_position,
+                        next_position,
                     );
-                    self.sample_position = self.sample_position.saturating_add(frame_count as u64);
+                    if let Some(position) = next_position.checked_add(frame_count as u64) {
+                        next_position = position;
+                    } else {
+                        tap.record_unsupported_packet();
+                        return Err(());
+                    }
                 } else {
-                    self.tap.record_unsupported_packet();
+                    tap.record_unsupported_packet();
                 }
-                self.output.write(AudioPacket::Samples(samples), converter)
+                Ok((next_generation, next_position))
             }
-            AudioPacket::Raw(bytes) => {
-                self.tap.record_unsupported_packet();
-                self.output.write(AudioPacket::Raw(bytes), converter)
+            AudioPacket::Raw(_) => {
+                tap.record_unsupported_packet();
+                Ok((next_generation, next_position))
             }
-        };
+        });
+        match tap_result {
+            Some(Ok((generation, position))) => {
+                self.generation = generation;
+                self.sample_position = position;
+            }
+            Some(Err(())) => self.mark_tap_failed(),
+            None => {}
+        }
+        let result = self.output.write(packet, converter);
         if result.is_err() {
-            self.tap.set_playback_state(DecodedPcmPlaybackState::Failed);
+            self.mark_tap_failed();
         }
         result
     }
@@ -1414,14 +1474,25 @@ mod tests {
             player::PlayerEvent,
         },
     };
+    use lumistripe_engine_audio::{
+        AudioConfig, PcmIngressSender, PcmPlaybackState, monotonic_time_ns,
+    };
+    use lumistripe_engine_config::{EngineConfig, OutputBackend, OutputConfig};
+    use lumistripe_engine_protocol::{
+        AudioInputTransport, EngineAudioStatus, RenderOutput, RenderSceneUpdate,
+        RenderSchedulerConfig, RequestCommand, ResponseResult,
+    };
+    use lumistripe_engine_runtime::{EngineHandle, EngineRuntime};
+    use serde_json::Value;
     use std::{
         fs,
         os::unix::fs::PermissionsExt,
+        path::PathBuf,
         sync::{
             Arc, Mutex,
-            atomic::{AtomicU64, Ordering},
+            atomic::{AtomicBool, AtomicU64, Ordering},
         },
-        time::Duration,
+        time::{Duration, Instant},
     };
     use tempfile::tempdir;
     use tokio_util::sync::CancellationToken;
@@ -1432,6 +1503,7 @@ mod tests {
         states: Mutex<Vec<DecodedPcmPlaybackState>>,
         submissions: Mutex<Vec<(Vec<f64>, u32, u16, u64, u64)>>,
         unsupported_packets: AtomicU64,
+        panic_on_submit: AtomicBool,
     }
 
     impl DecodedPcmTap for RecordingPcmTap {
@@ -1455,6 +1527,10 @@ mod tests {
             stream_generation: u64,
             sample_position: u64,
         ) {
+            assert!(
+                !self.panic_on_submit.load(Ordering::Relaxed),
+                "synthetic tap panic"
+            );
             self.submissions.lock().unwrap().push((
                 samples.to_vec(),
                 sample_rate,
@@ -1485,6 +1561,154 @@ mod tests {
         }
     }
 
+    struct DiscardingSink;
+
+    impl Sink for DiscardingSink {
+        fn write(&mut self, _packet: AudioPacket, _converter: &mut Converter) -> SinkResult<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Debug)]
+    struct RuntimePcmTap {
+        ingress: PcmIngressSender,
+        timestamp_origin_ns: u64,
+        deterministic_timestamps: bool,
+        last_timestamp_ns: AtomicU64,
+    }
+
+    impl RuntimePcmTap {
+        fn new(ingress: PcmIngressSender, deterministic_timestamps: bool) -> Self {
+            Self {
+                ingress,
+                timestamp_origin_ns: monotonic_time_ns(),
+                deterministic_timestamps,
+                last_timestamp_ns: AtomicU64::new(0),
+            }
+        }
+    }
+
+    impl DecodedPcmTap for RuntimePcmTap {
+        fn stream_generation(&self) -> u64 {
+            self.ingress.generation()
+        }
+
+        fn begin_generation(&self) {
+            self.ingress.begin_generation();
+        }
+
+        fn set_playback_state(&self, state: DecodedPcmPlaybackState) {
+            let state = match state {
+                DecodedPcmPlaybackState::Idle => PcmPlaybackState::Idle,
+                DecodedPcmPlaybackState::Loading => PcmPlaybackState::Loading,
+                DecodedPcmPlaybackState::Playing => PcmPlaybackState::Playing,
+                DecodedPcmPlaybackState::Paused => PcmPlaybackState::Paused,
+                DecodedPcmPlaybackState::Failed => PcmPlaybackState::Failed,
+            };
+            self.ingress.set_playback_state(state);
+        }
+
+        fn submit_interleaved_f64(
+            &self,
+            samples: &[f64],
+            sample_rate: u32,
+            channels: u16,
+            stream_generation: u64,
+            sample_position: u64,
+        ) {
+            let frames = samples.len() / usize::from(channels.max(1));
+            let duration_ns = (frames as u128 * 1_000_000_000_u128 / u128::from(sample_rate.max(1)))
+                .min(u64::MAX as u128) as u64;
+            let submitted_at_ns = if self.deterministic_timestamps {
+                let end_position = sample_position.saturating_add(frames as u64);
+                self.timestamp_origin_ns.saturating_add(
+                    (end_position as u128 * 1_000_000_000_u128 / u128::from(sample_rate.max(1)))
+                        .min(u64::MAX as u128) as u64,
+                )
+            } else {
+                let mut previous = self.last_timestamp_ns.load(Ordering::Relaxed);
+                loop {
+                    let submitted = monotonic_time_ns().max(previous.saturating_add(duration_ns));
+                    match self.last_timestamp_ns.compare_exchange_weak(
+                        previous,
+                        submitted,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    ) {
+                        Ok(_) => break submitted,
+                        Err(current) => previous = current,
+                    }
+                }
+            };
+            let _ = self.ingress.submit_interleaved_f64_at(
+                samples,
+                sample_rate,
+                channels,
+                stream_generation,
+                sample_position,
+                submitted_at_ns,
+            );
+        }
+
+        fn record_unsupported_packet(&self) {
+            self.ingress.record_unsupported_packet();
+        }
+    }
+
+    fn fixture_bass_sine_raw() -> (Value, Value, Vec<f32>) {
+        let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/audio-reference-v1");
+        let reference: Value = serde_json::from_slice(
+            &fs::read(fixture_dir.join("reference.json")).expect("audio reference exists"),
+        )
+        .expect("audio reference is valid JSON");
+        let fixture = reference["fixtures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|fixture| fixture["name"] == "bass_sine_raw")
+            .expect("bass sine fixture exists")
+            .clone();
+        let tolerance = reference["tolerance"].clone();
+        let bytes = fs::read(fixture_dir.join(fixture["pcm_file"].as_str().unwrap()))
+            .expect("fixture PCM exists");
+        let samples = bytes
+            .chunks_exact(4)
+            .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
+            .collect();
+        (fixture, tolerance, samples)
+    }
+
+    async fn wait_for_audio_samples(handle: &EngineHandle, target: u64) -> EngineAudioStatus {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if let ResponseResult::AudioStatus { status } = handle.audio_status().await.unwrap() {
+                if status.processor.samples_seen >= target {
+                    return status;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "audio worker did not consume {target} samples"
+            );
+            tokio::task::yield_now().await;
+        }
+    }
+
+    fn assert_close(
+        expected: f64,
+        actual: f64,
+        absolute_tolerance: f64,
+        relative_tolerance: f64,
+        context: &str,
+    ) {
+        let tolerance = absolute_tolerance.max(expected.abs() * relative_tolerance);
+        assert!(
+            (expected - actual).abs() <= tolerance,
+            "{context}: expected {expected:.9}, got {actual:.9}, tolerance {tolerance:.3e}"
+        );
+    }
+
     #[test]
     fn decoded_pcm_tap_observes_stereo_samples_and_forwards_them_unchanged() {
         let tap = Arc::new(RecordingPcmTap::default());
@@ -1509,7 +1733,7 @@ mod tests {
                 samples,
                 librespot::playback::SAMPLE_RATE,
                 u16::from(librespot::playback::NUM_CHANNELS),
-                0,
+                1,
                 0
             )]
         );
@@ -1518,6 +1742,67 @@ mod tests {
             .unwrap();
         assert_eq!(*output_raw.lock().unwrap(), [vec![1, 2, 3]]);
         assert_eq!(tap.unsupported_packets.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn tap_panic_marks_analysis_failed_without_interrupting_speaker_output() {
+        let tap = Arc::new(RecordingPcmTap::default());
+        tap.panic_on_submit.store(true, Ordering::Relaxed);
+        let output_samples = Arc::new(Mutex::new(Vec::new()));
+        let output_raw = Arc::new(Mutex::new(Vec::new()));
+        let output = RecordingSink {
+            samples: Arc::clone(&output_samples),
+            raw: Arc::clone(&output_raw),
+        };
+        let mut sink = DecodedPcmSink::new(Box::new(output), tap.clone());
+        let samples = vec![0.25, -0.25, 0.5, -0.5];
+        let mut converter = Converter::new(None);
+
+        sink.write(AudioPacket::Samples(samples.clone()), &mut converter)
+            .unwrap();
+
+        assert_eq!(*output_samples.lock().unwrap(), [samples]);
+        assert_eq!(
+            tap.states.lock().unwrap().last(),
+            Some(&DecodedPcmPlaybackState::Failed)
+        );
+    }
+
+    #[test]
+    fn sink_stop_start_preserves_pause_timeline_and_generation_change_resets_position() {
+        let tap = Arc::new(RecordingPcmTap::default());
+        let output_samples = Arc::new(Mutex::new(Vec::new()));
+        let output_raw = Arc::new(Mutex::new(Vec::new()));
+        let output = RecordingSink {
+            samples: Arc::clone(&output_samples),
+            raw: Arc::clone(&output_raw),
+        };
+        let mut sink = DecodedPcmSink::new(Box::new(output), tap.clone());
+        let mut converter = Converter::new(None);
+        let samples = vec![0.1, 0.1, 0.2, 0.2];
+
+        sink.start().unwrap();
+        sink.write(AudioPacket::Samples(samples.clone()), &mut converter)
+            .unwrap();
+        tap.set_playback_state(DecodedPcmPlaybackState::Paused);
+        sink.stop().unwrap();
+        sink.start().unwrap();
+        sink.write(AudioPacket::Samples(samples.clone()), &mut converter)
+            .unwrap();
+        tap.begin_generation();
+        sink.write(AudioPacket::Samples(samples), &mut converter)
+            .unwrap();
+
+        let submissions = tap.submissions.lock().unwrap();
+        assert_eq!(
+            submissions
+                .iter()
+                .map(|submission| (submission.3, submission.4))
+                .collect::<Vec<_>>(),
+            [(1, 0), (1, 2), (2, 0)]
+        );
+        assert_eq!(output_samples.lock().unwrap().len(), 3);
+        assert!(output_raw.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -1873,6 +2158,436 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn decoded_pcm_runs_through_ingress_dsp_structure_and_mock_led_output() {
+        let (fixture, tolerance, mono_samples) = fixture_bass_sine_raw();
+        let config: AudioConfig =
+            serde_json::from_value(fixture["config"].clone()).expect("fixture audio config");
+        let frames_per_packet = fixture["feed_size"].as_u64().unwrap() as usize;
+        let mut runtime = EngineRuntime::start().expect("start mock engine runtime");
+        let handle = runtime.handle();
+        assert!(matches!(
+            handle
+                .configure(
+                    EngineConfig::new(vec![OutputConfig {
+                        id: "synthetic-led".to_owned(),
+                        pixel_count: 8,
+                        reversed: false,
+                        backend: OutputBackend::Mock,
+                    }])
+                    .expect("valid mock output config")
+                )
+                .await
+                .unwrap(),
+            ResponseResult::Configured {
+                output_count: 1,
+                total_pixels: 8
+            }
+        ));
+        let scene_timestamp_ns = monotonic_time_ns();
+        assert!(matches!(
+            handle
+                .update_scene(RenderSceneUpdate {
+                    revision: 1,
+                    timestamp_ns: scene_timestamp_ns,
+                    brightness: 1.0,
+                    power: Default::default(),
+                    outputs: vec![RenderOutput {
+                        animation: "rainbow".to_owned(),
+                        ..RenderOutput::default()
+                    }],
+                    scheduler: RenderSchedulerConfig { max_fps: 60 },
+                })
+                .await
+                .unwrap(),
+            ResponseResult::SceneUpdated {
+                revision: 1,
+                replaced: false
+            }
+        ));
+        let ingress = handle.audio_pcm_ingress().unwrap();
+        assert!(matches!(
+            handle
+                .request(RequestCommand::AudioStartDirect {
+                    fallback_selector: None,
+                    config,
+                })
+                .await
+                .unwrap(),
+            ResponseResult::AudioConfigured { active: true }
+        ));
+
+        let tap = Arc::new(RuntimePcmTap::new(ingress.clone(), true));
+        let timestamp_origin_ns = tap.timestamp_origin_ns;
+        tap.set_playback_state(DecodedPcmPlaybackState::Playing);
+        let output_samples = Arc::new(Mutex::new(Vec::new()));
+        let output_raw = Arc::new(Mutex::new(Vec::new()));
+        let mut sink = DecodedPcmSink::new(
+            Box::new(RecordingSink {
+                samples: Arc::clone(&output_samples),
+                raw: Arc::clone(&output_raw),
+            }),
+            tap.clone(),
+        );
+        sink.start().unwrap();
+
+        let expected_frames = fixture["frames"].as_array().unwrap();
+        let expected_structures = fixture["structures"].as_array().unwrap();
+        let absolute_tolerance = tolerance["absolute"].as_f64().unwrap();
+        let relative_tolerance = tolerance["relative"].as_f64().unwrap();
+        let mut checked_frames = 0usize;
+        let mut previous_sequence = 0_u64;
+
+        for offset in (0..mono_samples.len()).step_by(frames_per_packet) {
+            let end = (offset + frames_per_packet).min(mono_samples.len());
+            let stereo = mono_samples[offset..end]
+                .iter()
+                .flat_map(|sample| [f64::from(*sample), f64::from(*sample)])
+                .collect::<Vec<_>>();
+            sink.write(AudioPacket::Samples(stereo), &mut Converter::new(None))
+                .unwrap();
+
+            let status = wait_for_audio_samples(&handle, end as u64).await;
+            assert_eq!(status.input_transport, AudioInputTransport::DirectPcm);
+            assert_eq!(status.pcm_ingress.dropped_samples, 0);
+            assert_eq!(status.pcm_ingress.unsupported_packets, 0);
+            assert_eq!(status.pcm_ingress.queue_occupancy, 0);
+            assert_eq!(status.processor.samples_seen, end as u64);
+
+            if status.frame.sequence > previous_sequence {
+                let expected = &expected_frames[checked_frames];
+                assert_eq!(
+                    status.frame.sequence,
+                    expected["frame"]["sequence"].as_u64().unwrap()
+                );
+                assert_eq!(
+                    status.frame.fresh,
+                    expected["frame"]["fresh"].as_bool().unwrap()
+                );
+                assert_eq!(
+                    status.frame.beat,
+                    expected["frame"]["beat"].as_bool().unwrap()
+                );
+                assert_close(
+                    expected["frame"]["rms"].as_f64().unwrap(),
+                    f64::from(status.frame.rms),
+                    absolute_tolerance,
+                    relative_tolerance,
+                    &format!("frame {} RMS", status.frame.sequence),
+                );
+                assert_close(
+                    expected["frame"]["beat_strength"].as_f64().unwrap(),
+                    f64::from(status.frame.beat_strength),
+                    absolute_tolerance,
+                    relative_tolerance,
+                    &format!("frame {} beat strength", status.frame.sequence),
+                );
+                for (band_index, (expected_band, actual_band)) in expected["frame"]["bands"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .zip(status.frame.bands)
+                    .enumerate()
+                {
+                    assert_close(
+                        expected_band.as_f64().unwrap(),
+                        f64::from(actual_band),
+                        absolute_tolerance,
+                        relative_tolerance,
+                        &format!("frame {} band {band_index}", status.frame.sequence),
+                    );
+                }
+                for (field, actual) in [
+                    ("bass_energy", status.features.bass_energy),
+                    ("mid_energy", status.features.mid_energy),
+                    ("treble_energy", status.features.treble_energy),
+                    ("bpm", status.features.bpm),
+                    ("beat_confidence", status.features.beat_confidence),
+                ] {
+                    assert_close(
+                        expected["features"][field].as_f64().unwrap(),
+                        f64::from(actual),
+                        absolute_tolerance,
+                        relative_tolerance,
+                        &format!("frame {} {field}", status.frame.sequence),
+                    );
+                }
+                let expected_timestamp = expected["frame"]["timestamp"].as_f64().unwrap();
+                let actual_timestamp =
+                    status.frame.timestamp - timestamp_origin_ns as f64 / 1_000_000_000.0;
+                assert_close(
+                    expected_timestamp,
+                    actual_timestamp,
+                    0.000_002,
+                    0.0,
+                    &format!("frame {} timestamp", status.frame.sequence),
+                );
+                let expected_structure = &expected_structures[checked_frames];
+                let actual_phase = format!("{:?}", status.structure.phase).to_lowercase();
+                assert_eq!(actual_phase, expected_structure["phase"].as_str().unwrap());
+                assert_close(
+                    expected_structure["confidence"].as_f64().unwrap(),
+                    status.structure.confidence,
+                    0.003,
+                    0.003,
+                    &format!("structure {} confidence", status.frame.sequence),
+                );
+                assert_close(
+                    expected_structure["buildup_progress"].as_f64().unwrap(),
+                    status.structure.buildup_progress,
+                    0.003,
+                    0.003,
+                    &format!("structure {} buildup", status.frame.sequence),
+                );
+                previous_sequence = status.frame.sequence;
+                checked_frames += 1;
+            }
+        }
+
+        assert_eq!(checked_frames, expected_frames.len());
+        let final_status = wait_for_audio_samples(&handle, mono_samples.len() as u64).await;
+        assert_eq!(
+            final_status.pcm_ingress.samples_received,
+            mono_samples.len() as u64
+        );
+        assert_eq!(
+            final_status.processor.samples_seen,
+            mono_samples.len() as u64
+        );
+        assert_eq!(
+            final_status.processor.fft_count,
+            fixture["final_stats"]["fft_count"].as_u64().unwrap()
+        );
+        assert_eq!(
+            final_status.processor.feed_count,
+            fixture["final_stats"]["feed_count"].as_u64().unwrap()
+        );
+        assert_eq!(
+            final_status.frame.beat,
+            expected_frames.last().unwrap()["frame"]["beat"]
+                .as_bool()
+                .unwrap()
+        );
+        let forwarded = output_samples
+            .lock()
+            .unwrap()
+            .iter()
+            .flatten()
+            .copied()
+            .collect::<Vec<_>>();
+        assert!(output_raw.lock().unwrap().is_empty());
+        assert_eq!(forwarded.len(), mono_samples.len() * 2);
+        for (index, (actual, source)) in forwarded
+            .iter()
+            .zip(
+                mono_samples
+                    .iter()
+                    .flat_map(|sample| [f64::from(*sample); 2]),
+            )
+            .enumerate()
+        {
+            assert_eq!(*actual, source, "forwarded stereo sample {index}");
+        }
+        sink.stop().unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if let ResponseResult::Health {
+                frames_rendered,
+                audio_update_sequence,
+                ..
+            } = handle.health().await.unwrap()
+                && frames_rendered > 0
+                && audio_update_sequence.is_some_and(|sequence| sequence > 1)
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "mock renderer did not consume audio updates"
+            );
+            tokio::task::yield_now().await;
+        }
+
+        let _ = handle.request(RequestCommand::AudioStop).await.unwrap();
+        tokio::task::spawn_blocking(move || runtime.shutdown())
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[derive(Clone, Copy)]
+    struct ProcessMetrics {
+        rss_bytes: u64,
+        threads: u64,
+        cpu_ticks: u64,
+        ticks_per_second: u64,
+    }
+
+    #[cfg(target_os = "linux")]
+    fn process_metrics() -> ProcessMetrics {
+        let status = fs::read_to_string("/proc/self/status").expect("Linux process status");
+        let value = |name: &str| -> u64 {
+            status
+                .lines()
+                .find_map(|line| {
+                    line.strip_prefix(name)
+                        .and_then(|tail| tail.split_whitespace().next())
+                        .and_then(|value| value.parse().ok())
+                })
+                .unwrap_or_else(|| panic!("{name} missing from /proc/self/status"))
+        };
+        let stat = fs::read_to_string("/proc/self/stat").expect("Linux process stat");
+        let fields = stat[stat.rfind(')').expect("process command end") + 1..]
+            .split_whitespace()
+            .collect::<Vec<_>>();
+        let user_ticks = fields[11].parse::<u64>().expect("process user CPU ticks");
+        let system_ticks = fields[12].parse::<u64>().expect("process system CPU ticks");
+        ProcessMetrics {
+            rss_bytes: value("VmRSS:") * 1024,
+            threads: value("Threads:"),
+            cpu_ticks: user_ticks.saturating_add(system_ticks),
+            ticks_per_second: unsafe { libc::sysconf(libc::_SC_CLK_TCK) }.max(1) as u64,
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "bounded synthetic stress run; invoke explicitly to collect process metrics"]
+    async fn synthetic_start_seek_switch_overload_and_shutdown_stay_bounded() {
+        let before = process_metrics();
+        let started_at = Instant::now();
+        let mut runtime = EngineRuntime::start().expect("start mock engine runtime");
+        let handle = runtime.handle();
+        let ingress = handle.audio_pcm_ingress().unwrap();
+        handle
+            .configure(
+                EngineConfig::new(vec![OutputConfig {
+                    id: "stress-led".to_owned(),
+                    pixel_count: 8,
+                    reversed: false,
+                    backend: OutputBackend::Mock,
+                }])
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        handle
+            .update_scene(RenderSceneUpdate {
+                revision: 1,
+                timestamp_ns: monotonic_time_ns(),
+                brightness: 1.0,
+                power: Default::default(),
+                outputs: vec![RenderOutput {
+                    animation: "rainbow".to_owned(),
+                    ..RenderOutput::default()
+                }],
+                scheduler: RenderSchedulerConfig { max_fps: 60 },
+            })
+            .await
+            .unwrap();
+        handle
+            .request(RequestCommand::AudioStartDirect {
+                fallback_selector: None,
+                config: AudioConfig::default(),
+            })
+            .await
+            .unwrap();
+
+        let tap = Arc::new(RuntimePcmTap::new(ingress.clone(), false));
+        let tap_trait: Arc<dyn DecodedPcmTap> = tap.clone();
+        let mut sink = DecodedPcmSink::new(Box::new(DiscardingSink), tap_trait);
+        sink.start().unwrap();
+        tap.set_playback_state(DecodedPcmPlaybackState::Playing);
+
+        let active = process_metrics();
+        let mut peak_queue = 0_u64;
+        let mut max_dsp_p95_ns = 0_u64;
+        let mut sample_count = 0_u64;
+        let mut amplitude = 0.1_f64;
+        for cycle in 0..8 {
+            if cycle > 0 {
+                tap.set_playback_state(DecodedPcmPlaybackState::Idle);
+                handle
+                    .request(RequestCommand::AudioStart {
+                        selector: Some("demo".to_owned()),
+                        config: AudioConfig::default(),
+                    })
+                    .await
+                    .unwrap();
+                handle
+                    .request(RequestCommand::AudioStartDirect {
+                        fallback_selector: None,
+                        config: AudioConfig::default(),
+                    })
+                    .await
+                    .unwrap();
+                tap.set_playback_state(DecodedPcmPlaybackState::Playing);
+                sink.start().unwrap();
+            }
+            for packet_index in 0..512 {
+                if packet_index % 128 == 0 {
+                    tap.begin_generation();
+                    amplitude = if amplitude < 0.2 { 0.35 } else { 0.1 };
+                }
+                let packet = vec![amplitude; 1_024];
+                sink.write(AudioPacket::Samples(packet), &mut Converter::new(None))
+                    .unwrap();
+                sample_count += 512;
+                let ingress_stats = ingress.stats();
+                peak_queue = peak_queue.max(ingress_stats.queue_occupancy as u64);
+                assert!(ingress_stats.queue_occupancy <= ingress_stats.queue_capacity);
+                if packet_index % 64 == 0 {
+                    if let ResponseResult::AudioStatus { status } =
+                        handle.audio_status().await.unwrap()
+                    {
+                        max_dsp_p95_ns = max_dsp_p95_ns.max(status.dsp_processing_p95_ns);
+                    }
+                }
+            }
+            sink.stop().unwrap();
+        }
+
+        handle.request(RequestCommand::AudioStop).await.unwrap();
+        let dropped_samples = ingress.stats().dropped_samples;
+        assert!(
+            dropped_samples > 0,
+            "producer burst should exercise bounded overflow"
+        );
+        assert!(peak_queue <= ingress.stats().queue_capacity as u64);
+        tokio::task::spawn_blocking(move || runtime.shutdown())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!handle.is_accepting());
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let after = loop {
+            let metrics = process_metrics();
+            if metrics.threads <= before.threads + 2 || Instant::now() >= deadline {
+                break metrics;
+            }
+            tokio::task::yield_now().await;
+        };
+        let elapsed_seconds = started_at.elapsed().as_secs_f64();
+        let cpu_seconds =
+            after.cpu_ticks.saturating_sub(before.cpu_ticks) as f64 / after.ticks_per_second as f64;
+        let cpu_percent_one_core = cpu_seconds / elapsed_seconds * 100.0;
+        let rss_growth_mib =
+            after.rss_bytes.saturating_sub(before.rss_bytes) as f64 / (1024.0 * 1024.0);
+        eprintln!(
+            "synthetic PCM stress: {sample_count} samples, {dropped_samples} dropped, peak queue {peak_queue}/{} batches, DSP p95 {max_dsp_p95_ns} ns, CPU {cpu_percent_one_core:.1}% of one core, RSS growth {rss_growth_mib:.1} MiB, threads {} -> {} -> {}, elapsed {:.2}s",
+            ingress.stats().queue_capacity,
+            before.threads,
+            active.threads,
+            after.threads,
+            elapsed_seconds,
+        );
+        assert!(after.rss_bytes <= before.rss_bytes + 32 * 1024 * 1024);
+        assert!(after.threads <= before.threads + 2);
     }
 
     #[test]
