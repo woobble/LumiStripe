@@ -259,7 +259,7 @@ def make_manifest(
             ],
         },
         "toolchain": {
-            "rust": "1.88.0",
+            "rust": "1.99.1",
             "bun": _bun_version(project_root),
             "builder": "debian:trixie-slim" if origin == "github" else "local",
         },
@@ -341,7 +341,7 @@ def validate_release_dir(
     toolchain = manifest.get("toolchain")
     if (
         not isinstance(toolchain, dict)
-        or toolchain.get("rust") != "1.88.0"
+        or toolchain.get("rust") != "1.99.1"
         or not isinstance(toolchain.get("bun"), str)
         or not toolchain["bun"]
         or not isinstance(toolchain.get("builder"), str)

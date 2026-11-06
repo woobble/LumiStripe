@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      RUSTUP_TOOLCHAIN: "1.88.0"
+      RUSTUP_TOOLCHAIN: "1.99.1"
     defaults:
       run:
         working-directory: apps/lumistripe-web/frontend
@@ -65,8 +65,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-rust-${{ env.RUSTUP_TOOLCHAIN }}-
 
-      - name: Install Rust 1.88 toolchain
-        run: rustup toolchain install 1.88.0 --profile minimal
+      - name: Install Rust 1.99.1 toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal
 
       - name: Verify Rust toolchain
         run: |
@@ -99,11 +99,11 @@ jobs:
         run: bun run build
 
   rust-engine:
-    name: Rust engine x86_64 (MSRV 1.88)
+    name: Rust engine x86_64 (MSRV 1.99)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      RUSTUP_TOOLCHAIN: "1.88.0"
+      RUSTUP_TOOLCHAIN: "1.99.1"
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -122,12 +122,12 @@ jobs:
             ${{ runner.os }}-${{ runner.arch }}-rust-${{ env.RUSTUP_TOOLCHAIN }}-
 
       - name: Install MSRV Rust toolchain
-        run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt --component clippy
+        run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
 
       - name: Verify Rust toolchain
         run: |
           cargo --version
-          rustc --version | grep -Eq '^rustc 1\.88\.0([[:space:]]|$)'
+          rustc --version | grep -Eq '^rustc 1\.99\.1([[:space:]]|$)'
 
       - name: Install CPAL Linux host dependencies
         run: >-
@@ -165,11 +165,11 @@ jobs:
           --package lumistripe-web --features bluez,pipewire
 
   rust-engine-arm64:
-    name: Rust engine Linux ARM64 (MSRV 1.88)
+    name: Rust engine Linux ARM64 (MSRV 1.99)
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
     env:
-      RUSTUP_TOOLCHAIN: "1.88.0"
+      RUSTUP_TOOLCHAIN: "1.99.1"
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -188,14 +188,14 @@ jobs:
             ${{ runner.os }}-${{ runner.arch }}-rust-${{ env.RUSTUP_TOOLCHAIN }}-
 
       - name: Install MSRV Rust toolchain
-        run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt
+        run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt
 
       - name: Verify ARM64 Rust toolchain
         run: |
           command -v cargo
           command -v rustc
           test "$(uname -m)" = "aarch64"
-          rustc --version | grep -Eq '^rustc 1\.88\.0([[:space:]]|$)'
+          rustc --version | grep -Eq '^rustc 1\.99\.1([[:space:]]|$)'
           rustc -vV | tee "$RUNNER_TEMP/rustc-version.txt"
           test "$(sed -n 's/^host: //p' "$RUNNER_TEMP/rustc-version.txt")" = "aarch64-unknown-linux-gnu"
           cargo --version

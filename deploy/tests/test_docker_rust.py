@@ -84,7 +84,7 @@ def test_docker_development_image_builds_rust_binaries_without_python() -> None:
     compose = COMPOSE_FILE.read_text(encoding="utf-8").lower()
     dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
 
-    assert "arg rust_version=1.88.0" in dockerfile
+    assert "arg rust_version=1.99.1" in dockerfile
     assert "from rust:${rust_version}-slim-trixie" in dockerfile
     assert "arg bun_version=1.4.4" in dockerfile
     assert "from oven/bun:${bun_version}" in dockerfile

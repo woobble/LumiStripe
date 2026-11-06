@@ -178,7 +178,7 @@ It validates release asset digests, GitHub Actions provenance, the manifest,
 and runtime dependencies, then stages the web server, engine, CLI, deployment
 helper, and frontend as one commit-matched release. Binary installs do not
 compile Rust or build the frontend on the Pi. Source mode installs Rust
-1.88.0, Bun, and build requirements as needed.
+1.99.1, Bun, and build requirements as needed.
 
 `lumistripe-admin` delegates to the existing `deploy/install.sh`,
 `deploy/update.sh`, and `deploy/uninstall.sh` implementations. Those scripts,
@@ -379,7 +379,7 @@ sudo lumistripe-admin update
 ```
 
 For an explicit source update, use `--mode source`.
-Source updates require Bun, Cargo, Rust 1.88.0, and the native development
+Source updates require Bun, Cargo, Rust 1.99.1, and the native development
 headers to have been installed already; run the installer in source mode first
 on a binary-only appliance. `auto` also accepts a missing or unsupported
 artifact as a reason to use a local build, but it does not bypass an integrity,

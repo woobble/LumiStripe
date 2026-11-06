@@ -36,7 +36,7 @@ if [ "$1" = toolchain ] && [ "$2" = install ]; then
 fi
 if [ "$1" = run ]; then
   if [ -f "$SERVICE_HOME/.toolchain-installed" ]; then
-    printf 'rustc 1.88.0 (test build)\n'
+    printf 'rustc 1.99.1 (test build)\n'
   else
     printf 'rustc 1.87.0 (test build)\n'
   fi
@@ -63,11 +63,11 @@ install_rust_toolchain
 
     assert result.returncode == 0, result.stderr
     assert bootstrap_log.read_text(encoding="utf-8").splitlines() == [
-        "https://sh.rustup.rs /bin/sh -y --default-toolchain 1.88.0 --profile minimal"
+        "https://sh.rustup.rs /bin/sh -y --default-toolchain 1.99.1 --profile minimal"
     ]
     assert rustup_log.read_text(encoding="utf-8").splitlines() == [
-        "run 1.88.0 rustc --version",
-        "toolchain install 1.88.0 --profile minimal",
-        "run 1.88.0 rustc --version",
-        "run 1.88.0 rustc --version",
+        "run 1.99.1 rustc --version",
+        "toolchain install 1.99.1 --profile minimal",
+        "run 1.99.1 rustc --version",
+        "run 1.99.1 rustc --version",
     ]

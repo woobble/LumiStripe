@@ -41,8 +41,8 @@ def _builder_environment(tmp_path: Path, cargo_log: Path) -> dict[str, str]:
         "#!/usr/bin/env python3\n"
         "import os, pathlib, sys\n"
         "args = sys.argv[1:]\n"
-        "if args == ['+1.88.0', '--version']:\n"
-        "    print('cargo 1.88.0')\n"
+        "if args == ['+1.99.1', '--version']:\n"
+        "    print('cargo 1.99.1')\n"
         "    raise SystemExit(0)\n"
         "with open(os.environ['LUMI_TEST_CARGO_LOG'], 'a') as log:\n"
         "    log.write(' '.join(args) + '\\n')\n"
@@ -659,7 +659,7 @@ def test_rust_update_build_promotes_a_complete_commit_matched_release(
 
     commands = cargo_log.read_text(encoding="utf-8").splitlines()
     assert len(commands) == 4
-    assert all(command.startswith("+1.88.0 build --locked --release") for command in commands)
+    assert all(command.startswith("+1.99.1 build --locked --release") for command in commands)
     assert "lumistripe-engine" in commands[0]
     assert "--features bluez,pipewire" in commands[1]
     assert "lumistripe-deploy-helper" in commands[2]

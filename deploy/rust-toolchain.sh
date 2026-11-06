@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-RUST_TOOLCHAIN_VERSION=1.88.0
+RUST_TOOLCHAIN_VERSION=1.99.1
 
 install_rust_toolchain() {
   local rustup_bin="$SERVICE_HOME/.cargo/bin/rustup"

@@ -110,7 +110,7 @@ and microphone input.
 
 ## Development
 
-Requirements are Rust 1.88 and the Bun version pinned in `.bun-version`.
+Requirements are Rust 1.99.1 and the Bun version pinned in `.bun-version`.
 Clone without submodules:
 
 ```bash

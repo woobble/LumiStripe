@@ -37,8 +37,8 @@ BUILD_JOBS="${LUMI_RUST_BUILD_JOBS:-2}"
   exit 1
 }
 if ! env RUSTUP_HOME="$RUSTUP_HOME_DIR" CARGO_HOME="$CARGO_HOME_DIR" \
-  "$CARGO_BIN" +1.88.0 --version >/dev/null 2>&1; then
-  echo "Rust backend updates require the Rust 1.88.0 toolchain for this user." >&2
+  "$CARGO_BIN" +1.99.1 --version >/dev/null 2>&1; then
+  echo "Rust backend updates require the Rust 1.99.1 toolchain for this user." >&2
   exit 1
 fi
 
@@ -87,7 +87,7 @@ run_cargo() {
     CARGO_HOME="$CARGO_HOME_DIR" \
     CARGO_TARGET_DIR="$BUILD_DIR" \
     CARGO_BUILD_JOBS="$BUILD_JOBS" \
-    "$CARGO_BIN" +1.88.0 "$@"
+    "$CARGO_BIN" +1.99.1 "$@"
 }
 
 run_cargo build --locked --release --manifest-path "$PROJECT_DIR/Cargo.toml" \

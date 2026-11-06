@@ -6,7 +6,7 @@ Changes are welcome through pull requests against `main`.
 
 The supported application is native Rust. The root `Cargo.toml` is the
 workspace entry point; applications are under `apps/` and shared libraries
-under `crates/`. Development requires Rust 1.88 and the Bun version pinned in
+under `crates/`. Development requires Rust 1.99.1 and the Bun version pinned in
 `.bun-version`. GPIO, SPI, Bluetooth, and PipeWire hardware are not needed for
 the default software checks.
 

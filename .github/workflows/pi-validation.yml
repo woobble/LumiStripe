@@ -19,7 +19,7 @@ jobs:
     runs-on: [self-hosted, linux, ARM64, rpi5]
     timeout-minutes: 45
     env:
-      RUSTUP_TOOLCHAIN: "1.88.0"
+      RUSTUP_TOOLCHAIN: "1.99.1"
     steps:
       - name: Check out trusted main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -27,8 +27,8 @@ jobs:
           ref: main
           persist-credentials: false
 
-      - name: Install Rust 1.88 toolchain
-        run: rustup toolchain install 1.88.0 --profile minimal
+      - name: Install Rust 1.99.1 toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal
 
       - name: Install Raspberry Pi native build dependencies
         run: bash scripts/provision_rpi_ci_native_deps.sh
