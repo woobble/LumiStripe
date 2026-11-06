@@ -450,3 +450,16 @@ def test_phase_timing_reports_named_monotonic_spans() -> None:
         assert 'lumi_phase_end "Source build"' in script
 
 
+def test_phase_timing_names_the_active_component_and_includes_incomplete_phase() -> None:
+    result = _bash(
+        'set -e; source "$1"; lumi_phase_start "Service health"; '
+        'printf "COMPONENT=%s\\n" "$(lumi_phase_component)"; lumi_phase_report',
+        os.environ.copy(),
+        str(DEPLOY / "timing.sh"),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "COMPONENT=systemd service startup and health" in result.stdout
+    assert "Service health" in result.stdout
+
+

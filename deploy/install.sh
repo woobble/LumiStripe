@@ -992,10 +992,23 @@ write_install_state() {
   NGINX_DEFAULT_REMOVED="$(awk -F= '$1 == "nginx_default_removed" { print $2; exit }' "$STATE_FILE")"
 }
 
+handle_install_error() {
+  local exit_status=$?
+  trap - ERR
+  echo "Installation failed during $LUMI_ACTIVE_PHASE ($(lumi_phase_component); exit status $exit_status)." >&2
+  echo "Review the preceding command output for the specific error. Service logs: sudo journalctl -u lumistripe-web.service -b --no-pager" >&2
+  if [[ "${SELECTED_SPOTIFY_BACKEND:-}" == soloist ]]; then
+    echo "Spotify service logs: sudo journalctl -u lumistripe-spotify.service -b --no-pager" >&2
+  fi
+  lumi_phase_report >&2 || true
+  exit "$exit_status"
+}
+trap handle_install_error ERR
+
 if [[ "$DEPLOY_MODE" != source ]]; then
   if ! binary_target_supported; then
     if [[ "$DEPLOY_MODE" == binary ]]; then
-      echo "Prebuilt releases require aarch64 Debian or Raspberry Pi OS Trixie, or aarch64 Ubuntu. Set LUMI_DEPLOY_MODE=source for a local build." >&2
+      echo "Prebuilt releases require aarch64 Debian or Raspberry Pi OS Trixie, or aarch64 Ubuntu 26.04 LTS. Set LUMI_DEPLOY_MODE=source for a local build." >&2
       exit 1
     fi
     EFFECTIVE_DEPLOY_MODE=source
@@ -1053,7 +1066,11 @@ if [[ "$EFFECTIVE_DEPLOY_MODE" == source ]]; then
   install_project_dependencies
   build_rust_release
   lumi_phase_end "Source build"
-  APP_RELEASE_CHANGED=1
+  ACTIVE_RELEASE_AFTER="$(readlink -f -- "$PROJECT_DIR/target/rust-deploy/current" 2>/dev/null || true)"
+  ACTIVE_RELEASE_AFTER_COMMIT="${ACTIVE_RELEASE_AFTER##*/}"
+  if [[ "$ACTIVE_RELEASE_AFTER_COMMIT" != "$ACTIVE_RELEASE_BEFORE_COMMIT" ]]; then
+    APP_RELEASE_CHANGED=1
+  fi
 else
   if stage_prebuilt_release; then
     if [[ "$SELECTED_SPOTIFY_BACKEND" == librespot ]] && \
@@ -1088,7 +1105,11 @@ else
         exit 1
       fi
       lumi_phase_end "Source build"
-      APP_RELEASE_CHANGED=1
+      ACTIVE_RELEASE_AFTER="$(readlink -f -- "$PROJECT_DIR/target/rust-deploy/current" 2>/dev/null || true)"
+      ACTIVE_RELEASE_AFTER_COMMIT="${ACTIVE_RELEASE_AFTER##*/}"
+      if [[ "$ACTIVE_RELEASE_AFTER_COMMIT" != "$ACTIVE_RELEASE_BEFORE_COMMIT" ]]; then
+        APP_RELEASE_CHANGED=1
+      fi
     else
       echo "Prebuilt release installation failed; the active Rust release was not switched." >&2
       exit "$stage_status"

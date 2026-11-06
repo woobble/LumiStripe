@@ -2796,6 +2796,52 @@ async fn serves_compatible_http_websockets_with_an_in_process_engine() {
         restored_audio.body["audio_status"],
         "Using the internal demo beat."
     );
+
+    let mut demo_audio_socket = websocket(server.address, "/ws/audio", &cookie).await;
+    let demo_audio_deadline = Instant::now() + Duration::from_secs(3);
+    let demo_telemetry = loop {
+        let message = timeout(Duration::from_secs(1), demo_audio_socket.next())
+            .await
+            .expect("demo audio should keep publishing telemetry")
+            .unwrap()
+            .unwrap();
+        let telemetry: Value = match message {
+            Message::Text(text) => serde_json::from_str(text.as_str()).unwrap(),
+            message => panic!("audio stream sent unexpected demo telemetry: {message:?}"),
+        };
+        if telemetry["gate_reason"] == "demo_audio_active"
+            && telemetry["fresh"].as_bool() == Some(true)
+        {
+            break telemetry;
+        }
+        assert!(
+            Instant::now() < demo_audio_deadline,
+            "synthetic demo audio did not produce fresh telemetry: {telemetry}"
+        );
+    };
+    assert_eq!(demo_telemetry["health"], "ok");
+    assert_eq!(demo_telemetry["input_transport"], "demo");
+    assert!(demo_telemetry["sequence"].as_u64().unwrap() > 0);
+    assert!(demo_telemetry["processed_level"].as_f64().unwrap() > 0.0);
+    assert_eq!(demo_telemetry["bands"].as_array().unwrap().len(), 8);
+    demo_audio_socket.close(None).await.unwrap();
+
+    let mut reactive_preview_socket = websocket(server.address, "/ws/preview", &cookie).await;
+    let reactive_preview = timeout(Duration::from_secs(3), reactive_preview_socket.next())
+        .await
+        .expect("mock rendering should continue while synthetic audio is active")
+        .unwrap()
+        .unwrap();
+    match reactive_preview {
+        Message::Binary(packet) => {
+            assert!(packet.len() > 12);
+            assert_eq!(&packet[..4], b"LSFP");
+            assert_eq!(packet[4], 1);
+        }
+        message => panic!("simulator preview sent an unexpected message: {message:?}"),
+    }
+    reactive_preview_socket.close(None).await.unwrap();
+
     let after_direct_update = request(
         &router,
         Method::PUT,

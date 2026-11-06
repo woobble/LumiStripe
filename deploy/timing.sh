@@ -7,6 +7,19 @@ declare -Ag LUMI_PHASE_START_MS=()
 declare -Ag LUMI_PHASE_TOTAL_MS=()
 declare -ag LUMI_PHASE_ORDER=()
 declare -gi LUMI_PHASE_SEQUENCE=0
+LUMI_ACTIVE_PHASE="preflight"
+
+lumi_phase_component() {
+  case "${LUMI_ACTIVE_PHASE:-preflight}" in
+    "Package setup") printf '%s\n' "system packages and runtime libraries" ;;
+    Configuration) printf '%s\n' "deployment configuration and service files" ;;
+    "Source build") printf '%s\n' "Rust and frontend source build" ;;
+    Soloist) printf '%s\n' "Spotify Soloist provider" ;;
+    "Service health") printf '%s\n' "systemd service startup and health" ;;
+    "between deployment phases") printf '%s\n' "deployment finalization" ;;
+    *) printf '%s\n' "deployment preflight" ;;
+  esac
+}
 
 lumi_monotonic_ms() {
   awk '{ printf "%.0f\n", $1 * 1000 }' /proc/uptime
@@ -14,6 +27,7 @@ lumi_monotonic_ms() {
 
 lumi_phase_start() {
   local phase="$1"
+  LUMI_ACTIVE_PHASE="$phase"
   if [[ -z "${LUMI_PHASE_TOTAL_MS[$phase]+present}" ]]; then
     LUMI_PHASE_ORDER+=("$phase")
     LUMI_PHASE_TOTAL_MS["$phase"]=0
@@ -33,15 +47,23 @@ lumi_phase_end() {
     ${LUMI_PHASE_TOTAL_MS[$phase]:-0} + end_ms - start_ms
   ))
   unset 'LUMI_PHASE_START_MS[$phase]'
+  if [[ "$LUMI_ACTIVE_PHASE" == "$phase" ]]; then
+    LUMI_ACTIVE_PHASE="between deployment phases"
+  fi
   printf '    Complete: %s\n' "$phase"
 }
 
 lumi_phase_report() {
-  local phase elapsed_ms
+  local phase elapsed_ms now_ms start_ms
   ((${#LUMI_PHASE_ORDER[@]} > 0)) || return 0
+  now_ms="$(lumi_monotonic_ms)"
   printf '\nInstallation/update timing (monotonic elapsed):\n'
   for phase in "${LUMI_PHASE_ORDER[@]}"; do
     elapsed_ms="${LUMI_PHASE_TOTAL_MS[$phase]:-0}"
+    start_ms="${LUMI_PHASE_START_MS[$phase]:-}"
+    if [[ -n "$start_ms" ]]; then
+      elapsed_ms=$((elapsed_ms + now_ms - start_ms))
+    fi
     printf '  %-30s %d.%03d s\n' \
       "$phase" "$((elapsed_ms / 1000))" "$((elapsed_ms % 1000))"
   done

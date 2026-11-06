@@ -603,7 +603,8 @@ def binary_target_supported(
     codename = os_release.get("VERSION_CODENAME", "")
     distro = os_release.get("ID", "").lower()
     return machine == "aarch64" and (
-        distro == "ubuntu" or (codename == "trixie" and distro in {"debian", "raspbian"})
+        (distro == "ubuntu" and codename == "resolute")
+        or (codename == "trixie" and distro in {"debian", "raspbian"})
     )
 
 
@@ -961,7 +962,7 @@ def install_release(
         raise VerificationError("release commit must be a full lowercase Git SHA")
     if require_supported_target and not binary_target_supported():
         raise UnsupportedTarget(
-            "prebuilt releases require aarch64 Debian or Raspberry Pi OS Trixie, or aarch64 Ubuntu"
+            "prebuilt releases require aarch64 Debian or Raspberry Pi OS Trixie, or aarch64 Ubuntu 26.04 LTS"
         )
 
     release_root.mkdir(parents=True, exist_ok=True, mode=0o755)

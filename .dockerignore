@@ -43,5 +43,8 @@ apps/lumistripe-web/static/
 !tests/fixtures/
 !tests/fixtures/**
 !deploy/
+!deploy/release_artifact.py
+!deploy/release_smoke.py
 !deploy/docker/
 !deploy/docker/spotify-entrypoint.sh
+!deploy/docker/release-ubuntu-compatibility.Dockerfile

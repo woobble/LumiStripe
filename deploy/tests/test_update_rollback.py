@@ -208,3 +208,56 @@ def test_rollback_verifies_health_and_uses_only_the_validated_previous_release(
     assert all("--max-time 0.25" in line for line in health_probes)
     if return_code == 42:
         assert "Rollback failed; manual recovery is required." in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("rollback_succeeds", "expected_message"),
+    [
+        (True, "The previous release"),
+        (False, "Rollback failed; manual recovery is required."),
+    ],
+)
+def test_update_failure_diagnostics_report_phase_recovery_and_log_commands(
+    tmp_path: Path,
+    rollback_succeeds: bool,
+    expected_message: str,
+) -> None:
+    source = UPDATE_SCRIPT.read_text(encoding="utf-8")
+    start = source.index("handle_update_error() {")
+    end = source.index("\ntrap handle_update_error ERR", start)
+    handler = source[start:end]
+    commit = "d" * 40
+    project_dir = tmp_path / "project"
+    releases = project_dir / "target/rust-deploy/releases"
+    active = releases / commit
+    active.mkdir(parents=True)
+    (project_dir / "target/rust-deploy").mkdir(exist_ok=True)
+    (project_dir / "target/rust-deploy/current").symlink_to("releases/" + commit)
+    timing = Path(__file__).parents[1] / "timing.sh"
+    script = f"""
+set -u
+source {str(timing)!r}
+PROJECT_DIR={str(project_dir)!r}
+PREVIOUS_REF={commit!r}
+SELECTED_SPOTIFY_BACKEND=disabled
+LUMI_ACTIVE_PHASE="Service health"
+rollback() {{ return {0 if rollback_succeeds else 1}; }}
+git_user() {{ printf '%s\\n' "$PREVIOUS_REF"; }}
+record_update_state() {{ printf '%s\\n' "$1"; }}
+{handler}
+false || handle_update_error
+"""
+
+    result = subprocess.run(
+        ["/bin/bash", "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 1
+    assert "Update failed during Service health (systemd service startup and health; exit status 1)." in result.stderr
+    assert expected_message in result.stderr
+    assert "sudo journalctl -u lumistripe-web.service -b --no-pager" in result.stderr
+    assert "install-failed" in result.stdout

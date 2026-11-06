@@ -75,6 +75,7 @@ RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
         binutils \
         file \
+        python3 \
         libasound2 \
         libatomic1 \
         libdbus-1-3 \
@@ -98,8 +99,28 @@ RUN set -eu; \
         fi; \
     done; \
     glibc_version="$(getconf GNU_LIBC_VERSION | awk '{print $2}')"; \
+    glibc_minimum="$(for binary in lumistripe-web lumistripe-engine lumistripe lumistripe-deploy-helper; do \
+        readelf --version-info "/release/$binary"; \
+    done | grep -Eo 'GLIBC_[0-9]+(\.[0-9]+){1,2}' | sed 's/^GLIBC_//' | sort -Vu | tail -n 1)"; \
+    test -n "$glibc_minimum"; \
+    test "$(printf '%s\n%s\n' "$glibc_minimum" "$glibc_version" | sort -V | head -n 1)" = "$glibc_minimum"; \
     printf '{"architecture":"aarch64","target":"aarch64-unknown-linux-gnu","distribution":"debian-trixie","glibc_minimum":"%s"}\n' \
-        "$glibc_version" > /release-build-info.json
+        "$glibc_minimum" > /release-build-info.json
+
+# CI builds this target once, runs the bundle in an isolated Trixie runtime,
+# and then uses the loaded image to exercise the packaged release directory.
+# Python and inspection tools are present only in this validation image.
+FROM release-runtime-check AS release-smoke
+
+ARG LUMI_RELEASE_COMMIT
+
+COPY deploy/release_artifact.py /usr/local/libexec/lumistripe/release_artifact.py
+COPY deploy/release_smoke.py /usr/local/libexec/lumistripe/release_smoke.py
+
+RUN --network=none python3 /usr/local/libexec/lumistripe/release_smoke.py \
+        --inside-container \
+        --release-dir /release \
+        --commit "$LUMI_RELEASE_COMMIT"
 
 FROM scratch AS release-output
 COPY --from=release-runtime-check /release /release

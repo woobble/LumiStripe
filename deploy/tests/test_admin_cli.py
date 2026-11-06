@@ -114,6 +114,7 @@ def _provider_switch_call(
     web_enabled: bool = True,
     soloist_enabled: bool = False,
     health_fail_first: bool = False,
+    fail_action: str = "",
 ) -> subprocess.CompletedProcess[str]:
     config = tmp_path / "lumistripe-web.env"
     config.write_text(f"LUMI_SPOTIFY_BACKEND={current}\n", encoding="utf-8")
@@ -138,6 +139,7 @@ SOLOIST_ACTIVE="$8"
 WEB_ENABLED="$9"
 SOLOIST_ENABLED="${10}"
 HEALTH_FAIL_FIRST="${11}"
+FAIL_ACTION="${12}"
 HEALTH_CALLS=0
 ACTIONS=
 
@@ -202,6 +204,7 @@ systemctl() {
     daemon-reload) return 0 ;;
     *) printf 'unexpected systemctl command: %s\n' "$*" >&2; return 1 ;;
   esac
+  [[ "$FAIL_ACTION" != "$action:$service" ]] || return 1
   case "$action:$service" in
     stop:lumistripe-web.service) WEB_ACTIVE=0 ;;
     stop:lumistripe-spotify.service) SOLOIST_ACTIVE=0 ;;
@@ -243,6 +246,7 @@ printf 'HEALTH_CALLS=%s\nACTIONS=%s\n' "$HEALTH_CALLS" "$ACTIONS"
         "1" if web_enabled else "0",
         "1" if soloist_enabled else "0",
         "1" if health_fail_first else "0",
+        fail_action,
         input_text="y\n",
     )
 
@@ -547,6 +551,13 @@ def test_offline_and_normal_updates_preserve_provider_and_validate_rollback_supp
     target_guard = UPDATER.index("The verified target release does not support the configured librespot provider")
     checkout_switch = UPDATER.index("git_user -c core.hooksPath=/dev/null switch --detach")
     assert active_guard < fetch < target_guard < checkout_switch
+    assert 'if [[ "$SELECTED_SPOTIFY_BACKEND" == librespot && "$EFFECTIVE_DEPLOY_MODE" != source ]]' in UPDATER
+    source_build = UPDATER.index("    build_rust_backend\n", checkout_switch)
+    source_provider_check = UPDATER.index(
+        "The source-built target does not support the configured librespot provider",
+        source_build,
+    )
+    assert checkout_switch < source_build < source_provider_check
     assert 'if [[ -n "$OFFLINE_COMMIT" ]]; then' in UPDATER
 
 
@@ -654,6 +665,43 @@ def test_provider_switch_uses_mocked_prerequisites_and_keeps_both_credential_sto
     assert soloist_env.read_text(encoding="utf-8") == "LUMI_SPOTIFY_API_KEY=existing-key\n"
 
 
+@pytest.mark.parametrize(
+    ("current", "target", "soloist_active"),
+    [
+        ("soloist", "librespot", True),
+        ("librespot", "soloist", False),
+        ("librespot", "disabled", False),
+        ("disabled", "librespot", False),
+        ("disabled", "soloist", False),
+    ],
+)
+def test_provider_switch_completes_each_supported_migration(
+    tmp_path: Path,
+    current: str,
+    target: str,
+    soloist_active: bool,
+) -> None:
+    result = _provider_switch_call(
+        tmp_path,
+        current=current,
+        target=target,
+        web_active=True,
+        soloist_active=soloist_active,
+        web_enabled=True,
+        soloist_enabled=soloist_active,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "SWITCH_STATUS=0" in result.stdout
+    assert f"FINAL_BACKEND={target}" in result.stdout
+    assert "FINAL_WEB_ACTIVE=1" in result.stdout
+    assert f"FINAL_SOLOIST_ACTIVE={int(target == 'soloist')}" in result.stdout
+    assert f"FINAL_SOLOIST_ENABLED={int(target == 'soloist')}" in result.stdout
+    assert (tmp_path / "lumistripe-spotify.env").read_text(encoding="utf-8") == (
+        "LUMI_SPOTIFY_API_KEY=existing-key\n"
+    )
+
+
 def test_failed_provider_switch_restores_provider_config_and_service_state(
     tmp_path: Path,
 ) -> None:
@@ -698,6 +746,29 @@ def test_failed_first_soloist_switch_removes_new_unit_enablement(
     assert "FINAL_SOLOIST_ACTIVE=0" in result.stdout
     assert "FINAL_SOLOIST_ENABLED=0" in result.stdout
     assert not (tmp_path / "lumistripe-spotify.service").exists()
+
+
+def test_soloist_service_start_failure_restores_the_previous_provider(
+    tmp_path: Path,
+) -> None:
+    result = _provider_switch_call(
+        tmp_path,
+        current="librespot",
+        target="soloist",
+        web_active=True,
+        soloist_active=False,
+        web_enabled=True,
+        soloist_enabled=False,
+        fail_action="start:lumistripe-spotify.service",
+    )
+
+    assert result.returncode == 0
+    assert "SWITCH_STATUS=1" in result.stdout
+    assert "FINAL_BACKEND=librespot" in result.stdout
+    assert "FINAL_WEB_ACTIVE=1" in result.stdout
+    assert "FINAL_SOLOIST_ACTIVE=0" in result.stdout
+    assert "FINAL_SOLOIST_ENABLED=0" in result.stdout
+    assert "Soloist did not become active" in result.stderr
 
 
 def test_native_provider_switch_rejects_two_active_connect_receivers(tmp_path: Path) -> None:

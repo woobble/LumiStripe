@@ -561,6 +561,7 @@ def test_offline_installs_require_a_cached_verified_commit() -> None:
     ("architecture", "os_release", "supported"),
     [
         ("aarch64", "ID=ubuntu\nVERSION_CODENAME=resolute\n", True),
+        ("aarch64", "ID=ubuntu\nVERSION_CODENAME=noble\n", False),
         ("aarch64", "ID=raspbian\nVERSION_CODENAME=trixie\n", True),
         ("aarch64", "ID=debian\nVERSION_CODENAME=bookworm\n", False),
         ("armv7l", "ID=ubuntu\nVERSION_CODENAME=resolute\n", False),

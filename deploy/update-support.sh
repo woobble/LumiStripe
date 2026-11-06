@@ -205,7 +205,7 @@ binary_target_supported() {
   distribution="$(. "$os_release_file" && printf '%s' "${ID:-}")"
   codename="$(. "$os_release_file" && printf '%s' "${VERSION_CODENAME:-}")"
   [[ "$architecture" == aarch64 &&
-      ( "$distribution" == ubuntu ||
+      ( ( "$distribution" == ubuntu && "$codename" == resolute ) ||
         ( "$codename" == trixie && ( "$distribution" == debian || "$distribution" == raspbian ) ) ) ]]
 }
 
@@ -329,7 +329,11 @@ ensure_current_release_static() {
     echo "The current Rust release has an incomplete frontend directory; refusing to overwrite it." >&2
     return 1
   fi
-  checkout_commit="$(git -C "$PROJECT_DIR" rev-parse --verify HEAD 2>/dev/null)" || return 1
+  if declare -F as_user >/dev/null 2>&1 && [[ -n "$project_user" ]]; then
+    checkout_commit="$(as_user git -C "$PROJECT_DIR" rev-parse --verify HEAD 2>/dev/null)" || return 1
+  else
+    checkout_commit="$(git -C "$PROJECT_DIR" rev-parse --verify HEAD 2>/dev/null)" || return 1
+  fi
   [[ "$checkout_commit" == "$commit" ]] || {
     echo "Cannot migrate the legacy frontend because the checkout and active release commits differ." >&2
     return 1
@@ -560,6 +564,7 @@ install_privileged_network_helper() {
   local destination_metadata
   local cached_stage=
   local tool
+  local project_user="${PROJECT_USER:-${SERVICE_USER:-}}"
 
   migrate_legacy_rust_deploy_root || return 1
 
@@ -582,7 +587,11 @@ install_privileged_network_helper() {
   }
   source_commit="$(cat -- "$release_dir/source-commit")" || return 1
   validate_rust_release "$deploy_root/releases" "$release_commit" || return 1
-  checkout_commit="$(git -C "$PROJECT_DIR" rev-parse --verify HEAD 2>/dev/null)" || return 1
+  if declare -F as_user >/dev/null 2>&1 && [[ -n "$project_user" ]]; then
+    checkout_commit="$(as_user git -C "$PROJECT_DIR" rev-parse --verify HEAD 2>/dev/null)" || return 1
+  else
+    checkout_commit="$(git -C "$PROJECT_DIR" rev-parse --verify HEAD 2>/dev/null)" || return 1
+  fi
   source_binary="$release_dir/lumistripe-deploy-helper"
   if [[ ! "$release_commit" =~ ^[0-9a-f]{40}$ || "$source_commit" != "$release_commit" ||
         "$checkout_commit" != "$release_commit" || ! -f "$source_binary" ||

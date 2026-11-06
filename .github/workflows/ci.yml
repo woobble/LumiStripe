@@ -4,6 +4,12 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      run_extended_stability:
+        description: Run the bounded three-minute simulator stability profile
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -101,7 +107,10 @@ jobs:
   rust-engine:
     name: Rust engine x86_64 (MSRV 1.99)
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
+    outputs:
+      extended-stability: ${{ steps.extended-stability.outcome }}
+      application-tests: ${{ steps.application-tests.outcome }}
     env:
       RUSTUP_TOOLCHAIN: "1.99.1"
     steps:
@@ -144,6 +153,7 @@ jobs:
         run: cargo build --locked --package lumistripe-engine --bin lumistripe-engine
 
       - name: Test Rust workspace
+        id: application-tests
         run: >-
           LUMISTRIPE_TRACE_BLUETOOTH_WIFI_TEST=1
           cargo test --locked --workspace -- --nocapture
@@ -165,6 +175,32 @@ jobs:
         run: >-
           cargo build --release --locked
           --package lumistripe-web --features bluez,pipewire
+
+      - name: Install uv for the extended stability profile
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_extended_stability }}
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: false
+          python-version: "3.12"
+          version: "0.13.5"
+
+      - name: Run the opt-in simulator stability profile
+        id: extended-stability
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_extended_stability }}
+        run: |
+          uv run --no-project --python 3.12 python deploy/stability_profile.py \
+            --binary target/release/lumistripe-web \
+            --duration-seconds 180 \
+            --output "$RUNNER_TEMP/lumistripe-stability.json"
+
+      - name: Upload stability profile report
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_extended_stability && success() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: simulator-stability-${{ github.sha }}
+          path: ${{ runner.temp }}/lumistripe-stability.json
+          if-no-files-found: error
+          retention-days: 30
 
   rust-engine-arm64:
     name: Rust engine Linux ARM64 (MSRV 1.99)
@@ -268,23 +304,27 @@ jobs:
             exit 1
           fi
 
-      - name: Build ARM64 binaries and frontend in Debian Trixie
+      - name: Build and smoke-test the ARM64 release in Debian Trixie
         run: |
           set -eu
           docker buildx build \
             --platform linux/arm64 \
             --file deploy/docker/Dockerfile \
-            --target release-output \
+            --target release-smoke \
             --build-arg "BUN_VERSION=$(cat .bun-version)" \
             --build-arg "LUMI_RELEASE_COMMIT=$GITHUB_SHA" \
-            --output "type=local,dest=$RUNNER_TEMP/lumistripe-release" \
+            --load \
+            --tag "lumistripe-release-smoke:$GITHUB_SHA" \
             .
-          test -x "$RUNNER_TEMP/lumistripe-release/release/lumistripe-web"
-          test -x "$RUNNER_TEMP/lumistripe-release/release/lumistripe-engine"
-          test -x "$RUNNER_TEMP/lumistripe-release/release/lumistripe"
-          test -x "$RUNNER_TEMP/lumistripe-release/release/lumistripe-deploy-helper"
-          test "$(cat "$RUNNER_TEMP/lumistripe-release/release/source-commit")" = "$GITHUB_SHA"
-          test -s "$RUNNER_TEMP/lumistripe-release/release/static/index.html"
+          mkdir -p "$RUNNER_TEMP/lumistripe-release"
+          release_container="$(docker create "lumistripe-release-smoke:$GITHUB_SHA")"
+          docker cp "$release_container:/release" "$RUNNER_TEMP/lumistripe-release/"
+          docker cp "$release_container:/release-build-info.json" \
+            "$RUNNER_TEMP/lumistripe-release/release-build-info.json"
+          docker rm "$release_container"
+          release_dir="$RUNNER_TEMP/lumistripe-release/release"
+          test "$(cat "$release_dir/source-commit")" = "$GITHUB_SHA"
+          test -s "$release_dir/static/index.html"
 
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
@@ -309,13 +349,49 @@ jobs:
           (cd "$RUNNER_TEMP" && sha256sum "$archive_name" > "$archive_name.sha256")
           echo "LUMI_RELEASE_ARCHIVE=$archive" >> "$GITHUB_ENV"
 
+      - name: Validate and smoke-test the packaged ARM64 release
+        run: |
+          set -eu
+          release_dir="$RUNNER_TEMP/lumistripe-release/release"
+          archive="$RUNNER_TEMP/lumistripe-linux-aarch64-$GITHUB_SHA.tar.gz"
+          uv run --no-project --python 3.12 python deploy/release_artifact.py validate \
+            --release-dir "$release_dir" \
+            --commit "$GITHUB_SHA" \
+            --origin github \
+            --check-runtime
+          cmp "$release_dir/manifest.json" "$archive.manifest.json"
+          (cd "$RUNNER_TEMP" && sha256sum --check "${archive##*/}.sha256")
+          uv run --no-project --python 3.12 python deploy/release_smoke.py \
+            --release-dir "$release_dir" \
+            --commit "$GITHUB_SHA" \
+            --image "lumistripe-release-smoke:$GITHUB_SHA" \
+            --require-manifest
+
+      - name: Build Ubuntu 26.04 ARM64 runtime compatibility image
+        run: |
+          docker buildx build \
+            --platform linux/arm64 \
+            --file deploy/docker/release-ubuntu-compatibility.Dockerfile \
+            --load \
+            --tag "lumistripe-release-ubuntu-compat:$GITHUB_SHA" \
+            .
+
+      - name: Verify the release on Ubuntu 26.04 ARM64
+        run: |
+          set -eu
+          uv run --no-project --python 3.12 python deploy/release_smoke.py \
+            --release-dir "$RUNNER_TEMP/lumistripe-release/release" \
+            --commit "$GITHUB_SHA" \
+            --image "lumistripe-release-ubuntu-compat:$GITHUB_SHA" \
+            --require-manifest
+
       - name: Attest release archive provenance
         id: attest
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: ${{ env.LUMI_RELEASE_ARCHIVE }}
 
-      - name: Verify provenance and publish immutable GitHub release
+      - name: Verify release provenance
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -332,6 +408,52 @@ jobs:
             --source-digest "$GITHUB_SHA" \
             --deny-self-hosted-runners \
             --bundle "$bundle"
+          echo "LUMI_RELEASE_BUNDLE=$bundle" >> "$GITHUB_ENV"
+
+      - name: Generate and upload release qualification report
+        env:
+          DEPLOYMENT_TEST_RESULT: ${{ needs.deployment-tests.result }}
+          FRONTEND_TEST_RESULT: ${{ needs.frontend.result }}
+          RUST_X86_TEST_RESULT: ${{ needs.rust-engine.result }}
+          RUST_ARM64_TEST_RESULT: ${{ needs.rust-engine-arm64.result }}
+        run: |
+          set -eu
+          release_report_dir="$RUNNER_TEMP/release-qualification"
+          uv run --no-project --python 3.12 python deploy/release_qualification.py \
+            --project-root "$GITHUB_WORKSPACE" \
+            --release-dir "$RUNNER_TEMP/lumistripe-release/release" \
+            --commit "$GITHUB_SHA" \
+            --deployment-tests "$DEPLOYMENT_TEST_RESULT" \
+            --frontend-tests "$FRONTEND_TEST_RESULT" \
+            --rust-x86-tests "$RUST_X86_TEST_RESULT" \
+            --application-tests "${{ needs.rust-engine.outputs.application-tests || needs.rust-engine.result }}" \
+            --stability-tests "${{ needs.rust-engine.outputs.extended-stability || 'skipped' }}" \
+            --rust-arm64-tests "$RUST_ARM64_TEST_RESULT" \
+            --trixie-runtime passed \
+            --ubuntu-2604-runtime passed \
+            --artifact-integrity passed \
+            --provenance passed \
+            --output-dir "$release_report_dir"
+          cat "$release_report_dir/release-qualification.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload release qualification report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-qualification-${{ github.sha }}
+          path: ${{ runner.temp }}/release-qualification/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish immutable GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          archive="$LUMI_RELEASE_ARCHIVE"
+          archive_name="${archive##*/}"
+          checksum="$archive.sha256"
+          manifest="$archive.manifest.json"
+          bundle="$LUMI_RELEASE_BUNDLE"
 
           tag="build-$GITHUB_SHA"
           gh release create "$tag" \

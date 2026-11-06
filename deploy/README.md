@@ -6,9 +6,13 @@ default for new installations, or the retained Spotify Soloist migration
 provider. The Pi sends the selected stream to the
 sound system and analyzes it for reactive animations.
 
-Supported targets are Raspberry Pi OS Trixie and Ubuntu on ARM64, using
-PipeWire/WirePlumber. Prebuilt releases are available on both; source builds
-remain available through `lumistripe-admin update --mode source`.
+Supported binary targets are 64-bit Raspberry Pi OS Trixie and Ubuntu Server
+26.04 LTS (Resolute Raccoon) on ARM64, using PipeWire/WirePlumber. Ubuntu
+24.04 LTS is not currently qualified for the Debian Trixie release ABI; use
+`lumistripe-admin install --mode source` or `lumistripe-admin update --mode
+source` there. CI checks the Debian Trixie userspace used by the release
+builder; that does not independently verify Raspberry Pi OS packaging or
+hardware behavior, which remain manual acceptance items.
 The Pi can send audio to USB, HDMI, wired, or Bluetooth speaker outputs. It
 can also receive music from phones and other Bluetooth audio sources; the
 same routed stream drives the music-reactive animation.
@@ -177,7 +181,8 @@ by LumiStripe. Verified archives are cached under
 `/var/cache/lumistripe/releases/<commit>`; the active and previous releases
 remain available for rollback.
 
-The binary-first path supports ARM64 Ubuntu and Debian-family Trixie targets.
+The binary-first path supports ARM64 Ubuntu 26.04 LTS and Debian-family Trixie
+targets.
 It validates release asset digests, GitHub Actions provenance, the manifest,
 and runtime dependencies, then stages the web server, engine, CLI, deployment
 helper, and frontend as one commit-matched release. Binary installs do not
@@ -396,7 +401,7 @@ recovery and legacy maintenance. They are not needed for ordinary operation.
 To update offline from a previously verified local bundle, the full commit
 must exist in the checkout and its root-protected cache entry must still be
 present under `/var/cache/lumistripe/releases/<commit>`. Keep the system on
-ARM64 Debian or Raspberry Pi OS Trixie, or ARM64 Ubuntu, with the runtime
+ARM64 Debian or Raspberry Pi OS Trixie, or Ubuntu Server 26.04 LTS ARM64, with the runtime
 packages already installed, then pass that commit to the admin command:
 
 ```bash

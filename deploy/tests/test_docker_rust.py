@@ -75,6 +75,11 @@ def _docker_context_archive() -> bytes:
             ROOT / "deploy/docker/spotify-entrypoint.sh",
             arcname="deploy/docker/spotify-entrypoint.sh",
         )
+        for filename in ("release_artifact.py", "release_smoke.py"):
+            archive.add(
+                ROOT / "deploy" / filename,
+                arcname=f"deploy/{filename}",
+            )
 
     return archive_buffer.getvalue()
 
@@ -99,7 +104,7 @@ def test_docker_development_image_builds_rust_binaries_without_python() -> None:
     assert "from runtime-common as runtime-soloist" in dockerfile
     runtime_stage = dockerfile.rsplit("from runtime-common as runtime", 1)[-1]
     assert "copy --from=soloist" not in runtime_stage
-    assert "python" not in dockerfile
+    assert "python" not in runtime_stage
     assert "uv" not in dockerfile
     assert "pip install" not in dockerfile
     assert "pip3 install" not in dockerfile
@@ -111,6 +116,9 @@ def test_docker_development_image_builds_rust_binaries_without_python() -> None:
     assert "rust/Cargo.toml" not in dockerfile
     assert "!apps/lumistripe-web/frontend/**" in dockerignore
     assert "apps/lumistripe-web/frontend/.env*" in dockerignore
+    assert "from release-runtime-check as release-smoke" in dockerfile
+    assert "--network=none python3" in dockerfile
+    assert "release_smoke.py" in dockerfile
 
     assert ".venv" not in compose
     assert "python" not in compose
@@ -199,6 +207,8 @@ def test_rust_docker_image_builds_and_starts_the_simulator(tmp_path: Path) -> No
                 "/var/lib/lumistripe:rw,uid=10001,gid=10001",
                 image,
                 "--simulate",
+                "--host",
+                "127.0.0.1",
                 "--port",
                 str(port),
                 "--static-dir",

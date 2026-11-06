@@ -186,7 +186,7 @@ def test_legacy_frontend_migration_seals_the_existing_release(tmp_path: Path) ->
     assert (release / "static/assets/app.js").read_text(encoding="utf-8") == "legacy asset\n"
 
 
-def test_prebuilt_target_supports_aarch64_trixie_and_ubuntu(tmp_path: Path) -> None:
+def test_prebuilt_target_supports_aarch64_trixie_and_ubuntu_2604(tmp_path: Path) -> None:
     target = {"ID": "raspbian", "VERSION_CODENAME": "trixie"}
     assert release_artifact.binary_target_supported(machine="aarch64", os_release=target)
     assert not release_artifact.binary_target_supported(machine="armv7l", os_release=target)
@@ -197,6 +197,10 @@ def test_prebuilt_target_supports_aarch64_trixie_and_ubuntu(tmp_path: Path) -> N
     assert release_artifact.binary_target_supported(
         machine="aarch64",
         os_release={"ID": "ubuntu", "VERSION_CODENAME": "resolute"},
+    )
+    assert not release_artifact.binary_target_supported(
+        machine="aarch64",
+        os_release={"ID": "ubuntu", "VERSION_CODENAME": "noble"},
     )
     assert not release_artifact.binary_target_supported(
         machine="armv7l",
@@ -231,6 +235,33 @@ def test_ci_release_publisher_checks_github_immutability() -> None:
     assert "publish-arm64-release:" in workflow
     assert "--json tagName,isDraft,isImmutable,assets" in workflow
     assert "isDraft == false and .isImmutable == true" in workflow
+
+
+def test_ci_release_smoke_platform_checks_and_qualification_gate_precede_publication() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    publisher = workflow.split("  publish-arm64-release:", maxsplit=1)[1]
+    required_steps = [
+        "Build and smoke-test the ARM64 release in Debian Trixie",
+        "Validate and smoke-test the packaged ARM64 release",
+        "Verify the release on Ubuntu 26.04 ARM64",
+        "Verify release provenance",
+        "Generate and upload release qualification report",
+        "Upload release qualification report",
+        "Publish immutable GitHub release",
+    ]
+    positions = [publisher.index(step) for step in required_steps]
+    assert positions == sorted(positions)
+    assert "--target release-smoke" in publisher
+    assert "--require-manifest" in publisher
+    assert "needs: [deployment-tests, frontend, rust-engine, rust-engine-arm64]" in publisher
+    assert publisher.index("gh release create") > positions[-1]
+
+    smoke = Path(__file__).parents[1] / "release_smoke.py"
+    smoke_source = smoke.read_text(encoding="utf-8")
+    assert '"--network",\n        "none"' in smoke_source
+    assert '"--simulate"' in smoke_source
+    assert '"--spotify-backend",\n            "disabled"' in smoke_source
+    assert '"LUMISTRIPE_ENABLE_SPOTIFY": "0"' not in smoke_source
 
 
 def test_signed_release_is_verified_before_cache_and_release_staging(
