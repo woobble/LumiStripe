@@ -2878,6 +2878,18 @@
             },
             "default": []
           },
+          "dsp_processing_p50_ns": {
+            "type": "integer",
+            "format": "int64",
+            "default": 0,
+            "minimum": 0
+          },
+          "dsp_processing_p95_ns": {
+            "type": "integer",
+            "format": "int64",
+            "default": 0,
+            "minimum": 0
+          },
           "error": {
             "type": [
               "string",
@@ -2923,8 +2935,36 @@
             "type": "boolean",
             "default": false
           },
+          "input_channels": {
+            "type": "integer",
+            "format": "int32",
+            "default": 0,
+            "minimum": 0
+          },
+          "input_sample_rate": {
+            "type": "integer",
+            "format": "int32",
+            "default": 0,
+            "minimum": 0
+          },
+          "input_transport": {
+            "type": "string",
+            "default": "off"
+          },
+          "last_feature_timestamp_ns": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
           "monitoring": {
             "type": "boolean"
+          },
+          "pcm_ingress": {
+            "$ref": "#/components/schemas/PcmIngressResponse",
+            "default": {}
           },
           "settings": {
             "$ref": "#/components/schemas/AudioTuningValues",
@@ -4299,6 +4339,117 @@
           "code": {
             "type": "string",
             "pattern": "^[0-9]{4}$"
+          }
+        }
+      },
+      "PcmIngressResponse": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "playback_state",
+          "sample_rate",
+          "channels",
+          "stream_generation",
+          "batches_received",
+          "samples_received",
+          "queue_occupancy",
+          "queue_capacity",
+          "dropped_batches",
+          "dropped_samples",
+          "discontinuities",
+          "invalid_samples",
+          "unsupported_packets",
+          "stale_batches",
+          "stale_samples",
+          "estimated_ingress_delay_ns"
+        ],
+        "properties": {
+          "batches_received": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "channels": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "discontinuities": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "dropped_batches": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "dropped_samples": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "estimated_ingress_delay_ns": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "invalid_samples": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "last_input_timestamp_ns": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "playback_state": {
+            "type": "string"
+          },
+          "queue_capacity": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "queue_occupancy": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sample_rate": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "samples_received": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "stale_batches": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "stale_samples": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "stream_generation": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "unsupported_packets": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },

@@ -475,7 +475,17 @@ describe("dashboardApi", () => {
 
   it("uses explicit defaults for microphone fields from older telemetry", () => {
     const legacy = { ...emptyTelemetry } as Record<string, unknown>
-    for (const key of ["input_peak", "clipping_fraction", "microphone_gate_open", "configured_input_noise_floor", "beat_scheduler_late_ticks_dropped", "beat_scheduler_late_ticks_coalesced", "beat_scheduler_lateness_p95_ms", "calibration_output_callback_count", "calibration_output_sample_rate", "calibration_output_block_duration_ms", "calibration_output_callback_p50_ms", "calibration_output_callback_p95_ms", "calibration_output_callback_p99_ms", "calibration_output_interval_jitter_p95_ms", "calibration_output_underflow_count", "calibration_output_overflow_count", "calibration_output_callback_error_count", "music_structure_phase", "music_structure_confidence", "music_structure_buildup_progress", "music_structure_drop_count", "music_structure_active", "music_structure_fresh", "drop_accent_status", "drop_accent_reason"]) delete legacy[key]
+    for (const key of [
+      "input_peak", "clipping_fraction", "microphone_gate_open", "configured_input_noise_floor",
+      "beat_scheduler_late_ticks_dropped", "beat_scheduler_late_ticks_coalesced", "beat_scheduler_lateness_p95_ms",
+      "calibration_output_callback_count", "calibration_output_sample_rate", "calibration_output_block_duration_ms",
+      "calibration_output_callback_p50_ms", "calibration_output_callback_p95_ms", "calibration_output_callback_p99_ms",
+      "calibration_output_interval_jitter_p95_ms", "calibration_output_underflow_count", "calibration_output_overflow_count",
+      "calibration_output_callback_error_count", "input_transport", "input_sample_rate", "input_channels", "pcm_ingress",
+      "dsp_processing_p50_ns", "dsp_processing_p95_ns", "last_feature_timestamp_ns", "music_structure_phase",
+      "music_structure_confidence", "music_structure_buildup_progress", "music_structure_drop_count", "music_structure_active",
+      "music_structure_fresh", "drop_accent_status", "drop_accent_reason",
+    ]) delete legacy[key]
     const parsed = parseAudioTelemetry(legacy)
     expect(parsed.input_peak).toBe(0)
     expect(parsed.clipping_fraction).toBe(0)
@@ -493,8 +503,18 @@ describe("dashboardApi", () => {
     expect(parsed.music_structure_fresh).toBe(false)
     expect(parsed.drop_accent_status).toBe("idle")
     expect(parsed.drop_accent_reason).toBeNull()
+    expect(parsed.input_transport).toBe("off")
+    expect(parsed.input_sample_rate).toBe(0)
+    expect(parsed.input_channels).toBe(0)
+    expect(parsed.pcm_ingress.playback_state).toBe("idle")
+    expect(parsed.pcm_ingress.queue_capacity).toBe(0)
+    expect(parsed.dsp_processing_p50_ns).toBe(0)
+    expect(parsed.dsp_processing_p95_ns).toBe(0)
+    expect(parsed.last_feature_timestamp_ns).toBeNull()
     expect(() => parseAudioTelemetry({ ...legacy, clipping_fraction: 2 })).toThrow()
     expect(() => parseAudioTelemetry({ ...legacy, microphone_gate_open: "yes" })).toThrow()
+    expect(() => parseAudioTelemetry({ ...legacy, input_transport: "pulse_monitor" })).toThrow()
+    expect(() => parseAudioTelemetry({ ...legacy, pcm_ingress: { dropped_samples: -1 } })).toThrow()
     expect(() => parseAudioTelemetry({ ...legacy, music_structure_phase: "chorus" })).toThrow()
     expect(() => parseAudioTelemetry({ ...legacy, extra_field: 1 })).toThrow()
   })

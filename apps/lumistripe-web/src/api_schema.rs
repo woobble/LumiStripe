@@ -723,6 +723,20 @@ pub(crate) struct AudioSettingsResponse {
     pub fallback_device: Option<String>,
     #[serde(default)]
     pub active_device_name: Option<String>,
+    #[schema(required = false, default = "off")]
+    pub input_transport: String,
+    #[schema(required = false, default = 0)]
+    pub input_sample_rate: u32,
+    #[schema(required = false, default = 0)]
+    pub input_channels: u16,
+    #[schema(required = false, default = json!({}))]
+    pub pcm_ingress: PcmIngressResponse,
+    #[schema(required = false, default = 0)]
+    pub dsp_processing_p50_ns: u64,
+    #[schema(required = false, default = 0)]
+    pub dsp_processing_p95_ns: u64,
+    #[schema(required = false, nullable = true)]
+    pub last_feature_timestamp_ns: Option<u64>,
     #[schema(required = false, default = json!([]))]
     pub devices: Vec<AudioDeviceOption>,
     #[schema(required = false, default = json!({}))]
@@ -751,6 +765,28 @@ pub(crate) struct AudioSettingsResponse {
     pub spotify: SpotifyStatus,
     #[serde(default)]
     pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, ToSchema)]
+pub(crate) struct PcmIngressResponse {
+    pub enabled: bool,
+    pub playback_state: String,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub stream_generation: u64,
+    pub batches_received: u64,
+    pub samples_received: u64,
+    pub queue_occupancy: usize,
+    pub queue_capacity: usize,
+    pub dropped_batches: u64,
+    pub dropped_samples: u64,
+    pub discontinuities: u64,
+    pub invalid_samples: u64,
+    pub unsupported_packets: u64,
+    pub stale_batches: u64,
+    pub stale_samples: u64,
+    pub last_input_timestamp_ns: Option<u64>,
+    pub estimated_ingress_delay_ns: u64,
 }
 
 #[derive(Clone, Debug, ToSchema)]

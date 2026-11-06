@@ -1668,6 +1668,13 @@ async fn serves_compatible_http_websockets_with_an_in_process_engine() {
             "active_device",
             "fallback_device",
             "active_device_name",
+            "input_transport",
+            "input_sample_rate",
+            "input_channels",
+            "pcm_ingress",
+            "dsp_processing_p50_ns",
+            "dsp_processing_p95_ns",
+            "last_feature_timestamp_ns",
             "devices",
             "settings",
             "configured_noise_floor",
@@ -1684,6 +1691,8 @@ async fn serves_compatible_http_websockets_with_an_in_process_engine() {
             "error",
         ],
     );
+    assert_eq!(audio_settings.body["input_transport"], "off");
+    assert_eq!(audio_settings.body["pcm_ingress"]["enabled"], false);
     assert_object_keys(
         &audio_settings.body["settings"],
         &[
@@ -2690,6 +2699,13 @@ async fn serves_compatible_http_websockets_with_an_in_process_engine() {
             "calibration_output_callback_error_count",
             "sync_offset_ms",
             "sync_route",
+            "input_transport",
+            "input_sample_rate",
+            "input_channels",
+            "pcm_ingress",
+            "dsp_processing_p50_ns",
+            "dsp_processing_p95_ns",
+            "last_feature_timestamp_ns",
             "estimated_noise_floor",
             "configured_noise_floor",
             "normalization_gain",

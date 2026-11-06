@@ -51,6 +51,32 @@ export const emptyTelemetry: AudioTelemetry = {
   calibration_output_callback_error_count: 0,
   sync_offset_ms: 0,
   sync_route: "mic|unknown|default",
+  input_transport: "off",
+  input_sample_rate: 0,
+  input_channels: 0,
+  pcm_ingress: {
+    enabled: false,
+    playback_state: "idle",
+    sample_rate: 0,
+    channels: 0,
+    stream_generation: 0,
+    batches_received: 0,
+    samples_received: 0,
+    queue_occupancy: 0,
+    queue_capacity: 0,
+    dropped_batches: 0,
+    dropped_samples: 0,
+    discontinuities: 0,
+    invalid_samples: 0,
+    unsupported_packets: 0,
+    stale_batches: 0,
+    stale_samples: 0,
+    last_input_timestamp_ns: null,
+    estimated_ingress_delay_ns: 0,
+  },
+  dsp_processing_p50_ns: 0,
+  dsp_processing_p95_ns: 0,
+  last_feature_timestamp_ns: null,
   estimated_noise_floor: 0,
   configured_noise_floor: 0.015,
   normalization_gain: 1,
@@ -387,6 +413,9 @@ export function AudioTelemetryCards({
             <div className="h-2 overflow-hidden rounded-full bg-white/5"><div className="h-full rounded-full bg-fuchsia-400 transition-[width] duration-75" style={{ width: `${percent(telemetry.beat_phase) || 0.5}%` }} /></div>
             <div className="flex flex-wrap justify-between gap-x-4 gap-y-1 text-[11px] text-muted-foreground"><span>Next beat {telemetry.next_beat_in_ms === null ? "—" : `${Math.round(telemetry.next_beat_in_ms)} ms`}</span><span>Event #{telemetry.beat_event_sequence}</span><span>{telemetry.dropped_beat_events} dropped · {telemetry.pending_beat_events} queued</span></div>
             <p className="break-words text-[11px] text-muted-foreground [overflow-wrap:anywhere]">Route {telemetry.sync_route} · offset {telemetry.sync_offset_ms > 0 ? "+" : ""}{Math.round(telemetry.sync_offset_ms)} ms</p>
+            <p className="break-words text-[11px] text-muted-foreground [overflow-wrap:anywhere]">
+              Input {telemetry.input_transport.replaceAll("_", " ")} · {telemetry.input_sample_rate ? (telemetry.input_sample_rate / 1000).toFixed(1) + " kHz" : "rate pending"} / {telemetry.input_channels || "?"} ch · queue {telemetry.pcm_ingress.queue_occupancy}/{telemetry.pcm_ingress.queue_capacity} · {telemetry.pcm_ingress.dropped_samples} PCM samples dropped · DSP p50/p95 {(telemetry.dsp_processing_p50_ns / 1_000_000).toFixed(2)}/{(telemetry.dsp_processing_p95_ns / 1_000_000).toFixed(2)} ms
+            </p>
             <p className="text-[11px] text-muted-foreground">
               Scheduler: {telemetry.beat_scheduler_late_ticks_dropped} late dropped · {telemetry.beat_scheduler_late_ticks_coalesced} coalesced · p95 {telemetry.beat_scheduler_lateness_p95_ms.toFixed(1)} ms
               {telemetry.calibration_output_callback_count > 0 && <> · Output {Math.round(telemetry.calibration_output_sample_rate / 1000)} kHz / {telemetry.calibration_output_block_duration_ms.toFixed(2)} ms blocks · callback p95 {telemetry.calibration_output_callback_p95_ms.toFixed(2)} ms · interval jitter p95 {telemetry.calibration_output_interval_jitter_p95_ms.toFixed(2)} ms · {telemetry.calibration_output_underflow_count} underflows / {telemetry.calibration_output_overflow_count} overflows / {telemetry.calibration_output_callback_error_count} callback errors</>}

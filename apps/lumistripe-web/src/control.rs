@@ -3477,6 +3477,8 @@ async fn activate_monitor_source(
             "Bluetooth audio input is only available in hardware mode.",
         ));
     }
+    let direct_pcm =
+        source == "spotify" && model.config.spotify_backend == SpotifyBackend::Librespot;
     let (selector, pipewire_source) = if source == "bluetooth" {
         let status = bluetooth.status();
         let device = status
@@ -3521,7 +3523,11 @@ async fn activate_monitor_source(
         };
         route_result.map_err(bluetooth_control_error)?;
         audio_routing.spotify_active = Some(spotify_status.is_active);
-        let devices = audio_devices(client).await?;
+        let devices = match audio_devices(client).await {
+            Ok(devices) => devices,
+            Err(_) if direct_pcm => Vec::new(),
+            Err(error) => return Err(error),
+        };
         let dedicated = devices.iter().find(|device| {
             let name = device.name.to_ascii_lowercase();
             name.contains("lumistripe spotify") || name.contains("lumistripe_spotify")
@@ -3542,7 +3548,11 @@ async fn activate_monitor_source(
         .get(source)
         .cloned()
         .unwrap_or_default();
-    let result = start_audio_capture(model, client, source, selector, &profile, false).await;
+    let result = if direct_pcm {
+        start_audio_direct(model, client, selector, &profile).await
+    } else {
+        start_audio_capture(model, client, source, selector, &profile, false).await
+    };
     if result.is_ok() {
         model.audio_started = true;
         commit_audio_source(model, configured_source.to_owned());
@@ -3693,6 +3703,65 @@ async fn start_audio_capture(
         Ok(other) => Err(ApiError::new(
             axum::http::StatusCode::BAD_GATEWAY,
             format!("engine returned an unexpected audio status: {other:?}"),
+        )),
+        Err(error) => Err(engine_api_error(error)),
+    }
+}
+
+async fn start_audio_direct(
+    model: &mut ControlModel,
+    client: &EngineAccess,
+    fallback_selector: Option<String>,
+    profile: &AudioTuningProfile,
+) -> Result<(), ApiError> {
+    let config = audio::engine_config(profile, false);
+    config
+        .validate()
+        .map_err(|error| ApiError::new(axum::http::StatusCode::UNPROCESSABLE_ENTITY, error))?;
+    match client
+        .request(RequestCommand::AudioStartDirect {
+            fallback_selector,
+            config,
+        })
+        .await
+    {
+        Ok(ResponseResult::AudioConfigured { active: true }) => {}
+        Ok(ResponseResult::AudioConfigured { active: false }) => {
+            return Err(ApiError::new(
+                axum::http::StatusCode::CONFLICT,
+                "Rust Spotify direct PCM input did not become active",
+            ));
+        }
+        Ok(ResponseResult::Error { code, message }) => {
+            return Err(engine_api_error(EngineAccessError::Engine {
+                code,
+                message,
+            }));
+        }
+        Ok(other) => {
+            return Err(ApiError::new(
+                axum::http::StatusCode::BAD_GATEWAY,
+                format!(
+                    "engine returned an unexpected direct audio-start acknowledgement: {other:?}"
+                ),
+            ));
+        }
+        Err(error) => return Err(engine_api_error(error)),
+    }
+    match client.audio_status().await {
+        Ok(ResponseResult::AudioStatus { status }) if status.active => {
+            model.audio_status = Some(status);
+            model.active_audio_source = "spotify".to_owned();
+            model.audio_started = true;
+            Ok(())
+        }
+        Ok(ResponseResult::AudioStatus { .. }) => Err(ApiError::new(
+            axum::http::StatusCode::CONFLICT,
+            "Spotify direct PCM input stopped before its active status could be confirmed",
+        )),
+        Ok(other) => Err(ApiError::new(
+            axum::http::StatusCode::BAD_GATEWAY,
+            format!("engine returned an unexpected direct audio status: {other:?}"),
         )),
         Err(error) => Err(engine_api_error(error)),
     }
@@ -4219,7 +4288,8 @@ mod tests {
     use futures_util::future::BoxFuture;
     use lumistripe_engine_audio::InputAudioDevice;
     use lumistripe_engine_protocol::{
-        EngineAudioStatus, EngineErrorCode, Request, RequestCommand, Response, ResponseResult,
+        AudioInputTransport, EngineAudioStatus, EngineErrorCode, Request, RequestCommand, Response,
+        ResponseResult,
     };
     use serde_json::{Value, json};
     use std::fs;
@@ -4707,6 +4777,7 @@ mod tests {
     }
 
     async fn mock_spotify_capture_engine(listener: UnixListener) {
+        let mut direct_pcm = false;
         for _ in 0..3 {
             let (stream, _) = listener.accept().await.unwrap();
             let (read, mut write) = stream.into_split();
@@ -4727,10 +4798,25 @@ mod tests {
                 RequestCommand::AudioStart { .. } => {
                     ResponseResult::AudioConfigured { active: true }
                 }
+                RequestCommand::AudioStartDirect {
+                    fallback_selector, ..
+                } => {
+                    assert_eq!(
+                        fallback_selector.as_deref(),
+                        Some("pulse:lumistripe_spotify")
+                    );
+                    direct_pcm = true;
+                    ResponseResult::AudioConfigured { active: true }
+                }
                 RequestCommand::AudioStatus => ResponseResult::AudioStatus {
                     status: EngineAudioStatus {
                         active: true,
-                        device: Some(InputAudioDevice {
+                        input_transport: if direct_pcm {
+                            AudioInputTransport::DirectPcm
+                        } else {
+                            AudioInputTransport::CaptureDevice
+                        },
+                        device: (!direct_pcm).then(|| InputAudioDevice {
                             selector: "pulse:lumistripe_spotify".to_owned(),
                             host: "PulseAudio".to_owned(),
                             name: "LumiStripe Spotify".to_owned(),
@@ -5035,6 +5121,65 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|command| command.starts_with("set-source:"))
+        );
+
+        engine.await.unwrap();
+        cancellation.cancel();
+        tokio::time::timeout(Duration::from_secs(1), poller)
+            .await
+            .expect("disabled Bluetooth poller should stop promptly")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn librespot_audio_selection_uses_direct_pcm_and_keeps_the_monitor_for_fallback() {
+        let directory = tempdir().unwrap();
+        let socket = directory.path().join("engine.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let engine = tokio::spawn(mock_spotify_capture_engine(listener));
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let cancellation = CancellationToken::new();
+        let (bluetooth, poller) = BluetoothService::with_providers(
+            false,
+            true,
+            Arc::new(AudioRouteBlueZ),
+            Arc::new(AudioRoutePipeWire {
+                commands: commands.clone(),
+                fail_loopback: Arc::new(AtomicBool::new(false)),
+            }),
+            cancellation.clone(),
+        );
+        let mut config = test_config(directory.path().join("settings.json"));
+        config.runtime_kind = "hardware";
+        config.spotify_backend = SpotifyBackend::Librespot;
+        let mut settings_store = SettingsStore::open(&config.settings_file).unwrap();
+        let mut model = ControlModel::new(config.clone(), DashboardSettings::default());
+        let client = EngineAccess::new(socket, Duration::from_secs(1));
+        let mut routing = AudioSourceRouting::default();
+
+        set_audio_source(
+            &mut model,
+            &mut settings_store,
+            &client,
+            &mut routing,
+            Some(&bluetooth),
+            Some(&ReadySpotify),
+            "spotify",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(model.active_audio_source, "spotify");
+        let status = model.audio_status.as_ref().unwrap();
+        assert!(status.active);
+        assert_eq!(status.input_transport, AudioInputTransport::DirectPcm);
+        assert_eq!(status.device, None);
+        assert!(
+            commands
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|command| command == "load-module:57")
         );
 
         engine.await.unwrap();

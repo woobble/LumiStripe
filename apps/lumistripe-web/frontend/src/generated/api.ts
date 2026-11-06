@@ -1076,6 +1076,16 @@ export interface components {
             configured_noise_floor: number;
             /** @default [] */
             devices: components["schemas"]["AudioDeviceOption"][];
+            /**
+             * Format: int64
+             * @default 0
+             */
+            dsp_processing_p50_ns: number;
+            /**
+             * Format: int64
+             * @default 0
+             */
+            dsp_processing_p95_ns: number;
             error?: string | null;
             fallback_device?: string | null;
             hardware_gain_backend?: string | null;
@@ -1087,7 +1097,23 @@ export interface components {
             hardware_gain_value?: number | null;
             /** @default false */
             hardware_gain_writable: boolean;
+            /**
+             * Format: int32
+             * @default 0
+             */
+            input_channels: number;
+            /**
+             * Format: int32
+             * @default 0
+             */
+            input_sample_rate: number;
+            /** @default off */
+            input_transport: string;
+            /** Format: int64 */
+            last_feature_timestamp_ns?: number | null;
             monitoring: boolean;
+            /** @default {} */
+            pcm_ingress: components["schemas"]["PcmIngressResponse"];
             /** @default {} */
             settings: components["schemas"]["AudioTuningValues"];
             source: string;
@@ -1585,6 +1611,40 @@ export interface components {
         };
         PairingRequest: {
             code: string;
+        };
+        PcmIngressResponse: {
+            /** Format: int64 */
+            batches_received: number;
+            /** Format: int32 */
+            channels: number;
+            /** Format: int64 */
+            discontinuities: number;
+            /** Format: int64 */
+            dropped_batches: number;
+            /** Format: int64 */
+            dropped_samples: number;
+            enabled: boolean;
+            /** Format: int64 */
+            estimated_ingress_delay_ns: number;
+            /** Format: int64 */
+            invalid_samples: number;
+            /** Format: int64 */
+            last_input_timestamp_ns?: number | null;
+            playback_state: string;
+            queue_capacity: number;
+            queue_occupancy: number;
+            /** Format: int32 */
+            sample_rate: number;
+            /** Format: int64 */
+            samples_received: number;
+            /** Format: int64 */
+            stale_batches: number;
+            /** Format: int64 */
+            stale_samples: number;
+            /** Format: int64 */
+            stream_generation: number;
+            /** Format: int64 */
+            unsupported_packets: number;
         };
         /** @enum {string} */
         PlaybackMode: "solid" | "static" | "cycling" | "dynamic";

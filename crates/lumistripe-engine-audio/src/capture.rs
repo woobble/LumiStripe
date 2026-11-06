@@ -4,6 +4,7 @@
 //! callbacks downmix into fixed-size batches and hand them to a bounded SPSC ring;
 //! processing, recovery, and device changes stay on the control worker.
 
+use crate::ingress::AudioPcmBatch;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{
     BufferSize, Device, FromSample, Host, HostId, InputCallbackInfo, Sample, SampleFormat,
@@ -46,26 +47,7 @@ pub struct AudioCaptureStats {
     pub callback_interval_jitter_p95_ns: u64,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct CapturedAudioBatch {
-    pub samples: [f32; MAX_CAPTURE_BATCH_SAMPLES],
-    pub len: usize,
-    pub capture_end_ns: u64,
-    pub sample_position: u64,
-    pub dropped_samples_before: u64,
-}
-
-impl CapturedAudioBatch {
-    fn empty() -> Self {
-        Self {
-            samples: [0.0; MAX_CAPTURE_BATCH_SAMPLES],
-            len: 0,
-            capture_end_ns: 0,
-            sample_position: 0,
-            dropped_samples_before: 0,
-        }
-    }
-}
+pub type CapturedAudioBatch = AudioPcmBatch;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AudioCaptureError(pub String);
@@ -521,7 +503,7 @@ fn queue_captured_frames<T>(
     let mut offset_frames = 0;
     while offset_frames < frames {
         let batch_frames = (frames - offset_frames).min(MAX_CAPTURE_BATCH_SAMPLES);
-        let mut batch = CapturedAudioBatch::empty();
+        let mut batch = CapturedAudioBatch::empty(sample_rate, channels as u16);
         let sample_offset = offset_frames * channels;
         for frame in 0..batch_frames {
             let channel_offset = sample_offset + frame * channels;
@@ -537,6 +519,7 @@ fn queue_captured_frames<T>(
             ((offset_frames + batch_frames) as u128 * 1_000_000_000_u128 / sample_rate as u128)
                 .min(u64::MAX as u128) as u64,
         );
+        batch.submitted_at_ns = batch.capture_end_ns;
         batch.dropped_samples_before = counters.pending_dropped_samples.swap(0, Ordering::Relaxed);
         enqueue_batch(producer, counters, batch);
         offset_frames += batch_frames;
@@ -691,13 +674,13 @@ mod tests {
         let (mut producer, mut consumer) = RingBuffer::new(2);
         let counters = CaptureCounters::default();
         for sample_position in [0, 8] {
-            let mut batch = CapturedAudioBatch::empty();
+            let mut batch = CapturedAudioBatch::empty(48_000, 2);
             batch.len = 8;
             batch.sample_position = sample_position;
             producer.push(batch).unwrap();
         }
 
-        let mut dropped = CapturedAudioBatch::empty();
+        let mut dropped = CapturedAudioBatch::empty(48_000, 2);
         dropped.len = 6;
         dropped.sample_position = 16;
         dropped.dropped_samples_before = 3;
@@ -707,7 +690,7 @@ mod tests {
         assert_eq!(counters.pending_dropped_samples.load(Ordering::Relaxed), 9);
 
         consumer.pop().unwrap();
-        let mut recovered = CapturedAudioBatch::empty();
+        let mut recovered = CapturedAudioBatch::empty(48_000, 2);
         recovered.len = 4;
         recovered.sample_position = 22;
         recovered.dropped_samples_before =

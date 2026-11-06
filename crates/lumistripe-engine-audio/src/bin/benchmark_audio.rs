@@ -1,7 +1,9 @@
 use lumistripe_engine_audio::{
-    AUDIO_HOP_SIZE, AUDIO_SAMPLE_RATE, AudioBeatEvent, AudioConfig, AudioProcessor,
-    MAX_AUDIO_BEAT_EVENTS, MusicStructureTracker,
+    AUDIO_HOP_SIZE, AUDIO_SAMPLE_RATE, AudioBeatEvent, AudioConfig, AudioPcmBatch, AudioProcessor,
+    MAX_AUDIO_BEAT_EVENTS, MAX_CAPTURE_BATCH_SAMPLES, MusicStructureTracker, PcmIngressReceiver,
+    PcmIngressSender, bounded_pcm_ingress,
 };
+use rtrb::{Consumer, Producer, RingBuffer};
 use serde::Serialize;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -46,6 +48,8 @@ struct BenchmarkReport {
     rust_audio_version: &'static str,
     iterations_512_sample_hops: usize,
     input: &'static str,
+    measurement_scope: &'static str,
+    process_peak_rss_mb: Option<f64>,
     results: Vec<PipelineResult>,
 }
 
@@ -58,7 +62,6 @@ struct PipelineResult {
     wall_seconds: f64,
     realtime_headroom_x: f64,
     cpu_utilization_percent: Option<f64>,
-    peak_rss_mb: Option<f64>,
     feed_p50_ms: f64,
     feed_p95_ms: f64,
     feed_p99_ms: f64,
@@ -91,6 +94,20 @@ fn main() {
             &input,
             true,
         ));
+        results.push(measure_transport(
+            "monitor_capture_queue_plus_dsp",
+            hops_per_call,
+            calls,
+            &input,
+            false,
+        ));
+        results.push(measure_transport(
+            "decoded_pcm_conversion_queue_plus_dsp",
+            hops_per_call,
+            calls,
+            &input,
+            true,
+        ));
     }
 
     let report = BenchmarkReport {
@@ -99,12 +116,238 @@ fn main() {
         rust_audio_version: env!("CARGO_PKG_VERSION"),
         iterations_512_sample_hops: iterations,
         input: "0.32 amplitude 80 Hz plus 0.08 amplitude 1600 Hz at 44100 Hz",
+        measurement_scope: "synthetic software path only; excludes Spotify decoding, PipeWire scheduling, hardware playback/capture, and LED output",
+        process_peak_rss_mb: peak_rss_mb(),
         results,
     };
     println!(
         "{}",
         serde_json::to_string_pretty(&report).expect("serialize report")
     );
+}
+
+enum TransportHarness {
+    Monitor {
+        producer: Producer<AudioPcmBatch>,
+        consumer: Consumer<AudioPcmBatch>,
+        interleaved: Vec<f32>,
+    },
+    Direct {
+        sender: PcmIngressSender,
+        receiver: PcmIngressReceiver,
+        generation: u64,
+        interleaved: Vec<f64>,
+    },
+}
+
+impl TransportHarness {
+    fn new(direct: bool, input: &[f32]) -> Self {
+        if direct {
+            let (sender, receiver) = bounded_pcm_ingress();
+            let generation = sender.set_enabled(true);
+            let interleaved = input
+                .iter()
+                .flat_map(|sample| [f64::from(*sample), f64::from(*sample)])
+                .collect();
+            Self::Direct {
+                sender,
+                receiver,
+                generation,
+                interleaved,
+            }
+        } else {
+            let (producer, consumer) = RingBuffer::new(8);
+            let interleaved = input.iter().flat_map(|sample| [*sample, *sample]).collect();
+            Self::Monitor {
+                producer,
+                consumer,
+                interleaved,
+            }
+        }
+    }
+
+    fn transfer(
+        &mut self,
+        input: &[f32],
+        sample_position: u64,
+        input_offset_samples: usize,
+    ) -> AudioPcmBatch {
+        let timestamp_ns = sample_position
+            .saturating_add(input.len() as u64)
+            .saturating_mul(1_000_000_000)
+            / u64::from(AUDIO_SAMPLE_RATE as u32);
+        match self {
+            Self::Monitor {
+                producer,
+                consumer,
+                interleaved,
+            } => {
+                let mut batch = AudioPcmBatch {
+                    samples: [0.0; MAX_CAPTURE_BATCH_SAMPLES],
+                    len: input.len(),
+                    sample_rate: AUDIO_SAMPLE_RATE as u32,
+                    channels: 2,
+                    capture_end_ns: timestamp_ns,
+                    submitted_at_ns: timestamp_ns,
+                    sample_position,
+                    stream_generation: 0,
+                    dropped_samples_before: 0,
+                };
+                let interleaved_start = input_offset_samples * 2;
+                for (frame, channels) in interleaved
+                    [interleaved_start..interleaved_start + input.len() * 2]
+                    .chunks_exact(2)
+                    .enumerate()
+                {
+                    batch.samples[frame] = (channels[0] + channels[1]) * 0.5;
+                }
+                producer
+                    .push(batch)
+                    .expect("synthetic monitor queue has room");
+                consumer.pop().expect("synthetic monitor batch was queued")
+            }
+            Self::Direct {
+                sender,
+                receiver,
+                generation,
+                interleaved,
+            } => {
+                let input_start = input_offset_samples * 2;
+                let input_end = input_start + input.len() * 2;
+                let accepted = sender.submit_interleaved_f64_at(
+                    &interleaved[input_start..input_end],
+                    AUDIO_SAMPLE_RATE as u32,
+                    2,
+                    *generation,
+                    sample_position,
+                    timestamp_ns,
+                );
+                assert!(accepted, "synthetic direct PCM queue has room");
+                receiver
+                    .try_pop()
+                    .expect("synthetic direct PCM batch was queued")
+            }
+        }
+    }
+}
+
+fn measure_transport(
+    pipeline: &'static str,
+    hops_per_call: usize,
+    calls: usize,
+    input: &[f32],
+    direct: bool,
+) -> PipelineResult {
+    let mut processor = AudioProcessor::new(AudioConfig::default(), AUDIO_SAMPLE_RATE)
+        .expect("valid audio processor configuration");
+    let mut tracker = MusicStructureTracker::new();
+    let mut transport = TransportHarness::new(direct, input);
+    let mut sample_position = 0_u64;
+    for _ in 0..32 {
+        process_transport_call(
+            &mut transport,
+            input,
+            &mut processor,
+            &mut tracker,
+            &mut sample_position,
+        );
+    }
+
+    let mut elapsed_ns = Vec::with_capacity(calls);
+    let cpu_started = thread_cpu_time_ns();
+    let started = Instant::now();
+    for _ in 0..calls {
+        let call_started = Instant::now();
+        process_transport_call(
+            &mut transport,
+            input,
+            &mut processor,
+            &mut tracker,
+            &mut sample_position,
+        );
+        elapsed_ns.push(call_started.elapsed().as_nanos() as u64);
+    }
+    let wall_seconds = started.elapsed().as_secs_f64();
+    let cpu_seconds = cpu_started
+        .zip(thread_cpu_time_ns())
+        .map(|(before, after)| after.saturating_sub(before) as f64 / 1_000_000_000.0);
+    let simulated_audio_seconds = (calls * input.len()) as f64 / AUDIO_SAMPLE_RATE as f64;
+    let (steady_state_allocations, allocations_per_call) =
+        count_transport_allocations(input, calls, direct);
+    elapsed_ns.sort_unstable();
+
+    PipelineResult {
+        pipeline,
+        hops_per_call,
+        calls,
+        simulated_audio_seconds,
+        wall_seconds,
+        realtime_headroom_x: simulated_audio_seconds / wall_seconds.max(1e-9),
+        cpu_utilization_percent: cpu_seconds
+            .map(|seconds| seconds / wall_seconds.max(1e-9) * 100.0),
+        feed_p50_ms: percentile_ms(&elapsed_ns, 50),
+        feed_p95_ms: percentile_ms(&elapsed_ns, 95),
+        feed_p99_ms: percentile_ms(&elapsed_ns, 99),
+        steady_state_allocations,
+        allocations_per_call,
+    }
+}
+
+fn count_transport_allocations(input: &[f32], calls: usize, direct: bool) -> (u64, f64) {
+    let mut processor = AudioProcessor::new(AudioConfig::default(), AUDIO_SAMPLE_RATE)
+        .expect("valid audio processor configuration");
+    let mut tracker = MusicStructureTracker::new();
+    let mut transport = TransportHarness::new(direct, input);
+    let mut sample_position = 0_u64;
+    for _ in 0..32 {
+        process_transport_call(
+            &mut transport,
+            input,
+            &mut processor,
+            &mut tracker,
+            &mut sample_position,
+        );
+    }
+
+    let before = ALLOCATION_COUNT.load(Ordering::Relaxed);
+    TRACK_ALLOCATIONS.store(true, Ordering::Relaxed);
+    for _ in 0..calls {
+        process_transport_call(
+            &mut transport,
+            input,
+            &mut processor,
+            &mut tracker,
+            &mut sample_position,
+        );
+    }
+    TRACK_ALLOCATIONS.store(false, Ordering::Relaxed);
+    let allocations = ALLOCATION_COUNT
+        .load(Ordering::Relaxed)
+        .saturating_sub(before);
+    (allocations, allocations as f64 / calls as f64)
+}
+
+fn process_transport_call(
+    transport: &mut TransportHarness,
+    input: &[f32],
+    processor: &mut AudioProcessor,
+    tracker: &mut MusicStructureTracker,
+    sample_position: &mut u64,
+) {
+    for (batch_index, samples) in input.chunks(MAX_CAPTURE_BATCH_SAMPLES).enumerate() {
+        let batch = transport.transfer(
+            samples,
+            *sample_position,
+            batch_index * MAX_CAPTURE_BATCH_SAMPLES,
+        );
+        process(
+            processor,
+            tracker,
+            sample_position,
+            &batch.samples[..batch.len],
+            true,
+        );
+    }
 }
 
 fn measure(
@@ -160,7 +403,6 @@ fn measure(
         realtime_headroom_x: simulated_audio_seconds / wall_seconds.max(1e-9),
         cpu_utilization_percent: cpu_seconds
             .map(|seconds| seconds / wall_seconds.max(1e-9) * 100.0),
-        peak_rss_mb: peak_rss_mb(),
         feed_p50_ms: percentile_ms(&elapsed_ns, 50),
         feed_p95_ms: percentile_ms(&elapsed_ns, 95),
         feed_p99_ms: percentile_ms(&elapsed_ns, 99),

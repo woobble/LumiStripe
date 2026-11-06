@@ -23,15 +23,16 @@ with no control characters. Control lines are limited to 1 MiB. Malformed
 JSON, invalid IDs, oversized input, and incomplete requests close the
 connection without changing engine state.
 
-Versions 2 and 3 use the typed `Request` and `Response` models. Commands use a
-tagged `type` and optional `data` object:
+Versions 2, 3, and 4 use the typed `Request` and `Response` models. The server
+currently accepts versions 3 and 4; version 2 is retained only as a historical
+wire fixture. Commands use a tagged `type` and optional `data` object:
 
 ```json
-{"protocol_version":3,"request_id":"health-1","command":{"type":"health"}}
-{"protocol_version":3,"request_id":"configure-1","command":{"type":"configure","data":{"config":{"outputs":[{"id":"main","pixel_count":80,"reversed":false,"backend":{"type":"mock"}}]}}}}
+{"protocol_version":4,"request_id":"health-1","command":{"type":"health"}}
+{"protocol_version":4,"request_id":"configure-1","command":{"type":"configure","data":{"config":{"outputs":[{"id":"main","pixel_count":80,"reversed":false,"backend":{"type":"mock"}}]}}}}
 ```
 
-Responses have the shape `{"protocol_version":3,"request_id":"health-1","result":{"type":"health",...}}`.
+Responses have the shape `{"protocol_version":4,"request_id":"health-1","result":{"type":"health",...}}`.
 Successful result types include `health`, `configured`, `render_capabilities`,
 `render_queued`, `scene_updated`, `audio_updated`, `audio_configured`,
 `audio_stopped`, `audio_devices`, `audio_status`, and `shutdown`.
@@ -41,8 +42,9 @@ Successful result types include `health`, `configured`, `render_capabilities`,
 | Version | Status | Commands and compatibility |
 | ---: | --- | --- |
 | 1 | Legacy compatibility | Separate `LegacyRequest`/`LegacyResponse` models for health, one-output configuration, RGB frame rendering, and shutdown. Configuration accepts 1–16,384 pixels. Errors are `unsupported_version`, `invalid_config`, `invalid_frame`, or `not_configured`. |
-| 2 | Supported previous | Health, render capabilities, configuration, direct rendering, scene updates, audio feature updates, and shutdown. It uses the `Request`/`Response` models and does not start or configure Rust audio capture. |
-| 3 | Current | Version 2 commands plus Rust audio start, configure, stop, device enumeration, and status. New clients should use version 3. |
+| 2 | Retired | Historical typed `Request`/`Response` format. The current server rejects this version. |
+| 3 | Supported previous | Health, render capabilities, configuration, direct rendering, scene updates, audio feature updates, Rust audio start/configure/stop, device enumeration, and status. |
+| 4 | Current | Version 3 commands plus `audio_start_direct` for a runtime with a decoded-PCM provider. New clients should use version 4. |
 
 Version 1 uses its own envelope and response result types. For example:
 
@@ -51,11 +53,14 @@ Version 1 uses its own envelope and response result types. For example:
 {"protocol_version":1,"request_id":"legacy-1","result":{"type":"configured","pixel_count":80}}
 ```
 
-For versions 2 and 3, audio lifecycle commands are `audio_start` with
+For versions 3 and 4, audio lifecycle commands include `audio_start` with
 `selector` and `config`, `audio_configure` with `config`, `audio_stop`,
-`audio_devices`, and `audio_status`. The built-in `demo` selector is supported.
-Audio lifecycle commands sent with version 2 return `unsupported_version`.
-Version 1 remains a distinct legacy wire model; it is not a reduced `Request`.
+`audio_devices`, and `audio_status`. Version 4 also supports
+`audio_start_direct` with an optional `fallback_selector` and `config`. The
+direct command is intended for an in-process runtime whose native Spotify
+provider supplies decoded PCM; standalone IPC clients do not attach a PCM
+producer. The built-in `demo` selector is supported by `audio_start`. Version 1
+remains a distinct legacy wire model; it is not a reduced `Request`.
 
 Control errors use `result.type = "error"` with a typed code and message.
 Codes are `unsupported_version`, `invalid_config`, `invalid_frame`,
@@ -69,7 +74,7 @@ has completed; use health results for completed-frame telemetry.
 ## Binary frame transport
 
 Frame transport is version 2 (`LSF2`) and is independent of JSON control
-versions 1, 2, and 3. Integers are little-endian. The header is 20 bytes:
+versions 1 through 4. Integers are little-endian. The header is 20 bytes:
 
 | Offset | Size | Field |
 | ---: | ---: | --- |

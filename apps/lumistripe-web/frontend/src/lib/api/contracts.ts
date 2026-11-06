@@ -14,6 +14,7 @@ export type AnimationSettingsUpdateRequest = RestSchema<"AnimationSettingsUpdate
 export type AudioCalibrationResult = RestSchema<"AudioCalibrationResult">
 export type AudioCalibrationSessionResponse = RestSchema<"AudioCalibrationSessionResponse">
 export type AudioDeviceOption = RestSchema<"AudioDeviceOption">
+export type PcmIngressResponse = RestSchema<"PcmIngressResponse">
 export type AudioOutputDeviceInfo = RestSchema<"AudioOutputDeviceInfo">
 export type AudioSettingsResponse = RestSchema<"AudioSettingsResponse">
 export type SpotifyStatusResponse = RestSchema<"SpotifyStatusResponse">
@@ -54,6 +55,13 @@ export interface AudioTelemetry {
   calibration_output_callback_error_count: number
   sync_offset_ms: number
   sync_route: string
+  input_transport: "off" | "capture_device" | "direct_pcm" | "monitor_fallback" | "demo"
+  input_sample_rate: number
+  input_channels: number
+  pcm_ingress: PcmIngressResponse
+  dsp_processing_p50_ns: number
+  dsp_processing_p95_ns: number
+  last_feature_timestamp_ns: number | null
   estimated_noise_floor: number
   configured_noise_floor: number
   normalization_gain: number

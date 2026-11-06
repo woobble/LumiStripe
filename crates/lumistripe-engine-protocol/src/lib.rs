@@ -2,15 +2,15 @@
 
 use lumistripe_engine_audio::{
     AudioCaptureStats, AudioConfig, AudioFrame, AudioProcessorStats, InputAudioDevice,
-    MusicFeatures, MusicStructureState,
+    MusicFeatures, MusicStructureState, PcmIngressStats,
 };
 use lumistripe_engine_config::EngineConfig;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::fmt;
 
-pub const PROTOCOL_VERSION: u16 = 3;
-pub const PREVIOUS_PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 4;
+pub const PREVIOUS_PROTOCOL_VERSION: u16 = 3;
 pub const LEGACY_PROTOCOL_VERSION: u16 = 1;
 pub const MAX_CONTROL_MESSAGE_BYTES: usize = 1_048_576;
 pub const MAX_RENDER_STRUCTURE_EVENTS: usize = 256;
@@ -49,6 +49,11 @@ pub enum RequestCommand {
     },
     AudioStart {
         selector: Option<String>,
+        config: AudioConfig,
+    },
+    AudioStartDirect {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fallback_selector: Option<String>,
         config: AudioConfig,
     },
     AudioConfigure {
@@ -1033,6 +1038,8 @@ pub enum ResponseResult {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct EngineAudioStatus {
     pub active: bool,
+    #[serde(default)]
+    pub input_transport: AudioInputTransport,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device: Option<InputAudioDevice>,
     #[serde(default)]
@@ -1045,6 +1052,12 @@ pub struct EngineAudioStatus {
     pub processor: AudioProcessorStats,
     #[serde(default)]
     pub capture: AudioCaptureStats,
+    #[serde(default)]
+    pub pcm_ingress: PcmIngressStats,
+    #[serde(default)]
+    pub dsp_processing_p50_ns: u64,
+    #[serde(default)]
+    pub dsp_processing_p95_ns: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_frame_ns: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1055,6 +1068,17 @@ pub struct EngineAudioStatus {
     pub dropped_audio_updates: u64,
     #[serde(default)]
     pub dropped_structure_events: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioInputTransport {
+    #[default]
+    Off,
+    CaptureDevice,
+    DirectPcm,
+    MonitorFallback,
+    Demo,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1258,7 +1282,7 @@ impl std::error::Error for ProtocolError {}
 #[cfg(test)]
 mod tests {
     use super::{
-        FRAME_ACK_BYTES, FRAME_HEADER_BYTES, FrameAck, FrameAckStatus, FrameHeader,
+        AudioConfig, FRAME_ACK_BYTES, FRAME_HEADER_BYTES, FrameAck, FrameAckStatus, FrameHeader,
         LEGACY_PROTOCOL_VERSION, LegacyConfig, LegacyRequest, LegacyRequestCommand, LegacyResponse,
         LegacyResponseResult, PREVIOUS_PROTOCOL_VERSION, PROTOCOL_VERSION, RenderAnimationChoice,
         RenderAudioInput, RenderBeatEvent, RenderCycleOrder, RenderCycleTiming, RenderCycling,
@@ -1342,7 +1366,7 @@ mod tests {
     #[test]
     fn health_request_matches_shared_v2_fixture() {
         let mut request = Request::new("fixture-health-2", RequestCommand::Health);
-        request.protocol_version = PREVIOUS_PROTOCOL_VERSION;
+        request.protocol_version = 2;
         let actual: Value =
             serde_json::from_slice(&super::encode_request(&request).unwrap()).unwrap();
         let fixture: Value = serde_json::from_str(include_str!(
@@ -1350,13 +1374,13 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(actual, fixture);
-        assert_eq!(request.protocol_version, PREVIOUS_PROTOCOL_VERSION);
+        assert_eq!(request.protocol_version, 2);
     }
 
     #[test]
     fn health_response_matches_shared_v2_fixture() {
         let mut response = health_response("fixture-health-2");
-        response.protocol_version = PREVIOUS_PROTOCOL_VERSION;
+        response.protocol_version = 2;
         let actual: Value =
             serde_json::from_slice(&super::encode_response(&response).unwrap()).unwrap();
         let fixture: Value = serde_json::from_str(include_str!(
@@ -1368,7 +1392,8 @@ mod tests {
 
     #[test]
     fn health_request_matches_shared_v3_fixture() {
-        let request = Request::new("fixture-health-3", RequestCommand::Health);
+        let mut request = Request::new("fixture-health-3", RequestCommand::Health);
+        request.protocol_version = PREVIOUS_PROTOCOL_VERSION;
         let actual: Value =
             serde_json::from_slice(&super::encode_request(&request).unwrap()).unwrap();
         let fixture: Value = serde_json::from_str(include_str!(
@@ -1376,16 +1401,43 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(actual, fixture);
-        assert_eq!(request.protocol_version, PROTOCOL_VERSION);
+        assert_eq!(request.protocol_version, PREVIOUS_PROTOCOL_VERSION);
     }
 
     #[test]
     fn health_response_matches_shared_v3_fixture() {
-        let response = health_response("fixture-health-3");
+        let mut response = health_response("fixture-health-3");
+        response.protocol_version = PREVIOUS_PROTOCOL_VERSION;
         let actual: Value =
             serde_json::from_slice(&super::encode_response(&response).unwrap()).unwrap();
         let fixture: Value = serde_json::from_str(include_str!(
             "../../../tests/fixtures/protocol-v3/health-response.json"
+        ))
+        .unwrap();
+        assert_eq!(actual, fixture);
+        assert_eq!(response.protocol_version, PREVIOUS_PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn health_request_matches_shared_v4_fixture() {
+        let request = Request::new("fixture-health-4", RequestCommand::Health);
+        let actual: Value =
+            serde_json::from_slice(&super::encode_request(&request).unwrap()).unwrap();
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/protocol-v4/health-request.json"
+        ))
+        .unwrap();
+        assert_eq!(actual, fixture);
+        assert_eq!(request.protocol_version, PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn health_response_matches_shared_v4_fixture() {
+        let response = health_response("fixture-health-4");
+        let actual: Value =
+            serde_json::from_slice(&super::encode_response(&response).unwrap()).unwrap();
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/protocol-v4/health-response.json"
         ))
         .unwrap();
         assert_eq!(actual, fixture);
@@ -1458,6 +1510,21 @@ mod tests {
             },
         );
         let decoded = super::decode_request(&super::encode_request(&request).unwrap()).unwrap();
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn direct_audio_start_control_message_is_typed() {
+        let request = Request::new(
+            "audio-direct-start-1",
+            RequestCommand::AudioStartDirect {
+                fallback_selector: Some("pipewire:Spotify monitor".to_owned()),
+                config: AudioConfig::default(),
+            },
+        );
+
+        let decoded = super::decode_request(&super::encode_request(&request).unwrap()).unwrap();
+
         assert_eq!(decoded, request);
     }
 

@@ -76,13 +76,15 @@ and application data remain outside the release tree.
 
 ## Audio and hardware
 
-The audio crate owns capture, configuration, DSP, and telemetry. The web layer
-selects sources and profiles, persists route-specific synchronization offsets,
-and sends audio commands to the engine. The optional native Spotify Connect
-provider is isolated in `crates/lumistripe-spotify`; the web app selects it
-through the existing provider boundary and leaves REST status/control shapes
-unchanged. Both it and the retained Soloist provider use the dedicated Spotify
-PipeWire sink. See the [audio guide](audio.md) and [Spotify provider guide](spotify.md).
+The audio crate owns device capture, the bounded decoded-PCM ingress, DSP, and
+telemetry. The optional native Spotify Connect provider taps decoded PCM while
+continuing playback to the dedicated Spotify PipeWire sink. The audio worker
+uses the same DSP and renderer for direct PCM and capture sources; a stalled
+native stream can fall back to sink-monitor capture. Soloist continues to use
+monitor capture. The web layer selects sources and profiles, persists
+route-specific synchronization offsets, and sends audio commands to the
+engine. See the [audio guide](audio.md) and
+[Spotify provider guide](spotify.md).
 
 Production hardware use is documented in the [deployment guide](../deploy/README.md).
 The [browser simulator](simulator.md) uses mock outputs and does not verify

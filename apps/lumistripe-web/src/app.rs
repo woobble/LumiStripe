@@ -52,9 +52,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post, put};
 use axum::{Router, middleware as axum_middleware};
 use lumistripe_engine_animation_definitions::catalog;
+use lumistripe_engine_audio::{PcmIngressSender, PcmPlaybackState, monotonic_time_ns};
 use lumistripe_engine_protocol::{RequestCommand, ResponseResult};
 use lumistripe_engine_runtime::{EngineHandle, EngineRuntime};
-use lumistripe_spotify::SpotifyConnectConfig;
+use lumistripe_spotify::{DecodedPcmPlaybackState, DecodedPcmTap, SpotifyConnectConfig};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value, json};
 use std::path::PathBuf;
@@ -243,6 +244,9 @@ impl WebApplication {
         let access = PairingAuth::new(pairing_code)?;
         let engine = EngineRuntime::start().map_err(|error| error.to_string())?;
         let client = engine.handle();
+        let pcm_ingress = client
+            .audio_pcm_ingress()
+            .map_err(|error| error.to_string())?;
         let control_client = EngineAccess::direct(client.clone());
         let cancellation = CancellationToken::new();
         let model = ControlModel::new(config.clone(), settings);
@@ -328,8 +332,12 @@ impl WebApplication {
                 Err(error) => model.set_audio_status(Err(error.to_string())),
             }
         }
-        let (spotify, spotify_task) =
-            create_spotify_provider(&config, spotify_device_name, cancellation.clone());
+        let (spotify, spotify_task) = create_spotify_provider(
+            &config,
+            spotify_device_name,
+            cancellation.clone(),
+            pcm_ingress,
+        );
         spotify.start();
         let bluetooth_enabled = config.runtime_kind == "hardware";
         let spotify_audio_routing_enabled = bluetooth_enabled || spotify_enabled(&config);
@@ -774,11 +782,13 @@ fn create_spotify_provider(
     config: &AppConfig,
     device_name: String,
     cancellation: CancellationToken,
+    pcm_ingress: PcmIngressSender,
 ) -> (Arc<dyn SpotifyProvider>, Option<JoinHandle<()>>) {
     match config.spotify_backend {
         SpotifyBackend::Librespot => {
             let native_config =
-                SpotifyConnectConfig::new(config.spotify_data_dir.clone(), device_name);
+                SpotifyConnectConfig::new(config.spotify_data_dir.clone(), device_name)
+                    .with_pcm_tap(Arc::new(EngineSpotifyPcmTap { pcm_ingress }));
             let (provider, task) = LibrespotBackend::new(native_config, cancellation);
             (Arc::new(provider), Some(task))
         }
@@ -788,6 +798,54 @@ fn create_spotify_provider(
             (Arc::new(provider), Some(task))
         }
         SpotifyBackend::Disabled => (Arc::new(DisabledSpotifyBackend), None),
+    }
+}
+
+#[derive(Debug)]
+struct EngineSpotifyPcmTap {
+    pcm_ingress: PcmIngressSender,
+}
+
+impl DecodedPcmTap for EngineSpotifyPcmTap {
+    fn stream_generation(&self) -> u64 {
+        self.pcm_ingress.generation()
+    }
+
+    fn begin_generation(&self) {
+        self.pcm_ingress.begin_generation();
+    }
+
+    fn set_playback_state(&self, state: DecodedPcmPlaybackState) {
+        let state = match state {
+            DecodedPcmPlaybackState::Idle => PcmPlaybackState::Idle,
+            DecodedPcmPlaybackState::Loading => PcmPlaybackState::Loading,
+            DecodedPcmPlaybackState::Playing => PcmPlaybackState::Playing,
+            DecodedPcmPlaybackState::Paused => PcmPlaybackState::Paused,
+            DecodedPcmPlaybackState::Failed => PcmPlaybackState::Failed,
+        };
+        self.pcm_ingress.set_playback_state(state);
+    }
+
+    fn submit_interleaved_f64(
+        &self,
+        samples: &[f64],
+        sample_rate: u32,
+        channels: u16,
+        stream_generation: u64,
+        sample_position: u64,
+    ) {
+        self.pcm_ingress.submit_interleaved_f64_at(
+            samples,
+            sample_rate,
+            channels,
+            stream_generation,
+            sample_position,
+            monotonic_time_ns(),
+        );
+    }
+
+    fn record_unsupported_packet(&self) {
+        self.pcm_ingress.record_unsupported_packet();
     }
 }
 
@@ -3549,6 +3607,7 @@ mod tests {
     use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
     use clap::Parser;
     use futures_util::future::BoxFuture;
+    use lumistripe_engine_audio::bounded_pcm_ingress;
     use serde_json::{Value, json};
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
@@ -3598,10 +3657,12 @@ mod tests {
             .unwrap();
             let (config, _, _) = options.into_config().unwrap();
             let cancellation = CancellationToken::new();
+            let (pcm_ingress, _pcm_receiver) = bounded_pcm_ingress();
             let (provider, task) = create_spotify_provider(
                 &config,
                 "Test LumiStripe".to_owned(),
                 cancellation.clone(),
+                pcm_ingress,
             );
 
             assert_eq!(task.is_some(), expected_task, "backend: {backend}");

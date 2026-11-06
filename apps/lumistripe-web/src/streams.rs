@@ -281,6 +281,13 @@ fn audio_telemetry(
         "calibration_output_callback_error_count": 0,
         "sync_offset_ms": context.sync_offset_ms,
         "sync_route": context.sync_route,
+        "input_transport": status.input_transport,
+        "input_sample_rate": status.device.as_ref().map_or(status.pcm_ingress.sample_rate, |device| device.sample_rate),
+        "input_channels": status.device.as_ref().map_or(status.pcm_ingress.channels, |device| device.channels),
+        "pcm_ingress": status.pcm_ingress,
+        "dsp_processing_p50_ns": status.dsp_processing_p50_ns,
+        "dsp_processing_p95_ns": status.dsp_processing_p95_ns,
+        "last_feature_timestamp_ns": status.last_frame_ns,
         "estimated_noise_floor": estimated_noise_floor,
         "configured_noise_floor": context.configured_noise_floor,
         "normalization_gain": f64::from(processor.normalization_gain.max(0.0)),
@@ -294,7 +301,7 @@ fn audio_telemetry(
         "gate_beat_density": clamp_unit_f32(features.beat_confidence),
         "gate_brightness": clamp_unit_f32(features.brightness),
         "gate_spectral_balance": spectral_balance,
-        "gate_reason": if active && context.source == "demo" { "demo_audio_active" } else if active { "rust_audio_capture_active" } else { "no_audio_input" },
+        "gate_reason": if active && context.source == "demo" { "demo_audio_active" } else if active && status.input_transport == lumistripe_engine_protocol::AudioInputTransport::DirectPcm { "spotify_direct_pcm_active" } else if active && status.input_transport == lumistripe_engine_protocol::AudioInputTransport::MonitorFallback { "spotify_monitor_fallback_active" } else if active { "rust_audio_capture_active" } else { "no_audio_input" },
         "gate_checks": [],
         "music_structure_phase": phase,
         "music_structure_confidence": structure.confidence.clamp(0.0, 1.0),
@@ -683,7 +690,7 @@ mod tests {
     };
     use crate::audio::AudioStreamContext;
     use lumistripe_engine_audio::{AudioFrame, AudioProcessorStats};
-    use lumistripe_engine_protocol::EngineAudioStatus;
+    use lumistripe_engine_protocol::{AudioInputTransport, EngineAudioStatus};
     use std::collections::VecDeque;
     use std::sync::Arc;
     use tokio::sync::watch;
@@ -751,10 +758,26 @@ mod tests {
 
     #[test]
     fn audio_telemetry_reports_profile_noise_floors_and_route_settings() {
-        let status = status(3, true, 0.12);
+        let status = EngineAudioStatus {
+            input_transport: AudioInputTransport::DirectPcm,
+            pcm_ingress: lumistripe_engine_audio::PcmIngressStats {
+                enabled: true,
+                playback_state: lumistripe_engine_audio::PcmPlaybackState::Playing,
+                sample_rate: 44_100,
+                channels: 2,
+                queue_occupancy: 1,
+                queue_capacity: 8,
+                dropped_samples: 12,
+                ..Default::default()
+            },
+            dsp_processing_p50_ns: 200_000,
+            dsp_processing_p95_ns: 650_000,
+            last_frame_ns: Some(1_234_000_000),
+            ..status(3, true, 0.12)
+        };
         let context = AudioStreamContext {
             source: "auto".to_owned(),
-            sync_route: "mic|USB mic|default".to_owned(),
+            sync_route: "spotify_direct|librespot decoded PCM|default".to_owned(),
             sync_offset_ms: -24.5,
             configured_input_noise_floor: Some(0.02),
             configured_noise_floor: 0.04,
@@ -774,7 +797,18 @@ mod tests {
         assert_eq!(telemetry["configured_input_noise_floor"], 0.02);
         assert_eq!(telemetry["configured_noise_floor"], 0.04);
         assert_eq!(telemetry["estimated_noise_floor"], 0.03);
-        assert_eq!(telemetry["sync_route"], "mic|USB mic|default");
+        assert_eq!(
+            telemetry["sync_route"],
+            "spotify_direct|librespot decoded PCM|default"
+        );
         assert_eq!(telemetry["sync_offset_ms"], -24.5);
+        assert_eq!(telemetry["input_transport"], "direct_pcm");
+        assert_eq!(telemetry["input_sample_rate"], 44_100);
+        assert_eq!(telemetry["input_channels"], 2);
+        assert_eq!(telemetry["pcm_ingress"]["queue_occupancy"], 1);
+        assert_eq!(telemetry["pcm_ingress"]["dropped_samples"], 12);
+        assert_eq!(telemetry["dsp_processing_p50_ns"], 200_000);
+        assert_eq!(telemetry["dsp_processing_p95_ns"], 650_000);
+        assert_eq!(telemetry["last_feature_timestamp_ns"], 1_234_000_000_u64);
     }
 }

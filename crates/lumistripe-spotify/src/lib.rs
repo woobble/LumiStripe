@@ -17,16 +17,21 @@ use librespot::{
     discovery::Discovery,
     metadata::audio::UniqueFields,
     playback::{
-        audio_backend,
+        NUM_CHANNELS, SAMPLE_RATE,
+        audio_backend::{self, Sink, SinkResult},
         config::{AudioFormat, PlayerConfig},
+        convert::Converter,
+        decoder::AudioPacket,
         mixer::{self, MixerConfig},
         player::{Player, PlayerEvent, PlayerEventChannel, SinkStatus},
     },
 };
 use std::{
+    fmt,
     fs::{self, OpenOptions},
     io,
     path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
 use thiserror::Error;
@@ -50,11 +55,50 @@ const DISCOVERY_RETRY_MAX: Duration = Duration::from_secs(30);
 const POSITION_UPDATE_INTERVAL: Duration = Duration::from_millis(250);
 const AUDIO_CACHE_LIMIT_BYTES: u64 = 64 * 1024 * 1024;
 
-#[derive(Clone, Debug)]
+/// Provider playback state used by the engine's direct-input fallback policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DecodedPcmPlaybackState {
+    Idle,
+    Loading,
+    Playing,
+    Paused,
+    Failed,
+}
+
+/// Bounded handoff for decoded PCM; implementations must return promptly.
+pub trait DecodedPcmTap: Send + Sync + fmt::Debug {
+    fn stream_generation(&self) -> u64;
+    fn begin_generation(&self);
+    fn set_playback_state(&self, state: DecodedPcmPlaybackState);
+    fn submit_interleaved_f64(
+        &self,
+        samples: &[f64],
+        sample_rate: u32,
+        channels: u16,
+        stream_generation: u64,
+        sample_position: u64,
+    );
+    fn record_unsupported_packet(&self);
+}
+
+#[derive(Clone)]
 pub struct SpotifyConnectConfig {
     pub data_dir: PathBuf,
     pub device_name: String,
     pub audio_sink_name: String,
+    pub pcm_tap: Option<Arc<dyn DecodedPcmTap>>,
+}
+
+impl fmt::Debug for SpotifyConnectConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SpotifyConnectConfig")
+            .field("data_dir", &self.data_dir)
+            .field("device_name", &self.device_name)
+            .field("audio_sink_name", &self.audio_sink_name)
+            .field("pcm_tap_enabled", &self.pcm_tap.is_some())
+            .finish()
+    }
 }
 
 impl SpotifyConnectConfig {
@@ -63,7 +107,13 @@ impl SpotifyConnectConfig {
             data_dir: data_dir.into(),
             device_name: device_name.into(),
             audio_sink_name: SPOTIFY_PIPEWIRE_SINK.to_owned(),
+            pcm_tap: None,
         }
+    }
+
+    pub fn with_pcm_tap(mut self, pcm_tap: Arc<dyn DecodedPcmTap>) -> Self {
+        self.pcm_tap = Some(pcm_tap);
+        self
     }
 }
 
@@ -746,6 +796,70 @@ struct OpenSessionError {
     authentication_failed: bool,
 }
 
+struct DecodedPcmSink {
+    output: Box<dyn Sink>,
+    tap: Arc<dyn DecodedPcmTap>,
+    generation: u64,
+    sample_position: u64,
+}
+
+impl DecodedPcmSink {
+    fn new(output: Box<dyn Sink>, tap: Arc<dyn DecodedPcmTap>) -> Self {
+        let generation = tap.stream_generation();
+        Self {
+            output,
+            tap,
+            generation,
+            sample_position: 0,
+        }
+    }
+}
+
+impl Sink for DecodedPcmSink {
+    fn start(&mut self) -> SinkResult<()> {
+        self.output.start()
+    }
+
+    fn stop(&mut self) -> SinkResult<()> {
+        self.output.stop()
+    }
+
+    fn write(&mut self, packet: AudioPacket, converter: &mut Converter) -> SinkResult<()> {
+        let result = match packet {
+            AudioPacket::Samples(samples) => {
+                let channel_count = usize::from(NUM_CHANNELS);
+                if samples.len() % channel_count == 0 {
+                    let generation = self.tap.stream_generation();
+                    if generation != self.generation {
+                        self.generation = generation;
+                        self.sample_position = 0;
+                    }
+                    let frame_count = samples.len() / channel_count;
+                    self.tap.submit_interleaved_f64(
+                        &samples,
+                        SAMPLE_RATE,
+                        u16::from(NUM_CHANNELS),
+                        generation,
+                        self.sample_position,
+                    );
+                    self.sample_position = self.sample_position.saturating_add(frame_count as u64);
+                } else {
+                    self.tap.record_unsupported_packet();
+                }
+                self.output.write(AudioPacket::Samples(samples), converter)
+            }
+            AudioPacket::Raw(bytes) => {
+                self.tap.record_unsupported_packet();
+                self.output.write(AudioPacket::Raw(bytes), converter)
+            }
+        };
+        if result.is_err() {
+            self.tap.set_playback_state(DecodedPcmPlaybackState::Failed);
+        }
+        result
+    }
+}
+
 async fn open_session(
     config: &SpotifyConnectConfig,
     storage: &Storage,
@@ -774,6 +888,7 @@ async fn open_session(
         });
     };
     let device = config.audio_sink_name.clone();
+    let pcm_tap = config.pcm_tap.clone();
     let player = Player::new(
         PlayerConfig {
             position_update_interval: Some(POSITION_UPDATE_INTERVAL),
@@ -781,12 +896,22 @@ async fn open_session(
         },
         session.clone(),
         mixer.get_soft_volume(),
-        move || sink_builder(Some(device), AudioFormat::S16),
+        move || {
+            let output = sink_builder(Some(device), AudioFormat::S16);
+            match pcm_tap {
+                Some(tap) => Box::new(DecodedPcmSink::new(output, tap)) as Box<dyn Sink>,
+                None => output,
+            }
+        },
     );
     let events = player.get_player_event_channel();
     let sink_status = status.clone();
+    let pcm_status = config.pcm_tap.clone();
     player.set_sink_event_callback(Some(Box::new(move |state| {
         if state == SinkStatus::TemporarilyClosed {
+            if let Some(pcm_tap) = &pcm_status {
+                pcm_tap.set_playback_state(DecodedPcmPlaybackState::Failed);
+            }
             update_status(&sink_status, |snapshot| {
                 snapshot.error = Some(
                     "Spotify audio output is unavailable; check the PipeWire Spotify sink."
@@ -837,6 +962,7 @@ async fn open_session(
         task: Some(task),
         events,
         session,
+        pcm_tap: config.pcm_tap.clone(),
     })
 }
 
@@ -845,6 +971,7 @@ struct ConnectedSession {
     task: Option<JoinHandle<()>>,
     events: PlayerEventChannel,
     session: Session,
+    pcm_tap: Option<Arc<dyn DecodedPcmTap>>,
 }
 
 #[derive(Debug)]
@@ -960,6 +1087,7 @@ async fn run_connected_session(
                     fail_pending(&mut pending, ProviderError::disconnected());
                     return SessionExit::Lost;
                 };
+                update_decoded_pcm_state(connected.pcm_tap.as_deref(), &event);
                 let mut snapshot = status.borrow().clone();
                 let observation = apply_player_event(&mut snapshot, event, &mut track_sequence);
                 status.send_replace(snapshot.clone());
@@ -984,6 +1112,49 @@ async fn run_connected_session(
                 return SessionExit::Lost;
             }
         }
+    }
+}
+
+fn update_decoded_pcm_state(tap: Option<&dyn DecodedPcmTap>, event: &PlayerEvent) {
+    let Some(tap) = tap else {
+        return;
+    };
+    match event {
+        PlayerEvent::Loading { .. } => {
+            tap.begin_generation();
+            tap.set_playback_state(DecodedPcmPlaybackState::Loading);
+        }
+        PlayerEvent::Playing { .. } => {
+            tap.set_playback_state(DecodedPcmPlaybackState::Playing);
+        }
+        PlayerEvent::Paused { .. } => {
+            tap.set_playback_state(DecodedPcmPlaybackState::Paused);
+        }
+        PlayerEvent::Stopped { .. } => {
+            tap.begin_generation();
+            tap.set_playback_state(DecodedPcmPlaybackState::Idle);
+        }
+        PlayerEvent::TrackChanged { .. } | PlayerEvent::Seeked { .. } => {
+            tap.begin_generation();
+        }
+        PlayerEvent::SessionDisconnected { .. } => {
+            tap.begin_generation();
+            tap.set_playback_state(DecodedPcmPlaybackState::Idle);
+        }
+        PlayerEvent::Unavailable { .. }
+        | PlayerEvent::Preloading { .. }
+        | PlayerEvent::TimeToPreloadNextTrack { .. }
+        | PlayerEvent::EndOfTrack { .. }
+        | PlayerEvent::PositionChanged { .. }
+        | PlayerEvent::PositionCorrection { .. }
+        | PlayerEvent::VolumeChanged { .. }
+        | PlayerEvent::ShuffleChanged { .. }
+        | PlayerEvent::RepeatChanged { .. }
+        | PlayerEvent::SessionConnected { .. }
+        | PlayerEvent::PlayRequestIdChanged { .. }
+        | PlayerEvent::SessionClientChanged { .. }
+        | PlayerEvent::AutoPlayChanged { .. }
+        | PlayerEvent::FilterExplicitContentChanged { .. } => {}
     }
 }
 
@@ -1206,6 +1377,10 @@ fn update_status(status: &watch::Sender<Snapshot>, update: impl FnOnce(&mut Snap
 }
 
 async fn shutdown_session(mut connected: ConnectedSession) {
+    if let Some(tap) = &connected.pcm_tap {
+        tap.begin_generation();
+        tap.set_playback_state(DecodedPcmPlaybackState::Idle);
+    }
     let _ = connected.spirc.shutdown();
     if let Some(mut task) = connected.task.take() {
         if timeout(SESSION_SHUTDOWN_TIMEOUT, &mut task).await.is_err() {
@@ -1219,10 +1394,11 @@ async fn shutdown_session(mut connected: ConnectedSession) {
 #[cfg(test)]
 mod tests {
     use super::{
-        AUDIO_CACHE_LIMIT_BYTES, Command, Confirmation, Observation, PlaybackState, RepeatMode,
-        SPOTIFY_PIPEWIRE_SINK, Snapshot, SpotifyConnectConfig, apply_player_event,
-        confirmation_matches, credentials_for_retry, ensure_private_file, next_backoff,
-        prepare_storage, repeat_mode, validate_command, validate_device_name, volume_to_percent,
+        AUDIO_CACHE_LIMIT_BYTES, Command, Confirmation, DecodedPcmPlaybackState, DecodedPcmSink,
+        DecodedPcmTap, Observation, PlaybackState, RepeatMode, SPOTIFY_PIPEWIRE_SINK, Snapshot,
+        SpotifyConnectConfig, apply_player_event, confirmation_matches, credentials_for_retry,
+        ensure_private_file, next_backoff, prepare_storage, repeat_mode, update_decoded_pcm_state,
+        validate_command, validate_device_name, volume_to_percent,
     };
     use librespot::{
         core::{SpotifyUri, authentication::Credentials},
@@ -1231,11 +1407,168 @@ mod tests {
             audio::{AudioFiles, AudioItem, UniqueFields, item::CoverImage},
             image::ImageSize,
         },
-        playback::player::PlayerEvent,
+        playback::{
+            audio_backend::{Sink, SinkResult},
+            convert::Converter,
+            decoder::AudioPacket,
+            player::PlayerEvent,
+        },
     };
-    use std::{fs, os::unix::fs::PermissionsExt, time::Duration};
+    use std::{
+        fs,
+        os::unix::fs::PermissionsExt,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicU64, Ordering},
+        },
+        time::Duration,
+    };
     use tempfile::tempdir;
     use tokio_util::sync::CancellationToken;
+
+    #[derive(Debug, Default)]
+    struct RecordingPcmTap {
+        generation: AtomicU64,
+        states: Mutex<Vec<DecodedPcmPlaybackState>>,
+        submissions: Mutex<Vec<(Vec<f64>, u32, u16, u64, u64)>>,
+        unsupported_packets: AtomicU64,
+    }
+
+    impl DecodedPcmTap for RecordingPcmTap {
+        fn stream_generation(&self) -> u64 {
+            self.generation.load(Ordering::Relaxed)
+        }
+
+        fn begin_generation(&self) {
+            self.generation.fetch_add(1, Ordering::Relaxed);
+        }
+
+        fn set_playback_state(&self, state: DecodedPcmPlaybackState) {
+            self.states.lock().unwrap().push(state);
+        }
+
+        fn submit_interleaved_f64(
+            &self,
+            samples: &[f64],
+            sample_rate: u32,
+            channels: u16,
+            stream_generation: u64,
+            sample_position: u64,
+        ) {
+            self.submissions.lock().unwrap().push((
+                samples.to_vec(),
+                sample_rate,
+                channels,
+                stream_generation,
+                sample_position,
+            ));
+        }
+
+        fn record_unsupported_packet(&self) {
+            self.unsupported_packets.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingSink {
+        samples: Arc<Mutex<Vec<Vec<f64>>>>,
+        raw: Arc<Mutex<Vec<Vec<u8>>>>,
+    }
+
+    impl Sink for RecordingSink {
+        fn write(&mut self, packet: AudioPacket, _converter: &mut Converter) -> SinkResult<()> {
+            match packet {
+                AudioPacket::Samples(samples) => self.samples.lock().unwrap().push(samples),
+                AudioPacket::Raw(bytes) => self.raw.lock().unwrap().push(bytes),
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn decoded_pcm_tap_observes_stereo_samples_and_forwards_them_unchanged() {
+        let tap = Arc::new(RecordingPcmTap::default());
+        let output_samples = Arc::new(Mutex::new(Vec::new()));
+        let output_raw = Arc::new(Mutex::new(Vec::new()));
+        let output = RecordingSink {
+            samples: Arc::clone(&output_samples),
+            raw: Arc::clone(&output_raw),
+        };
+        let mut sink = DecodedPcmSink::new(Box::new(output), tap.clone());
+        let samples = vec![0.25, -0.25, 0.5, -0.5];
+        let mut converter = Converter::new(None);
+
+        sink.write(AudioPacket::Samples(samples.clone()), &mut converter)
+            .unwrap();
+
+        assert_eq!(*output_samples.lock().unwrap(), [samples.clone()]);
+        assert!(output_raw.lock().unwrap().is_empty());
+        assert_eq!(
+            *tap.submissions.lock().unwrap(),
+            [(
+                samples,
+                librespot::playback::SAMPLE_RATE,
+                u16::from(librespot::playback::NUM_CHANNELS),
+                0,
+                0
+            )]
+        );
+
+        sink.write(AudioPacket::Raw(vec![1, 2, 3]), &mut converter)
+            .unwrap();
+        assert_eq!(*output_raw.lock().unwrap(), [vec![1, 2, 3]]);
+        assert_eq!(tap.unsupported_packets.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn player_events_advance_pcm_generations_and_report_playback_state() {
+        let tap = RecordingPcmTap::default();
+        let track_id = SpotifyUri::from_uri("spotify:track:0123456789012345678901").unwrap();
+
+        update_decoded_pcm_state(
+            Some(&tap),
+            &PlayerEvent::Loading {
+                play_request_id: 1,
+                track_id: track_id.clone(),
+                position_ms: 0,
+            },
+        );
+        assert_eq!(tap.stream_generation(), 1);
+        update_decoded_pcm_state(
+            Some(&tap),
+            &PlayerEvent::Playing {
+                play_request_id: 1,
+                track_id: track_id.clone(),
+                position_ms: 0,
+            },
+        );
+        update_decoded_pcm_state(
+            Some(&tap),
+            &PlayerEvent::Seeked {
+                play_request_id: 1,
+                track_id: track_id.clone(),
+                position_ms: 200,
+            },
+        );
+        assert_eq!(tap.stream_generation(), 2);
+        update_decoded_pcm_state(
+            Some(&tap),
+            &PlayerEvent::Paused {
+                play_request_id: 1,
+                track_id,
+                position_ms: 500,
+            },
+        );
+
+        assert_eq!(
+            *tap.states.lock().unwrap(),
+            [
+                DecodedPcmPlaybackState::Loading,
+                DecodedPcmPlaybackState::Playing,
+                DecodedPcmPlaybackState::Paused
+            ]
+        );
+    }
 
     #[test]
     fn local_storage_persists_device_identity_and_restricts_permissions() {

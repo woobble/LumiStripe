@@ -22,6 +22,7 @@ use lumistripe_engine_animation_definitions::catalog;
 use lumistripe_engine_animation_state::{
     AnimationInstance, RenderingInput, supported_animations, supports_animation,
 };
+use lumistripe_engine_audio::PcmIngressSender;
 use lumistripe_engine_compositing::{TransitionMode, apply_transition, screen_composite};
 use lumistripe_engine_config::{
     EngineConfig, MAX_OUTPUT_COUNT, MAX_PIXEL_COUNT, OutputBackend, OutputConfig,
@@ -289,6 +290,12 @@ impl EngineHandle {
         Ok(ResponseResult::AudioStatus {
             status: self.inner.server.audio.status(),
         })
+    }
+
+    /// Cloneable bounded PCM ingress handle for in-process playback providers.
+    pub fn audio_pcm_ingress(&self) -> Result<PcmIngressSender, EngineError> {
+        self.ensure_accepting()?;
+        Ok(self.inner.server.audio.pcm_ingress())
     }
 
     pub async fn shutdown(&self) -> Result<ResponseResult, EngineError> {
@@ -1065,9 +1072,6 @@ fn dispatch(request: Request, server: &EngineServer) -> (Response, bool) {
             }
         }
         RequestCommand::AudioStart { selector, config } => {
-            if protocol_version != PROTOCOL_VERSION {
-                return unsupported_audio_protocol(request_id, protocol_version);
-            }
             if let Err(error) = config.validate() {
                 return (
                     Response::new(
@@ -1097,10 +1101,43 @@ fn dispatch(request: Request, server: &EngineServer) -> (Response, bool) {
                 ),
             }
         }
-        RequestCommand::AudioConfigure { config } => {
+        RequestCommand::AudioStartDirect {
+            fallback_selector,
+            config,
+        } => {
             if protocol_version != PROTOCOL_VERSION {
                 return unsupported_audio_protocol(request_id, protocol_version);
             }
+            if let Err(error) = config.validate() {
+                return (
+                    Response::new(
+                        request_id,
+                        ResponseResult::Error {
+                            code: EngineErrorCode::InvalidConfig,
+                            message: error,
+                        },
+                    ),
+                    false,
+                );
+            }
+            match server.audio.start_direct(fallback_selector, config) {
+                Ok(active) => (
+                    Response::new(request_id, ResponseResult::AudioConfigured { active }),
+                    false,
+                ),
+                Err(message) => (
+                    Response::new(
+                        request_id,
+                        ResponseResult::Error {
+                            code: EngineErrorCode::AudioFailure,
+                            message,
+                        },
+                    ),
+                    false,
+                ),
+            }
+        }
+        RequestCommand::AudioConfigure { config } => {
             if let Err(message) = config.validate() {
                 return (
                     Response::new(
@@ -1130,62 +1167,47 @@ fn dispatch(request: Request, server: &EngineServer) -> (Response, bool) {
                 ),
             }
         }
-        RequestCommand::AudioStop => {
-            if protocol_version != PROTOCOL_VERSION {
-                return unsupported_audio_protocol(request_id, protocol_version);
-            }
-            match server.audio.stop() {
-                Ok(()) => (
-                    Response::new(request_id, ResponseResult::AudioStopped),
-                    false,
-                ),
-                Err(message) => (
-                    Response::new(
-                        request_id,
-                        ResponseResult::Error {
-                            code: EngineErrorCode::AudioFailure,
-                            message,
-                        },
-                    ),
-                    false,
-                ),
-            }
-        }
-        RequestCommand::AudioDevices => {
-            if protocol_version != PROTOCOL_VERSION {
-                return unsupported_audio_protocol(request_id, protocol_version);
-            }
-            match server.audio.devices() {
-                Ok(devices) => (
-                    Response::new(request_id, ResponseResult::AudioDevices { devices }),
-                    false,
-                ),
-                Err(message) => (
-                    Response::new(
-                        request_id,
-                        ResponseResult::Error {
-                            code: EngineErrorCode::AudioFailure,
-                            message,
-                        },
-                    ),
-                    false,
-                ),
-            }
-        }
-        RequestCommand::AudioStatus => {
-            if protocol_version != PROTOCOL_VERSION {
-                return unsupported_audio_protocol(request_id, protocol_version);
-            }
-            (
+        RequestCommand::AudioStop => match server.audio.stop() {
+            Ok(()) => (
+                Response::new(request_id, ResponseResult::AudioStopped),
+                false,
+            ),
+            Err(message) => (
                 Response::new(
                     request_id,
-                    ResponseResult::AudioStatus {
-                        status: server.audio.status(),
+                    ResponseResult::Error {
+                        code: EngineErrorCode::AudioFailure,
+                        message,
                     },
                 ),
                 false,
-            )
-        }
+            ),
+        },
+        RequestCommand::AudioDevices => match server.audio.devices() {
+            Ok(devices) => (
+                Response::new(request_id, ResponseResult::AudioDevices { devices }),
+                false,
+            ),
+            Err(message) => (
+                Response::new(
+                    request_id,
+                    ResponseResult::Error {
+                        code: EngineErrorCode::AudioFailure,
+                        message,
+                    },
+                ),
+                false,
+            ),
+        },
+        RequestCommand::AudioStatus => (
+            Response::new(
+                request_id,
+                ResponseResult::AudioStatus {
+                    status: server.audio.status(),
+                },
+            ),
+            false,
+        ),
         RequestCommand::Shutdown => match server.shutdown_workers() {
             Ok(()) => (Response::new(request_id, ResponseResult::Shutdown), true),
             Err(message) => (
@@ -4858,16 +4880,17 @@ mod tests {
     };
     use lumistripe_engine_config::{EngineConfig, OutputBackend, OutputConfig};
     use lumistripe_engine_protocol::{
-        FRAME_ACK_BYTES, FRAME_HEADER_BYTES, FrameAck, FrameAckStatus, FrameHeader, LegacyConfig,
-        LegacyRequest, LegacyRequestCommand, LegacyResponseResult, MAX_CONTROL_MESSAGE_BYTES,
-        MAX_FRAME_BYTES, PREVIOUS_PROTOCOL_VERSION, PROTOCOL_VERSION, RenderAnimationChoice,
-        RenderAnimationSequence, RenderAnimationSequenceStep, RenderAudioInput, RenderAudioUpdate,
-        RenderBeatClockState, RenderBeatEvent, RenderCycleOrder, RenderCycleTiming, RenderCycling,
-        RenderDynamicIdle, RenderDynamicIdleMode, RenderDynamicSelector, RenderEffect,
-        RenderFrameRequest, RenderMusicActivityConfig, RenderMusicStructurePhase, RenderOutput,
-        RenderPowerConfig, RenderSceneUpdate, RenderSchedulerConfig, RenderSelectorFeatures,
-        RenderStructureEvent, RenderSwitchQuantization, RenderTransition, Request, RequestCommand,
-        Response, ResponseResult, decode_frame_ack, decode_legacy_response, decode_response,
+        EngineErrorCode, FRAME_ACK_BYTES, FRAME_HEADER_BYTES, FrameAck, FrameAckStatus,
+        FrameHeader, LegacyConfig, LegacyRequest, LegacyRequestCommand, LegacyResponseResult,
+        MAX_CONTROL_MESSAGE_BYTES, MAX_FRAME_BYTES, PREVIOUS_PROTOCOL_VERSION, PROTOCOL_VERSION,
+        RenderAnimationChoice, RenderAnimationSequence, RenderAnimationSequenceStep,
+        RenderAudioInput, RenderAudioUpdate, RenderBeatClockState, RenderBeatEvent,
+        RenderCycleOrder, RenderCycleTiming, RenderCycling, RenderDynamicIdle,
+        RenderDynamicIdleMode, RenderDynamicSelector, RenderEffect, RenderFrameRequest,
+        RenderMusicActivityConfig, RenderMusicStructurePhase, RenderOutput, RenderPowerConfig,
+        RenderSceneUpdate, RenderSchedulerConfig, RenderSelectorFeatures, RenderStructureEvent,
+        RenderSwitchQuantization, RenderTransition, Request, RequestCommand, Response,
+        ResponseResult, decode_frame_ack, decode_legacy_response, decode_response,
         encode_frame_header, encode_legacy_request, encode_request,
     };
     use std::fs;
@@ -7317,12 +7340,51 @@ mod tests {
     }
 
     #[test]
-    fn v2_clients_receive_v2_responses_for_existing_commands() {
+    fn previous_protocol_clients_receive_previous_version_responses() {
         let server = ServerThread::start();
         let response =
             server.request_with_version(PREVIOUS_PROTOCOL_VERSION, RequestCommand::Health);
         assert_eq!(response.protocol_version, PREVIOUS_PROTOCOL_VERSION);
         assert!(matches!(response.result, ResponseResult::Health { .. }));
+        server.shutdown();
+    }
+
+    #[test]
+    fn previous_protocol_keeps_audio_status_but_rejects_direct_pcm_start() {
+        let server = ServerThread::start();
+        let response = server.request_with_version(
+            PREVIOUS_PROTOCOL_VERSION,
+            RequestCommand::AudioStart {
+                selector: Some("demo".to_owned()),
+                config: lumistripe_engine_audio::AudioConfig::default(),
+            },
+        );
+        assert!(matches!(
+            response.result,
+            ResponseResult::AudioConfigured { active: true }
+        ));
+
+        let response =
+            server.request_with_version(PREVIOUS_PROTOCOL_VERSION, RequestCommand::AudioStatus);
+        assert!(matches!(
+            response.result,
+            ResponseResult::AudioStatus { .. }
+        ));
+
+        let response = server.request_with_version(
+            PREVIOUS_PROTOCOL_VERSION,
+            RequestCommand::AudioStartDirect {
+                fallback_selector: None,
+                config: lumistripe_engine_audio::AudioConfig::default(),
+            },
+        );
+        assert!(matches!(
+            response.result,
+            ResponseResult::Error {
+                code: EngineErrorCode::UnsupportedVersion,
+                ..
+            }
+        ));
         server.shutdown();
     }
 

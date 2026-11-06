@@ -1,6 +1,6 @@
 use crate::settings::{AudioTuningProfile, DashboardSettings};
 use lumistripe_engine_audio::{AudioConfig, InputAudioDevice};
-use lumistripe_engine_protocol::EngineAudioStatus;
+use lumistripe_engine_protocol::{AudioInputTransport, EngineAudioStatus};
 use serde_json::{Value, json};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -57,6 +57,11 @@ pub(crate) fn sync_route(
     active_source: &str,
     settings: &DashboardSettings,
 ) -> String {
+    if status.is_some_and(|status| {
+        status.active && status.input_transport == AudioInputTransport::DirectPcm
+    }) {
+        return "spotify_direct|librespot decoded PCM|default".to_owned();
+    }
     let source = if status.is_some_and(|status| status.active) {
         match active_source {
             "demo" | "mic" | "bluetooth" | "spotify" => active_source,
@@ -127,6 +132,7 @@ pub(crate) fn response(
     };
     let active_device = status
         .filter(|status| status.active)
+        .filter(|status| status.input_transport != AudioInputTransport::DirectPcm)
         .and_then(|status| status.device.as_ref())
         .map(|device| device.selector.as_str())
         .or_else(|| {
@@ -157,6 +163,21 @@ pub(crate) fn response(
     let audio_error = status
         .and_then(|status| status.last_error.as_deref())
         .or(enumeration_error);
+    let input_transport = status
+        .filter(|status| status.active)
+        .map_or(AudioInputTransport::Off, |status| status.input_transport);
+    let input_sample_rate = status.map_or(0, |status| {
+        status
+            .device
+            .as_ref()
+            .map_or(status.pcm_ingress.sample_rate, |device| device.sample_rate)
+    });
+    let input_channels = status.map_or(0, |status| {
+        status
+            .device
+            .as_ref()
+            .map_or(status.pcm_ingress.channels, |device| device.channels)
+    });
     json!({
         "source": configured_source,
         "active_source": active_source,
@@ -164,6 +185,13 @@ pub(crate) fn response(
         "active_device": active_device,
         "fallback_device": fallback_device,
         "active_device_name": active_name,
+        "input_transport": input_transport,
+        "input_sample_rate": input_sample_rate,
+        "input_channels": input_channels,
+        "pcm_ingress": status.map(|status| status.pcm_ingress).unwrap_or_default(),
+        "dsp_processing_p50_ns": status.map_or(0, |status| status.dsp_processing_p50_ns),
+        "dsp_processing_p95_ns": status.map_or(0, |status| status.dsp_processing_p95_ns),
+        "last_feature_timestamp_ns": status.and_then(|status| status.last_frame_ns),
         "devices": devices.iter().map(|device| json!({
             "selector": device.selector,
             "name": device.name,
@@ -225,7 +253,7 @@ mod tests {
     use super::{engine_config, response, stream_context};
     use crate::settings::{AudioTuningProfile, DashboardSettings};
     use lumistripe_engine_audio::InputAudioDevice;
-    use lumistripe_engine_protocol::EngineAudioStatus;
+    use lumistripe_engine_protocol::{AudioInputTransport, EngineAudioStatus};
 
     #[test]
     fn microphone_audio_config_uses_the_saved_profile() {
@@ -286,6 +314,51 @@ mod tests {
         assert_eq!(response["monitoring"], false);
         assert_eq!(response["sync_route"], "demo|demo|default");
         assert_eq!(response["sync_offset_ms"], 18.0);
+    }
+
+    #[test]
+    fn direct_spotify_pcm_uses_a_stable_route_and_reports_its_format() {
+        let mut settings = DashboardSettings {
+            selected_audio_device: Some("Spotify monitor".to_owned()),
+            ..Default::default()
+        };
+        settings
+            .audio_sync_offsets_ms
+            .insert("spotify|Spotify monitor|default".to_owned(), 35.0);
+        settings.audio_sync_offsets_ms.insert(
+            "spotify_direct|librespot decoded PCM|default".to_owned(),
+            -12.5,
+        );
+        let status = EngineAudioStatus {
+            active: true,
+            input_transport: AudioInputTransport::DirectPcm,
+            pcm_ingress: lumistripe_engine_audio::PcmIngressStats {
+                enabled: true,
+                playback_state: lumistripe_engine_audio::PcmPlaybackState::Playing,
+                sample_rate: 44_100,
+                channels: 2,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let response = response(&settings, "spotify", "spotify", Some(&status), &[], None);
+        let context = stream_context(&settings, "spotify", "spotify", Some(&status));
+
+        assert_eq!(response["input_transport"], "direct_pcm");
+        assert_eq!(response["input_sample_rate"], 44_100);
+        assert_eq!(response["input_channels"], 2);
+        assert_eq!(response["active_device"], serde_json::Value::Null);
+        assert_eq!(
+            response["sync_route"],
+            "spotify_direct|librespot decoded PCM|default"
+        );
+        assert_eq!(response["sync_offset_ms"], -12.5);
+        assert_eq!(context.sync_offset_ms, -12.5);
+        assert_eq!(
+            settings.audio_sync_offsets_ms["spotify|Spotify monitor|default"],
+            35.0
+        );
     }
 
     #[test]

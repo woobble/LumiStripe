@@ -68,12 +68,20 @@ reports that delivery may still complete; it does not claim success.
 
 Librespot uses its PulseAudio-compatible output backend with the explicit
 `lumistripe_spotify` sink. PipeWire supplies that PulseAudio interface on
-supported installations. LumiStripe then uses the existing sink monitor to
-route sound to the selected physical output and capture it for reactive
-animations. If the receiver connects but is silent, check that the sink and
-monitor exist with `pactl list short sinks` and
-`pactl list short sources`, and check the web service journal for an output
-error.
+supported installations and routes it to the selected physical output. With
+the native provider, decoded PCM also enters LumiStripe's bounded analysis
+queue directly, avoiding a monitor-capture round trip for reactive animation.
+The audio worker still runs the existing DSP and renderer. If decoded PCM
+fails or stalls while Spotify is playing, LumiStripe falls back to the
+PipeWire sink monitor when available. Soloist continues to use monitor
+capture. The dashboard exposes the active input transport and PCM queue/drop
+statistics.
+
+If the receiver connects but is silent, check that the sink and monitor exist
+with `pactl list short sinks` and `pactl list short sources`, and check the web
+service journal for an output error. For source-path diagnostics, inspect the
+Audio page's input transport: `direct_pcm` means decoded Spotify audio is
+reaching the engine, while `monitor_fallback` means monitor capture is active.
 
 ## Compatibility and policy
 
@@ -102,7 +110,8 @@ that:
 
 1. LumiStripe appears in Spotify's device list and can be selected.
 2. Playback, dashboard controls, track metadata, and speaker output work.
-3. The Spotify monitor remains available as a LumiStripe audio source.
+3. The Audio page reports direct PCM during playback, and the Spotify monitor
+   remains available for fallback routing.
 4. A service restart restores the session without creating a duplicate device.
 5. A network interruption recovers, and a renamed device reappears with its new
    name.
