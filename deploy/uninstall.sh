@@ -25,6 +25,7 @@ UPDATE_LIBEXEC_DIR=/usr/local/libexec/lumistripe/deploy
 NETWORK_SUDOERS_FILE=/etc/sudoers.d/lumistripe-network
 SPOTIFY_SERVICE_SUDOERS_FILE=/etc/sudoers.d/lumistripe-spotify-service
 NETWORK_HELPER_FILE=/usr/local/sbin/lumistripe-network
+ADMIN_ENTRYPOINT=/usr/local/sbin/lumistripe-admin
 NETWORK_LIBEXEC_DIR=/usr/local/libexec/lumistripe/network
 LEGACY_SOLOIST_BIN=/usr/local/bin/soloist
 STATE_DIR=/var/lib/lumistripe
@@ -208,9 +209,6 @@ remove_file "$SPOTIFY_SERVICE_SUDOERS_FILE"
 remove_file /etc/sudoers.d/lumistripe-spotify-name
 remove_file /usr/local/sbin/lumistripe-spotify-device-name
 remove_file "$NETWORK_HELPER_FILE"
-remove_directory "$UPDATE_LIBEXEC_DIR"
-remove_directory "$NETWORK_LIBEXEC_DIR"
-rmdir /usr/local/libexec/lumistripe 2>/dev/null || true
 systemctl daemon-reload
 
 remove_file "$WIREPLUMBER_FILE"
@@ -259,8 +257,12 @@ rm -f -- /var/lib/lumistripe/spotify-device-name.env
 rm -f -- "$SERVICE_HOME/.config/lumistripe/spotify-device-name.env"
 remove_empty_directory "$STATE_DIR"
 remove_empty_directory /var/backups/lumistripe
+remove_directory "$UPDATE_LIBEXEC_DIR"
+remove_directory "$NETWORK_LIBEXEC_DIR"
+rmdir /usr/local/libexec/lumistripe 2>/dev/null || true
+remove_file "$ADMIN_ENTRYPOINT"
 
 echo
 echo "LumiStripe uninstall completed."
 echo "Shared packages, services, toolchains, user account, mkcert CA, and checkout were preserved."
-echo "Run deploy/install.sh to reinstall; it will request a pairing code and optional Spotify API key."
+echo "Run lumistripe-admin install from a trusted checkout to reinstall."

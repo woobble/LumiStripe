@@ -1,0 +1,1014 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# LumiStripe's administrative command is deliberately a thin wrapper. The
+# installer, updater, and uninstaller remain the owners of deployment logic.
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+ADMIN_STATE_DIR=/var/lib/lumistripe
+ADMIN_STATE_FILE="$ADMIN_STATE_DIR/install-state"
+ADMIN_UPDATE_STATUS=/var/lib/lumistripe/update/status.json
+ADMIN_WEB_UNIT=/etc/systemd/system/lumistripe-web.service
+ADMIN_SPOTIFY_ENV=/etc/lumistripe/lumistripe-spotify.env
+ADMIN_SNAPSHOT_DIR=/usr/local/libexec/lumistripe/deploy
+ADMIN_ENTRYPOINT=/usr/local/sbin/lumistripe-admin
+ADMIN_COMMAND=
+ADMIN_HELP=0
+ADMIN_HELP_TARGET=
+ADMIN_USER_OPTION=
+ADMIN_PROJECT_OPTION=
+ADMIN_SOURCE_OPTION=
+ADMIN_MODE=binary
+ADMIN_OFFLINE=
+ADMIN_REFRESH_SOLOIST=0
+ADMIN_ASSUME_YES=0
+ADMIN_ORIGIN=
+ADMIN_SOURCE_PROJECT=
+ADMIN_PROJECT_DIR=
+ADMIN_PROJECT_VALID=0
+ADMIN_SERVICE_USER=
+ADMIN_INSTALLATION_DETECTED=0
+ADMIN_STATE_PRESENT=0
+ADMIN_STATE_SERVICE_USER=
+ADMIN_STATE_PROJECT_DIR=
+ADMIN_STATE_DEPLOYMENT_MODE=
+ADMIN_UNIT_SERVICE_USER=
+ADMIN_UNIT_PROJECT_DIR=
+declare -A ADMIN_SEEN_OPTIONS=()
+
+admin_error() {
+  printf 'Error: %s\n' "$*" >&2
+  return 2
+}
+
+admin_usage() {
+  cat <<'EOF'
+Usage: lumistripe-admin COMMAND [OPTIONS]
+
+Commands:
+  install    Install or repeat setup from trusted deployment tooling
+  update     Update the installed release
+  status     Show read-only installation and service status
+  repair     Reapply installer setup from a trusted checkout
+  uninstall  Remove LumiStripe with confirmation
+  help       Show command help
+
+Run `lumistripe-admin COMMAND --help` for command options.
+Initial installation: sudo ./deploy/lumistripe-admin install --user pi
+EOF
+}
+
+admin_command_help() {
+  case "$1" in
+    install)
+      cat <<'EOF'
+Usage: lumistripe-admin install [--user USER] [--project-dir PATH]
+                                [--mode binary|auto|source]
+                                [--offline COMMIT] [--refresh-soloist]
+
+Install from an administrator-controlled LumiStripe checkout. On first
+installation, invoke this script from that checkout; subsequent installs use
+the installed root-owned deployment snapshot. First install defaults to binary
+mode; later installs preserve the saved mode unless --mode is supplied.
+Pairing and optional Spotify credentials remain interactive or environment-file
+configured.
+EOF
+      ;;
+    update)
+      cat <<'EOF'
+Usage: sudo lumistripe-admin update [--user USER] [--project-dir PATH]
+                                    [--mode binary|auto|source]
+                                    [--offline COMMIT] [--refresh-soloist]
+
+Updates from GitHub main by default, preferring a verified precompiled release.
+Offline commits must already exist in the checkout and verified release cache.
+EOF
+      ;;
+    status)
+      cat <<'EOF'
+Usage: sudo lumistripe-admin status [--user USER] [--project-dir PATH]
+
+Displays installation, service, release, dashboard, and saved update-check
+information. This command does not fetch, install, restart, or modify anything.
+EOF
+      ;;
+    repair)
+      cat <<'EOF'
+Usage: sudo lumistripe-admin repair --source PATH [--user USER]
+                                    [--mode binary|auto|source]
+                                    [--offline COMMIT] [--refresh-soloist]
+
+Reapplies the existing installer setup from an administrator-controlled
+checkout. The checkout must not be writable by the service account or invoking
+user. It becomes the configured runtime project directory after repair. The
+saved deployment mode is preserved unless --mode is supplied.
+EOF
+      ;;
+    uninstall)
+      cat <<'EOF'
+Usage: sudo lumistripe-admin uninstall [--user USER] [--project-dir PATH]
+                                       [--yes]
+
+Removes LumiStripe using the root-owned installed deployment snapshot.
+Confirmation is required unless --yes is supplied.
+EOF
+      ;;
+    help)
+      admin_usage
+      ;;
+    *)
+      admin_error "unknown command for help: $1"
+      return 2
+      ;;
+  esac
+}
+
+admin_validate_user_value() {
+  [[ "$1" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]]
+}
+
+admin_validate_mode_value() {
+  [[ "$1" == binary || "$1" == auto || "$1" == source ]]
+}
+
+admin_validate_commit_value() {
+  [[ "$1" =~ ^[0-9a-f]{40}$ ]]
+}
+
+admin_parse_arguments() {
+  local command_name="${1:-help}"
+  local argument value key
+  shift || true
+  ADMIN_SEEN_OPTIONS=()
+
+  case "$command_name" in
+    install|update|status|repair|uninstall|help) ;;
+    --help|-h)
+      command_name=help
+      ;;
+    *)
+      admin_error "unknown command: $command_name"
+      return 2
+      ;;
+  esac
+  ADMIN_COMMAND="$command_name"
+  ADMIN_HELP=0
+  ADMIN_HELP_TARGET=
+  ADMIN_USER_OPTION=
+  ADMIN_PROJECT_OPTION=
+  ADMIN_SOURCE_OPTION=
+  ADMIN_MODE=binary
+  ADMIN_OFFLINE=
+  ADMIN_REFRESH_SOLOIST=0
+  ADMIN_ASSUME_YES=0
+
+  if [[ "$ADMIN_COMMAND" == help ]]; then
+    if (($# > 1)); then
+      admin_error "help accepts at most one command name"
+      return 2
+    fi
+    ADMIN_HELP_TARGET="${1:-help}"
+    case "$ADMIN_HELP_TARGET" in
+      install|update|status|repair|uninstall|help) return 0 ;;
+      *) admin_error "unknown command for help: $ADMIN_HELP_TARGET"; return 2 ;;
+    esac
+  fi
+
+  while (($#)); do
+    argument="$1"
+    shift
+    case "$argument" in
+      --user|--project-dir|--source|--mode|--offline)
+        key="${argument#--}"
+        if ((${#@} == 0)) || [[ "$1" == --* ]]; then
+          admin_error "$argument requires a value"
+          return 2
+        fi
+        value="$1"
+        shift
+        ;;
+      --user=*|--project-dir=*|--source=*|--mode=*|--offline=*)
+        key="${argument%%=*}"
+        key="${key#--}"
+        value="${argument#*=}"
+        [[ -n "$value" ]] || { admin_error "$argument requires a value"; return 2; }
+        ;;
+      --refresh-soloist)
+        key=refresh_soloist
+        value=1
+        ;;
+      --yes)
+        key=yes
+        value=1
+        ;;
+      --help|-h)
+        key=help
+        value=1
+        ;;
+      *)
+        admin_error "unknown option or argument: $argument"
+        return 2
+        ;;
+    esac
+    if [[ -n "${ADMIN_SEEN_OPTIONS[$key]:-}" ]]; then
+      admin_error "option was specified more than once: --$key"
+      return 2
+    fi
+    ADMIN_SEEN_OPTIONS[$key]=1
+    case "$key" in
+      user)
+        admin_validate_user_value "$value" || { admin_error "invalid Linux service username: $value"; return 2; }
+        ADMIN_USER_OPTION="$value"
+        ;;
+      project-dir|source)
+        [[ "$value" == /* && "$value" != *$'\n'* && "$value" != *$'\r'* ]] || {
+          admin_error "--$key requires an absolute, single-line path"
+          return 2
+        }
+        if [[ "$key" == project-dir ]]; then ADMIN_PROJECT_OPTION="$value"; else ADMIN_SOURCE_OPTION="$value"; fi
+        ;;
+      mode)
+        admin_validate_mode_value "$value" || { admin_error "--mode must be binary, auto, or source"; return 2; }
+        ADMIN_MODE="$value"
+        ;;
+      offline)
+        admin_validate_commit_value "$value" || { admin_error "--offline requires a full lowercase 40-character commit SHA"; return 2; }
+        ADMIN_OFFLINE="$value"
+        ;;
+      refresh_soloist) ADMIN_REFRESH_SOLOIST=1 ;;
+      yes) ADMIN_ASSUME_YES=1 ;;
+      help) ADMIN_HELP=1 ;;
+    esac
+  done
+
+  if [[ "$ADMIN_HELP" == 1 ]]; then
+    if ((${#ADMIN_SEEN_OPTIONS[@]} != 1)); then
+      admin_error "--help cannot be combined with other options"
+      return 2
+    fi
+    return 0
+  fi
+
+  case "$ADMIN_COMMAND" in
+    install|update)
+      [[ -z "$ADMIN_SOURCE_OPTION" && "$ADMIN_ASSUME_YES" == 0 ]] || {
+        admin_error "--source and --yes are not supported by $ADMIN_COMMAND"
+        return 2
+      }
+      ;;
+    status)
+      [[ -z "${ADMIN_SEEN_OPTIONS[source]:-}" && -z "${ADMIN_SEEN_OPTIONS[offline]:-}" &&
+         -z "${ADMIN_SEEN_OPTIONS[mode]:-}" &&
+         "$ADMIN_REFRESH_SOLOIST" == 0 && "$ADMIN_ASSUME_YES" == 0 ]] || {
+        admin_error "status accepts only --user and --project-dir"
+        return 2
+      }
+      ;;
+    repair)
+      [[ -n "$ADMIN_SOURCE_OPTION" ]] || { admin_error "repair requires --source PATH"; return 2; }
+      [[ "$ADMIN_ASSUME_YES" == 0 ]] || { admin_error "--yes is not supported by repair"; return 2; }
+      ;;
+    uninstall)
+      [[ -z "${ADMIN_SEEN_OPTIONS[source]:-}" && -z "${ADMIN_SEEN_OPTIONS[offline]:-}" &&
+         -z "${ADMIN_SEEN_OPTIONS[mode]:-}" &&
+         "$ADMIN_REFRESH_SOLOIST" == 0 ]] || {
+        admin_error "uninstall accepts only --user, --project-dir, and --yes"
+        return 2
+      }
+      ;;
+  esac
+  if [[ -n "$ADMIN_OFFLINE" && "$ADMIN_MODE" != binary ]]; then
+    admin_error "--offline can only be used with --mode binary"
+    return 2
+  fi
+}
+
+admin_safe_system_file() {
+  local path="$1"
+  local expected_uid="$2"
+  local metadata owner mode
+  [[ -f "$path" && ! -L "$path" ]] || return 1
+  metadata="$(stat -c '%u:%a' -- "$path" 2>/dev/null)" || return 1
+  owner="${metadata%%:*}"
+  mode="${metadata#*:}"
+  [[ "$owner" == "$expected_uid" ]] || return 1
+  (( (8#$mode & 0022) == 0 ))
+}
+
+admin_safe_state_directory() {
+  local directory="$1"
+  local metadata owner mode
+  [[ -d "$directory" && ! -L "$directory" ]] || return 1
+  metadata="$(stat -c '%u:%a' -- "$directory" 2>/dev/null)" || return 1
+  owner="${metadata%%:*}"
+  mode="${metadata#*:}"
+  [[ "$owner" == 0 ]] || return 1
+  (( (8#$mode & 0022) == 0 ))
+}
+
+admin_safe_system_directory() {
+  local directory="$1"
+  local metadata owner mode
+  [[ -d "$directory" && ! -L "$directory" ]] || return 1
+  metadata="$(stat -c '%u:%a' -- "$directory" 2>/dev/null)" || return 1
+  owner="${metadata%%:*}"
+  mode="${metadata#*:}"
+  [[ "$owner" == 0 ]] || return 1
+  (( (8#$mode & 0022) == 0 ))
+}
+
+admin_state_value() {
+  local file="$1" key="$2"
+  awk -F= -v wanted="$key" '
+    $1 == wanted {
+      count++
+      value = substr($0, index($0, "=") + 1)
+    }
+    END {
+      if (count > 1) exit 2
+      if (count == 0) exit 1
+      print value
+    }
+  ' "$file"
+}
+
+admin_read_install_state() {
+  local state_file="${1:-$ADMIN_STATE_FILE}"
+  local state_dir="${state_file%/*}"
+  local metadata mode size
+  local value result
+  ADMIN_STATE_PRESENT=0
+  ADMIN_STATE_SERVICE_USER=
+  ADMIN_STATE_PROJECT_DIR=
+  ADMIN_STATE_DEPLOYMENT_MODE=
+  if [[ ! -e "$state_file" && ! -L "$state_file" ]]; then
+    return 0
+  fi
+  admin_safe_state_directory /var || { admin_error "installation state parent is not a trusted root-owned directory"; return 1; }
+  admin_safe_state_directory /var/lib || { admin_error "installation state parent is not a trusted root-owned directory"; return 1; }
+  admin_safe_state_directory "${state_dir%/*}" || { admin_error "installation state directory is not a trusted root-owned directory"; return 1; }
+  admin_safe_state_directory "$state_dir" || { admin_error "installation state directory is not a trusted root-owned directory"; return 1; }
+  [[ -f "$state_file" && ! -L "$state_file" ]] || { admin_error "installation state must be a regular, non-symlink file"; return 1; }
+  metadata="$(stat -c '%u:%a:%s' -- "$state_file")" || return 1
+  [[ "${metadata%%:*}" == 0 ]] || { admin_error "installation state is not owned by root"; return 1; }
+  mode="$(cut -d: -f2 <<< "$metadata")"
+  size="$(cut -d: -f3 <<< "$metadata")"
+  (( (8#$mode & 0077) == 0 && size <= 16384 )) || { admin_error "installation state permissions or size are invalid"; return 1; }
+  ADMIN_STATE_PRESENT=1
+  if value="$(admin_state_value "$state_file" service_user)"; then
+    admin_validate_user_value "$value" || { admin_error "installation state contains an invalid service user"; return 1; }
+    ADMIN_STATE_SERVICE_USER="$value"
+  else
+    result=$?
+    (( result == 1 )) || { admin_error "installation state contains duplicate service-user entries"; return 1; }
+  fi
+  if value="$(admin_state_value "$state_file" project_dir)"; then
+    [[ "$value" == /* && "$value" != / && "$value" != *$'\n'* && "$value" != *$'\r'* ]] || {
+      admin_error "installation state contains an invalid project directory"
+      return 1
+    }
+    ADMIN_STATE_PROJECT_DIR="$value"
+  else
+    result=$?
+    (( result == 1 )) || { admin_error "installation state contains duplicate project-directory entries"; return 1; }
+  fi
+  if value="$(admin_state_value "$state_file" deployment_mode)"; then
+    [[ "$value" == binary || "$value" == source || "$value" == auto ]] || {
+      admin_error "installation state contains an invalid deployment mode"
+      return 1
+    }
+    ADMIN_STATE_DEPLOYMENT_MODE="$value"
+  else
+    result=$?
+    (( result == 1 )) || { admin_error "installation state contains duplicate deployment-mode entries"; return 1; }
+  fi
+}
+
+admin_read_unit_configuration() {
+  local unit_file="${1:-$ADMIN_WEB_UNIT}"
+  local directory
+  ADMIN_UNIT_SERVICE_USER=
+  ADMIN_UNIT_PROJECT_DIR=
+  if [[ ! -e "$unit_file" && ! -L "$unit_file" ]]; then
+    return 0
+  fi
+  for directory in /etc /etc/systemd /etc/systemd/system; do
+    admin_safe_system_directory "$directory" || {
+      admin_error "LumiStripe systemd configuration directory is missing or unsafe: $directory"
+      return 1
+    }
+  done
+  admin_safe_system_file "$unit_file" 0 || { admin_error "LumiStripe systemd configuration is not a trusted root-owned file"; return 1; }
+  ADMIN_INSTALLATION_DETECTED=1
+  ADMIN_UNIT_SERVICE_USER="$(awk -F= '$1 == "User" { print substr($0, index($0, "=") + 1); exit }' "$unit_file")"
+  ADMIN_UNIT_PROJECT_DIR="$(awk '
+    /^Environment=LUMI_PROJECT_DIR=/ {
+      print substr($0, length("Environment=LUMI_PROJECT_DIR=") + 1)
+      found = 1
+      exit
+    }
+    /^WorkingDirectory=/ { fallback = substr($0, length("WorkingDirectory=") + 1) }
+    END { if (!found && fallback != "") print fallback }
+  ' "$unit_file" | head -n 1)"
+  if [[ -n "$ADMIN_UNIT_SERVICE_USER" ]] && ! admin_validate_user_value "$ADMIN_UNIT_SERVICE_USER"; then
+    admin_error "systemd configuration contains an invalid LumiStripe service user"
+    return 1
+  fi
+  if [[ -n "$ADMIN_UNIT_PROJECT_DIR" ]] && [[ "$ADMIN_UNIT_PROJECT_DIR" != /* || "$ADMIN_UNIT_PROJECT_DIR" == *$'\n'* ]]; then
+    admin_error "systemd configuration contains an invalid project directory"
+    return 1
+  fi
+}
+
+admin_canonical_project_directory() {
+  local candidate="$1"
+  local canonical
+  [[ "$candidate" == /* && "$candidate" != / && "$candidate" != *$'\n'* && "$candidate" != *$'\r'* ]] || {
+    admin_error "project directory must be an absolute, single-line path"
+    return 1
+  }
+  canonical="$(cd -- "$candidate" 2>/dev/null && pwd -P)" || {
+    admin_error "project directory does not exist: $candidate"
+    return 1
+  }
+  [[ "$canonical" != / && -e "$canonical/.git" && -f "$canonical/Cargo.toml" &&
+     -d "$canonical/deploy" && -f "$canonical/deploy/install.sh" &&
+     -d "$canonical/apps/lumistripe-web/frontend" &&
+     -f "$canonical/apps/lumistripe-web/Cargo.toml" ]] || {
+    admin_error "not a LumiStripe checkout: $canonical"
+    return 1
+  }
+  printf '%s\n' "$canonical"
+}
+
+admin_resolve_metadata() {
+  local candidate project_owner
+  admin_read_install_state || return 1
+  admin_read_unit_configuration || return 1
+  ADMIN_INSTALLATION_DETECTED=0
+  [[ "$ADMIN_STATE_PRESENT" == 1 || -e "$ADMIN_WEB_UNIT" ]] && ADMIN_INSTALLATION_DETECTED=1
+
+  ADMIN_SERVICE_USER="${ADMIN_USER_OPTION:-${ADMIN_STATE_SERVICE_USER:-${ADMIN_UNIT_SERVICE_USER:-}}}"
+  if [[ -z "$ADMIN_SERVICE_USER" && "$ADMIN_ORIGIN" == checkout && "$ADMIN_COMMAND" == install ]]; then
+    ADMIN_SERVICE_USER="${SUDO_USER:-}"
+  fi
+  candidate="${ADMIN_PROJECT_OPTION:-${ADMIN_STATE_PROJECT_DIR:-${ADMIN_UNIT_PROJECT_DIR:-}}}"
+  if [[ "$ADMIN_COMMAND" == repair ]]; then
+    candidate="$ADMIN_SOURCE_OPTION"
+  elif [[ "$ADMIN_ORIGIN" == checkout && "$ADMIN_COMMAND" == install && -z "$ADMIN_PROJECT_OPTION" ]]; then
+    candidate="$ADMIN_SOURCE_PROJECT"
+  fi
+  ADMIN_PROJECT_DIR=
+  ADMIN_PROJECT_VALID=0
+  if [[ -n "$candidate" ]]; then
+    if [[ -d "$candidate" ]]; then
+      if ADMIN_PROJECT_DIR="$(admin_canonical_project_directory "$candidate")"; then
+        ADMIN_PROJECT_VALID=1
+      elif [[ "$ADMIN_COMMAND" != status ]]; then
+        return 1
+      fi
+    elif [[ "$ADMIN_COMMAND" == status ]]; then
+      ADMIN_PROJECT_DIR="$candidate"
+    else
+      admin_error "project directory does not exist: $candidate"
+      return 1
+    fi
+  fi
+  if [[ -z "$ADMIN_SERVICE_USER" && "$ADMIN_PROJECT_VALID" == 1 ]]; then
+    project_owner="$(stat -c '%U' -- "$ADMIN_PROJECT_DIR" 2>/dev/null || true)"
+    [[ "$project_owner" != root ]] && ADMIN_SERVICE_USER="$project_owner"
+  fi
+  if [[ -z "$ADMIN_SERVICE_USER" && "$ADMIN_COMMAND" == install ]]; then
+    project_owner="$(stat -c '%U' -- "$ADMIN_PROJECT_DIR" 2>/dev/null || true)"
+    [[ "$project_owner" != root ]] && ADMIN_SERVICE_USER="$project_owner"
+  fi
+  if [[ -n "$ADMIN_SERVICE_USER" ]] && ! admin_validate_user_value "$ADMIN_SERVICE_USER"; then
+    admin_error "invalid Linux service username: $ADMIN_SERVICE_USER"
+    return 1
+  fi
+}
+
+admin_apply_saved_install_mode() {
+  [[ "$ADMIN_COMMAND" == install || "$ADMIN_COMMAND" == repair ]] || return 0
+  [[ -n "$ADMIN_STATE_DEPLOYMENT_MODE" && -z "${ADMIN_SEEN_OPTIONS[mode]:-}" ]] || return 0
+  ADMIN_MODE="$ADMIN_STATE_DEPLOYMENT_MODE"
+}
+
+admin_determine_origin() {
+  local supplied="${BASH_SOURCE[0]}" resolved_input
+  local resolved script_dir
+  if [[ "$supplied" == */* ]]; then
+    resolved_input="$supplied"
+  else
+    resolved_input="$(command -v -- "$supplied" 2>/dev/null || true)"
+  fi
+  [[ -n "$resolved_input" ]] || { admin_error "could not locate the admin command path"; return 1; }
+  if [[ -L "$resolved_input" ]]; then
+    admin_error "lumistripe-admin must not be invoked through a symlink"
+    return 1
+  fi
+  resolved="$(readlink -f -- "$resolved_input" 2>/dev/null)" || { admin_error "could not resolve the admin command path"; return 1; }
+  if [[ "$resolved" == "$ADMIN_ENTRYPOINT" ]]; then
+    ADMIN_ORIGIN=installed
+  elif [[ "${resolved##*/}" == lumistripe-admin && "$(basename -- "$(dirname -- "$resolved")")" == deploy ]]; then
+    script_dir="$(dirname -- "$resolved")"
+    ADMIN_SOURCE_PROJECT="$(cd -- "$script_dir/.." && pwd -P)"
+    [[ "$resolved" == "$ADMIN_SOURCE_PROJECT/deploy/lumistripe-admin" ]] || {
+      admin_error "admin command path is not a canonical checkout path"
+      return 1
+    }
+    ADMIN_ORIGIN=checkout
+  else
+    admin_error "use the root-owned /usr/local/sbin/lumistripe-admin entry point"
+    return 1
+  fi
+}
+
+admin_require_root() {
+  [[ "$EUID" == 0 ]] || { admin_error "run this command as root (for example: sudo lumistripe-admin $ADMIN_COMMAND)"; return 1; }
+}
+
+admin_require_installed_entrypoint() {
+  [[ "$ADMIN_ORIGIN" == installed ]] || {
+    admin_error "only install may be run from a source checkout; use sudo lumistripe-admin for maintenance"
+    return 1
+  }
+  admin_safe_system_file "$ADMIN_ENTRYPOINT" 0 && [[ -x "$ADMIN_ENTRYPOINT" ]] || {
+    admin_error "installed admin entry point is not a root-owned executable file"
+    return 1
+  }
+  local directory
+  for directory in /usr /usr/local /usr/local/sbin /usr/local/libexec \
+    /usr/local/libexec/lumistripe "$ADMIN_SNAPSHOT_DIR"; do
+    [[ -d "$directory" && ! -L "$directory" ]] || { admin_error "trusted deployment snapshot directory is missing or unsafe: $directory"; return 1; }
+    [[ "$(stat -c '%u' -- "$directory")" == 0 ]] || { admin_error "trusted deployment snapshot directory is not root-owned: $directory"; return 1; }
+    (( (8#$(stat -c '%a' -- "$directory") & 0022) == 0 )) || { admin_error "trusted deployment snapshot directory is writable by another account: $directory"; return 1; }
+  done
+}
+
+admin_check_platform() {
+  local architecture distribution codename
+  architecture="$(uname -m)"
+  distribution="$(awk -F= '$1 == "ID" { gsub(/"/, "", $2); print $2; exit }' /etc/os-release 2>/dev/null)"
+  codename="$(awk -F= '$1 == "VERSION_CODENAME" { gsub(/"/, "", $2); print $2; exit }' /etc/os-release 2>/dev/null)"
+  [[ "$architecture" == aarch64 &&
+     ( "$distribution" == ubuntu ||
+       ( "$codename" == trixie && ( "$distribution" == debian || "$distribution" == raspbian ) ) ) ]] || {
+    admin_error "unsupported target $distribution/$codename on $architecture; supported targets are ARM64 Ubuntu and Debian-family Trixie"
+    return 1
+  }
+}
+
+admin_validate_trusted_checkout() {
+  local project="$1" service_user="$2"
+  local candidate owner source_mode trusted_user seen source_file
+  local -a trusted_users=()
+  project="$(admin_canonical_project_directory "$project")" || return 1
+  for candidate in "${SUDO_USER:-}" "$service_user" "$(stat -c '%U' -- "$project" 2>/dev/null || true)"; do
+    [[ -n "$candidate" && "$candidate" != root ]] || continue
+    id "$candidate" >/dev/null 2>&1 || continue
+    seen=0
+    for trusted_user in "${trusted_users[@]}"; do
+      [[ "$trusted_user" == "$candidate" ]] && seen=1
+    done
+    (( seen )) || trusted_users+=("$candidate")
+  done
+  ((${#trusted_users[@]} > 0)) || {
+    admin_error "run through sudo from an existing non-root account or create the service account first"
+    return 1
+  }
+  for trusted_user in "${trusted_users[@]}"; do
+    candidate="$project"
+    while :; do
+      source_mode="$(stat -c '%a' -- "$candidate" 2>/dev/null)" || return 1
+      (( (8#$source_mode & 0022) == 0 )) || {
+        admin_error "trusted checkout path is group- or world-writable: $candidate"
+        return 1
+      }
+      if runuser -u "$trusted_user" -- test -w "$candidate"; then
+        admin_error "trusted checkout path is writable by $trusted_user: $candidate; copy a reviewed checkout under an administrator-controlled directory"
+        return 1
+      fi
+      [[ "$candidate" == / ]] && break
+      candidate="$(dirname -- "$candidate")"
+    done
+    while IFS= read -r -d '' source_file; do
+      [[ ! -L "$source_file" ]] || { admin_error "trusted deployment source must not contain symlinks: $source_file"; return 1; }
+      source_mode="$(stat -c '%a' -- "$source_file" 2>/dev/null)" || return 1
+      (( (8#$source_mode & 0022) == 0 )) || {
+        admin_error "deployment source is group- or world-writable: $source_file"
+        return 1
+      }
+      if runuser -u "$trusted_user" -- test -w "$source_file"; then
+        admin_error "deployment source is writable by $trusted_user: $source_file"
+        return 1
+      fi
+    done < <(find -P "$project/deploy" -print0)
+  done
+}
+
+admin_check_user_exists() {
+  [[ -n "$ADMIN_SERVICE_USER" && "$ADMIN_SERVICE_USER" != root ]] || {
+    admin_error "could not determine the LumiStripe service account; pass --user USER"
+    return 1
+  }
+  admin_validate_user_value "$ADMIN_SERVICE_USER" || { admin_error "invalid Linux service username: $ADMIN_SERVICE_USER"; return 1; }
+  if [[ "$ADMIN_COMMAND" != install ]] && ! id "$ADMIN_SERVICE_USER" >/dev/null 2>&1; then
+    admin_error "service account does not exist: $ADMIN_SERVICE_USER"
+    return 1
+  fi
+}
+
+admin_require_project() {
+  [[ "$ADMIN_PROJECT_VALID" == 1 ]] || { admin_error "no valid installed project directory was found; pass --project-dir PATH"; return 1; }
+}
+
+admin_require_installed() {
+  [[ "$ADMIN_INSTALLATION_DETECTED" == 1 ]] || { admin_error "LumiStripe is not installed"; return 1; }
+}
+
+admin_clear_unapproved_environment() {
+  local allow_credentials="${1:-0}" name
+  while IFS= read -r name; do
+    [[ "$name" == LUMI_* ]] || continue
+    case "$name" in
+      LUMI_PAIRING_CODE|LUMI_SPOTIFY_API_KEY)
+        [[ "$allow_credentials" == 1 ]] || unset "$name"
+        ;;
+      *) unset "$name" ;;
+    esac
+  done < <(env | sed -n 's/=.*//p')
+  HOME=/root
+  PATH=/usr/sbin:/usr/bin:/sbin:/bin
+  export HOME PATH
+  export LUMI_PROJECT_DIR="$ADMIN_PROJECT_DIR"
+  export LUMI_SERVICE_USER="$ADMIN_SERVICE_USER"
+  export LUMI_DEPLOY_MODE="$ADMIN_MODE"
+  if [[ -n "$ADMIN_OFFLINE" ]]; then export LUMI_OFFLINE_COMMIT="$ADMIN_OFFLINE"; fi
+  if [[ "$ADMIN_REFRESH_SOLOIST" == 1 ]]; then export LUMI_SOLOIST_REFRESH=1; fi
+}
+
+admin_current_commit() {
+  local git_path=/usr/bin/git
+  [[ "$ADMIN_PROJECT_VALID" == 1 && -x "$git_path" && -n "$ADMIN_SERVICE_USER" ]] || return 1
+  id -u "$ADMIN_SERVICE_USER" >/dev/null 2>&1 || return 1
+  runuser -u "$ADMIN_SERVICE_USER" -- env \
+    HOME="$(getent passwd "$ADMIN_SERVICE_USER" | cut -d: -f6)" \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_OPTIONAL_LOCKS=0 \
+    "$git_path" -c core.hooksPath=/dev/null -c core.fsmonitor=false \
+    -C "$ADMIN_PROJECT_DIR" rev-parse --verify HEAD 2>/dev/null
+}
+
+admin_active_release_commit() {
+  local current="$ADMIN_PROJECT_DIR/target/rust-deploy/current"
+  local releases="$ADMIN_PROJECT_DIR/target/rust-deploy/releases"
+  local resolved commit marker
+  [[ "$ADMIN_PROJECT_VALID" == 1 && -L "$current" ]] || return 1
+  resolved="$(readlink -f -- "$current" 2>/dev/null)" || return 1
+  [[ "$resolved" == "$releases"/* && -d "$resolved" && ! -L "$resolved" ]] || return 1
+  commit="${resolved##*/}"
+  [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || return 1
+  marker="$resolved/source-commit"
+  [[ -f "$marker" && ! -L "$marker" && "$(cat -- "$marker" 2>/dev/null)" == "$commit" ]] || return 1
+  printf '%s\n' "$commit"
+}
+
+admin_update_status_values() {
+  local status_file="$1"
+  [[ -f "$status_file" && ! -L "$status_file" ]] || return 1
+  python3 - "$status_file" <<'PY'
+import json
+import os
+import re
+import stat
+import sys
+
+try:
+    descriptor = os.open(sys.argv[1], os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("regular file required")
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            raw = handle.read(1024 * 1024 + 1)
+    finally:
+        os.close(descriptor)
+    if len(raw) > 1024 * 1024:
+        raise ValueError("oversize")
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise ValueError("object required")
+except (OSError, ValueError, UnicodeError, json.JSONDecodeError):
+    print("unknown\tunknown\t-\t-")
+    raise SystemExit(0)
+
+available = value.get("available_commit")
+update = value.get("update_available")
+checked = value.get("checked_at")
+state = value.get("install_state")
+finished = value.get("install_finished_at")
+commit_re = re.compile(r"^[0-9a-f]{40}$")
+time_re = re.compile(r"^[0-9T:.+Z-]{1,64}$")
+if isinstance(available, str) and commit_re.fullmatch(available):
+    availability = "available:" + available
+elif update is False and isinstance(checked, str) and time_re.fullmatch(checked):
+    availability = "current"
+elif value.get("check_error"):
+    availability = "unavailable"
+else:
+    availability = "unknown"
+if state in ("success", "failed", "running", "idle"):
+    result = state
+else:
+    result = "unknown"
+checked_text = checked if isinstance(checked, str) and time_re.fullmatch(checked) else "-"
+finished_text = finished if isinstance(finished, str) and time_re.fullmatch(finished) else "-"
+print("\t".join((availability, result, checked_text, finished_text)))
+PY
+}
+
+admin_service_state() {
+  local service="$1" load_state
+  if ! command -v systemctl >/dev/null 2>&1; then
+    printf 'Unavailable (systemctl not found)\n'
+  elif systemctl is-active --quiet "$service"; then
+    printf 'Active\n'
+  elif ! load_state="$(systemctl show --property=LoadState --value "$service" 2>/dev/null)"; then
+    printf 'Unavailable (systemd query failed)\n'
+  elif [[ "$load_state" == not-found ]]; then
+    printf 'Not installed\n'
+  elif [[ -n "$load_state" ]]; then
+    printf 'Inactive\n'
+  else
+    printf 'Unavailable (service state unknown)\n'
+  fi
+}
+
+admin_spotify_configured() {
+  local key
+  [[ -f "$ADMIN_SPOTIFY_ENV" && ! -L "$ADMIN_SPOTIFY_ENV" ]] || return 1
+  key="$(awk -F= '$1 == "LUMI_SPOTIFY_API_KEY" { print substr($0, index($0, "=") + 1); exit }' "$ADMIN_SPOTIFY_ENV" 2>/dev/null)"
+  [[ -n "$key" && "$key" != REPLACE_WITH_* ]]
+}
+
+admin_print_status() {
+  local current_commit=unknown active_commit=unknown update_data availability result checked finished
+  printf 'LumiStripe Status\n\n'
+  if [[ "$ADMIN_INSTALLATION_DETECTED" == 1 ]]; then
+    printf 'Installation: Detected\n'
+  else
+    printf 'Installation: Not installed\n'
+  fi
+  printf 'Service user: %s\n' "${ADMIN_SERVICE_USER:-Unavailable}"
+  if [[ "$ADMIN_PROJECT_VALID" == 1 ]]; then
+    printf 'Project directory: %s\n' "$ADMIN_PROJECT_DIR"
+    current_commit="$(admin_current_commit 2>/dev/null || true)"
+    [[ "$current_commit" =~ ^[0-9a-f]{40}$ ]] || current_commit=Unavailable
+    active_commit="$(admin_active_release_commit 2>/dev/null || true)"
+    [[ "$active_commit" =~ ^[0-9a-f]{40}$ ]] || active_commit=Unavailable
+    if [[ "$current_commit" == Unavailable ]]; then
+      printf 'Installed Git commit: Unavailable\n'
+    else
+      printf 'Installed Git commit: %.12s\n' "$current_commit"
+    fi
+    if [[ "$active_commit" == Unavailable ]]; then
+      printf 'Active binary release commit: Unavailable\n'
+    else
+      printf 'Active binary release commit: %.12s\n' "$active_commit"
+    fi
+  elif [[ -n "$ADMIN_PROJECT_DIR" ]]; then
+    printf 'Project directory: Unavailable (configured path is missing or invalid)\n'
+    printf 'Installed Git commit: Unavailable\n'
+    printf 'Active binary release commit: Unavailable\n'
+  else
+    printf 'Project directory: Unavailable\n'
+    printf 'Installed Git commit: Unavailable\n'
+    printf 'Active binary release commit: Unavailable\n'
+  fi
+  printf 'Deployment mode: %s\n' "${ADMIN_STATE_DEPLOYMENT_MODE:-Unknown}"
+  printf 'Web service: %s\n' "$(admin_service_state lumistripe-web.service)"
+  if admin_spotify_configured; then
+    printf 'Spotify service: %s\n' "$(admin_service_state lumistripe-spotify.service)"
+  else
+    printf 'Spotify service: Not configured\n'
+  fi
+  if [[ -e /etc/nginx/sites-available/led-controller && -s /etc/nginx/certs/led.controller.pem ]]; then
+    printf 'Dashboard: https://led.controller/\n'
+  else
+    printf 'Dashboard: Unavailable\n'
+  fi
+  if update_data="$(admin_update_status_values "$ADMIN_UPDATE_STATUS" 2>/dev/null)"; then
+    IFS=$'\t' read -r availability result checked finished <<< "$update_data"
+    case "$availability" in
+      available:*) printf 'Update availability: Available (%s)\n' "${availability#available:}" ;;
+      current) printf 'Update availability: No update available at the last check\n' ;;
+      unavailable) printf 'Update availability: Unavailable (last check could not complete)\n' ;;
+      *) printf 'Update availability: Unknown\n' ;;
+    esac
+    case "$result" in
+      success) [[ "$finished" != - ]] && finished=" ($finished)" || finished=; printf 'Last update result: Successful%s\n' "$finished" ;;
+      failed) [[ "$finished" != - ]] && finished=" ($finished)" || finished=; printf 'Last update result: Failed%s\n' "$finished" ;;
+      running) printf 'Last update result: In progress\n' ;;
+      idle) printf 'Last update result: No update recorded\n' ;;
+      *) printf 'Last update result: Unavailable\n' ;;
+    esac
+    [[ "$checked" == - ]] || printf 'Update check: %s\n' "$checked"
+  else
+    printf 'Update availability: Unavailable (no saved update state)\n'
+    printf 'Last update result: Unavailable\n'
+  fi
+}
+
+admin_print_header() {
+  local title="$1" target="$2" mode_label current=Unavailable
+  case "$ADMIN_MODE" in
+    binary) mode_label='Verified precompiled release' ;;
+    source) mode_label='Source build' ;;
+    auto) mode_label='Precompiled first, source fallback' ;;
+  esac
+  current="$(admin_current_commit 2>/dev/null || true)"
+  [[ "$current" =~ ^[0-9a-f]{40}$ ]] && current="${current:0:12}" || current=Unavailable
+  printf 'LumiStripe %s\n\n' "$title"
+  printf 'Installation: %s\n' "$ADMIN_PROJECT_DIR"
+  printf 'Current:      %s\n' "$current"
+  printf 'Target:       %s\n' "$target"
+  printf 'Mode:         %s\n\n' "$mode_label"
+}
+
+admin_run_script() {
+  local script="$1"; shift
+  local status
+  if /bin/bash "$script" "$@"; then
+    return 0
+  else
+    status=$?
+    return "$status"
+  fi
+}
+
+admin_finish_operation() {
+  local operation="$1" current service
+  current="$(admin_current_commit 2>/dev/null || true)"
+  [[ "$current" =~ ^[0-9a-f]{40}$ ]] && current="${current:0:12}" || current=Unavailable
+  service="$(admin_service_state lumistripe-web.service)"
+  printf '\n%s successful.\n' "$operation"
+  printf 'Installed commit: %s\n' "$current"
+  printf 'Web service: %s\n' "$service"
+  printf 'Dashboard: https://led.controller/\n'
+}
+
+admin_run_install() {
+  local script target="$ADMIN_PROJECT_DIR"
+  admin_check_platform || return 1
+  admin_check_user_exists || return 1
+  if [[ "$ADMIN_ORIGIN" == installed ]]; then
+    script="$ADMIN_SNAPSHOT_DIR/install.sh"
+    admin_safe_system_file "$script" 0 || { admin_error "root-owned installer snapshot is missing or unsafe"; return 1; }
+  else
+    script="$target/deploy/install.sh"
+    admin_validate_trusted_checkout "$target" "$ADMIN_SERVICE_USER" || return 1
+  fi
+  [[ -f "$script" && ! -L "$script" ]] || { admin_error "trusted installer is missing: $script"; return 1; }
+  admin_print_header Install "Checkout HEAD"
+  if [[ "$ADMIN_ORIGIN" == installed ]]; then
+    printf '[1/1] Checking root-owned deployment snapshot and running the existing installer\n\n'
+  else
+    printf '[1/1] Checking trusted checkout and running the existing installer\n\n'
+  fi
+  admin_clear_unapproved_environment 1
+  if admin_run_script "$script"; then
+    admin_finish_operation Install
+  else
+    return $?
+  fi
+}
+
+admin_run_update() {
+  local script="$ADMIN_SNAPSHOT_DIR/update.sh" target
+  admin_require_installed || return 1
+  admin_require_project || return 1
+  admin_check_user_exists || return 1
+  admin_safe_system_file "$script" 0 || { admin_error "root-owned updater snapshot is missing or unsafe"; return 1; }
+  target="GitHub main"
+  [[ -n "$ADMIN_OFFLINE" ]] && target="Cached commit ${ADMIN_OFFLINE:0:12}"
+  admin_print_header Update "$target"
+  admin_clear_unapproved_environment
+  if admin_run_script "$script"; then
+    admin_finish_operation Update
+  else
+    return $?
+  fi
+}
+
+admin_run_repair() {
+  local target="$ADMIN_SOURCE_OPTION" script
+  admin_require_installed || return 1
+  target="$(admin_canonical_project_directory "$target")" || return 1
+  if [[ -n "$ADMIN_PROJECT_OPTION" ]]; then
+    local requested_project
+    requested_project="$(admin_canonical_project_directory "$ADMIN_PROJECT_OPTION")" || return 1
+    [[ "$requested_project" == "$target" ]] || {
+      admin_error "repair uses --source as its project directory; --project-dir must resolve to the same path"
+      return 1
+    }
+  fi
+  ADMIN_PROJECT_DIR="$target"
+  ADMIN_PROJECT_VALID=1
+  admin_check_platform || return 1
+  admin_check_user_exists || return 1
+  admin_validate_trusted_checkout "$target" "$ADMIN_SERVICE_USER" || return 1
+  script="$target/deploy/install.sh"
+  [[ -f "$script" && ! -L "$script" ]] || { admin_error "trusted installer is missing: $script"; return 1; }
+  admin_print_header Repair "Checkout HEAD"
+  printf '[1/1] Checking trusted source and running the existing idempotent installer\n\n'
+  admin_clear_unapproved_environment 1
+  if admin_run_script "$script"; then
+    admin_finish_operation Repair
+  else
+    return $?
+  fi
+}
+
+admin_run_uninstall() {
+  local script="$ADMIN_SNAPSHOT_DIR/uninstall.sh"
+  admin_require_installed || return 1
+  admin_require_project || return 1
+  admin_check_user_exists || return 1
+  admin_safe_system_file "$script" 0 || { admin_error "root-owned uninstaller snapshot is missing or unsafe"; return 1; }
+  printf 'LumiStripe Uninstall\n\n'
+  printf 'Installation: %s\n' "$ADMIN_PROJECT_DIR"
+  printf 'Service user: %s\n' "$ADMIN_SERVICE_USER"
+  printf 'Will remove: LumiStripe services, helpers, configuration, generated dependencies, dashboard TLS files, and default Soloist data.\n'
+  printf 'Will preserve: shared OS packages, the service account, toolchains, project checkout, mkcert CA, backups, and custom Soloist paths.\n\n'
+  admin_clear_unapproved_environment
+  if [[ "$ADMIN_ASSUME_YES" == 1 ]]; then
+    admin_run_script "$script" --yes
+  else
+    admin_run_script "$script"
+  fi
+}
+
+admin_main() {
+  local parse_status
+  admin_parse_arguments "$@" || return $?
+  if [[ "$ADMIN_COMMAND" == help || "$ADMIN_HELP" == 1 ]]; then
+    admin_command_help "${ADMIN_HELP_TARGET:-$ADMIN_COMMAND}"
+    return $?
+  fi
+  admin_require_root || return 1
+  admin_determine_origin || return 1
+  if [[ "$ADMIN_ORIGIN" == installed ]]; then
+    admin_require_installed_entrypoint || return 1
+  elif [[ "$ADMIN_COMMAND" != install ]]; then
+    admin_error "only install may be run from a source checkout; use the installed admin command for maintenance"
+    return 1
+  fi
+
+  admin_resolve_metadata || return 1
+  admin_apply_saved_install_mode || return $?
+  case "$ADMIN_COMMAND" in
+    install)
+      if [[ "$ADMIN_ORIGIN" == checkout && -n "$ADMIN_PROJECT_OPTION" ]]; then
+        local source_canonical requested_canonical
+        source_canonical="$(admin_canonical_project_directory "$ADMIN_SOURCE_PROJECT")" || return 1
+        requested_canonical="$(admin_canonical_project_directory "$ADMIN_PROJECT_OPTION")" || return 1
+        [[ "$source_canonical" == "$requested_canonical" ]] || {
+          admin_error "when invoked from a checkout, --project-dir must identify that same checkout"
+          return 1
+        }
+        ADMIN_PROJECT_DIR="$source_canonical"
+        ADMIN_PROJECT_VALID=1
+      fi
+      admin_require_project || return 1
+      admin_check_user_exists || return 1
+      admin_run_install
+      ;;
+    update)
+      admin_require_installed_entrypoint || return 1
+      admin_run_update
+      ;;
+    status)
+      admin_require_installed_entrypoint || return 1
+      admin_print_status
+      ;;
+    repair)
+      admin_require_installed_entrypoint || return 1
+      admin_run_repair
+      ;;
+    uninstall)
+      admin_require_installed_entrypoint || return 1
+      admin_run_uninstall
+      ;;
+    *)
+      admin_error "unsupported command: $ADMIN_COMMAND"
+      return 2
+      ;;
+  esac
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  admin_main "$@"
+  exit $?
+fi

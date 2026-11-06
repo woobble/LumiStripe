@@ -6,6 +6,7 @@
 declare -Ag LUMI_PHASE_START_MS=()
 declare -Ag LUMI_PHASE_TOTAL_MS=()
 declare -ag LUMI_PHASE_ORDER=()
+declare -gi LUMI_PHASE_SEQUENCE=0
 
 lumi_monotonic_ms() {
   awk '{ printf "%.0f\n", $1 * 1000 }' /proc/uptime
@@ -17,6 +18,8 @@ lumi_phase_start() {
     LUMI_PHASE_ORDER+=("$phase")
     LUMI_PHASE_TOTAL_MS["$phase"]=0
   fi
+  LUMI_PHASE_SEQUENCE=$((LUMI_PHASE_SEQUENCE + 1))
+  printf '[%d] %s\n' "$LUMI_PHASE_SEQUENCE" "$phase"
   LUMI_PHASE_START_MS["$phase"]="$(lumi_monotonic_ms)"
 }
 
@@ -30,6 +33,7 @@ lumi_phase_end() {
     ${LUMI_PHASE_TOTAL_MS[$phase]:-0} + end_ms - start_ms
   ))
   unset 'LUMI_PHASE_START_MS[$phase]'
+  printf '    Complete: %s\n' "$phase"
 }
 
 lumi_phase_report() {

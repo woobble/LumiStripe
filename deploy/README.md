@@ -6,7 +6,7 @@ stream to the sound system and analyzes it for reactive animations.
 
 Supported targets are Raspberry Pi OS Trixie and Ubuntu on ARM64, using
 PipeWire/WirePlumber. Prebuilt releases are available on both; source builds
-remain available through `LUMI_DEPLOY_MODE=source`.
+remain available through `lumistripe-admin update --mode source`.
 The Pi can send audio to USB, HDMI, wired, or Bluetooth speaker outputs. It
 can also receive music from phones and other Bluetooth audio sources; the
 same routed stream drives the music-reactive animation.
@@ -37,97 +37,138 @@ Change the dashboard title and Spotify Connect player name from
 **Devices → Startup → Names**. Saving a Spotify name updates the Soloist
 service configuration and requests a service restart so Connect advertises it.
 On appliances installed before this naming control was added, rerun the
-installer from a trusted checkout as described below to install its restricted
-restart helper and the Soloist service override path.
+trusted `lumistripe-admin install` command as described below to install its
+restricted restart helper and the Soloist service override path.
 
-## Install from a trusted checkout
+## Administrative command quick start
 
-The installer copies deployment helpers, systemd units, sudoers rules, and the
-Nginx configuration into privileged locations. Run it from a reviewed checkout
-under a directory that the service account cannot modify. For example, from
-the repository root:
+The primary installation and maintenance interface is `lumistripe-admin`.
+Use this sequence for a new appliance:
 
-```bash
-sudo install -d -o root -g root -m 755 /opt/lumistripe-install
-sudo cp -a "$PWD"/. /opt/lumistripe-install/
-sudo chown -R root:root /opt/lumistripe-install
-sudo chmod -R go-w /opt/lumistripe-install
-sudo env LUMI_SERVICE_USER=pi LUMI_PROJECT_DIR=/opt/lumistripe-install \
-  /opt/lumistripe-install/deploy/install.sh
-```
+1. **Prepare and review a trusted checkout.** The service account and invoking
+   account must not be able to write the checkout, its parent directories, or
+   deployment files.
 
-Replace `pi` with the non-root account that should run LumiStripe. The
-installer checks that the invoking and service accounts cannot write the
-checkout, its parent directories, or its deployment files. It installs the
-root-owned deployment snapshot before making the runtime checkout writable by
-the service account. It refuses to import privileged files from a live,
-service-user-writable checkout.
+    ```bash
+    git clone https://github.com/woobble/LumiStripe.git
+    cd LumiStripe
+    # Review the checkout before installing it.
+    sudo install -d -o root -g root -m 755 /opt/lumistripe-install
+    sudo cp -a "$PWD"/. /opt/lumistripe-install/
+    sudo chown -R root:root /opt/lumistripe-install
+    sudo chmod -R go-w /opt/lumistripe-install
+    ```
 
-In a terminal, the installer asks for a four-digit pairing code and the
+2. **Install.** Replace `pi` with the LumiStripe service account.
+
+    ```bash
+    sudo /opt/lumistripe-install/deploy/lumistripe-admin install --user pi
+    ```
+
+3. **Update.** Updates use GitHub main and verified precompiled releases by
+   default.
+
+    ```bash
+    sudo lumistripe-admin update
+    ```
+
+4. **Check status.** This reads saved update state and service information
+   without changing the installation.
+
+    ```bash
+    sudo lumistripe-admin status
+    ```
+
+5. **Repair.** Prepare a fresh trusted checkout. Repair makes it the configured
+   runtime project directory, so do not use the current service-writable
+   checkout as its source.
+
+    ```bash
+    sudo lumistripe-admin repair --source /opt/lumistripe-repair --user pi
+    ```
+
+6. **Uninstall.** Confirmation is required by default; pass `--yes` to skip it.
+
+    ```bash
+    sudo lumistripe-admin uninstall
+    ```
+
+The installer installs a root-owned deployment snapshot before making the
+runtime checkout writable by the service account. Repeating `sudo
+lumistripe-admin install` runs the idempotent installer from that root-owned
+snapshot. Do not run initial installation or repair from an unreviewed or
+service-user-writable checkout. Ordinary maintenance needs no internal paths or
+environment-variable assignments.
+
+The root-owned `/var/lib/lumistripe/install-state` file stores the service user,
+canonical project directory, deployment mode, and existing Nginx migration
+flag. It remains root-owned with mode `600`, is updated atomically, and is
+parsed as data rather than sourced by a shell. On older installations without
+`project_dir`, the command safely reads the value from the root-owned rendered
+web service unit or accepts an explicit `--project-dir`; a successful install
+or update persists the migrated value. No current working directory is used
+to discover an installation.
+
+Systems installed before `lumistripe-admin` existed need one trusted installer
+upgrade. The installer keeps the existing service state and credentials while
+installing the root-owned command and deployment snapshot. Older updater
+migrations that still allow privileged reads from the runtime checkout must
+disable that old trigger during this upgrade; see
+[Existing updater migration](#existing-updater-migration).
+
+Interactive installation asks for a four-digit pairing code and optional
 Spotify Soloist API key. Leave the pairing-code prompt blank to generate a
-random code. Leave the Spotify-key prompt blank to install without Spotify.
-For unattended installation, provide `LUMI_PAIRING_CODE` and the optional
-Spotify key through the provisioning process environment. Keep their values
-out of shell history and command arguments.
+random code and the Spotify prompt blank to skip Spotify. For unattended
+installation, the existing `LUMI_PAIRING_CODE` and Spotify environment-file
+handling remains available; keep secrets out of shell history and command
+arguments. The command does not accept pairing passwords or API keys as CLI
+options.
 
-The installer defaults to a commit-matched ARM64 binary release for Debian or
-Raspberry Pi OS Trixie, or Ubuntu on ARM64. It downloads the GitHub release for
-the exact checkout commit, verifies its asset digests and GitHub Actions
-provenance, validates the manifest and runtime dependencies, then stages the web server, engine, CLI,
-deployment helper, and frontend together. Binary installs do not compile Rust
-or build the frontend on the Pi. They do not install Rustup, Cargo, Bun, or
-native build headers. Python's standard library is used for bounded archive
-validation; no Python application packages, extensions, or uv are installed.
+### Advanced deployment options
 
-Choose a deployment mode with `LUMI_DEPLOY_MODE`:
-
-| Mode | Behavior |
-| --- | --- |
-| `binary` (default) | Require a published, verified release for the checked out commit. Missing or unsupported releases stop the operation. |
-| `source` | Install Rust 1.88.0 and Bun, build the frontend and Rust applications locally, and activate that complete release. |
-| `auto` | Prefer a verified binary, then build locally only when the artifact is missing or the target is unsupported. Integrity or provenance failures stop without a source fallback. |
-
-For example, use source mode during installation with:
+The command defaults to verified precompiled releases. Select a deployment
+strategy or use an already verified cached commit with readable flags:
 
 ```bash
-sudo env LUMI_DEPLOY_MODE=source LUMI_SERVICE_USER=pi \
-  LUMI_PROJECT_DIR=/opt/lumistripe-install \
-  /opt/lumistripe-install/deploy/install.sh
+sudo lumistripe-admin update --mode source
+sudo lumistripe-admin update --mode auto
+sudo lumistripe-admin update --offline 0123456789abcdef0123456789abcdef01234567
+sudo lumistripe-admin update --refresh-soloist
+sudo lumistripe-admin install --mode source --user pi
 ```
 
-The installer also configures operating-system packages, GPIO/SPI/audio
-permissions, Raspberry Pi SPI, NetworkManager, Bluetooth/WirePlumber,
-Spotify Soloist when an API key is provided, a local mkcert CA and HTTPS
-certificate, Nginx, and systemd services. Existing
+`binary` requires the published release for the target commit. `source` builds
+locally using the installed Rust and Bun toolchains. `auto` prefers a verified
+binary and falls back only when the artifact is missing or the platform is
+unsupported; integrity or provenance failures stop the operation. Offline
+updates use only a previously verified local release. Soloist is not refreshed
+during routine updates unless `--refresh-soloist` is supplied.
+
+The installer configures operating-system packages, GPIO/SPI/audio
+permissions, Raspberry Pi SPI, NetworkManager, Bluetooth/WirePlumber, optional
+Spotify Soloist, mkcert TLS, Nginx, and systemd. Existing
 `/etc/lumistripe/lumistripe-web.env` and
 `/etc/lumistripe/lumistripe-spotify.env` files are preserved. Spotify's
 official builds are downloaded on the Pi and are not bundled or redistributed
 by LumiStripe. Verified archives are cached under
-`/var/cache/lumistripe/releases/<commit>`; the cache retains the active and
-previous releases for rollback.
+`/var/cache/lumistripe/releases/<commit>`; the active and previous releases
+remain available for rollback.
 
-The installer uses the non-root account that invoked `sudo` (or the checkout
-owner when run from a root shell). To install for another account, set
-`LUMI_SERVICE_USER`. `LUMI_PROJECT_DIR` must point to a reviewed,
-administrator-controlled checkout as described above; a normal checkout in a
-user's home directory is intentionally rejected:
+The binary-first path supports ARM64 Ubuntu and Debian-family Trixie targets.
+It validates release asset digests, GitHub Actions provenance, the manifest,
+and runtime dependencies, then stages the web server, engine, CLI, deployment
+helper, and frontend as one commit-matched release. Binary installs do not
+compile Rust or build the frontend on the Pi. Source mode installs Rust
+1.88.0, Bun, and build requirements as needed.
 
-```bash
-sudo env LUMI_SERVICE_USER=woobb LUMI_PROJECT_DIR=/opt/lumistripe-install \
-  /opt/lumistripe-install/deploy/install.sh
-```
+`lumistripe-admin` delegates to the existing `deploy/install.sh`,
+`deploy/update.sh`, and `deploy/uninstall.sh` implementations. Those scripts,
+the release verifier, update lock, transactional activation, health check, and
+automatic rollback remain the deployment internals. The dashboard's
+fixed, argument-free update trigger remains separate, and the service account
+does not receive permission to run the administrative command.
 
-`LUMI_PROJECT_DIR` must point to the top-level LumiStripe checkout. The
-installer resolves symlinks and validates the checkout before it changes
-ownership or installs services.
-Because installation runs as root and installs privileged deployment files
-from that checkout, use a trusted administrator-controlled copy. If the
-service account may have been compromised, do not rerun the installer from its
-writable checkout; restore a trusted copy first.
-
-The pairing code is stored in `/etc/lumistripe/lumistripe-web.env` with mode
-`600`. The systemd service passes it through the process environment, not its
-command-line arguments.
+## Advanced maintenance reference
 
 ## Rust backend and rollback
 
@@ -216,30 +257,27 @@ APT when required packages are already present, preserve existing environment
 files and service-owned data, and only rewrite changed managed configuration.
 The source installer checks its Rust and Bun pins and reuses matching
 toolchains. Unchanged application and Spotify files do not trigger service
-restarts. Each successful run prints monotonic timings for package
-provisioning, configuration, Soloist handling, and service health checks;
-source builds are timed separately.
+restarts. Each successful run prints numbered phases and monotonic timings for
+package setup, configuration, Soloist, and service health; source builds are
+timed separately.
 
 Spotify Soloist is reused during routine setup. To ask the updater to check the
-official Spotify archive, set `LUMI_SOLOIST_REFRESH=1`. The updater compares
-the verified candidate with the installed executable and replaces it only when
-the candidate is newer. Replacement is an atomic rename, so a failed download,
-archive check, or executable check leaves the existing binary intact. A valid
-existing executable is also retained if an explicit refresh cannot complete.
+official Spotify archive without advancing the checkout, request its current
+full commit with the administrative command:
+
+```bash
+sudo lumistripe-admin update --offline FULL_CACHED_COMMIT_SHA --refresh-soloist
+```
+
+The updater compares the verified candidate with the installed executable and
+replaces it only when the candidate is newer. Replacement is an atomic rename,
+so a failed download, archive check, or executable check leaves the existing
+binary intact. A valid existing executable is also retained if an explicit
+refresh cannot complete. The internal updater still accepts
+`LUMI_SOLOIST_REFRESH=1` for legacy maintenance workflows.
 Spotify documents the official architecture-specific archives and the build
 metadata reported by `soloist --version` in its [downloads and updates
 reference](https://developer.spotify.com/documentation/soloist/reference/downloads-and-updates).
-For a refresh without advancing the LumiStripe checkout, pass its current
-commit as the updater target:
-
-```bash
-PROJECT_DIR=/home/pi/LumiStripe
-CURRENT_COMMIT="$(git -C "$PROJECT_DIR" rev-parse HEAD)"
-sudo env LUMI_SERVICE_USER=pi LUMI_PROJECT_DIR="$PROJECT_DIR" \
-  LUMI_SOLOIST_REFRESH=1 \
-  /usr/local/libexec/lumistripe/deploy/update.sh "$CURRENT_COMMIT"
-```
-
 The Pi self-hosted native validation workflow is separate from normal CI and
 runs only when manually dispatched for `main`. Hosted CI remains responsible
 for routine pull request and push validation. Dispatch the **Raspberry Pi
@@ -287,19 +325,20 @@ starts installation only after the artifact is ready. The updater verifies and
 stages the release, restarts services, and checks dashboard health. A failed
 health check restores the previous checkout and release pointer.
 
-The updater is installed by `deploy/install.sh`. To add it to an existing
-systemd installation, prepare a reviewed administrator-controlled checkout as
-described above. This preserves existing pairing and Spotify settings.
-Existing installations must replace the old updater once because it could
-install privileged files from the service-user-writable checkout. During that
-migration, prevent the old dashboard trigger and updater from running while the
-trusted installer replaces them:
+### Existing updater migration
+
+The administrative command and its root-owned deployment snapshot are
+installed by the trusted installer. Existing installations must run it once to
+record the project directory and add `lumistripe-admin`; existing pairing and
+Spotify settings are preserved. An older updater may still install privileged
+files from the service-user-writable runtime checkout. During migration,
+prevent its dashboard trigger and updater from running until the trusted
+installer replaces them:
 
 ```bash
 sudo mv /etc/sudoers.d/lumistripe-update /etc/lumistripe/lumistripe-update.sudoers.disabled
 sudo systemctl stop lumistripe-web.service lumistripe-update.service lumistripe-update-check.timer
-sudo env LUMI_SERVICE_USER=pi LUMI_PROJECT_DIR=/opt/lumistripe-install \
-  /opt/lumistripe-install/deploy/install.sh
+sudo /opt/lumistripe-install/deploy/lumistripe-admin install --user pi
 ```
 
 Before running the last command, copy the reviewed checkout to
@@ -314,37 +353,32 @@ deployment snapshot installed by that command; changes to privileged helper,
 service, and Nginx files take effect only when an administrator reruns the
 installer from a trusted checkout. If the TLS certificate or key is missing,
 the updater stops and the administrator must rerun the installer to repair it.
-For a manual update, run this from the checkout root so the installed updater
-receives the checkout path:
+Normal manual updates use the administrative command:
 
 ```bash
-sudo env LUMI_PROJECT_DIR="$PWD" \
-  /usr/local/libexec/lumistripe/deploy/update.sh
+sudo lumistripe-admin update
 ```
 
-For an explicit source update, use `LUMI_DEPLOY_MODE=source` with that command.
+For an explicit source update, use `--mode source`.
 Source updates require Bun, Cargo, Rust 1.88.0, and the native development
 headers to have been installed already; run the installer in source mode first
 on a binary-only appliance. `auto` also accepts a missing or unsupported
 artifact as a reason to use a local build, but it does not bypass an integrity,
 digest, or provenance failure.
 
+Direct calls to `deploy/install.sh`, `deploy/update.sh`, and
+`/usr/local/libexec/lumistripe/deploy/update.sh` are retained for advanced
+recovery and legacy maintenance. They are not needed for ordinary operation.
+
 To update offline from a previously verified local bundle, the full commit
 must exist in the checkout and its root-protected cache entry must still be
 present under `/var/cache/lumistripe/releases/<commit>`. Keep the system on
 ARM64 Debian or Raspberry Pi OS Trixie, or ARM64 Ubuntu, with the runtime
-packages already installed, then run the normal updater in binary mode with
-that commit:
+packages already installed, then pass that commit to the admin command:
 
 ```bash
-PROJECT_DIR=/opt/lumistripe-install
-SERVICE_USER=pi
 COMMIT=FULL_CACHED_COMMIT_SHA
-sudo -u "$SERVICE_USER" git -C "$PROJECT_DIR" cat-file -e "$COMMIT^{commit}"
-sudo env LUMI_SERVICE_USER="$SERVICE_USER" \
-  LUMI_PROJECT_DIR="$PROJECT_DIR" \
-  LUMI_OFFLINE_COMMIT="$COMMIT" \
-  /usr/local/libexec/lumistripe/deploy/update.sh
+sudo lumistripe-admin update --offline "$COMMIT"
 ```
 
 The offline path skips GitHub fetching, accepts only the verified cache, and
@@ -356,13 +390,9 @@ To reinstall from the same machine's verified cache, prepare a fresh trusted
 checkout at the cached commit and run:
 
 ```bash
-PROJECT_DIR=/opt/lumistripe-install
-SERVICE_USER=pi
 COMMIT=FULL_CACHED_COMMIT_SHA
-sudo env LUMI_SERVICE_USER="$SERVICE_USER" \
-  LUMI_PROJECT_DIR="$PROJECT_DIR" \
-  LUMI_OFFLINE_COMMIT="$COMMIT" \
-  "$PROJECT_DIR/deploy/install.sh"
+sudo /opt/lumistripe-install/deploy/lumistripe-admin install \
+  --user pi --offline "$COMMIT"
 ```
 
 Offline installation requires the checkout and root-protected verified cache
@@ -472,13 +502,13 @@ service account, Rust and Bun toolchains, mkcert, and
 the mkcert CA, run:
 
 ```bash
-sudo ./deploy/uninstall.sh
+sudo lumistripe-admin uninstall
 ```
 
-The script asks for confirmation. Use `--yes` for an unattended removal:
+Use `--yes` to skip the confirmation:
 
 ```bash
-sudo ./deploy/uninstall.sh --yes
+sudo lumistripe-admin uninstall --yes
 ```
 
 The uninstaller removes both LumiStripe systemd units, environment files,
@@ -639,7 +669,8 @@ that port outside the Pi.
 - Spotify is unavailable: check that `/etc/lumistripe/lumistripe-spotify.env`
   contains a valid `LUMI_SPOTIFY_API_KEY`, then restart
   `lumistripe-spotify.service`. If the Soloist build has expired, rerun
-  `deploy/update.sh` to download the current official build. The service checks
+  `sudo lumistripe-admin update --refresh-soloist` to download the current
+  official build. The service checks
   the installed build timestamp before startup and reports missing, malformed,
   or expired builds in `journalctl -u lumistripe-spotify.service`.
 - Spotify plays but the Stripe is quiet: confirm that the dedicated sink and

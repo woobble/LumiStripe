@@ -9,6 +9,8 @@ umask 022
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_DIR="${LUMI_PROJECT_DIR:-$(cd -- "$SCRIPT_DIR/.." && pwd -P)}"
 SERVICE_USER="${LUMI_SERVICE_USER:-${SUDO_USER:-}}"
+DEPLOY_SNAPSHOT_DIR=/usr/local/libexec/lumistripe/deploy
+DEPLOY_SOURCE_KIND=
 
 ENV_DIR=/etc/lumistripe
 ENV_FILE="$ENV_DIR/lumistripe-web.env"
@@ -65,14 +67,18 @@ fi
   exit 1
 }
 PROJECT_DIR="$(cd -- "$PROJECT_DIR" && pwd -P)"
-[[ "$SCRIPT_DIR" == "$PROJECT_DIR/deploy" ]] || {
-  echo "Run the installer from the trusted checkout selected by LUMI_PROJECT_DIR." >&2
-  exit 1
-}
 [[ -d "$PROJECT_DIR/deploy" ]] || {
   echo "Deployment source directory is missing: $PROJECT_DIR/deploy" >&2
   exit 1
 }
+if [[ "$SCRIPT_DIR" == "$PROJECT_DIR/deploy" ]]; then
+  DEPLOY_SOURCE_KIND=checkout
+elif [[ "$SCRIPT_DIR" == "$DEPLOY_SNAPSHOT_DIR" ]]; then
+  DEPLOY_SOURCE_KIND=snapshot
+else
+  echo "Run the installer from its selected trusted checkout or root-owned deployment snapshot." >&2
+  exit 1
+fi
 [[ "$PROJECT_DIR" != *$'\n'* && "$PROJECT_DIR" != *$'\r'* ]] || {
   echo "Project directory must be a single-line path." >&2
   exit 1
@@ -94,57 +100,87 @@ command -v runuser >/dev/null 2>&1 || {
   exit 1
 }
 
-# Root copies several scripts and configuration files into privileged system
-# locations. Refuse to read them from a checkout that the service account or
-# invoking user can modify, including through a writable parent directory.
-trusted_source_users=()
-for candidate in "${SUDO_USER:-}" "$SERVICE_USER" "$(stat -c '%U' "$PROJECT_DIR" 2>/dev/null || true)"; do
-  [[ -n "$candidate" && "$candidate" != root ]] || continue
-  id "$candidate" >/dev/null 2>&1 || continue
-  already_checked=0
-  for checked_user in "${trusted_source_users[@]}"; do
-    if [[ "$checked_user" == "$candidate" ]]; then
-      already_checked=1
-      break
+if [[ "$DEPLOY_SOURCE_KIND" == checkout ]]; then
+  # Root copies several scripts and configuration files into privileged
+  # locations. Refuse writable checkouts and parents as before.
+  trusted_source_users=()
+  for candidate in "${SUDO_USER:-}" "$SERVICE_USER" "$(stat -c '%U' "$PROJECT_DIR" 2>/dev/null || true)"; do
+    [[ -n "$candidate" && "$candidate" != root ]] || continue
+    id "$candidate" >/dev/null 2>&1 || continue
+    already_checked=0
+    for checked_user in "${trusted_source_users[@]}"; do
+      if [[ "$checked_user" == "$candidate" ]]; then
+        already_checked=1
+        break
+      fi
+    done
+    if [[ "$already_checked" -eq 0 ]]; then
+      trusted_source_users+=("$candidate")
     fi
   done
-  if [[ "$already_checked" -eq 0 ]]; then
-    trusted_source_users+=("$candidate")
-  fi
-done
-((${#trusted_source_users[@]} > 0)) || {
-  echo "Run through sudo from an existing non-root account or create the service account first." >&2
-  exit 1
-}
-for trusted_user in "${trusted_source_users[@]}"; do
-  source_path="$PROJECT_DIR"
-  while :; do
-    source_mode="$(stat -c '%a' -- "$source_path")" || exit 1
-    if (( (8#$source_mode & 0022) != 0 )); then
-      echo "Installer source path is group- or world-writable: $source_path" >&2
+  ((${#trusted_source_users[@]} > 0)) || {
+    echo "Run through sudo from an existing non-root account or create the service account first." >&2
+    exit 1
+  }
+  for trusted_user in "${trusted_source_users[@]}"; do
+    source_path="$PROJECT_DIR"
+    while :; do
+      source_mode="$(stat -c '%a' -- "$source_path")" || exit 1
+      if (( (8#$source_mode & 0022) != 0 )); then
+        echo "Installer source path is group- or world-writable: $source_path" >&2
+        exit 1
+      fi
+      if runuser -u "$trusted_user" -- test -w "$source_path"; then
+        echo "Installer source path is writable by $trusted_user: $source_path" >&2
+        echo "Copy a reviewed checkout under an administrator-controlled directory and retry." >&2
+        exit 1
+      fi
+      [[ "$source_path" == / ]] && break
+      source_path="$(dirname -- "$source_path")"
+    done
+    while IFS= read -r -d '' source_path; do
+      [[ ! -L "$source_path" ]] || {
+        echo "Installer deployment source must not contain symlinks: $source_path" >&2
+        exit 1
+      }
+      source_mode="$(stat -c '%a' -- "$source_path")" || exit 1
+      if (( (8#$source_mode & 0022) != 0 )); then
+        echo "Installer deployment source is group- or world-writable: $source_path" >&2
+        exit 1
+      fi
+      if runuser -u "$trusted_user" -- test -w "$source_path"; then
+        echo "Installer deployment source is writable by $trusted_user: $source_path" >&2
+        echo "Copy a reviewed checkout under an administrator-controlled directory and retry." >&2
+        exit 1
+      fi
+    done < <(find -P "$PROJECT_DIR/deploy" -print0)
+  done
+else
+  for source_path in /usr /usr/local /usr/local/libexec \
+    /usr/local/libexec/lumistripe "$DEPLOY_SNAPSHOT_DIR"; do
+    [[ -d "$source_path" && ! -L "$source_path" ]] || {
+      echo "Trusted deployment snapshot directory is missing or unsafe: $source_path" >&2
       exit 1
-    fi
-    if runuser -u "$trusted_user" -- test -w "$source_path"; then
-      echo "Installer source path is writable by $trusted_user: $source_path" >&2
-      echo "Copy a reviewed checkout under an administrator-controlled directory and retry." >&2
+    }
+    [[ "$(stat -c '%u' -- "$source_path")" == 0 ]] &&
+      (( (8#$(stat -c '%a' -- "$source_path") & 0022) == 0 )) || {
+      echo "Trusted deployment snapshot directory is not protected: $source_path" >&2
       exit 1
-    fi
-    [[ "$source_path" == / ]] && break
-    source_path="$(dirname -- "$source_path")"
+    }
   done
   while IFS= read -r -d '' source_path; do
-    source_mode="$(stat -c '%a' -- "$source_path")" || exit 1
-    if (( (8#$source_mode & 0022) != 0 )); then
-      echo "Installer deployment source is group- or world-writable: $source_path" >&2
+    [[ ! -L "$source_path" ]] || {
+      echo "Trusted deployment snapshot must not contain symlinks: $source_path" >&2
       exit 1
-    fi
-    if runuser -u "$trusted_user" -- test -w "$source_path"; then
-      echo "Installer deployment source is writable by $trusted_user: $source_path" >&2
-      echo "Copy a reviewed checkout under an administrator-controlled directory and retry." >&2
+    }
+    source_metadata="$(stat -c '%u:%a' -- "$source_path")" || exit 1
+    [[ "${source_metadata%%:*}" == 0 ]] &&
+      (( (8#${source_metadata#*:} & 0022) == 0 )) || {
+      echo "Trusted deployment snapshot file is not protected: $source_path" >&2
       exit 1
-    fi
-  done < <(find -P "$PROJECT_DIR/deploy" -print0)
-done
+    }
+  done < <(find -P "$SCRIPT_DIR" -print0)
+fi
 
 # shellcheck source=deploy/update-support.sh
 source "$SCRIPT_DIR/update-support.sh"
@@ -179,25 +215,25 @@ SPOTIFY_PIPEWIRE_FILE="$PIPEWIRE_DIR/90-lumistripe-spotify.conf"
 USER_RUNTIME_DIR="/run/user/$SERVICE_UID"
 
 for required_file in \
-  "$PROJECT_DIR/deploy/lumistripe-web.service" \
+  "$SCRIPT_DIR/lumistripe-web.service" \
   "$PROJECT_DIR/deploy/lumistripe-web-launcher.sh" \
   "$PROJECT_DIR/deploy/build-rust-backend.sh" \
-  "$PROJECT_DIR/deploy/release_artifact.py" \
-  "$PROJECT_DIR/deploy/install-github-cli.sh" \
-  "$PROJECT_DIR/deploy/rust-toolchain.sh" \
-  "$PROJECT_DIR/deploy/lumistripe-spotify.service" \
-  "$PROJECT_DIR/deploy/90-lumistripe-bluetooth.conf" \
-  "$PROJECT_DIR/deploy/90-lumistripe-spotify.conf" \
-  "$PROJECT_DIR/deploy/lumistripe-web.env.example" \
-  "$PROJECT_DIR/deploy/lumistripe-spotify.env.example" \
-  "$PROJECT_DIR/deploy/lumistripe-network" \
-  "$PROJECT_DIR/deploy/lumistripe-network.sudoers" \
-  "$PROJECT_DIR/deploy/lumistripe-spotify-service.sudoers" \
-  "$PROJECT_DIR/deploy/nginx/led-controller.conf" \
-  "$PROJECT_DIR/deploy/tls.sh" \
-  "$PROJECT_DIR/deploy/soloist.sh" \
-  "$PROJECT_DIR/deploy/package-provisioning.sh" \
-  "$PROJECT_DIR/deploy/timing.sh"; do
+  "$SCRIPT_DIR/release_artifact.py" \
+  "$SCRIPT_DIR/install-github-cli.sh" \
+  "$SCRIPT_DIR/rust-toolchain.sh" \
+  "$SCRIPT_DIR/lumistripe-spotify.service" \
+  "$SCRIPT_DIR/90-lumistripe-bluetooth.conf" \
+  "$SCRIPT_DIR/90-lumistripe-spotify.conf" \
+  "$SCRIPT_DIR/lumistripe-web.env.example" \
+  "$SCRIPT_DIR/lumistripe-spotify.env.example" \
+  "$SCRIPT_DIR/lumistripe-network" \
+  "$SCRIPT_DIR/lumistripe-network.sudoers" \
+  "$SCRIPT_DIR/lumistripe-spotify-service.sudoers" \
+  "$SCRIPT_DIR/nginx/led-controller.conf" \
+  "$SCRIPT_DIR/tls.sh" \
+  "$SCRIPT_DIR/soloist.sh" \
+  "$SCRIPT_DIR/package-provisioning.sh" \
+  "$SCRIPT_DIR/timing.sh"; do
   [[ -f "$required_file" ]] || {
     echo "Required deployment file is missing: $required_file" >&2
     exit 1
@@ -344,7 +380,7 @@ install_source_build_packages() {
 }
 
 install_release_verifier() {
-  "$PROJECT_DIR/deploy/install-github-cli.sh"
+  "$SCRIPT_DIR/install-github-cli.sh"
 }
 
 install_mkcert() {
@@ -536,7 +572,7 @@ create_environment_file() {
       exit 1
     }
     install -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 600 \
-      "$PROJECT_DIR/deploy/lumistripe-web.env.example" "$ENV_FILE"
+      "$SCRIPT_DIR/lumistripe-web.env.example" "$ENV_FILE"
     sed -i "s/^LUMI_PAIRING_CODE=.*/LUMI_PAIRING_CODE=$pairing_code/" "$ENV_FILE"
     WEB_ENV_CHANGED=1
   fi
@@ -589,7 +625,7 @@ create_spotify_environment_file() {
         LUMI_SPOTIFY_CACHE_DIR=*) printf 'LUMI_SPOTIFY_CACHE_DIR=%s\n' "$SERVICE_HOME/.cache/soloist" ;;
         *) printf '%s\n' "$line" ;;
       esac
-    done < "$PROJECT_DIR/deploy/lumistripe-spotify.env.example" > "$spotify_env_tmp"; then
+    done < "$SCRIPT_DIR/lumistripe-spotify.env.example" > "$spotify_env_tmp"; then
       rm -f -- "$spotify_env_tmp"
       return 1
     fi
@@ -679,7 +715,7 @@ start_deployment_services() {
 
   for _ in {1..30}; do
     if curl --fail --silent http://127.0.0.1:8000/api/health >/dev/null; then
-      systemctl --no-pager --full status lumistripe-web.service
+      echo "Web service health check passed."
       return 0
     fi
     if ! systemctl is-active --quiet lumistripe-web.service; then
@@ -718,7 +754,7 @@ render_service_unit() {
     -e "s|@LUMI_PROJECT_DIR@|$project_replacement|g" \
     -e "s|@LUMI_HOME@|$home_replacement|g" \
     -e "s|@LUMI_SERVICE_UID@|$uid_replacement|g" \
-    "$PROJECT_DIR/deploy/lumistripe-web.service" > "$rendered_file"
+    "$SCRIPT_DIR/lumistripe-web.service" > "$rendered_file"
   if grep -q '@LUMI_[A-Z_]*@' "$rendered_file"; then
     rm -f -- "$rendered_file"
     echo "The systemd service template contains unresolved placeholders." >&2
@@ -752,7 +788,7 @@ render_spotify_service_unit() {
     -e "s|@LUMI_PROJECT_DIR@|$project_replacement|g" \
     -e "s|@LUMI_HOME@|$home_replacement|g" \
     -e "s|@LUMI_SERVICE_UID@|$uid_replacement|g" \
-    "$PROJECT_DIR/deploy/lumistripe-spotify.service" > "$rendered_file"
+    "$SCRIPT_DIR/lumistripe-spotify.service" > "$rendered_file"
   if grep -q '@LUMI_[A-Z_]*@' "$rendered_file"; then
     rm -f -- "$rendered_file"
     echo "The Spotify systemd service template contains unresolved placeholders." >&2
@@ -769,12 +805,12 @@ render_spotify_service_unit() {
 install_wireplumber_config() {
   install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 755 "$WIREPLUMBER_DIR"
   install_user_file_if_changed \
-    "$PROJECT_DIR/deploy/90-lumistripe-bluetooth.conf" "$WIREPLUMBER_FILE" \
+    "$SCRIPT_DIR/90-lumistripe-bluetooth.conf" "$WIREPLUMBER_FILE" \
     "$SERVICE_USER" "$SERVICE_GROUP" 644 || return 1
   WIREPLUMBER_CONFIG_CHANGED="$FILE_CHANGED"
   install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 755 "$PIPEWIRE_DIR"
   install_user_file_if_changed \
-    "$PROJECT_DIR/deploy/90-lumistripe-spotify.conf" "$SPOTIFY_PIPEWIRE_FILE" \
+    "$SCRIPT_DIR/90-lumistripe-spotify.conf" "$SPOTIFY_PIPEWIRE_FILE" \
     "$SERVICE_USER" "$SERVICE_GROUP" 644 || return 1
   if [[ "$FILE_CHANGED" == 1 ]]; then
     WIREPLUMBER_CONFIG_CHANGED=1
@@ -823,7 +859,7 @@ start_user_audio() {
 install_nginx() {
   local nginx_was_active=0
   install -d -m 755 /etc/nginx/sites-available /etc/nginx/sites-enabled
-  install_file_if_changed "$PROJECT_DIR/deploy/nginx/led-controller.conf" \
+  install_file_if_changed "$SCRIPT_DIR/nginx/led-controller.conf" \
     "$NGINX_AVAILABLE" root root 644 || return 1
   if [[ "$FILE_CHANGED" == 1 ]]; then
     NGINX_CONFIG_CHANGED=1
@@ -864,24 +900,8 @@ install_nginx() {
 }
 
 write_install_state() {
-  local state_file
-  local previous_default_removed=0
-  if [[ -f "$STATE_FILE" ]]; then
-    previous_default_removed="$(awk -F= '$1 == "nginx_default_removed" { print $2; exit }' "$STATE_FILE")"
-    [[ "$previous_default_removed" == 1 ]] && NGINX_DEFAULT_REMOVED=1
-  fi
-
-  install -d -o root -g root -m 755 "$STATE_DIR"
-  state_file="$(mktemp /tmp/lumistripe-install-state.XXXXXX)"
-  {
-    printf 'service_user=%s\n' "$SERVICE_USER"
-    printf 'nginx_default_removed=%s\n' "$NGINX_DEFAULT_REMOVED"
-  } > "$state_file"
-  install_file_if_changed "$state_file" "$STATE_FILE" root root 600 || {
-    rm -f -- "$state_file"
-    return 1
-  }
-  rm -f -- "$state_file"
+  write_lumistripe_install_state "$SERVICE_USER" "$PROJECT_DIR" "$DEPLOY_MODE" "$NGINX_DEFAULT_REMOVED"
+  NGINX_DEFAULT_REMOVED="$(awk -F= '$1 == "nginx_default_removed" { print $2; exit }' "$STATE_FILE")"
 }
 
 if [[ "$DEPLOY_MODE" != source ]]; then
@@ -895,7 +915,7 @@ if [[ "$DEPLOY_MODE" != source ]]; then
   fi
 fi
 
-lumi_phase_start "Package provisioning"
+lumi_phase_start "Package setup"
 install_system_packages
 if [[ "$EFFECTIVE_DEPLOY_MODE" == source ]]; then
   install_source_build_packages
@@ -907,7 +927,7 @@ elif [[ "$DEPLOY_MODE" != source ]]; then
   fi
 fi
 install_mkcert
-lumi_phase_end "Package provisioning"
+lumi_phase_end "Package setup"
 ensure_groups
 enable_spi
 lumi_phase_start "Configuration"
@@ -952,9 +972,9 @@ else
     if may_fallback_to_source "$DEPLOY_MODE" "$stage_status"; then
       echo "No compatible published release is available; auto mode is falling back to a local source build."
       EFFECTIVE_DEPLOY_MODE=source
-      lumi_phase_start "Package provisioning"
+      lumi_phase_start "Package setup"
       install_source_build_packages
-      lumi_phase_end "Package provisioning"
+      lumi_phase_end "Package setup"
       lumi_phase_start "Source build"
       install_toolchains
       install_project_dependencies
@@ -975,7 +995,7 @@ if [[ ! -e /var/lib/lumistripe/update/status.json ]]; then
     --project-dir "$PROJECT_DIR" \
     --state-file /var/lib/lumistripe/update/status.json
 fi
-lumi_phase_start "Optional Soloist handling"
+lumi_phase_start "Soloist"
 if spotify_environment_ready; then
   if [[ -n "$OFFLINE_COMMIT" ]]; then
     if LUMI_SOLOIST_OFFLINE=1 install_spotify_soloist \
@@ -984,7 +1004,7 @@ if spotify_environment_ready; then
     else
       soloist_status=$?
       if (( soloist_status != 10 )); then
-        lumi_phase_end "Optional Soloist handling"
+        lumi_phase_end "Soloist"
         echo "Offline installation with Spotify enabled requires a valid existing Soloist executable." >&2
         exit 1
       fi
@@ -1001,7 +1021,7 @@ if spotify_environment_ready; then
             "$SERVICE_HOME" "$SERVICE_USER" "$SERVICE_GROUP"; then
           echo "Warning: Spotify Soloist refresh failed; the valid installed executable was retained." >&2
         else
-          lumi_phase_end "Optional Soloist handling"
+          lumi_phase_end "Soloist"
           echo "Spotify Soloist could not be installed or refreshed." >&2
           exit 1
         fi
@@ -1011,7 +1031,7 @@ if spotify_environment_ready; then
 else
   echo "Spotify is disabled; skipping optional Soloist setup."
 fi
-lumi_phase_end "Optional Soloist handling"
+lumi_phase_end "Soloist"
 start_bluetooth
 start_user_audio
 
@@ -1019,9 +1039,11 @@ if [[ "${SYSTEMD_UNITS_CHANGED:-0}" == 1 ||
       "$WEB_SERVICE_FILE_CHANGED" == 1 || "$SPOTIFY_SERVICE_FILE_CHANGED" == 1 ]]; then
   systemctl daemon-reload
 fi
-lumi_phase_start "Service restart and health check"
+lumi_phase_start "Service health"
 start_deployment_services
-lumi_phase_end "Service restart and health check"
+lumi_phase_end "Service health"
+
+write_lumistripe_install_state "$SERVICE_USER" "$PROJECT_DIR" "$EFFECTIVE_DEPLOY_MODE"
 
 lumi_phase_report
 

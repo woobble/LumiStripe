@@ -20,40 +20,59 @@ architecture, protocols, and contribution guides.
 - A dashboard and simulator backed by the same Rust engine
 - A CLI that controls the engine over versioned local IPC
 
-## Raspberry Pi installation
+## Raspberry Pi installation and maintenance
 
-For Raspberry Pi OS Trixie, install from a reviewed checkout:
-
-```bash
-sudo ./deploy/install.sh
-```
-
-The installer builds the frontend and commit-matched Rust web, engine, CLI,
-and deployment-helper binaries. It configures the systemd services, SPI,
-Bluetooth, PipeWire, Nginx, and HTTPS. Set `LUMI_SERVICE_USER` and
-`LUMI_PROJECT_DIR` when the service account or checkout path differs. The
-installer prompts for a four-digit pairing code and an optional Spotify API
-key, or accepts them from the provisioning environment.
-
-Open `https://led.controller/` from a trusted network and pair from **Setup →
-Audio**. Install the generated mkcert CA on each client. See the
-[deployment guide](deploy/README.md) for trusted checkout setup, network/audio
-configuration, updates, recovery, and uninstallation.
-
-To update an installed checkout:
+Prepare and review a checkout in an administrator-controlled directory. The
+installer copies privileged deployment files from this checkout, so it must
+not be writable by the service account or by the account invoking `sudo`.
 
 ```bash
-sudo ./deploy/update.sh origin/main
+git clone https://github.com/woobble/LumiStripe.git
+cd LumiStripe
+# Review the checkout before installing it.
+sudo install -d -o root -g root -m 755 /opt/lumistripe-install
+sudo cp -a "$PWD"/. /opt/lumistripe-install/
+sudo chown -R root:root /opt/lumistripe-install
+sudo chmod -R go-w /opt/lumistripe-install
+sudo /opt/lumistripe-install/deploy/lumistripe-admin install --user pi
 ```
 
-The updater builds and activates a complete release for one Git commit. If the
-web service fails its health check, it attempts to restore the previous
-release. To remove the appliance while preserving the checkout, shared system
-packages, and service account:
+The installer prompts for the dashboard pairing code and optional Spotify
+configuration. It installs the administrative command at
+`/usr/local/sbin/lumistripe-admin`, then configures the Rust services, SPI,
+Bluetooth, PipeWire, Nginx, and HTTPS.
+
+Use the same command for routine maintenance:
 
 ```bash
-sudo ./deploy/uninstall.sh
+sudo lumistripe-admin update
+sudo lumistripe-admin status
+sudo lumistripe-admin update --mode source
+sudo lumistripe-admin update --refresh-soloist
 ```
+
+Repair from a fresh, reviewed trusted checkout. The source directory becomes
+the configured runtime project directory after repair:
+
+```bash
+sudo lumistripe-admin repair --source /opt/lumistripe-repair --user pi
+```
+
+To remove LumiStripe while preserving shared OS packages, toolchains, the
+service account, and the project checkout:
+
+```bash
+sudo lumistripe-admin uninstall
+```
+
+Existing installations need one trusted installer upgrade to install the new
+command and record their project directory. See the
+[deployment guide](deploy/README.md) for that migration, advanced update
+options, recovery, and hardware setup. The separate `lumistripe-cli` remains
+the playback and diagnostics command.
+
+After installation, open `https://led.controller/` from a trusted network and
+pair from **Setup → Audio**. Install the generated mkcert CA on each client.
 
 ## Rust CLI
 

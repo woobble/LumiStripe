@@ -4,6 +4,8 @@
 UPDATE_LIBEXEC_DIR=/usr/local/libexec/lumistripe/deploy
 NETWORK_LIBEXEC_DIR=/usr/local/libexec/lumistripe/network
 RELEASE_CACHE_DIR=/var/cache/lumistripe/releases
+LUMI_INSTALL_STATE_DIR=/var/lib/lumistripe
+LUMI_INSTALL_STATE_FILE="$LUMI_INSTALL_STATE_DIR/install-state"
 
 FILE_CHANGED=0
 
@@ -42,6 +44,114 @@ install_file_if_changed() {
   install -o "$owner" -g "$group" -m "$mode" -- \
     "$source_file" "$destination_file" || return 1
   FILE_CHANGED=1
+}
+
+# The installation state is plain data and is never sourced as shell. Write it
+# beside the previous file and rename it into place so readers see one complete
+# version. The project path is always canonicalized before it is persisted.
+write_lumistripe_install_state() {
+  local service_user="${1:-${SERVICE_USER:-}}"
+  local project_dir="${2:-${PROJECT_DIR:-}}"
+  local deployment_mode="${3:-}"
+  local requested_nginx_default_removed="${4:-}"
+  local canonical_project nginx_default_removed=0 previous_mode=
+  local temp_file directory metadata mode owner
+
+  [[ "$service_user" =~ ^[a-z_][a-z0-9_-]*[$]?$ && "$service_user" != root ]] || {
+    echo "Cannot save LumiStripe installation state with an invalid service user." >&2
+    return 1
+  }
+  canonical_project="$(canonical_project_directory "$project_dir")" || return 1
+  [[ -z "$deployment_mode" || "$deployment_mode" == binary ||
+     "$deployment_mode" == source || "$deployment_mode" == auto ]] || {
+    echo "Cannot save LumiStripe installation state with an invalid deployment mode." >&2
+    return 1
+  }
+  [[ -z "$requested_nginx_default_removed" || "$requested_nginx_default_removed" == 0 ||
+     "$requested_nginx_default_removed" == 1 ]] || {
+    echo "Cannot save LumiStripe installation state with invalid Nginx metadata." >&2
+    return 1
+  }
+
+  for directory in /var /var/lib; do
+    [[ -d "$directory" && ! -L "$directory" ]] || {
+      echo "Installation state parent is missing or unsafe: $directory" >&2
+      return 1
+    }
+    metadata="$(stat -c '%u:%a' -- "$directory")" || return 1
+    owner="${metadata%%:*}"
+    mode="${metadata#*:}"
+    [[ "$owner" == 0 ]] && (( (8#$mode & 0022) == 0 )) || {
+      echo "Installation state parent is not protected: $directory" >&2
+      return 1
+    }
+  done
+
+  if [[ -L "$LUMI_INSTALL_STATE_DIR" ]]; then
+    echo "Installation state directory must not be a symlink." >&2
+    return 1
+  fi
+  install -d -o root -g root -m 755 "$LUMI_INSTALL_STATE_DIR"
+  metadata="$(stat -c '%u:%a' -- "$LUMI_INSTALL_STATE_DIR")" || return 1
+  owner="${metadata%%:*}"
+  mode="${metadata#*:}"
+  [[ "$owner" == 0 && ! -L "$LUMI_INSTALL_STATE_DIR" ]] && (( (8#$mode & 0022) == 0 )) || {
+    echo "Installation state directory is not a protected root-owned directory." >&2
+    return 1
+  }
+
+  if [[ -e "$LUMI_INSTALL_STATE_FILE" || -L "$LUMI_INSTALL_STATE_FILE" ]]; then
+    [[ -f "$LUMI_INSTALL_STATE_FILE" && ! -L "$LUMI_INSTALL_STATE_FILE" ]] || {
+      echo "Installation state must be a regular, non-symlink file." >&2
+      return 1
+    }
+    metadata="$(stat -c '%u:%a' -- "$LUMI_INSTALL_STATE_FILE")" || return 1
+    owner="${metadata%%:*}"
+    mode="${metadata#*:}"
+    [[ "$owner" == 0 ]] && (( (8#$mode & 0077) == 0 )) || {
+      echo "Installation state must be root-owned with restricted permissions." >&2
+      return 1
+    }
+    nginx_default_removed="$(awk -F= '$1 == "nginx_default_removed" { print $2; count++ } END { if (count > 1) exit 2 }' "$LUMI_INSTALL_STATE_FILE")" || {
+      echo "Installation state contains duplicate Nginx metadata." >&2
+      return 1
+    }
+    [[ -z "$nginx_default_removed" || "$nginx_default_removed" == 0 || "$nginx_default_removed" == 1 ]] || {
+      echo "Installation state contains invalid Nginx metadata." >&2
+      return 1
+    }
+    previous_mode="$(awk -F= '$1 == "deployment_mode" { print $2; count++ } END { if (count > 1) exit 2 }' "$LUMI_INSTALL_STATE_FILE")" || {
+      echo "Installation state contains duplicate deployment-mode metadata." >&2
+      return 1
+    }
+    [[ -z "$previous_mode" || "$previous_mode" == binary || "$previous_mode" == source ||
+       "$previous_mode" == auto ]] || {
+      echo "Installation state contains invalid deployment-mode metadata." >&2
+      return 1
+    }
+  fi
+  [[ -n "$deployment_mode" ]] || deployment_mode="$previous_mode"
+  # This flag records an action that is reversed only by uninstall. An
+  # idempotent reinstall must not forget that the stock site was removed.
+  if [[ "$requested_nginx_default_removed" == 1 ]]; then
+    nginx_default_removed=1
+  fi
+
+  temp_file="$(mktemp "$LUMI_INSTALL_STATE_DIR/.install-state.XXXXXX")" || return 1
+  {
+    printf 'service_user=%s\n' "$service_user"
+    printf 'project_dir=%s\n' "$canonical_project"
+    [[ -z "$deployment_mode" ]] || printf 'deployment_mode=%s\n' "$deployment_mode"
+    printf 'nginx_default_removed=%s\n' "$nginx_default_removed"
+  } > "$temp_file" || { rm -f -- "$temp_file"; return 1; }
+  chown root:root -- "$temp_file" && chmod 600 -- "$temp_file" || {
+    rm -f -- "$temp_file"
+    return 1
+  }
+  mv -fT -- "$temp_file" "$LUMI_INSTALL_STATE_FILE" || {
+    rm -f -- "$temp_file"
+    return 1
+  }
 }
 
 install_user_file_if_changed() {
@@ -655,19 +765,21 @@ install_update_support() {
   install -d -o root -g root -m 755 "$NETWORK_LIBEXEC_DIR"
   rm -f -- "$NETWORK_LIBEXEC_DIR/lumistripe_network.py"
   for template in \
-    update.sh update-support.sh tls.sh soloist.sh package-provisioning.sh timing.sh \
+    install.sh update.sh uninstall.sh update-support.sh lumistripe-admin \
+    tls.sh soloist.sh package-provisioning.sh timing.sh \
     build-rust-backend.sh release_artifact.py install-github-cli.sh rust-toolchain.sh \
     lumistripe-network lumistripe-network.sudoers \
     lumistripe-spotify-service.sudoers \
     90-lumistripe-bluetooth.conf 90-lumistripe-spotify.conf \
     lumistripe-spotify.env.example \
+    lumistripe-web.env.example \
     lumistripe-web.service lumistripe-spotify.service \
     lumistripe-update-check.service lumistripe-update-check.timer \
     lumistripe-update.service lumistripe-update.sudoers \
     lumistripe-update-trigger; do
     local mode=644
     case "$template" in
-      update.sh|build-rust-backend.sh|release_artifact.py|install-github-cli.sh|lumistripe-network|lumistripe-update-trigger) mode=755 ;;
+      install.sh|update.sh|uninstall.sh|lumistripe-admin|build-rust-backend.sh|release_artifact.py|install-github-cli.sh|lumistripe-network|lumistripe-update-trigger) mode=755 ;;
     esac
     source_file="$SCRIPT_DIR/$template"
     destination_file="$UPDATE_LIBEXEC_DIR/$template"
@@ -696,6 +808,12 @@ install_update_support() {
 
   install_file_if_changed \
     "$UPDATE_LIBEXEC_DIR/lumistripe-network" /usr/local/sbin/lumistripe-network \
+    root root 755 || {
+      rm -rf -- "$rendered_dir"
+      return 1
+    }
+  install_file_if_changed \
+    "$UPDATE_LIBEXEC_DIR/lumistripe-admin" /usr/local/sbin/lumistripe-admin \
     root root 755 || {
       rm -rf -- "$rendered_dir"
       return 1

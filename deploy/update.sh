@@ -526,6 +526,7 @@ else
     +refs/heads/main:refs/remotes/lumistripe-upstream/main
   TARGET_COMMIT="$(git_user rev-parse --verify "${TARGET_REF}^{commit}")"
 fi
+printf 'Resolved target: %s\n' "${TARGET_COMMIT:0:12}"
 
 if [[ "$EFFECTIVE_DEPLOY_MODE" != source ]]; then
   if [[ -n "$OFFLINE_COMMIT" ]]; then
@@ -549,13 +550,13 @@ if [[ "$EFFECTIVE_DEPLOY_MODE" != source ]]; then
   fi
 fi
 
-lumi_phase_start "Package provisioning"
+lumi_phase_start "Package setup"
 install_audio_bridge_packages
 if [[ "$EFFECTIVE_DEPLOY_MODE" == source ]]; then
   install_source_build_packages
   require_source_toolchains
 fi
-lumi_phase_end "Package provisioning"
+lumi_phase_end "Package setup"
 
 git_user -c core.hooksPath=/dev/null switch --detach "$TARGET_COMMIT"
 UPDATE_SWITCHED=1
@@ -589,7 +590,7 @@ else
   fi
   install_rust_cli_command "$PROJECT_HOME"
 fi
-lumi_phase_start "Optional Soloist handling"
+lumi_phase_start "Soloist"
 if spotify_environment_ready; then
   if [[ -n "$OFFLINE_COMMIT" ]]; then
     if LUMI_SOLOIST_OFFLINE=1 install_spotify_soloist \
@@ -598,7 +599,7 @@ if spotify_environment_ready; then
     else
       soloist_status=$?
       if (( soloist_status != 10 )); then
-        lumi_phase_end "Optional Soloist handling"
+        lumi_phase_end "Soloist"
         echo "Offline update requires a valid existing Spotify Soloist executable." >&2
         false
       fi
@@ -615,7 +616,7 @@ if spotify_environment_ready; then
             "$PROJECT_HOME" "$PROJECT_USER" "$PROJECT_GROUP"; then
           echo "Warning: Spotify Soloist refresh failed; the valid installed executable was retained." >&2
         else
-          lumi_phase_end "Optional Soloist handling"
+          lumi_phase_end "Soloist"
           echo "Spotify Soloist could not be installed or refreshed; the LumiStripe update is being rolled back." >&2
           false
         fi
@@ -625,11 +626,11 @@ if spotify_environment_ready; then
 else
   echo "Spotify is disabled; skipping optional Soloist setup."
 fi
-lumi_phase_end "Optional Soloist handling"
+lumi_phase_end "Soloist"
 lumi_phase_start "Configuration"
 refresh_deployment_files
 lumi_phase_end "Configuration"
-lumi_phase_start "Service restart and health check"
+lumi_phase_start "Service health"
 if spotify_environment_ready; then
   spotify_restart_required=0
   if [[ "$SOLOIST_BINARY_CHANGED" == 1 || "$SPOTIFY_SERVICE_FILE_CHANGED" == 1 ||
@@ -649,7 +650,8 @@ fi
 systemctl is-active --quiet lumistripe-web.service
 
 if wait_for_web_service_health; then
-  lumi_phase_end "Service restart and health check"
+  write_lumistripe_install_state "$PROJECT_USER" "$PROJECT_DIR" "$EFFECTIVE_DEPLOY_MODE"
+  lumi_phase_end "Service health"
   lumi_phase_report
   echo "LumiStripe updated to $(git_user rev-parse --short HEAD)."
   ACTIVE_COMMIT="$(git_user rev-parse --verify HEAD)"
@@ -661,6 +663,6 @@ if wait_for_web_service_health; then
   trap - ERR
   exit 0
 fi
-lumi_phase_end "Service restart and health check"
+lumi_phase_end "Service health"
 echo "Service did not become healthy in time." >&2
 false
