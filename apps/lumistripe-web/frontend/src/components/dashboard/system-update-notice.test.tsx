@@ -68,4 +68,18 @@ describe("SystemUpdateNotice", () => {
     expect(await screen.findByText("CI is building and verifying the release for this commit.")).toBeInTheDocument()
     expect(screen.queryByRole("button", { name: "Install update" })).not.toBeInTheDocument()
   })
+
+  it("explains the supported binary update platforms", async () => {
+    vi.spyOn(dashboardApi, "getUpdateStatus").mockResolvedValue({
+      ...availableUpdate,
+      release_status: "unsupported",
+    })
+    vi.spyOn(dashboardApi, "checkForUpdates").mockResolvedValue(availableUpdate)
+    vi.spyOn(navigator, "onLine", "get").mockReturnValue(false)
+
+    render(<SystemUpdateNotice />)
+
+    expect(await screen.findByText("Binary updates require ARM64 Ubuntu or Debian-family Trixie.")).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Install update" })).not.toBeInTheDocument()
+  })
 })

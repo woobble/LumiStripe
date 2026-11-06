@@ -718,12 +718,16 @@ impl SystemUpdateService {
 }
 
 fn binary_target_supported() -> bool {
-    if !cfg!(target_arch = "aarch64") {
-        return false;
-    }
     let Ok(contents) = fs::read_to_string("/etc/os-release") else {
         return false;
     };
+    binary_target_supported_for(std::env::consts::ARCH, &contents)
+}
+
+fn binary_target_supported_for(architecture: &str, contents: &str) -> bool {
+    if architecture != "aarch64" {
+        return false;
+    }
     let mut id = "";
     let mut codename = "";
     for line in contents.lines() {
@@ -733,7 +737,7 @@ fn binary_target_supported() -> bool {
             codename = value.trim_matches(['"', '\'']);
         }
     }
-    codename == "trixie" && matches!(id, "debian" | "raspbian")
+    id == "ubuntu" || (codename == "trixie" && matches!(id, "debian" | "raspbian"))
 }
 
 fn try_file_lock(file: &File, operation: libc::c_int) -> io::Result<bool> {
@@ -759,7 +763,7 @@ fn try_file_lock(file: &File, operation: libc::c_int) -> io::Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::{InstallState, SystemUpdateService, UpdateStatus};
+    use super::{InstallState, SystemUpdateService, UpdateStatus, binary_target_supported_for};
     use serde_json::json;
     use std::fs;
     use std::path::Path;
@@ -781,6 +785,34 @@ mod tests {
             install_finished_at: None,
             install_error: None,
         }
+    }
+
+    #[test]
+    fn binary_updates_support_arm64_ubuntu_and_debian_trixie_only() {
+        assert!(binary_target_supported_for(
+            "aarch64",
+            "ID=ubuntu\nVERSION_CODENAME=resolute\n"
+        ));
+        assert!(binary_target_supported_for(
+            "aarch64",
+            "ID=raspbian\nVERSION_CODENAME=trixie\n"
+        ));
+        assert!(binary_target_supported_for(
+            "aarch64",
+            "ID=debian\nVERSION_CODENAME=trixie\n"
+        ));
+        assert!(!binary_target_supported_for(
+            "aarch64",
+            "ID=debian\nVERSION_CODENAME=bookworm\n"
+        ));
+        assert!(!binary_target_supported_for(
+            "aarch64",
+            "ID=fedora\nVERSION_CODENAME=resolute\n"
+        ));
+        assert!(!binary_target_supported_for(
+            "armv7l",
+            "ID=ubuntu\nVERSION_CODENAME=resolute\n"
+        ));
     }
 
     fn write_status(path: &Path, status: &UpdateStatus) {

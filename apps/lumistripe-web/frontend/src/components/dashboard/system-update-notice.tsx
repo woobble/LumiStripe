@@ -128,7 +128,7 @@ export function SystemUpdateNotice() {
       building: "CI is building and verifying the release for this commit.",
       failed: "The release build or verification failed. Check again after the next successful deployment.",
       unavailable: "No compatible immutable binary release was published for this commit.",
-      unsupported: "Binary updates require 64-bit Debian or Raspberry Pi OS Trixie.",
+      unsupported: "Binary updates require ARM64 Ubuntu or Debian-family Trixie.",
     }[status.release_status]
     return (
       <section className="mb-4 flex items-start gap-3 rounded-2xl border border-amber-300/20 bg-amber-400/10 px-4 py-3" role="status">
