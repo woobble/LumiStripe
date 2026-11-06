@@ -6,33 +6,47 @@ existing dashboard status and control API and send audio to the dedicated
 existing speaker routing and music-reactive audio path; the DSP and LED
 renderer do not change.
 
-## Select a provider
+## Default and provider management
 
-Set `LUMI_SPOTIFY_BACKEND` in
-`/etc/lumistripe/lumistripe-web.env`, or choose it during an administrator
-install/repair:
+Fresh installations select and persist `librespot`. Prepare and review the
+checkout in an administrator-controlled directory before installing:
 
 ```bash
-sudo lumistripe-admin install --spotify-backend librespot
-sudo lumistripe-admin install --spotify-backend soloist
-sudo lumistripe-admin install --spotify-backend disabled
+sudo ./deploy/lumistripe-admin install --user pi
+sudo lumistripe-admin spotify status
+sudo lumistripe-admin spotify use librespot
+sudo lumistripe-admin spotify use soloist
+sudo lumistripe-admin spotify disable
 ```
 
-For repair from a fresh trusted checkout, add the same option to
-`lumistripe-admin repair --source PATH`. Leaving the option out preserves the
-saved setting. Older installations without the setting continue to select
-Soloist. Selecting `librespot` or `disabled` stops the Soloist service but
-retains its API key file, executable, and data for a later switch back.
+The first command must run from a reviewed trusted checkout. The installer
+copies its deployment files into the root-owned installed snapshot; later
+provider commands use that snapshot. `spotify status` is read-only. A provider
+switch displays the source and target, explains the authentication difference,
+checks prerequisites, and asks before changing the setting. It serializes with
+updates, applies the environment change atomically, checks service health, and
+restores the previous setting and service state if the switch fails.
+
+Updates never change the selected provider. Install and repair without an
+explicit provider preserve the saved value. A legacy installation whose
+configuration has no `LUMI_SPOTIFY_BACKEND` remains on Soloist; the installer
+uses trusted configuration and installation state to distinguish it from a
+fresh install. Existing explicit `librespot`, `soloist`, and `disabled`
+selections are retained. No credentials are imported, rewritten, or deleted
+during a switch.
 
 | Backend | Runtime | Setup |
 | --- | --- | --- |
-| `librespot` | In-process Rust Spotify Connect receiver | No Soloist API key or service. Pair from Spotify on the same local network. |
+| `librespot` | In-process Rust Spotify Connect receiver | Default for new installations. No Soloist API key or service. Pair from Spotify on the same local network. |
 | `soloist` | Existing separate `lumistripe-spotify.service` | Requires the Soloist API key in its protected environment file. |
 | `disabled` | No Spotify provider | Spotify controls report unavailable. |
 
-The installer only asks for a Soloist key when `soloist` is selected. The
-native receiver can be selected on a fresh install without downloading or
-starting Soloist.
+The native receiver starts inside the Rust web process and does not download
+Soloist or prompt for its API key. Selecting Soloist requires the existing
+protected API-key file and a valid installed executable. If either is missing,
+the provider command reports the missing prerequisite and leaves the current
+configuration unchanged. The Soloist service and credentials remain available
+for an explicit return to that provider.
 
 ## Native pairing and saved state
 
@@ -109,8 +123,10 @@ can change, and Spotify can change client or service behavior. Spotify's
 published [Developer Terms](https://developer.spotify.com/terms) restrict
 reverse engineering and certain derivative uses. How those terms apply to a
 particular librespot deployment requires an operator's own policy and legal
-review. LumiStripe therefore keeps librespot opt-in and preserves Soloist as a
-migration option; it does not make the native backend the default.
+review. LumiStripe uses librespot as the default for new installations and
+preserves Soloist for existing installations and explicit migration. Spotify's
+behavior can change independently of LumiStripe, and native librespot does not
+guarantee feature parity with Soloist.
 
 The librespot project documents Premium as a requirement for Connect playback
 ([supported features](https://github.com/librespot-org/librespot#supported-features)).
@@ -120,21 +136,26 @@ general queue editor. Soloist and librespot use different authentication and
 credential formats; switching does not import or delete the other provider's
 credentials.
 
-## Manual acceptance after installation
+## Manual acceptance checklist
 
 Automated software tests use synthetic state and mock data. They do not verify
 Spotify authentication, local network discovery, playback, account policy, or
-physical audio routing. After selecting `librespot` on a real appliance, verify
-that:
+physical audio routing. Use this checklist separately on a real appliance; it
+is not part of the automated deployment checks:
 
-1. LumiStripe appears in Spotify's device list and can be selected.
-2. Playback, dashboard controls, track metadata, and speaker output work.
-3. The Audio page reports direct PCM during playback, and the Spotify monitor
-   remains available for fallback routing.
-4. A service restart restores the session without creating a duplicate device.
-5. A network interruption recovers, and a renamed device reappears with its new
-   name.
-6. Re-pairing works after cached credentials are revoked or removed.
+1. Spotify Connect discovers LumiStripe on the local network.
+2. Spotify authentication and pairing complete successfully.
+3. Playback starts and stops from Spotify and the dashboard.
+4. Audio reaches the selected speaker output.
+5. Dashboard controls and track status follow the current playback session.
+6. The Audio page reports direct PCM analysis while Spotify is playing.
+7. Audio-to-LED synchronization remains correct during playback.
+8. The receiver reconnects after a network interruption.
+9. A service restart restores the session without creating a duplicate device.
+10. Switching between providers stops the previous receiver before starting
+    the next one.
+11. Switching back to Soloist works with its existing API key, executable, and
+    saved data.
 
 Keep the dashboard paired and restricted to trusted clients during setup. The
 Connect receiver uses its required local discovery protocol; it does not add a

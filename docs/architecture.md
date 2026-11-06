@@ -76,6 +76,13 @@ and application data remain outside the release tree.
 
 ## Audio and hardware
 
+The deployment layer persists `LUMI_SPOTIFY_BACKEND` in the protected web
+environment file. Fresh installs select the embedded librespot receiver;
+existing Soloist, librespot, and disabled selections remain in effect. Legacy
+hardware installations with no backend setting retain the Rust runtime's
+Soloist compatibility fallback. The administrative Spotify command changes
+providers explicitly and retains each provider's credential store.
+
 The audio crate owns device capture, the bounded decoded-PCM ingress, DSP, and
 telemetry. The optional native Spotify Connect provider taps decoded PCM while
 continuing playback to the dedicated Spotify PipeWire sink. The audio worker

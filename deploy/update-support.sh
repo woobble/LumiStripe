@@ -678,23 +678,51 @@ read_spotify_backend() {
         line = substr(line, 2, length(line) - 2)
       }
       backend = line
+      count++
     }
-    END { print backend }
+    END {
+      if (count > 1) exit 2
+      print backend
+    }
   ' "$env_file"
 }
 
 resolve_spotify_backend() {
   local requested="${1:-}"
   local env_file="${2:-/etc/lumistripe/lumistripe-web.env}"
+  local default_backend="${3:-soloist}"
   local configured="" selected
+  case "$default_backend" in
+    librespot|soloist|disabled) ;;
+    *) echo "Unsupported Spotify backend default: $default_backend." >&2; return 1 ;;
+  esac
   if [[ -r "$env_file" ]]; then
     configured="$(read_spotify_backend "$env_file")" || return 1
   fi
-  selected="${requested:-${configured:-soloist}}"
+  selected="${requested:-${configured:-$default_backend}}"
   case "$selected" in
     librespot|soloist|disabled) printf '%s\n' "$selected" ;;
     *) echo "Unsupported LUMI_SPOTIFY_BACKEND: $selected (expected librespot, soloist, or disabled)." >&2; return 1 ;;
   esac
+}
+
+spotify_web_binary_supports_backend() {
+  local binary="$1" backend="$2" run_user="${3:-}" help_text
+  case "$backend" in
+    librespot|soloist|disabled) ;;
+    *) return 1 ;;
+  esac
+  [[ -x "$binary" && ! -L "$binary" ]] || return 1
+  command -v timeout >/dev/null 2>&1 || return 1
+  if [[ -z "$run_user" ]]; then
+    [[ "$EUID" != 0 ]] || return 1
+    run_user="$(id -un)"
+  fi
+  command -v runuser >/dev/null 2>&1 || return 1
+  help_text="$(runuser -u "$run_user" -- env -u LUMI_SPOTIFY_BACKEND \
+    timeout 10 "$binary" --help 2>/dev/null)" || return 1
+  [[ "$help_text" == *"--spotify-backend"* ]] || return 1
+  grep -Eq "possible values:.*(^|[[:space:],])${backend}([[:space:],]|$)" <<< "$help_text"
 }
 
 write_spotify_backend_setting() {
@@ -849,6 +877,7 @@ install_update_support() {
   rm -f -- "$NETWORK_LIBEXEC_DIR/lumistripe_network.py"
   for template in \
     install.sh update.sh uninstall.sh update-support.sh lumistripe-admin \
+    spotify-provider.sh \
     tls.sh soloist.sh package-provisioning.sh timing.sh \
     build-rust-backend.sh release_artifact.py install-github-cli.sh rust-toolchain.sh \
     lumistripe-network lumistripe-network.sudoers \
@@ -862,7 +891,7 @@ install_update_support() {
     lumistripe-update-trigger; do
     local mode=644
     case "$template" in
-      install.sh|update.sh|uninstall.sh|lumistripe-admin|build-rust-backend.sh|release_artifact.py|install-github-cli.sh|lumistripe-network|lumistripe-update-trigger) mode=755 ;;
+      install.sh|update.sh|uninstall.sh|lumistripe-admin|spotify-provider.sh|build-rust-backend.sh|release_artifact.py|install-github-cli.sh|lumistripe-network|lumistripe-update-trigger) mode=755 ;;
     esac
     source_file="$SCRIPT_DIR/$template"
     destination_file="$UPDATE_LIBEXEC_DIR/$template"
@@ -901,22 +930,24 @@ install_update_support() {
       rm -rf -- "$rendered_dir"
       return 1
     }
-  sed \
-    -e "s|@LUMI_SERVICE_USER@|$user_replacement|g" \
-    "$UPDATE_LIBEXEC_DIR/lumistripe-spotify-service.sudoers" \
-    > "$rendered_dir/lumistripe-spotify-service.sudoers"
-  chmod 440 "$rendered_dir/lumistripe-spotify-service.sudoers"
-  if ! visudo -cf "$rendered_dir/lumistripe-spotify-service.sudoers" >/dev/null; then
-    rm -rf -- "$rendered_dir"
-    echo "The Spotify service restart permission did not pass visudo validation." >&2
-    return 1
-  fi
-  install_file_if_changed \
-    "$rendered_dir/lumistripe-spotify-service.sudoers" \
-    /etc/sudoers.d/lumistripe-spotify-service root root 440 || {
+  if [[ "${SELECTED_SPOTIFY_BACKEND:-soloist}" == soloist ]]; then
+    sed \
+      -e "s|@LUMI_SERVICE_USER@|$user_replacement|g" \
+      "$UPDATE_LIBEXEC_DIR/lumistripe-spotify-service.sudoers" \
+      > "$rendered_dir/lumistripe-spotify-service.sudoers"
+    chmod 440 "$rendered_dir/lumistripe-spotify-service.sudoers"
+    if ! visudo -cf "$rendered_dir/lumistripe-spotify-service.sudoers" >/dev/null; then
       rm -rf -- "$rendered_dir"
+      echo "The Spotify service restart permission did not pass visudo validation." >&2
       return 1
-    }
+    fi
+    install_file_if_changed \
+      "$rendered_dir/lumistripe-spotify-service.sudoers" \
+      /etc/sudoers.d/lumistripe-spotify-service root root 440 || {
+        rm -rf -- "$rendered_dir"
+        return 1
+      }
+  fi
   sed \
     -e "s|@LUMI_SERVICE_USER@|$user_replacement|g" \
     "$UPDATE_LIBEXEC_DIR/lumistripe-network.sudoers" \

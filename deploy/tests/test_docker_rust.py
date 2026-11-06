@@ -117,7 +117,7 @@ def test_docker_development_image_builds_rust_binaries_without_python() -> None:
     assert "curl --fail" in compose
     assert 'profiles: ["spotify"]' in compose
     assert "target: runtime-soloist" in compose
-    assert "lumi_spotify_backend: ${lumi_spotify_backend:-soloist}" in compose
+    assert "lumi_spotify_backend: ${lumi_spotify_backend:-librespot}" in compose
     assert "depends_on:" not in compose
     assert "/var/lib/lumistripe/settings.json" in compose
     assert "--engine-binary" not in compose

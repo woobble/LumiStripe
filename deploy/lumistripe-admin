@@ -10,6 +10,7 @@ export PATH
 ADMIN_STATE_DIR=/var/lib/lumistripe
 ADMIN_STATE_FILE="$ADMIN_STATE_DIR/install-state"
 ADMIN_UPDATE_STATUS=/var/lib/lumistripe/update/status.json
+ADMIN_WEB_ENV=/etc/lumistripe/lumistripe-web.env
 ADMIN_WEB_UNIT=/etc/systemd/system/lumistripe-web.service
 ADMIN_SPOTIFY_ENV=/etc/lumistripe/lumistripe-spotify.env
 ADMIN_SNAPSHOT_DIR=/usr/local/libexec/lumistripe/deploy
@@ -22,6 +23,8 @@ ADMIN_PROJECT_OPTION=
 ADMIN_SOURCE_OPTION=
 ADMIN_MODE=binary
 ADMIN_SPOTIFY_BACKEND=
+ADMIN_SPOTIFY_ACTION=
+ADMIN_SPOTIFY_TARGET=
 ADMIN_OFFLINE=
 ADMIN_REFRESH_SOLOIST=0
 ADMIN_ASSUME_YES=0
@@ -52,6 +55,7 @@ Commands:
   install    Install or repeat setup from trusted deployment tooling
   update     Update the installed release
   status     Show read-only installation and service status
+  spotify    Show or switch the Spotify provider
   repair     Reapply installer setup from a trusted checkout
   uninstall  Remove LumiStripe with confirmation
   help       Show command help
@@ -74,10 +78,12 @@ Install from an administrator-controlled LumiStripe checkout. On first
 installation, invoke this script from that checkout; subsequent installs use
 the installed root-owned deployment snapshot. First install defaults to binary
 mode; later installs preserve the saved mode unless --mode is supplied.
-Pairing and optional Spotify credentials remain interactive or environment-file
-configured.
-Use --spotify-backend to select the provider; existing installations keep
-their saved selection when this option is omitted.
+The dashboard pairing code is interactive or configured with LUMI_PAIRING_CODE.
+Soloist credentials are requested only when the legacy provider is explicitly
+selected during a fresh installation.
+Use --spotify-backend only to select a provider during a fresh installation.
+Existing installations keep their saved selection; change it with the spotify
+command.
 EOF
       ;;
     update)
@@ -103,12 +109,25 @@ EOF
 Usage: sudo lumistripe-admin repair --source PATH [--user USER]
                                     [--mode binary|auto|source]
                                     [--offline COMMIT] [--refresh-soloist]
-                                    [--spotify-backend librespot|soloist|disabled]
 
 Reapplies the existing installer setup from an administrator-controlled
 checkout. The checkout must not be writable by the service account or invoking
 user. It becomes the configured runtime project directory after repair. The
 saved deployment mode is preserved unless --mode is supplied.
+EOF
+      ;;
+    spotify)
+      cat <<'EOF'
+Usage: sudo lumistripe-admin spotify COMMAND
+
+Commands:
+  status          Show provider configuration and service state without changes
+  use librespot   Switch to native Spotify Connect pairing
+  use soloist     Switch to Soloist using its existing protected API key
+  disable         Stop Spotify providers while retaining credentials and caches
+
+Provider changes show the current and target provider, explain authentication,
+and ask for confirmation. They use the root-owned installed deployment snapshot.
 EOF
       ;;
     uninstall)
@@ -153,7 +172,7 @@ admin_parse_arguments() {
   ADMIN_SEEN_OPTIONS=()
 
   case "$command_name" in
-    install|update|status|repair|uninstall|help) ;;
+    install|update|status|repair|uninstall|spotify|help) ;;
     --help|-h)
       command_name=help
       ;;
@@ -170,6 +189,8 @@ admin_parse_arguments() {
   ADMIN_SOURCE_OPTION=
   ADMIN_MODE=binary
   ADMIN_SPOTIFY_BACKEND=
+  ADMIN_SPOTIFY_ACTION=
+  ADMIN_SPOTIFY_TARGET=
   ADMIN_OFFLINE=
   ADMIN_REFRESH_SOLOIST=0
   ADMIN_ASSUME_YES=0
@@ -181,9 +202,38 @@ admin_parse_arguments() {
     fi
     ADMIN_HELP_TARGET="${1:-help}"
     case "$ADMIN_HELP_TARGET" in
-      install|update|status|repair|uninstall|help) return 0 ;;
+      install|update|status|repair|uninstall|spotify|help) return 0 ;;
       *) admin_error "unknown command for help: $ADMIN_HELP_TARGET"; return 2 ;;
     esac
+  fi
+
+  if [[ "$ADMIN_COMMAND" == spotify ]]; then
+    if (($# == 1)) && [[ "$1" == --help || "$1" == -h ]]; then
+      ADMIN_HELP=1
+      ADMIN_HELP_TARGET=spotify
+      return 0
+    fi
+    ADMIN_SPOTIFY_ACTION="${1:-}"
+    [[ -n "$ADMIN_SPOTIFY_ACTION" ]] || {
+      admin_error "spotify requires status, use, or disable"
+      return 2
+    }
+    shift
+    case "$ADMIN_SPOTIFY_ACTION" in
+      status|disable)
+        (($# == 0)) || { admin_error "spotify $ADMIN_SPOTIFY_ACTION accepts no arguments"; return 2; }
+        ;;
+      use)
+        (($# == 1)) || { admin_error "spotify use requires librespot or soloist"; return 2; }
+        ADMIN_SPOTIFY_TARGET="$1"
+        [[ "$ADMIN_SPOTIFY_TARGET" == librespot || "$ADMIN_SPOTIFY_TARGET" == soloist ]] || {
+          admin_error "spotify use accepts only librespot or soloist"
+          return 2
+        }
+        ;;
+      *) admin_error "unknown spotify command: $ADMIN_SPOTIFY_ACTION"; return 2 ;;
+    esac
+    return 0
   fi
 
   while (($#)); do
@@ -278,7 +328,7 @@ admin_parse_arguments() {
     update)
       [[ -z "$ADMIN_SOURCE_OPTION" && "$ADMIN_ASSUME_YES" == 0 &&
          -z "$ADMIN_SPOTIFY_BACKEND" ]] || {
-        admin_error "update accepts provider changes during install or repair; use install --spotify-backend"
+        admin_error "update cannot change Spotify providers; use lumistripe-admin spotify"
         return 2
       }
       ;;
@@ -293,6 +343,10 @@ admin_parse_arguments() {
       ;;
     repair)
       [[ -n "$ADMIN_SOURCE_OPTION" ]] || { admin_error "repair requires --source PATH"; return 2; }
+      [[ -z "$ADMIN_SPOTIFY_BACKEND" ]] || {
+        admin_error "provider changes must use lumistripe-admin spotify; repair preserves the selected provider"
+        return 2
+      }
       [[ "$ADMIN_ASSUME_YES" == 0 ]] || { admin_error "--yes is not supported by repair"; return 2; }
       ;;
     uninstall)
@@ -474,7 +528,9 @@ admin_resolve_metadata() {
   admin_read_install_state || return 1
   admin_read_unit_configuration || return 1
   ADMIN_INSTALLATION_DETECTED=0
-  [[ "$ADMIN_STATE_PRESENT" == 1 || -e "$ADMIN_WEB_UNIT" ]] && ADMIN_INSTALLATION_DETECTED=1
+  [[ "$ADMIN_STATE_PRESENT" == 1 || -e "$ADMIN_WEB_UNIT" || -L "$ADMIN_WEB_UNIT" ||
+     -e "$ADMIN_WEB_ENV" || -L "$ADMIN_WEB_ENV" ||
+     -e "$ADMIN_SPOTIFY_ENV" || -L "$ADMIN_SPOTIFY_ENV" ]] && ADMIN_INSTALLATION_DETECTED=1
 
   ADMIN_SERVICE_USER="${ADMIN_USER_OPTION:-${ADMIN_STATE_SERVICE_USER:-${ADMIN_UNIT_SERVICE_USER:-}}}"
   if [[ -z "$ADMIN_SERVICE_USER" && "$ADMIN_ORIGIN" == checkout && "$ADMIN_COMMAND" == install ]]; then
@@ -775,11 +831,28 @@ admin_service_state() {
   fi
 }
 
-admin_spotify_configured() {
-  local key
-  [[ -f "$ADMIN_SPOTIFY_ENV" && ! -L "$ADMIN_SPOTIFY_ENV" ]] || return 1
-  key="$(awk -F= '$1 == "LUMI_SPOTIFY_API_KEY" { print substr($0, index($0, "=") + 1); exit }' "$ADMIN_SPOTIFY_ENV" 2>/dev/null)"
-  [[ -n "$key" && "$key" != REPLACE_WITH_* ]]
+admin_print_spotify_provider_status() {
+  local script="$ADMIN_SNAPSHOT_DIR/spotify-provider.sh"
+  if ! admin_safe_system_file "$script" 0 || [[ ! -x "$script" ]]; then
+    printf 'Spotify provider: Unavailable (provider management is not installed)\n'
+    printf 'Spotify configured: Unavailable\n'
+    printf 'Spotify enabled: Unknown\n'
+    printf 'Spotify process: Unavailable\n'
+    printf 'Spotify service: Unavailable\n'
+    printf 'Spotify pairing: Unknown\n'
+    printf 'Spotify audio transport: Runtime telemetry unavailable to read-only status\n'
+    return 0
+  fi
+  admin_clear_unapproved_environment
+  if ! /bin/bash "$script" status 2>/dev/null; then
+    printf 'Spotify provider: Unavailable (trusted provider status could not be read)\n'
+    printf 'Spotify configured: Unavailable\n'
+    printf 'Spotify enabled: Unknown\n'
+    printf 'Spotify process: Unavailable\n'
+    printf 'Spotify service: Unavailable\n'
+    printf 'Spotify pairing: Unknown\n'
+    printf 'Spotify audio transport: Runtime telemetry unavailable to read-only status\n'
+  fi
 }
 
 admin_print_status() {
@@ -818,11 +891,7 @@ admin_print_status() {
   fi
   printf 'Deployment mode: %s\n' "${ADMIN_STATE_DEPLOYMENT_MODE:-Unknown}"
   printf 'Web service: %s\n' "$(admin_service_state lumistripe-web.service)"
-  if admin_spotify_configured; then
-    printf 'Spotify service: %s\n' "$(admin_service_state lumistripe-spotify.service)"
-  else
-    printf 'Spotify service: Not configured\n'
-  fi
+  admin_print_spotify_provider_status
   if [[ -e /etc/nginx/sites-available/led-controller && -s /etc/nginx/certs/led.controller.pem ]]; then
     printf 'Dashboard: https://led.controller/\n'
   else
@@ -890,6 +959,10 @@ admin_finish_operation() {
 
 admin_run_install() {
   local script target="$ADMIN_PROJECT_DIR"
+  if [[ "$ADMIN_INSTALLATION_DETECTED" == 1 && -n "$ADMIN_SPOTIFY_BACKEND" ]]; then
+    admin_error "provider changes on an existing installation must use lumistripe-admin spotify"
+    return 1
+  fi
   admin_check_platform || return 1
   admin_check_user_exists || return 1
   if [[ "$ADMIN_ORIGIN" == installed ]]; then
@@ -931,8 +1004,30 @@ admin_run_update() {
   fi
 }
 
+admin_run_spotify() {
+  local script="$ADMIN_SNAPSHOT_DIR/spotify-provider.sh"
+  local -a arguments
+  admin_require_installed || return 1
+  admin_require_project || return 1
+  admin_check_user_exists || return 1
+  admin_safe_system_file "$script" 0 && [[ -x "$script" ]] || {
+    admin_error "root-owned Spotify provider manager is missing or unsafe"
+    return 1
+  }
+  admin_clear_unapproved_environment
+  arguments=("$ADMIN_SPOTIFY_ACTION")
+  if [[ "$ADMIN_SPOTIFY_ACTION" == use ]]; then
+    arguments+=("$ADMIN_SPOTIFY_TARGET")
+  fi
+  admin_run_script "$script" "${arguments[@]}"
+}
+
 admin_run_repair() {
   local target="$ADMIN_SOURCE_OPTION" script
+  [[ -z "$ADMIN_SPOTIFY_BACKEND" ]] || {
+    admin_error "provider changes must use lumistripe-admin spotify; repair does not switch Spotify providers"
+    return 1
+  }
   admin_require_installed || return 1
   target="$(admin_canonical_project_directory "$target")" || return 1
   if [[ -n "$ADMIN_PROJECT_OPTION" ]]; then
@@ -969,8 +1064,8 @@ admin_run_uninstall() {
   printf 'LumiStripe Uninstall\n\n'
   printf 'Installation: %s\n' "$ADMIN_PROJECT_DIR"
   printf 'Service user: %s\n' "$ADMIN_SERVICE_USER"
-  printf 'Will remove: LumiStripe services, helpers, configuration, generated dependencies, dashboard TLS files, and default Soloist data.\n'
-  printf 'Will preserve: shared OS packages, the service account, toolchains, project checkout, mkcert CA, backups, and custom Soloist paths.\n\n'
+  printf 'Will remove: LumiStripe services, helpers, non-secret configuration, generated dependencies, and dashboard TLS files.\n'
+  printf 'Will preserve: Spotify credentials and caches for both providers, shared OS packages, the service account, toolchains, checkout, mkcert CA, and backups.\n\n'
   admin_clear_unapproved_environment
   if [[ "$ADMIN_ASSUME_YES" == 1 ]]; then
     admin_run_script "$script" --yes
@@ -1021,6 +1116,10 @@ admin_main() {
     status)
       admin_require_installed_entrypoint || return 1
       admin_print_status
+      ;;
+    spotify)
+      admin_require_installed_entrypoint || return 1
+      admin_run_spotify
       ;;
     repair)
       admin_require_installed_entrypoint || return 1

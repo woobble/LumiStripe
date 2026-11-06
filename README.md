@@ -34,13 +34,34 @@ sudo install -d -o root -g root -m 755 /opt/lumistripe-install
 sudo cp -a "$PWD"/. /opt/lumistripe-install/
 sudo chown -R root:root /opt/lumistripe-install
 sudo chmod -R go-w /opt/lumistripe-install
-sudo /opt/lumistripe-install/deploy/lumistripe-admin install --user pi
+cd /opt/lumistripe-install
+sudo ./deploy/lumistripe-admin install --user pi
 ```
 
-The installer prompts for the dashboard pairing code and optional Spotify
-configuration. It installs the administrative command at
+New installations use the native librespot Spotify Connect receiver and do not
+ask for a Soloist API key. Pair LumiStripe from Spotify on the same local
+network; Spotify Premium is generally required for Connect playback. The
+installer prompts for the dashboard pairing code and installs the
+administrative command at
 `/usr/local/sbin/lumistripe-admin`, then configures the Rust services, SPI,
 Bluetooth, PipeWire, Nginx, and HTTPS.
+
+Existing installations keep their selected provider. Legacy installations
+without `LUMI_SPOTIFY_BACKEND` remain on Soloist, and ordinary updates never
+switch providers. Check or change the provider explicitly:
+
+```bash
+sudo lumistripe-admin spotify status
+sudo lumistripe-admin spotify use librespot
+sudo lumistripe-admin spotify use soloist
+sudo lumistripe-admin spotify disable
+```
+
+Switching providers does not migrate or delete credentials. Librespot uses
+local Spotify Connect pairing and keeps its device identity and credential
+cache. Soloist requires its existing protected API key. See the
+[Spotify provider guide](docs/spotify.md) for migration details, limitations,
+and the separate manual acceptance checklist.
 
 Use the same command for routine maintenance:
 

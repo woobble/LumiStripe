@@ -34,6 +34,8 @@ EFFECTIVE_DEPLOY_MODE="$DEPLOY_MODE"
 DEPLOY_RELEASE_COMMIT=
 OFFLINE_COMMIT="${LUMI_OFFLINE_COMMIT:-}"
 WEB_ENV_CHANGED=0
+LEGACY_SPOTIFY_INSTALLATION=0
+INSTALL_DEFAULT_SPOTIFY_BACKEND=librespot
 SPOTIFY_ENV_CHANGED=0
 WEB_SERVICE_FILE_CHANGED=0
 SPOTIFY_SERVICE_FILE_CHANGED=0
@@ -56,6 +58,72 @@ if [[ -n "$OFFLINE_COMMIT" ]]; then
     exit 2
   }
 fi
+
+trusted_root_directory() {
+  local directory="$1" metadata mode owner
+  [[ -d "$directory" && ! -L "$directory" ]] || return 1
+  metadata="$(stat -c '%u:%a' -- "$directory" 2>/dev/null)" || return 1
+  owner="${metadata%%:*}"
+  mode="${metadata#*:}"
+  [[ "$owner" == 0 ]] && (( (8#$mode & 0022) == 0 ))
+}
+
+trusted_existing_file() {
+  local file="$1" root_owned="${2:-0}" metadata mode owner
+  [[ -e "$file" || -L "$file" ]] || return 1
+  [[ -f "$file" && ! -L "$file" ]] || {
+    echo "Existing LumiStripe configuration is not a regular, non-symlink file: $file" >&2
+    return 2
+  }
+  metadata="$(stat -c '%u:%a' -- "$file" 2>/dev/null)" || return 1
+  owner="${metadata%%:*}"
+  mode="${metadata#*:}"
+  (( (8#$mode & 0022) == 0 )) || {
+    echo "Existing LumiStripe configuration is writable by another account: $file" >&2
+    return 2
+  }
+  if [[ "$root_owned" == 1 && "$owner" != 0 ]]; then
+    echo "Existing LumiStripe system configuration is not root-owned: $file" >&2
+    return 2
+  fi
+}
+
+detect_legacy_spotify_installation() {
+  local candidate status
+  local -a system_directories=(/etc /etc/systemd /etc/systemd/system /var /var/lib)
+  for candidate in "${system_directories[@]}"; do
+    if [[ -e "$candidate" || -L "$candidate" ]]; then
+      trusted_root_directory "$candidate" || {
+        echo "Existing LumiStripe configuration parent is missing or unsafe: $candidate" >&2
+        return 1
+      }
+    fi
+  done
+  if [[ -e "$ENV_DIR" || -L "$ENV_DIR" ]]; then
+    trusted_root_directory "$ENV_DIR" || {
+      echo "Existing LumiStripe configuration directory is unsafe: $ENV_DIR" >&2
+      return 1
+    }
+  fi
+
+  for candidate in "$STATE_FILE" "$SERVICE_FILE" "$SPOTIFY_SERVICE_FILE"; do
+    if trusted_existing_file "$candidate" 1; then
+      status=0
+    else
+      status=$?
+    fi
+    (( status == 1 )) && continue
+    (( status == 0 )) || return "$status"
+    LEGACY_SPOTIFY_INSTALLATION=1
+  done
+  if [[ -e "$ENV_FILE" || -L "$ENV_FILE" ]]; then
+    trusted_existing_file "$ENV_FILE" 0 || return $?
+    LEGACY_SPOTIFY_INSTALLATION=1
+  fi
+  if [[ "$LEGACY_SPOTIFY_INSTALLATION" == 1 ]]; then
+    INSTALL_DEFAULT_SPOTIFY_BACKEND=soloist
+  fi
+}
 
 if [[ $EUID -ne 0 ]]; then
   echo "Run this installer as root (for example: sudo $0)." >&2
@@ -189,6 +257,7 @@ source "$SCRIPT_DIR/package-provisioning.sh"
 # shellcheck source=deploy/timing.sh
 source "$SCRIPT_DIR/timing.sh"
 PROJECT_DIR="$(canonical_project_directory "$PROJECT_DIR")" || exit 1
+detect_legacy_spotify_installation || exit 1
 resolve_web_backend "${LUMI_WEB_BACKEND:-}" "$ENV_FILE" >/dev/null || exit 1
 migrate_legacy_rust_deploy_root || exit 1
 ensure_current_release_static || exit 1
@@ -229,6 +298,7 @@ for required_file in \
   "$SCRIPT_DIR/lumistripe-network" \
   "$SCRIPT_DIR/lumistripe-network.sudoers" \
   "$SCRIPT_DIR/lumistripe-spotify-service.sudoers" \
+  "$SCRIPT_DIR/spotify-provider.sh" \
   "$SCRIPT_DIR/nginx/led-controller.conf" \
   "$SCRIPT_DIR/tls.sh" \
   "$SCRIPT_DIR/soloist.sh" \
@@ -551,6 +621,11 @@ stage_prebuilt_release() {
 
 create_environment_file() {
   install -d -m 755 "$ENV_DIR" /var/backups/lumistripe
+  trusted_root_directory /etc || return 1
+  trusted_root_directory "$ENV_DIR" || {
+    echo "LumiStripe configuration directory is not protected: $ENV_DIR" >&2
+    return 1
+  }
   [[ ! -L "$ENV_FILE" && ( ! -e "$ENV_FILE" || -f "$ENV_FILE" ) ]] || {
     echo "LumiStripe web environment path must be a regular file: $ENV_FILE" >&2
     return 1
@@ -575,6 +650,11 @@ create_environment_file() {
       "$SCRIPT_DIR/lumistripe-web.env.example" "$ENV_FILE"
     sed -i "s/^LUMI_PAIRING_CODE=.*/LUMI_PAIRING_CODE=$pairing_code/" "$ENV_FILE"
     WEB_ENV_CHANGED=1
+    if [[ "$LEGACY_SPOTIFY_INSTALLATION" == 1 &&
+          -z "${LUMI_SPOTIFY_BACKEND:-}" ]]; then
+      write_spotify_backend_setting \
+        "$ENV_FILE" soloist "$SERVICE_USER" "$SERVICE_GROUP" || return 1
+    fi
   fi
 
   if [[ "$(stat -c '%u:%g:%a' -- "$ENV_FILE")" != "$SERVICE_UID:$SERVICE_GID:600" ]]; then
@@ -610,7 +690,7 @@ create_spotify_environment_file() {
       printf '\n' >&2
     fi
     if [[ -z "$api_key" ]]; then
-      echo "Spotify key not supplied; Spotify will remain disabled."
+      echo "Spotify Soloist API key is missing; the selected provider cannot start." >&2
       return 0
     fi
     [[ "$api_key" != REPLACE_WITH_* ]] || {
@@ -666,7 +746,7 @@ start_deployment_services() {
   local unit
   local spotify_restart_required=0
   local web_restart_required=0
-  for unit in lumistripe-web.service lumistripe-spotify.service; do
+  for unit in lumistripe-web.service; do
     # Freshly installed unit files may not be loaded by systemd yet.
     systemctl reset-failed "$unit" >/dev/null 2>&1 || true
   done
@@ -693,7 +773,10 @@ start_deployment_services() {
   else
     if systemctl is-enabled --quiet lumistripe-spotify.service || \
       systemctl is-active --quiet lumistripe-spotify.service; then
-      systemctl disable --now lumistripe-spotify.service >/dev/null 2>&1 || true
+      systemctl disable --now lumistripe-spotify.service >/dev/null 2>&1 || {
+        echo "Could not stop and disable the unselected Spotify Soloist service." >&2
+        return 1
+      }
     fi
   fi
 
@@ -937,7 +1020,8 @@ ensure_groups
 enable_spi
 lumi_phase_start "Configuration"
 create_environment_file
-  SELECTED_SPOTIFY_BACKEND="$(resolve_spotify_backend "${LUMI_SPOTIFY_BACKEND:-}" "$ENV_FILE")"
+  SELECTED_SPOTIFY_BACKEND="$(resolve_spotify_backend \
+    "${LUMI_SPOTIFY_BACKEND:-}" "$ENV_FILE" "$INSTALL_DEFAULT_SPOTIFY_BACKEND")"
   write_spotify_backend_setting \
     "$ENV_FILE" "$SELECTED_SPOTIFY_BACKEND" "$SERVICE_USER" "$SERVICE_GROUP"
 create_spotify_environment_file
@@ -948,7 +1032,9 @@ if [[ -n "$OFFLINE_COMMIT" ]] && spotify_environment_ready &&
 fi
 create_tls_certificate
 render_service_unit
-render_spotify_service_unit
+if [[ "$SELECTED_SPOTIFY_BACKEND" == soloist ]]; then
+  render_spotify_service_unit
+fi
 install_update_support
 install_nginx
 install_wireplumber_config
@@ -970,6 +1056,13 @@ if [[ "$EFFECTIVE_DEPLOY_MODE" == source ]]; then
   APP_RELEASE_CHANGED=1
 else
   if stage_prebuilt_release; then
+    if [[ "$SELECTED_SPOTIFY_BACKEND" == librespot ]] && \
+      ! spotify_web_binary_supports_backend \
+        "$PROJECT_DIR/target/rust-deploy/releases/$DEPLOY_RELEASE_COMMIT/lumistripe-web" \
+        librespot "$SERVICE_USER"; then
+      echo "The verified release does not support the configured librespot provider; it was not activated." >&2
+      exit 1
+    fi
     activate_rust_release "$DEPLOY_RELEASE_COMMIT"
     echo "Activated verified prebuilt release $DEPLOY_RELEASE_COMMIT."
     if [[ "$ACTIVE_RELEASE_BEFORE_COMMIT" != "$DEPLOY_RELEASE_COMMIT" ]]; then
@@ -987,6 +1080,13 @@ else
       install_toolchains
       install_project_dependencies
       build_rust_release
+      if [[ "$SELECTED_SPOTIFY_BACKEND" == librespot ]] && \
+        ! spotify_web_binary_supports_backend \
+          "$PROJECT_DIR/target/rust-deploy/current/lumistripe-web" \
+          librespot "$SERVICE_USER"; then
+        echo "The source-built release does not support the configured librespot provider." >&2
+        exit 1
+      fi
       lumi_phase_end "Source build"
       APP_RELEASE_CHANGED=1
     else
@@ -1037,7 +1137,7 @@ if spotify_environment_ready; then
     fi
   fi
 else
-  echo "Spotify is disabled; skipping optional Soloist setup."
+  echo "Spotify backend is $SELECTED_SPOTIFY_BACKEND; skipping Soloist setup."
 fi
 lumi_phase_end "Soloist"
 start_bluetooth

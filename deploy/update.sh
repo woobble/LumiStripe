@@ -321,6 +321,11 @@ render_service_unit() {
 }
 
 render_spotify_service_unit() {
+  SPOTIFY_SERVICE_FILE_CHANGED=0
+  if [[ "$SELECTED_SPOTIFY_BACKEND" != soloist ]]; then
+    echo "Spotify backend is $SELECTED_SPOTIFY_BACKEND; retaining the legacy Soloist unit without updating it."
+    return 0
+  fi
   local rendered_file
   local project_replacement
   local home_replacement
@@ -504,7 +509,12 @@ ACTIVE_RELEASE="$(readlink -f -- "$PROJECT_DIR/target/rust-deploy/current" 2>/de
   echo "The active release does not match the project checkout; refusing to update." >&2
   exit 1
 }
-
+if [[ "$SELECTED_SPOTIFY_BACKEND" == librespot ]] && \
+  ! spotify_web_binary_supports_backend "$ACTIVE_RELEASE/lumistripe-web" librespot "$PROJECT_USER"; then
+  echo "The active rollback release does not support librespot; refusing to update before changing the checkout or active release." >&2
+  echo "Use the legacy provider for this update, then update to a release that supports native Spotify before switching providers." >&2
+  exit 1
+fi
 if [[ "$DEPLOY_MODE" != source ]] && ! binary_target_supported; then
   if [[ "$DEPLOY_MODE" == binary ]]; then
     echo "Prebuilt releases require aarch64 Debian or Raspberry Pi OS Trixie, or aarch64 Ubuntu. Set LUMI_DEPLOY_MODE=source for a local build." >&2
@@ -556,6 +566,12 @@ if [[ "$EFFECTIVE_DEPLOY_MODE" != source ]]; then
     fi
   fi
 fi
+if [[ "$SELECTED_SPOTIFY_BACKEND" == librespot ]] && \
+  ! spotify_web_binary_supports_backend \
+    "$PROJECT_DIR/target/rust-deploy/releases/$TARGET_COMMIT/lumistripe-web" librespot "$PROJECT_USER"; then
+  echo "The verified target release does not support the configured librespot provider; the current release remains active." >&2
+  exit 1
+fi
 
 lumi_phase_start "Package setup"
 install_audio_bridge_packages
@@ -565,18 +581,21 @@ if [[ "$EFFECTIVE_DEPLOY_MODE" == source ]]; then
 fi
 lumi_phase_end "Package setup"
 
+if [[ "$SELECTED_SPOTIFY_BACKEND" != soloist ]] && \
+  { systemctl is-enabled --quiet lumistripe-spotify.service || \
+    systemctl is-active --quiet lumistripe-spotify.service; }; then
+  systemctl disable --now lumistripe-spotify.service || {
+    echo "Could not stop and disable the unselected Spotify Soloist service; update was not started." >&2
+    exit 1
+  }
+fi
+
 git_user -c core.hooksPath=/dev/null switch --detach "$TARGET_COMMIT"
 UPDATE_SWITCHED=1
 source "$SCRIPT_DIR/update-support.sh"
 
 lumi_phase_start "Configuration"
 create_spotify_environment_file
-if ! spotify_environment_ready; then
-  if systemctl is-enabled --quiet lumistripe-spotify.service || \
-    systemctl is-active --quiet lumistripe-spotify.service; then
-    systemctl disable --now lumistripe-spotify.service >/dev/null 2>&1 || true
-  fi
-fi
 lumi_phase_end "Configuration"
 if [[ "$EFFECTIVE_DEPLOY_MODE" == source ]]; then
   if [[ "$TARGET_COMMIT" == "$PREVIOUS_REF" ]]; then
@@ -586,6 +605,12 @@ if [[ "$EFFECTIVE_DEPLOY_MODE" == source ]]; then
     build_frontend
     build_rust_backend
     lumi_phase_end "Source build"
+    if [[ "$SELECTED_SPOTIFY_BACKEND" == librespot ]] && \
+      ! spotify_web_binary_supports_backend \
+        "$PROJECT_DIR/target/rust-deploy/releases/$TARGET_COMMIT/lumistripe-web" librespot "$PROJECT_USER"; then
+      echo "The source-built target does not support the configured librespot provider." >&2
+      false
+    fi
     RELEASE_ACTIVATED=1
     APP_RELEASE_CHANGED=1
   fi
@@ -631,7 +656,7 @@ if spotify_environment_ready; then
     fi
   fi
 else
-  echo "Spotify is disabled; skipping optional Soloist setup."
+  echo "Spotify backend is $SELECTED_SPOTIFY_BACKEND; skipping Soloist setup."
 fi
 lumi_phase_end "Soloist"
 lumi_phase_start "Configuration"

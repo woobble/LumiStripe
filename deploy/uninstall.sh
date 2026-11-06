@@ -42,9 +42,9 @@ usage() {
   cat <<'EOF'
 Usage: sudo ./deploy/uninstall.sh [--yes]
 
-Removes LumiStripe services, configuration, generated dependencies, Soloist,
-and LumiStripe's Nginx/TLS artifacts. Shared OS packages, the service account,
-Bun, mkcert, its CA, and the project checkout are preserved.
+Removes LumiStripe services, non-secret configuration, generated dependencies,
+the Soloist executable, and LumiStripe's Nginx/TLS artifacts. Spotify
+credentials and caches for both providers are preserved.
 EOF
 }
 
@@ -111,21 +111,18 @@ USER_RUNTIME_DIR="/run/user/$SERVICE_UID"
 PROJECT_STATIC_DIR="$PROJECT_DIR/apps/lumistripe-web/static"
 PROJECT_FRONTEND_DIR="$PROJECT_DIR/apps/lumistripe-web/frontend"
 
-spotify_data_dir=""
-spotify_cache_dir=""
-if [[ -f "$SPOTIFY_ENV_FILE" ]]; then
-  spotify_data_dir="$(awk -F= '$1 == "LUMI_SPOTIFY_DATA_DIR" { print substr($0, index($0, "=") + 1); exit }' "$SPOTIFY_ENV_FILE")"
-  spotify_cache_dir="$(awk -F= '$1 == "LUMI_SPOTIFY_CACHE_DIR" { print substr($0, index($0, "=") + 1); exit }' "$SPOTIFY_ENV_FILE")"
-fi
-
 if ((ASSUME_YES == 0)); then
   cat <<EOF
-This will remove LumiStripe's installed services, configuration, Soloist,
-generated project dependencies/build output, Nginx site, and TLS certificate.
+This will remove LumiStripe's installed services, non-secret configuration,
+Soloist executable, generated project dependencies/build output, Nginx site,
+and TLS certificate.
 
 It will preserve the project checkout, shared OS packages/services, the
 $SERVICE_USER account, Bun, mkcert and its CA, and existing backups.
-Reinstalling will ask for a pairing code and an optional Spotify API key.
+Spotify credentials and caches are preserved: native librespot state remains
+in its configured data directory; Soloist's protected API-key file and data
+remain in place. Neither provider's credentials are purged by uninstall.
+Reinstalling will ask for a pairing code and defaults to librespot.
 
 EOF
   read -r -p "Continue with LumiStripe uninstall? [y/N] " confirmation
@@ -168,19 +165,6 @@ remove_empty_directory() {
   rmdir -- "$path" 2>/dev/null || true
 }
 
-remove_soloist_directory() {
-  local path="$1"
-  [[ -n "$path" ]] || return 0
-  case "$path" in
-    "$SERVICE_HOME/.local/share/soloist"|"$SERVICE_HOME/.cache/soloist")
-      remove_directory "$path"
-      ;;
-    *)
-      echo "Preserving custom Soloist path: $path" >&2
-      ;;
-  esac
-}
-
 restart_user_audio() {
   [[ -S "$USER_RUNTIME_DIR/bus" ]] || return 0
   runuser -u "$SERVICE_USER" -- env \
@@ -221,11 +205,8 @@ restart_user_audio
 
 remove_file "$SOLOIST_BIN"
 remove_file "$LEGACY_SOLOIST_BIN"
-remove_soloist_directory "$spotify_data_dir"
-remove_soloist_directory "$spotify_cache_dir"
 
 remove_file "$ENV_FILE"
-remove_file "$SPOTIFY_ENV_FILE"
 remove_empty_directory "$ENV_DIR"
 
 if [[ -L "$NGINX_ENABLED" && "$(readlink -f "$NGINX_ENABLED")" == "$NGINX_AVAILABLE" ]]; then
@@ -265,4 +246,5 @@ remove_file "$ADMIN_ENTRYPOINT"
 echo
 echo "LumiStripe uninstall completed."
 echo "Shared packages, services, toolchains, user account, mkcert CA, and checkout were preserved."
+echo "Spotify credentials and caches were preserved for both librespot and Soloist."
 echo "Run lumistripe-admin install from a trusted checkout to reinstall."

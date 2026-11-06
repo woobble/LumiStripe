@@ -1,8 +1,9 @@
 # Raspberry Pi installation and audio setup
 
 The LumiStripe web runtime can receive music from a phone or other source over Bluetooth,
-or use Spotify Connect through the native librespot provider or the retained
-Spotify Soloist migration provider. The Pi sends the selected stream to the
+or use Spotify Connect through the native librespot provider, which is the
+default for new installations, or the retained Spotify Soloist migration
+provider. The Pi sends the selected stream to the
 sound system and analyzes it for reactive animations.
 
 Supported targets are Raspberry Pi OS Trixie and Ubuntu on ARM64, using
@@ -63,7 +64,8 @@ Use this sequence for a new appliance:
 2. **Install.** Replace `pi` with the LumiStripe service account.
 
     ```bash
-    sudo /opt/lumistripe-install/deploy/lumistripe-admin install --user pi
+    cd /opt/lumistripe-install
+    sudo ./deploy/lumistripe-admin install --user pi
     ```
 
 3. **Update.** Updates use GitHub main and verified precompiled releases by
@@ -117,30 +119,32 @@ migrations that still allow privileged reads from the runtime checkout must
 disable that old trigger during this upgrade; see
 [Existing updater migration](#existing-updater-migration).
 
-Interactive installation asks for a four-digit pairing code and optional
-Spotify Soloist API key. Leave the pairing-code prompt blank to generate a
-random code. The Soloist key prompt is shown only when Soloist is selected;
-choose `librespot` to pair from Spotify without a Soloist key. For unattended
-installation, the existing `LUMI_PAIRING_CODE` and Spotify environment-file
-handling remains available; keep secrets out of shell history and command
-arguments. The command does not accept pairing passwords or API keys as CLI
-options.
+Interactive installation asks for a four-digit dashboard pairing code. Leave
+it blank to generate a random code. New installations select librespot, so no
+Soloist API key is requested and no Soloist executable is downloaded or
+started. Pair LumiStripe from Spotify Connect on the same local network;
+Spotify Premium is generally required for Connect playback. The initial
+installation must use a reviewed checkout in an administrator-controlled
+directory. For unattended installation, `LUMI_PAIRING_CODE` remains available;
+keep secrets out of shell history and command arguments.
 
-Choose the Spotify provider explicitly when installing or repairing an
-appliance:
+Check and switch the provider with the dedicated administrative command:
 
 ```bash
-sudo lumistripe-admin install --spotify-backend librespot
-sudo lumistripe-admin install --spotify-backend soloist
-sudo lumistripe-admin install --spotify-backend disabled
-sudo lumistripe-admin repair --source /opt/lumistripe-repair \
-  --user pi --spotify-backend librespot
+sudo lumistripe-admin spotify status
+sudo lumistripe-admin spotify use librespot
+sudo lumistripe-admin spotify use soloist
+sudo lumistripe-admin spotify disable
 ```
 
-Omitting the option preserves the saved setting. Older installations without
-`LUMI_SPOTIFY_BACKEND` stay on Soloist. Switching to `librespot` or `disabled`
-stops the Soloist service and leaves its existing credentials, binary, and data
-in place for a later switch back. See the [Spotify provider guide](../docs/spotify.md)
+`spotify status` reads provider configuration and service state without making
+changes. A switch checks prerequisites, shows the authentication differences,
+asks for confirmation, and restores the prior configuration and service state
+if it fails. Normal updates never change providers. Existing explicit provider
+settings remain selected; legacy configurations without a provider setting
+continue to use Soloist. Switching does not migrate, rewrite, or delete either
+provider's credentials. A Soloist switch requires its existing protected API
+key and validated executable. See the [Spotify provider guide](../docs/spotify.md)
 for pairing, audio routing, limitations, policy notes, and manual acceptance.
 
 ### Advanced deployment options
@@ -451,22 +455,14 @@ sudo journalctl -u lumistripe-update-check.service \
 ## Local Docker development with Spotify Connect
 
 The local development stack builds the Rust web app and engine with simulated
-LED output. It uses Spotify Connect as its audio source and plays Spotify through
-the host speakers. It does not start Bluetooth, mount GPIO/SPI devices, or
-require a microphone. This profile targets Linux hosts with Docker Compose and
-a PipeWire PulseAudio-compatible server in the active desktop session.
+LED output. It defaults to the native librespot receiver and plays Spotify
+through the host speakers. It does not start Bluetooth, mount GPIO/SPI devices,
+or require a microphone. This profile targets Linux hosts with Docker Compose
+and a PipeWire PulseAudio-compatible server in the active desktop session.
 
-Create a local Spotify Soloist API key file and export the current user IDs:
+Export the current user IDs:
 
 ```bash
-mkdir -p .docker-dev/data/web .docker-dev/data/soloist \
-  .docker-dev/data/soloist-cache .docker-dev/data/spotify-home
-umask 077
-printf 'Spotify Soloist API key: '
-read -r -s SPOTIFY_API_KEY
-printf '\n'
-printf '%s' "$SPOTIFY_API_KEY" > .docker-dev/spotify-api-key
-unset SPOTIFY_API_KEY
 export LUMI_DEV_UID="$(id -u)"
 export LUMI_DEV_GID="$(id -g)"
 ```
@@ -475,28 +471,42 @@ Start the local stack from the repository root:
 
 ```bash
 docker compose --project-name lumistripe-dev \
-  -f deploy/docker-compose.dev.yml --profile spotify up --build
-```
-
-The Spotify service is optional and runs in its own container. Omit
-`--profile spotify` to start only the web simulator. Open
-`http://127.0.0.1:8000/`. In Spotify on a phone or computer, select the
-**LumiStripe** Connect device. The web runtime captures the Spotify monitor
-while Soloist routes it to the host's default speaker output. LumiStripe
-settings and Soloist session/cache data persist under `.docker-dev/data/`;
-the local API key and all development state are ignored by Git.
-
-To exercise the native receiver in the simulator, select it explicitly and
-leave the Soloist profile off:
-
-```bash
-LUMI_SPOTIFY_BACKEND=librespot docker compose --project-name lumistripe-dev \
   -f deploy/docker-compose.dev.yml up --build
 ```
 
-Compose passes the selection to both services. If the Soloist profile is
-started while `librespot` or `disabled` is selected, its entrypoint exits
-before launching the legacy receiver.
+The native receiver runs inside the web simulator. Open
+`http://127.0.0.1:8000/` and select the **LumiStripe** Connect device in Spotify
+on a phone or computer. LumiStripe settings and native credentials persist
+under `.docker-dev/data/web/`; development state is ignored by Git.
+
+Set `LUMI_SPOTIFY_BACKEND=librespot` before the same Compose command to select
+the native receiver explicitly; this is also the default when the variable is
+omitted.
+
+To exercise the legacy Soloist sidecar, create its local API-key secret and
+storage directories:
+
+```bash
+mkdir -p .docker-dev/data/soloist .docker-dev/data/soloist-cache \
+  .docker-dev/data/spotify-home
+umask 077
+printf 'Spotify Soloist API key: '
+read -r -s SPOTIFY_API_KEY
+printf '\n'
+printf '%s' "$SPOTIFY_API_KEY" > .docker-dev/spotify-api-key
+unset SPOTIFY_API_KEY
+```
+
+Then select Soloist explicitly and start its profile:
+
+```bash
+LUMI_SPOTIFY_BACKEND=soloist docker compose --project-name lumistripe-dev \
+  -f deploy/docker-compose.dev.yml --profile spotify up --build
+```
+
+Compose passes the provider selection to both services. The Soloist sidecar
+refuses to start unless `LUMI_SPOTIFY_BACKEND=soloist`, so it cannot run at the
+same time as the embedded native receiver.
 
 Stop the stack with `Ctrl+C` or:
 
@@ -511,7 +521,8 @@ contains the native provider and does not download Soloist. The optional
 development-only `runtime-soloist` target downloads the Soloist archive for the
 separate legacy sidecar. These build paths do not use Python, `pip`, or `uv`.
 The Compose file uses host networking so the web runtime can connect to
-Soloist's local WebSocket on `127.0.0.1:9090`. It binds the dashboard to
+Soloist's local WebSocket on `127.0.0.1:9090` when the legacy profile is
+selected. It binds the dashboard to
 `127.0.0.1:8000`, runs both containers as the current user's UID/GID with a
 read-only root filesystem and no Linux capabilities, and mounts the active
 desktop audio runtime directory read-only. Web settings and Soloist state use
@@ -544,12 +555,15 @@ Use `--yes` to skip the confirmation:
 sudo lumistripe-admin uninstall --yes
 ```
 
-The uninstaller removes both LumiStripe systemd units, environment files,
-Soloist, LumiStripe's PipeWire/WirePlumber fragments, Nginx site and TLS
-files, generated frontend dependencies, and Soloist's default data and
-cache directories. It does not remove the project checkout, shared operating
-system packages, the service user, or custom Soloist data/cache paths. Existing
-non-empty backup directories are retained.
+The uninstaller removes LumiStripe systemd units, the web environment file,
+Soloist's executable, LumiStripe's PipeWire/WirePlumber fragments, Nginx site
+and TLS files, and generated frontend dependencies. It preserves the Soloist
+API-key file at `/etc/lumistripe/lumistripe-spotify.env`, native librespot state
+at `$HOME/.local/share/lumistripe/spotify` or its configured location, and
+Soloist data and cache at their default or custom locations. It does not remove
+the project checkout, shared operating-system packages, or service account.
+There is no credential purge option. Existing non-empty backup directories are
+retained.
 
 ## Manual audio-stack recovery
 

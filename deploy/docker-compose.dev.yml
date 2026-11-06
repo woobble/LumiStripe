@@ -20,7 +20,7 @@ services:
       XDG_RUNTIME_DIR: /run/host-audio
       PULSE_SERVER: unix:/run/host-audio/pulse/native
       LUMISTRIPE_ENABLE_SPOTIFY: "true"
-      LUMI_SPOTIFY_BACKEND: ${LUMI_SPOTIFY_BACKEND:-soloist}
+      LUMI_SPOTIFY_BACKEND: ${LUMI_SPOTIFY_BACKEND:-librespot}
     volumes:
       - ../.docker-dev/data/web:/var/lib/lumistripe
       - "${XDG_RUNTIME_DIR:?Run Docker Compose from a Linux desktop audio session}:/run/host-audio:ro"
@@ -70,7 +70,7 @@ services:
       LUMI_SPOTIFY_API_KEY_FILE: /run/secrets/spotify_api_key
       LUMI_SPOTIFY_DATA_DIR: /var/lib/lumistripe/soloist
       LUMI_SPOTIFY_CACHE_DIR: /var/lib/lumistripe/soloist-cache
-      LUMI_SPOTIFY_BACKEND: ${LUMI_SPOTIFY_BACKEND:-soloist}
+      LUMI_SPOTIFY_BACKEND: ${LUMI_SPOTIFY_BACKEND:-librespot}
     volumes:
       - ../.docker-dev/data/soloist:/var/lib/lumistripe/soloist
       - ../.docker-dev/data/soloist-cache:/var/lib/lumistripe/soloist-cache

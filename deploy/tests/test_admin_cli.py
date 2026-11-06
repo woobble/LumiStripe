@@ -10,6 +10,7 @@ ADMIN = DEPLOY / "lumistripe-admin"
 ADMIN_TEXT = ADMIN.read_text(encoding="utf-8")
 UPDATE_SUPPORT = (DEPLOY / "update-support.sh").read_text(encoding="utf-8")
 INSTALLER = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+UPDATER = (DEPLOY / "update.sh").read_text(encoding="utf-8")
 UNINSTALLER = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
 
 
@@ -23,7 +24,8 @@ def _parse(*arguments: str) -> subprocess.CompletedProcess[str]:
         'printf "mode=%s\\noffline=%s\\nrefresh=%s\\nyes=%s\\nsource=%s\\n" '
         '"$ADMIN_MODE" "$ADMIN_OFFLINE" "$ADMIN_REFRESH_SOLOIST" '
         '"$ADMIN_ASSUME_YES" "$ADMIN_SOURCE_OPTION"; '
-        'printf "spotify_backend=%s\\n" "$ADMIN_SPOTIFY_BACKEND"'
+        'printf "spotify_backend=%s\\nspotify_action=%s\\nspotify_target=%s\\n" '
+        '"$ADMIN_SPOTIFY_BACKEND" "$ADMIN_SPOTIFY_ACTION" "$ADMIN_SPOTIFY_TARGET"'
     )
     return subprocess.run(
         ["bash", "-c", command, "bash", str(ADMIN), *arguments],
@@ -45,7 +47,10 @@ def _help(*arguments: str) -> subprocess.CompletedProcess[str]:
 
 
 def _source_call(
-    script: str, *arguments: str, env: dict[str, str] | None = None
+    script: str,
+    *arguments: str,
+    env: dict[str, str] | None = None,
+    input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["bash", "-c", 'source "$1"; shift; ' + script, "bash", str(ADMIN), *arguments],
@@ -54,6 +59,7 @@ def _source_call(
         check=False,
         timeout=5,
         env=env,
+        input=input_text,
     )
 
 
@@ -73,6 +79,171 @@ def _support_call(
         text=True,
         check=False,
         timeout=5,
+    )
+
+
+def _provider_call(
+    script: str,
+    *arguments: str,
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; shift; ' + script,
+            "bash",
+            str(DEPLOY / "spotify-provider.sh"),
+            *arguments,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=5,
+        input=input_text,
+    )
+
+
+def _provider_switch_call(
+    tmp_path: Path,
+    *,
+    current: str,
+    target: str,
+    web_active: bool,
+    soloist_active: bool,
+    web_enabled: bool = True,
+    soloist_enabled: bool = False,
+    health_fail_first: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    config = tmp_path / "lumistripe-web.env"
+    config.write_text(f"LUMI_SPOTIFY_BACKEND={current}\n", encoding="utf-8")
+    key_file = tmp_path / "lumistripe-spotify.env"
+    key_file.write_text("LUMI_SPOTIFY_API_KEY=existing-key\n", encoding="utf-8")
+    unit = tmp_path / "lumistripe-spotify.service"
+    sudoers = tmp_path / "lumistripe-spotify.sudoers"
+    if soloist_active or soloist_enabled:
+        unit.write_text("existing Soloist unit\n", encoding="utf-8")
+    backup_root = tmp_path / "runtime"
+    backup_root.mkdir()
+
+    harness = r'''
+WEB_ENV_FILE="$1"
+SOLOIST_ENV_FILE="$2"
+SOLOIST_UNIT="$3"
+SOLOIST_SUDOERS="$4"
+TEST_ROOT="$5"
+TARGET="$6"
+WEB_ACTIVE="$7"
+SOLOIST_ACTIVE="$8"
+WEB_ENABLED="$9"
+SOLOIST_ENABLED="${10}"
+HEALTH_FAIL_FIRST="${11}"
+HEALTH_CALLS=0
+ACTIONS=
+
+provider_load_context() {
+  SERVICE_USER="$(id -un)"
+  SERVICE_GROUP="$(id -gn)"
+  SERVICE_HOME="$TEST_ROOT"
+  PROJECT_DIR="$TEST_ROOT"
+  ACTIVE_RELEASE="$TEST_ROOT/release"
+}
+provider_validate_existing_soloist_files() { :; }
+provider_require_backend() { printf 'CHECKED_PROVIDER=%s\n' "$1"; }
+provider_acquire_update_lock() { :; }
+provider_create_backup_directory() {
+  BACKUP_DIR="$(mktemp -d "$TEST_ROOT/provider-switch.XXXXXX")"
+  chmod 700 "$BACKUP_DIR"
+}
+provider_cleanup_backup() {
+  local name
+  for name in web-env soloist-unit soloist-sudoers; do
+    rm -f -- "$BACKUP_DIR/$name" "$BACKUP_DIR/$name.present" "$BACKUP_DIR/$name.absent"
+  done
+  rmdir -- "$BACKUP_DIR"
+  BACKUP_DIR=
+}
+provider_service_active() {
+  case "$1" in
+    lumistripe-web.service) [[ "$WEB_ACTIVE" == 1 ]] ;;
+    lumistripe-spotify.service) [[ "$SOLOIST_ACTIVE" == 1 ]] ;;
+  esac
+}
+provider_service_enabled() {
+  case "$1" in
+    lumistripe-web.service) [[ "$WEB_ENABLED" == 1 ]] ;;
+    lumistripe-spotify.service) [[ "$SOLOIST_ENABLED" == 1 ]] ;;
+  esac
+}
+provider_web_health() {
+  HEALTH_CALLS=$((HEALTH_CALLS + 1))
+  [[ "$HEALTH_FAIL_FIRST" != 1 || "$HEALTH_CALLS" != 1 ]]
+}
+provider_service_state() {
+  if provider_service_active "$1"; then printf 'Active\n'; else printf 'Inactive\n'; fi
+}
+provider_render_soloist_unit() { printf 'rendered Soloist unit\n' > "$SOLOIST_UNIT"; }
+systemctl() {
+  local action="$1" service
+  case "$action" in
+    stop|start|enable)
+      service="$2"
+      ACTIONS="${ACTIONS:+$ACTIONS,}$action:$service"
+      ;;
+    disable)
+      if [[ "$2" == --now ]]; then
+        service="$3"
+        ACTIONS="${ACTIONS:+$ACTIONS,}disable-now:$service"
+      else
+        service="$2"
+        ACTIONS="${ACTIONS:+$ACTIONS,}disable:$service"
+      fi
+      ;;
+    daemon-reload) return 0 ;;
+    *) printf 'unexpected systemctl command: %s\n' "$*" >&2; return 1 ;;
+  esac
+  case "$action:$service" in
+    stop:lumistripe-web.service) WEB_ACTIVE=0 ;;
+    stop:lumistripe-spotify.service) SOLOIST_ACTIVE=0 ;;
+    start:lumistripe-web.service) WEB_ACTIVE=1 ;;
+    start:lumistripe-spotify.service) SOLOIST_ACTIVE=1 ;;
+    enable:lumistripe-web.service) WEB_ENABLED=1 ;;
+    enable:lumistripe-spotify.service) SOLOIST_ENABLED=1 ;;
+    disable:lumistripe-web.service) WEB_ENABLED=0 ;;
+    disable:lumistripe-spotify.service) SOLOIST_ENABLED=0 ;;
+    disable-now:lumistripe-spotify.service) SOLOIST_ACTIVE=0; SOLOIST_ENABLED=0 ;;
+    disable-now:lumistripe-web.service) WEB_ACTIVE=0; WEB_ENABLED=0 ;;
+  esac
+}
+write_spotify_backend_setting() {
+  local file="$1" backend="$2" temporary="$1.test-temp"
+  sed "s/^LUMI_SPOTIFY_BACKEND=.*/LUMI_SPOTIFY_BACKEND=$backend/" "$file" > "$temporary"
+  chmod --reference="$file" "$temporary"
+  mv -fT -- "$temporary" "$file"
+  WEB_ENV_CHANGED=1
+}
+switch_status=0
+provider_switch "$TARGET" || switch_status=$?
+printf 'SWITCH_STATUS=%s\n' "$switch_status"
+printf 'FINAL_BACKEND=%s\n' "$(read_spotify_backend "$WEB_ENV_FILE")"
+printf 'FINAL_WEB_ACTIVE=%s\nFINAL_SOLOIST_ACTIVE=%s\n' "$WEB_ACTIVE" "$SOLOIST_ACTIVE"
+printf 'FINAL_WEB_ENABLED=%s\nFINAL_SOLOIST_ENABLED=%s\n' "$WEB_ENABLED" "$SOLOIST_ENABLED"
+printf 'HEALTH_CALLS=%s\nACTIONS=%s\n' "$HEALTH_CALLS" "$ACTIONS"
+'''
+    return _provider_call(
+        harness,
+        str(config),
+        str(key_file),
+        str(unit),
+        str(sudoers),
+        str(backup_root),
+        target,
+        "1" if web_active else "0",
+        "1" if soloist_active else "0",
+        "1" if web_enabled else "0",
+        "1" if soloist_enabled else "0",
+        "1" if health_fail_first else "0",
+        input_text="y\n",
     )
 
 
@@ -97,6 +268,7 @@ def test_command_help_documents_the_supported_admin_interface() -> None:
     assert main_help.returncode == 0
     for command in ("install", "update", "status", "repair", "uninstall", "help"):
         assert command in main_help.stdout
+    assert "spotify" in main_help.stdout
 
     update_help = _help("update", "--help")
     assert update_help.returncode == 0
@@ -109,7 +281,12 @@ def test_command_help_documents_the_supported_admin_interface() -> None:
     repair_help = _help("repair", "--help")
     assert repair_help.returncode == 0
     assert "--source PATH" in repair_help.stdout
-    assert "--spotify-backend librespot|soloist|disabled" in repair_help.stdout
+    assert "--spotify-backend" not in repair_help.stdout
+
+    spotify_help = _help("spotify", "--help")
+    assert spotify_help.returncode == 0
+    assert "use librespot" in spotify_help.stdout
+    assert "disable" in spotify_help.stdout
 
 
 def test_parser_defaults_and_forwards_supported_values() -> None:
@@ -136,6 +313,11 @@ def test_parser_defaults_and_forwards_supported_values() -> None:
     selected_backend = _parse("install", "--spotify-backend", "librespot")
     assert "parse_status=0" in selected_backend.stdout
     assert "spotify_backend=librespot" in selected_backend.stdout
+
+    provider_command = _parse("spotify", "use", "soloist")
+    assert "parse_status=0" in provider_command.stdout
+    assert "spotify_action=use" in provider_command.stdout
+    assert "spotify_target=soloist" in provider_command.stdout
 
     offline = _parse(
         "update",
@@ -169,6 +351,9 @@ def test_parser_defaults_and_forwards_supported_values() -> None:
         ("update", "--spotify-backend", "librespot"),
         ("status", "--mode", "binary"),
         ("repair",),
+        ("repair", "--source", "/opt/lumistripe", "--spotify-backend", "disabled"),
+        ("spotify", "use", "disabled"),
+        ("spotify", "status", "--anything"),
         ("install", "--yes"),
         ("uninstall", "--offline", "0123456789abcdef0123456789abcdef01234567"),
         ("update", "--user", "pi", "--user", "pi"),
@@ -201,11 +386,37 @@ def test_spotify_backend_selection_preserves_legacy_default_and_validates_overri
     legacy = _support_call('resolve_spotify_backend "" "$1"', str(env_file))
     assert legacy.returncode == 0
     assert legacy.stdout.strip() == "soloist"
+    fresh = _support_call(
+        'resolve_spotify_backend "" "$1" librespot', str(env_file)
+    )
+    assert fresh.returncode == 0
+    assert fresh.stdout.strip() == "librespot"
+
+    env_file.write_text("LUMI_SPOTIFY_BACKEND=disabled\n", encoding="utf-8")
+    disabled = _support_call(
+        'resolve_spotify_backend "" "$1" librespot', str(env_file)
+    )
+    assert disabled.returncode == 0
+    assert disabled.stdout.strip() == "disabled"
+
+    env_file.write_text("LUMI_SPOTIFY_BACKEND=soloist\n", encoding="utf-8")
+    retained_soloist = _support_call(
+        'resolve_spotify_backend "" "$1" librespot', str(env_file)
+    )
+    assert retained_soloist.returncode == 0
+    assert retained_soloist.stdout.strip() == "soloist"
 
     env_file.write_text("LUMI_SPOTIFY_BACKEND=unknown\n", encoding="utf-8")
     invalid = _support_call('resolve_spotify_backend "" "$1"', str(env_file))
     assert invalid.returncode != 0
     assert "expected librespot, soloist, or disabled" in invalid.stderr
+
+    env_file.write_text(
+        "LUMI_SPOTIFY_BACKEND=librespot\nLUMI_SPOTIFY_BACKEND=soloist\n",
+        encoding="utf-8",
+    )
+    duplicate = _support_call('resolve_spotify_backend "" "$1"', str(env_file))
+    assert duplicate.returncode != 0
 
 
 def test_spotify_backend_setting_rewrites_atomically_and_preserves_other_values(
@@ -246,20 +457,319 @@ def test_spotify_backend_setting_rewrites_atomically_and_preserves_other_values(
 
 
 def test_native_deployment_skips_soloist_setup_and_keeps_runtime_audio_library() -> None:
-    assert 'LUMI_SPOTIFY_BACKEND=soloist' in (DEPLOY / "lumistripe-web.env.example").read_text(
+    assert 'LUMI_SPOTIFY_BACKEND=librespot' in (DEPLOY / "lumistripe-web.env.example").read_text(
         encoding="utf-8"
     )
+    assert "INSTALL_DEFAULT_SPOTIFY_BACKEND=librespot" in INSTALLER
+    assert '"$ENV_FILE" "$SELECTED_SPOTIFY_BACKEND"' in INSTALLER
     assert 'if [[ "$SELECTED_SPOTIFY_BACKEND" != soloist ]]' in INSTALLER
     assert '[[ "$SELECTED_SPOTIFY_BACKEND" == soloist ]] || return 1' in INSTALLER
     assert '[[ "$SELECTED_SPOTIFY_BACKEND" == soloist ]] || return 1' in (
-        DEPLOY / "update.sh"
-    ).read_text(encoding="utf-8")
-    assert "libatomic1 libpulse0" in (DEPLOY / "update.sh").read_text(
-        encoding="utf-8"
+        (DEPLOY / "update.sh").read_text(encoding="utf-8")
+    )
+    create_soloist_env = INSTALLER[
+        INSTALLER.index("create_spotify_environment_file() {"):
+        INSTALLER.index("spotify_environment_ready() {", INSTALLER.index("create_spotify_environment_file() {"))
+    ]
+    assert 'if [[ "$SELECTED_SPOTIFY_BACKEND" != soloist ]]' in create_soloist_env
+    assert 'Spotify Soloist API key (leave blank to skip Spotify)' in create_soloist_env
+    assert create_soloist_env.index('if [[ "$SELECTED_SPOTIFY_BACKEND" != soloist ]]') < create_soloist_env.index("read -r -s")
+    assert 'if [[ "$SELECTED_SPOTIFY_BACKEND" == soloist ]]' in INSTALLER
+    assert "spotify-provider.sh \\" in UPDATE_SUPPORT
+    assert "lumistripe-spotify-service.sudoers \\" in UPDATE_SUPPORT
+    support_install = UPDATE_SUPPORT[
+        UPDATE_SUPPORT.index('if [[ "${SELECTED_SPOTIFY_BACKEND:-soloist}" == soloist ]]'):
+        UPDATE_SUPPORT.index('fi\n  sed \\', UPDATE_SUPPORT.index('if [[ "${SELECTED_SPOTIFY_BACKEND:-soloist}" == soloist ]]'))
+    ]
+    assert "install_file_if_changed" in support_install
+    assert 'if [[ "$SELECTED_SPOTIFY_BACKEND" != soloist ]]' in UPDATER
+    assert '[[ "$SELECTED_SPOTIFY_BACKEND" == soloist ]] || return 1' in UPDATER
+    assert "libatomic1 libpulse0" in UPDATER
+    soloist_phase = INSTALLER[
+        INSTALLER.index('lumi_phase_start "Soloist"'):
+        INSTALLER.index('lumi_phase_end "Soloist"', INSTALLER.index('lumi_phase_start "Soloist"'))
+    ]
+    assert soloist_phase.index("if spotify_environment_ready; then") < soloist_phase.index(
+        "install_spotify_soloist"
     )
     web_unit = (DEPLOY / "lumistripe-web.service").read_text(encoding="utf-8")
     assert "Wants=network-online.target bluetooth.service" in web_unit
     assert "lumistripe-spotify.service" not in web_unit
+
+
+def test_existing_installation_detection_uses_trusted_evidence_and_legacy_fallback() -> None:
+    detector = INSTALLER[
+        INSTALLER.index("detect_legacy_spotify_installation() {"):
+        INSTALLER.index("\nif [[ $EUID", INSTALLER.index("detect_legacy_spotify_installation() {"))
+    ]
+    assert 'trusted_existing_file "$candidate" 1' in detector
+    assert 'trusted_existing_file "$ENV_FILE" 0' in detector
+    assert "INSTALL_DEFAULT_SPOTIFY_BACKEND=soloist" in detector
+    assert '"${LUMI_SPOTIFY_BACKEND:-}" "$ENV_FILE" "$INSTALL_DEFAULT_SPOTIFY_BACKEND"' in INSTALLER
+
+
+def test_partial_existing_web_configuration_is_not_treated_as_a_fresh_install(
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / "lumistripe-web.env"
+    env_file.write_text("LUMI_SPOTIFY_BACKEND=soloist\n", encoding="utf-8")
+    command = r'''
+ADMIN_STATE_PRESENT=0
+ADMIN_STATE_SERVICE_USER=
+ADMIN_STATE_PROJECT_DIR=
+ADMIN_STATE_DEPLOYMENT_MODE=
+ADMIN_UNIT_SERVICE_USER=
+ADMIN_UNIT_PROJECT_DIR=
+ADMIN_INSTALLATION_DETECTED=0
+ADMIN_COMMAND=install
+ADMIN_USER_OPTION=
+ADMIN_PROJECT_OPTION=
+ADMIN_SOURCE_OPTION=
+ADMIN_ORIGIN=installed
+ADMIN_WEB_ENV="$1"
+ADMIN_WEB_UNIT="$1/missing-web.service"
+ADMIN_SPOTIFY_ENV="$1/missing-soloist.env"
+admin_read_install_state() { return 0; }
+admin_read_unit_configuration() { return 0; }
+admin_resolve_metadata
+printf 'INSTALLATION_DETECTED=%s\n' "$ADMIN_INSTALLATION_DETECTED"
+'''
+    result = _source_call(command, str(env_file))
+    assert result.returncode == 0, result.stderr
+    assert "INSTALLATION_DETECTED=1" in result.stdout
+
+
+def test_offline_and_normal_updates_preserve_provider_and_validate_rollback_support() -> None:
+    assert 'SELECTED_SPOTIFY_BACKEND="$(resolve_spotify_backend "" "$WEB_ENV_FILE")"' in UPDATER
+    assert "write_spotify_backend_setting" not in UPDATER
+    active_guard = UPDATER.index("The active rollback release does not support librespot")
+    fetch = UPDATER.index("git_user -c core.hooksPath=/dev/null fetch")
+    target_guard = UPDATER.index("The verified target release does not support the configured librespot provider")
+    checkout_switch = UPDATER.index("git_user -c core.hooksPath=/dev/null switch --detach")
+    assert active_guard < fetch < target_guard < checkout_switch
+    assert 'if [[ -n "$OFFLINE_COMMIT" ]]; then' in UPDATER
+
+
+def test_legacy_key_prerequisite_requires_protected_configuration(tmp_path: Path) -> None:
+    key_file = tmp_path / "lumistripe-spotify.env"
+    key_file.write_text("LUMI_SPOTIFY_API_KEY=existing-key\n", encoding="utf-8")
+    key_file.chmod(0o600)
+    result = _provider_call(
+        'SERVICE_USER="$(id -un)"; SOLOIST_ENV_FILE="$1"; '
+        'if provider_soloist_key_ready; then printf "KEY_READY=1\\n"; '
+        'else printf "KEY_READY=0\\n"; fi',
+        str(key_file),
+    )
+    assert result.returncode == 0, result.stderr
+    assert "KEY_READY=1" in result.stdout
+
+    key_file.chmod(0o640)
+    unsafe = _provider_call(
+        'SERVICE_USER="$(id -un)"; SOLOIST_ENV_FILE="$1"; '
+        'if provider_soloist_key_ready; then printf "KEY_READY=1\\n"; '
+        'else printf "KEY_READY=0\\n"; fi',
+        str(key_file),
+    )
+    assert unsafe.returncode == 0, unsafe.stderr
+    assert "KEY_READY=0" in unsafe.stdout
+
+
+def test_native_data_directory_must_be_private_and_service_owned(tmp_path: Path) -> None:
+    data_dir = tmp_path / "native-state"
+    data_dir.mkdir(mode=0o700)
+    command = (
+        'SERVICE_USER="$(id -un)"; runuser() { shift 3; "$@"; }; '
+        'if provider_native_data_writable "$1"; then printf "NATIVE_DIR_READY=1\\n"; '
+        'else printf "NATIVE_DIR_READY=0\\n"; fi'
+    )
+    safe = _provider_call(command, str(data_dir))
+    assert safe.returncode == 0, safe.stderr
+    assert "NATIVE_DIR_READY=1" in safe.stdout
+
+    data_dir.chmod(0o755)
+    unsafe = _provider_call(command, str(data_dir))
+    assert unsafe.returncode == 0, unsafe.stderr
+    assert "NATIVE_DIR_READY=0" in unsafe.stdout
+
+
+def test_release_backend_check_requires_the_requested_clap_value(tmp_path: Path) -> None:
+    web_binary = tmp_path / "lumistripe-web"
+    web_binary.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' 'Options: --spotify-backend <SPOTIFY_BACKEND> [possible values: librespot, soloist, disabled]'\n",
+        encoding="utf-8",
+    )
+    web_binary.chmod(0o755)
+    user = subprocess.check_output(["id", "-un"], text=True).strip()
+    supported = _support_call(
+        'runuser() { shift 3; "$@"; }; '
+        'spotify_web_binary_supports_backend "$1" librespot "$2"',
+        str(web_binary),
+        user,
+    )
+    assert supported.returncode == 0, supported.stderr
+
+    web_binary.write_text("#!/usr/bin/env bash\nprintf '%s\\n' 'No Spotify backend option'\n", encoding="utf-8")
+    unsupported = _support_call(
+        'runuser() { shift 3; "$@"; }; '
+        'spotify_web_binary_supports_backend "$1" librespot "$2"',
+        str(web_binary),
+        user,
+    )
+    assert unsupported.returncode != 0
+
+
+def test_provider_switch_uses_mocked_prerequisites_and_keeps_both_credential_stores(
+    tmp_path: Path,
+) -> None:
+    native_state = tmp_path / "native-state"
+    native_state.mkdir(mode=0o700)
+    native_credentials = native_state / "credentials.json"
+    native_credentials.write_text("native credentials\n", encoding="utf-8")
+    native_credentials.chmod(0o600)
+    soloist_env = tmp_path / "lumistripe-spotify.env"
+    soloist_env.write_text("LUMI_SPOTIFY_API_KEY=existing-key\n", encoding="utf-8")
+
+    result = _provider_switch_call(
+        tmp_path,
+        current="soloist",
+        target="librespot",
+        web_active=True,
+        soloist_active=True,
+        web_enabled=True,
+        soloist_enabled=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "CHECKED_PROVIDER=librespot" in result.stdout
+    assert "SWITCH_STATUS=0" in result.stdout
+    assert "FINAL_BACKEND=librespot" in result.stdout
+    assert "FINAL_WEB_ACTIVE=1" in result.stdout
+    assert "FINAL_SOLOIST_ACTIVE=0" in result.stdout
+    actions = result.stdout.split("ACTIONS=", 1)[1].splitlines()[0].split(",")
+    assert actions.index("stop:lumistripe-spotify.service") < actions.index(
+        "start:lumistripe-web.service"
+    )
+    assert native_credentials.read_text(encoding="utf-8") == "native credentials\n"
+    assert soloist_env.read_text(encoding="utf-8") == "LUMI_SPOTIFY_API_KEY=existing-key\n"
+
+
+def test_failed_provider_switch_restores_provider_config_and_service_state(
+    tmp_path: Path,
+) -> None:
+    result = _provider_switch_call(
+        tmp_path,
+        current="librespot",
+        target="disabled",
+        web_active=True,
+        soloist_active=False,
+        web_enabled=True,
+        health_fail_first=True,
+    )
+
+    assert result.returncode == 0
+    assert "SWITCH_STATUS=1" in result.stdout
+    assert "FINAL_BACKEND=librespot" in result.stdout
+    assert "FINAL_WEB_ACTIVE=1" in result.stdout
+    assert "FINAL_WEB_ENABLED=1" in result.stdout
+    assert "HEALTH_CALLS=2" in result.stdout
+    assert "could not fully restored" not in result.stderr
+
+
+def test_failed_first_soloist_switch_removes_new_unit_enablement(
+    tmp_path: Path,
+) -> None:
+    result = _provider_switch_call(
+        tmp_path,
+        current="librespot",
+        target="soloist",
+        web_active=True,
+        soloist_active=False,
+        web_enabled=True,
+        soloist_enabled=False,
+        health_fail_first=True,
+    )
+
+    assert result.returncode == 0
+    assert "SWITCH_STATUS=1" in result.stdout
+    assert "FINAL_BACKEND=librespot" in result.stdout
+    assert "FINAL_WEB_ACTIVE=1" in result.stdout
+    assert "FINAL_WEB_ENABLED=1" in result.stdout
+    assert "FINAL_SOLOIST_ACTIVE=0" in result.stdout
+    assert "FINAL_SOLOIST_ENABLED=0" in result.stdout
+    assert not (tmp_path / "lumistripe-spotify.service").exists()
+
+
+def test_native_provider_switch_rejects_two_active_connect_receivers(tmp_path: Path) -> None:
+    result = _provider_switch_call(
+        tmp_path,
+        current="librespot",
+        target="soloist",
+        web_active=True,
+        soloist_active=True,
+        web_enabled=True,
+        soloist_enabled=True,
+    )
+
+    assert result.returncode == 0
+    assert "SWITCH_STATUS=1" in result.stdout
+    assert "FINAL_BACKEND=librespot" in result.stdout
+    assert "both Spotify Connect providers are active" in result.stderr
+    assert "ACTIONS=\n" in result.stdout
+
+
+def test_native_status_does_not_require_soloist_credentials_and_is_read_only(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "lumistripe-web.env"
+    native_data = tmp_path / "native-state"
+    config.write_text(
+        f"LUMI_SPOTIFY_BACKEND=librespot\nLUMI_SPOTIFY_LIBRESPOT_DATA_DIR={native_data}\n",
+        encoding="utf-8",
+    )
+    command = r'''
+WEB_ENV_FILE="$1"
+SOLOIST_ENV_FILE="$2/missing-soloist.env"
+TEST_HOME="$2"
+provider_load_context() {
+  SERVICE_USER="$(id -un)"
+  SERVICE_HOME="$TEST_HOME"
+  ACTIVE_RELEASE="$TEST_HOME/release"
+}
+provider_native_data_writable() { return 0; }
+provider_service_state() { printf 'Inactive\n'; }
+spotify_web_binary_supports_backend() { return 0; }
+provider_print_status
+'''
+    result = _provider_call(command, str(config), str(tmp_path))
+    assert result.returncode == 0, result.stderr
+    assert "Spotify provider: librespot" in result.stdout
+    assert "Spotify configured: Yes" in result.stdout
+    assert "Spotify process: LumiStripe web process" in result.stdout
+    assert "Spotify pairing: Pairing required" in result.stdout
+    assert "Spotify API key" not in result.stdout
+
+    status_function = (DEPLOY / "spotify-provider.sh").read_text(encoding="utf-8")
+    status_function = status_function.split("provider_print_status() {", 1)[1].split(
+        "\nprovider_main() {", 1
+    )[0]
+    for mutation in (
+        "systemctl start",
+        "systemctl stop",
+        "systemctl restart",
+        "systemctl enable",
+        "write_spotify_backend_setting",
+        "install -d",
+    ):
+        assert mutation not in status_function
+
+
+def test_uninstall_preserves_both_provider_credential_stores() -> None:
+    assert 'remove_file "$ENV_FILE"' in UNINSTALLER
+    assert 'remove_file "$SPOTIFY_ENV_FILE"' not in UNINSTALLER
+    assert 'remove_directory "$SERVICE_HOME/.local/share/lumistripe/spotify"' not in UNINSTALLER
+    assert "remove_directory /var/lib/lumistripe/spotify\n" not in UNINSTALLER
+    assert 'remove_file "$SOLOIST_BIN"' in UNINSTALLER
 
 
 def test_project_discovery_migrates_from_trusted_systemd_configuration() -> None:
@@ -298,8 +808,10 @@ def test_systemd_directory_validation_requires_root_owned_non_writable_dirs() ->
     ("unit_configuration", "expected_project"),
     [
         (
-            "[Service]\nUser=pi\nWorkingDirectory=/srv/fallback\n"
-            "Environment=LUMI_PROJECT_DIR=/opt/lumistripe\n",
+            (
+                "[Service]\nUser=pi\nWorkingDirectory=/srv/fallback\n"
+                "Environment=LUMI_PROJECT_DIR=/opt/lumistripe\n"
+            ),
             "/opt/lumistripe",
         ),
         ("[Service]\nUser=pi\nWorkingDirectory=/srv/lumistripe\n", "/srv/lumistripe"),
@@ -455,8 +967,7 @@ def test_repair_requires_and_delegates_to_trusted_source_checkout(tmp_path: Path
     )
     service_user = subprocess.check_output(["id", "-un"], text=True).strip()
     command = (
-        'admin_parse_arguments repair --source "$1" --user "$2" '
-        '--spotify-backend disabled || exit $?; '
+        'admin_parse_arguments repair --source "$1" --user "$2" || exit $?; '
         'ADMIN_SERVICE_USER="$2"; ADMIN_INSTALLATION_DETECTED=1; '
         'admin_check_platform() { return 0; }; '
         'admin_validate_trusted_checkout() { return 0; }; '
@@ -467,7 +978,34 @@ def test_repair_requires_and_delegates_to_trusted_source_checkout(tmp_path: Path
     assert result.returncode == 0, result.stderr
     assert f"CHILD_PROJECT={project}" in result.stdout
     assert f"CHILD_USER={service_user}" in result.stdout
-    assert "CHILD_SPOTIFY_BACKEND=disabled" in result.stdout
+    assert "CHILD_SPOTIFY_BACKEND=" in result.stdout
+
+
+def test_spotify_command_delegates_to_the_root_owned_provider_snapshot(
+    tmp_path: Path,
+) -> None:
+    snapshot = tmp_path / "root-snapshot"
+    _mock_child(snapshot / "spotify-provider.sh")
+    service_user = subprocess.check_output(["id", "-un"], text=True).strip()
+    command = (
+        'admin_parse_arguments spotify use librespot || exit $?; '
+        'ADMIN_SNAPSHOT_DIR="$1"; ADMIN_PROJECT_DIR="$2"; ADMIN_PROJECT_VALID=1; '
+        'ADMIN_SERVICE_USER="$3"; ADMIN_INSTALLATION_DETECTED=1; '
+        'admin_require_installed() { return 0; }; '
+        'admin_require_project() { return 0; }; '
+        'admin_check_user_exists() { return 0; }; '
+        'admin_safe_system_file() { return 0; }; '
+        'admin_clear_unapproved_environment() { :; }; '
+        'admin_run_spotify'
+    )
+    result = _source_call(
+        command,
+        str(snapshot),
+        str(tmp_path / "runtime"),
+        service_user,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "CHILD_ARGS=use librespot" in result.stdout
 
 
 @pytest.mark.parametrize(("assume_yes", "expected_args"), [("0", ""), ("1", "--yes")])
@@ -523,6 +1061,9 @@ def test_source_trust_checks_and_uninstall_confirmation_remain_enforced() -> Non
     assert 'read -r -p "Continue with LumiStripe uninstall? [y/N] " confirmation' in UNINSTALLER
     assert 'admin_run_script "$script" --yes' in ADMIN_TEXT
     assert "lumistripe-admin" not in (DEPLOY / "lumistripe-update.sudoers").read_text(
+        encoding="utf-8"
+    )
+    assert "rm -rf -- \"$BACKUP_DIR\"" not in (DEPLOY / "spotify-provider.sh").read_text(
         encoding="utf-8"
     )
 
