@@ -64,7 +64,7 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use tokio::time::timeout;
+use tokio::time::{Instant as TokioInstant, timeout, timeout_at};
 use tokio_util::sync::CancellationToken;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
@@ -208,6 +208,8 @@ pub struct WebApplication {
     engine_failure: watch::Receiver<Option<String>>,
     tasks: Vec<JoinHandle<()>>,
 }
+
+const APPLICATION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl WebApplication {
     pub async fn start(config: AppConfig, pairing_code: Option<String>) -> Result<Self, String> {
@@ -463,19 +465,51 @@ impl WebApplication {
     }
 
     pub async fn shutdown(&mut self) {
+        let deadline = TokioInstant::now() + APPLICATION_SHUTDOWN_TIMEOUT;
         self.cancellation.cancel();
-        for task in self.tasks.drain(..) {
-            if timeout(Duration::from_secs(3), task).await.is_err() {
+        shutdown_background_tasks(&mut self.tasks, deadline).await;
+        if let Some(mut engine) = self.engine.take() {
+            if TokioInstant::now() >= deadline {
                 tracing::warn!(
-                    "Rust web background task did not stop before the shutdown deadline"
+                    "Rust web application shutdown deadline elapsed before engine shutdown"
                 );
+                drop(engine);
+            } else {
+                match timeout_at(
+                    deadline,
+                    tokio::task::spawn_blocking(move || engine.shutdown()),
+                )
+                .await
+                {
+                    Ok(Ok(Ok(()))) => {}
+                    Ok(Ok(Err(error))) => {
+                        tracing::error!(error = %error, "Rust engine shutdown failed")
+                    }
+                    Ok(Err(error)) => {
+                        tracing::error!(error = %error, "Rust engine shutdown task failed")
+                    }
+                    Err(_) => tracing::warn!(
+                        "Rust engine shutdown did not finish before the application shutdown deadline"
+                    ),
+                }
             }
         }
-        if let Some(mut engine) = self.engine.take() {
-            match tokio::task::spawn_blocking(move || engine.shutdown()).await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => tracing::error!(error = %error, "Rust engine shutdown failed"),
-                Err(error) => tracing::error!(error = %error, "Rust engine shutdown task failed"),
+    }
+}
+
+async fn shutdown_background_tasks(tasks: &mut Vec<JoinHandle<()>>, deadline: TokioInstant) {
+    for (index, mut task) in tasks.drain(..).enumerate() {
+        match timeout_at(deadline, &mut task).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(task_index = index, error = %error, "Rust web background task failed during shutdown");
+            }
+            Err(_) => {
+                task.abort();
+                tracing::warn!(
+                    task_index = index,
+                    "Rust web background task did not stop before the shutdown deadline; aborting it"
+                );
             }
         }
     }
@@ -3588,7 +3622,7 @@ fn spawn_audio_status_publisher(
 #[cfg(test)]
 mod tests {
     use super::{
-        NetworkManagerService, WebApplication, create_spotify_provider,
+        NetworkManagerService, WebApplication, create_spotify_provider, shutdown_background_tasks,
         spawn_dashboard_state_publisher, websocket_origin_allowed,
     };
     use crate::bluetooth::BluetoothService;
@@ -3613,13 +3647,49 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
     use tempfile::tempdir;
     use tokio::sync::{mpsc, watch};
-    use tokio::time::{sleep, timeout};
+    use tokio::time::{Instant as TokioInstant, sleep, timeout};
     use tokio_util::sync::CancellationToken;
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn shutdown_aborts_all_background_tasks_at_one_shared_deadline() {
+        struct DropCounter(Arc<AtomicUsize>);
+
+        impl Drop for DropCounter {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let mut tasks = (0..4)
+            .map(|_| {
+                let dropped = dropped.clone();
+                tokio::spawn(async move {
+                    let _drop_counter = DropCounter(dropped);
+                    std::future::pending::<()>().await;
+                })
+            })
+            .collect();
+        let deadline = TokioInstant::now() + Duration::from_millis(50);
+        let started = TokioInstant::now();
+
+        shutdown_background_tasks(&mut tasks, deadline).await;
+
+        assert!(started.elapsed() < Duration::from_millis(250));
+        timeout(Duration::from_secs(1), async {
+            while dropped.load(Ordering::Acquire) != 4 {
+                sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("background tasks should be aborted after the shared deadline");
+        assert!(tasks.is_empty());
+    }
 
     #[test]
     fn update_install_launch_failure_maps_to_service_unavailable() {
