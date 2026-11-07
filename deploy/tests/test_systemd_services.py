@@ -120,6 +120,139 @@ def test_sudoers_grants_only_the_fixed_helper_and_service_commands() -> None:
     assert "exec /usr/bin/systemctl start --no-block lumistripe-update.service" in trigger
 
 
+@pytest.mark.parametrize(
+    ("fail_configuration", "expected_state", "expected_diagnostic"),
+    [
+        (False, "success", None),
+        (
+            True,
+            "failed;rollback=complete",
+            "Updater step failed: Configuration: render web service unit (exit status 1).",
+        ),
+    ],
+)
+def test_dashboard_update_trigger_runs_the_fixed_service_and_records_outcome(
+    tmp_path: Path,
+    fail_configuration: bool,
+    expected_state: str,
+    expected_diagnostic: str | None,
+) -> None:
+    update_source = (DEPLOY / "update.sh").read_text(encoding="utf-8")
+    step_helper = update_source[
+        update_source.index("lumi_run_update_step() {"):
+        update_source.index("\ninstall_wireplumber_config() {")
+    ]
+    health = update_source[
+        update_source.index("wait_for_web_service_health() {"):
+        update_source.index("\nrollback() {")
+    ]
+    rollback = update_source[
+        update_source.index("rollback() {"):
+        update_source.index("\nrecord_update_state() {")
+    ]
+    service_runner = tmp_path / "update-service.sh"
+    outcome_file = tmp_path / "install-state"
+    call_log = tmp_path / "update-calls.log"
+    operation = "false" if fail_configuration else "true"
+    support_dir = tmp_path / "deploy"
+    support_dir.mkdir()
+    (support_dir / "update-support.sh").write_text(
+        """
+install_rust_cli_command() { printf 'install-cli %s\\n' "$1" >> "$CALL_LOG"; }
+activate_rust_release() { printf 'activate %s\\n' "$1" >> "$CALL_LOG"; }
+restart_spotify_service_if_needed() { :; }
+""",
+        encoding="utf-8",
+    )
+    runner = f"""#!/bin/bash
+set -u
+SCRIPT_DIR={str(support_dir)!r}
+PREVIOUS_REF=previous-commit
+ROLLING_BACK=0
+UPDATE_SWITCHED=1
+RELEASE_ACTIVATED=1
+PROJECT_DIR={str(tmp_path / "project")!r}
+PROJECT_HOME={str(tmp_path / "service-home")!r}
+SOLOIST_BINARY_CHANGED=0
+SPOTIFY_SERVICE_FILE_CHANGED=0
+SPOTIFY_ENV_CHANGED=0
+WIREPLUMBER_CONFIG_CHANGED=0
+git_user() {{ printf 'git %s\\n' "$*" >> "$CALL_LOG"; }}
+refresh_deployment_files() {{ printf 'refresh\\n' >> "$CALL_LOG"; }}
+install_rust_cli_command() {{ printf 'install-cli %s\\n' "$1" >> "$CALL_LOG"; }}
+activate_rust_release() {{ printf 'activate %s\\n' "$1" >> "$CALL_LOG"; }}
+systemctl() {{ printf 'systemctl %s\\n' "$*" >> "$CALL_LOG"; }}
+curl() {{ printf 'curl\\n' >> "$CALL_LOG"; return 0; }}
+sleep() {{ :; }}
+spotify_environment_ready() {{ return 1; }}
+{step_helper}
+{health}
+{rollback}
+if lumi_run_update_step "Configuration: render web service unit" {operation}; then
+  printf 'success\\n' > {str(outcome_file)!r}
+else
+  if rollback; then
+    printf 'failed;rollback=complete\\n' > {str(outcome_file)!r}
+  else
+    printf 'failed;rollback=incomplete\\n' > {str(outcome_file)!r}
+  fi
+fi
+"""
+    service_runner.write_text(runner, encoding="utf-8")
+    service_runner.chmod(0o755)
+
+    systemctl_log = tmp_path / "systemctl.log"
+    systemctl = tmp_path / "systemctl"
+    systemctl.write_text(
+        f"""#!/bin/sh
+set -eu
+printf '%s\\n' "$*" >> {str(systemctl_log)!r}
+[ "$*" = 'start --no-block lumistripe-update.service' ] || exit 2
+{str(service_runner)!r} >> {str(tmp_path / "service.log")!r} 2>&1 || true
+""",
+        encoding="utf-8",
+    )
+    systemctl.chmod(0o755)
+
+    trigger = tmp_path / "lumistripe-update-trigger"
+    trigger.write_text(
+        _unit("lumistripe-update-trigger").replace(
+            "/usr/bin/systemctl", str(systemctl)
+        ),
+        encoding="utf-8",
+    )
+    trigger.chmod(0o755)
+
+    result = subprocess.run(
+        [str(trigger)],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "CALL_LOG": str(call_log)},
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert systemctl_log.read_text(encoding="utf-8").splitlines() == [
+        "start --no-block lumistripe-update.service"
+    ]
+    assert outcome_file.read_text(encoding="utf-8").strip() == expected_state
+    service_output = (tmp_path / "service.log").read_text(encoding="utf-8")
+    if expected_diagnostic is None:
+        assert service_output == ""
+    else:
+        assert expected_diagnostic in service_output
+        assert call_log.read_text(encoding="utf-8").splitlines() == [
+            "git switch --detach previous-commit",
+            "activate previous-commit",
+            f"install-cli {tmp_path / 'service-home'}",
+            "refresh",
+            "systemctl restart lumistripe-web.service",
+            "systemctl is-active --quiet lumistripe-web.service",
+            "curl",
+        ]
+
+
 def test_systemd_analyze_accepts_rendered_service_units(tmp_path: Path) -> None:
     analyzer = shutil.which("systemd-analyze")
     if analyzer is None:

@@ -11,6 +11,10 @@ UPDATE_SCRIPT = Path(__file__).parents[1] / "update.sh"
 
 def _rollback_fixture(tmp_path: Path, extra: str = "") -> tuple[str, Path, Path]:
     source = UPDATE_SCRIPT.read_text(encoding="utf-8")
+    update_step = source[
+        source.index("lumi_run_update_step() {"):
+        source.index("\ninstall_wireplumber_config() {")
+    ]
     health = source[
         source.index("wait_for_web_service_health() {"):
         source.index("rollback() {")
@@ -69,6 +73,7 @@ curl() {{ printf 'curl %s\\n' "$*" >> "$CALL_LOG"; [[ "$WEB_HEALTHY" == 1 ]]; }}
 sleep() {{ :; }}
 spotify_environment_ready() {{ [[ "$SPOTIFY_CONFIGURED" == 1 ]]; }}
 {extra}
+{update_step}
 {health}
 {rollback}
 if rollback; then exit 0; else exit 42; fi
@@ -152,7 +157,7 @@ def test_rollback_restores_the_previous_checkout_and_release_without_rebuilding(
         "systemctl restart lumistripe-web.service",
     ]
     assert "systemctl is-active --quiet lumistripe-web.service" in calls
-    assert "curl --disable --fail --silent --show-error --max-time 0.25 http://127.0.0.1:8000/api/health" in calls
+    assert "curl --disable --fail --silent --max-time 0.25 http://127.0.0.1:8000/api/health" in calls
     assert ("systemctl restart lumistripe-spotify.service" in calls) is (
         spotify_configured and soloist_changed
     )
@@ -208,6 +213,62 @@ def test_rollback_verifies_health_and_uses_only_the_validated_previous_release(
     assert all("--max-time 0.25" in line for line in health_probes)
     if return_code == 42:
         assert "Rollback failed; manual recovery is required." in result.stderr
+
+
+def test_dashboard_update_configuration_failure_names_the_failed_substep(
+    tmp_path: Path,
+) -> None:
+    source = UPDATE_SCRIPT.read_text(encoding="utf-8")
+    update_step = source[
+        source.index("lumi_run_update_step() {"):
+        source.index("\ninstall_wireplumber_config() {")
+    ]
+    refresh = source[
+        source.index("refresh_deployment_files() {"):
+        source.index("\nwait_for_web_service_health() {")
+    ]
+    tls_cert = tmp_path / "tls-cert.pem"
+    tls_key = tmp_path / "tls-key.pem"
+    tls_cert.write_text("certificate\n", encoding="utf-8")
+    tls_key.write_text("key\n", encoding="utf-8")
+    script = f"""
+set -u
+SCRIPT_DIR={str(tmp_path)!r}
+TLS_CERT={str(tls_cert)!r}
+TLS_KEY={str(tls_key)!r}
+NGINX_AVAILABLE={str(tmp_path / "nginx.conf")!r}
+SERVICE_RUNTIME_DIR={str(tmp_path / "runtime")!r}
+SYSTEMD_UNITS_CHANGED=0
+WEB_SERVICE_FILE_CHANGED=0
+SPOTIFY_SERVICE_FILE_CHANGED=0
+WIREPLUMBER_CONFIG_CHANGED=0
+NGINX_CONFIG_CHANGED=0
+install_privileged_network_helper() {{ return 0; }}
+install_update_support() {{ return 0; }}
+install_wireplumber_config() {{ return 0; }}
+render_service_unit() {{ return 37; }}
+render_spotify_service_unit() {{ return 0; }}
+install_file_if_changed() {{ FILE_CHANGED=0; return 0; }}
+systemctl() {{ return 0; }}
+nginx() {{ return 0; }}
+{update_step}
+{refresh}
+if refresh_deployment_files; then exit 0; else exit $?; fi
+"""
+
+    result = subprocess.run(
+        ["/bin/bash", "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 1
+    assert (
+        "Updater step failed: Configuration: render web service unit "
+        "(exit status 37)."
+    ) in result.stderr
 
 
 @pytest.mark.parametrize(

@@ -268,6 +268,19 @@ build_frontend() (
   as_user "$BUN_BIN" run build || return 1
 )
 
+lumi_run_update_step() {
+  local label="$1"
+  local status
+  shift
+  if "$@"; then
+    return 0
+  else
+    status=$?
+    echo "Updater step failed: $label (exit status $status)." >&2
+    return "$status"
+  fi
+}
+
 install_wireplumber_config() {
   as_user install -d -m 755 "$WIREPLUMBER_DIR" || return 1
   install_user_file_if_changed \
@@ -363,6 +376,7 @@ render_spotify_service_unit() {
 }
 
 refresh_deployment_files() {
+  local step_context="${1:-Configuration}"
   local nginx_was_active=0
   # Creating a certificate involves files writable by the service account.
   # Require an administrator to repair it through the installer instead of
@@ -372,48 +386,62 @@ refresh_deployment_files() {
     return 1
   fi
 
-  install_privileged_network_helper || return 1
-  install_update_support || return 1
-  install_wireplumber_config || return 1
-  render_service_unit || return 1
-  render_spotify_service_unit || return 1
+  lumi_run_update_step "$step_context: install privileged network helper" \
+    install_privileged_network_helper || return 1
+  lumi_run_update_step "$step_context: install updater support files" \
+    install_update_support || return 1
+  lumi_run_update_step "$step_context: install PipeWire configuration" \
+    install_wireplumber_config || return 1
+  lumi_run_update_step "$step_context: render web service unit" \
+    render_service_unit || return 1
+  lumi_run_update_step "$step_context: render Spotify service unit" \
+    render_spotify_service_unit || return 1
   if [[ "${SYSTEMD_UNITS_CHANGED:-0}" == 1 ||
         "$WEB_SERVICE_FILE_CHANGED" == 1 || "$SPOTIFY_SERVICE_FILE_CHANGED" == 1 ]]; then
-    systemctl daemon-reload || return 1
+    lumi_run_update_step "$step_context: reload systemd units" \
+      systemctl daemon-reload || return 1
   fi
-  systemctl enable --now lumistripe-update-check.timer || return 1
+  lumi_run_update_step "$step_context: enable update-check timer" \
+    systemctl enable --now lumistripe-update-check.timer || return 1
 
-  install -d -m 755 /etc/nginx/sites-available /etc/nginx/sites-enabled || return 1
-  install_file_if_changed "$SCRIPT_DIR/nginx/led-controller.conf" \
+  lumi_run_update_step "$step_context: prepare Nginx site directories" \
+    install -d -m 755 /etc/nginx/sites-available /etc/nginx/sites-enabled || return 1
+  lumi_run_update_step "$step_context: install Nginx site configuration" \
+    install_file_if_changed "$SCRIPT_DIR/nginx/led-controller.conf" \
     "$NGINX_AVAILABLE" root root 644 || return 1
   NGINX_CONFIG_CHANGED="$FILE_CHANGED"
   if [[ -L /etc/nginx/sites-enabled/led-controller ]]; then
     if [[ "$(readlink -f -- /etc/nginx/sites-enabled/led-controller 2>/dev/null || true)" != "$NGINX_AVAILABLE" ]]; then
-      ln -sfn "$NGINX_AVAILABLE" /etc/nginx/sites-enabled/led-controller || return 1
+      lumi_run_update_step "$step_context: update Nginx site symlink" \
+        ln -sfn "$NGINX_AVAILABLE" /etc/nginx/sites-enabled/led-controller || return 1
       NGINX_CONFIG_CHANGED=1
     fi
   elif [[ -e /etc/nginx/sites-enabled/led-controller ]]; then
     echo "Refusing to replace a user-managed Nginx site: /etc/nginx/sites-enabled/led-controller" >&2
     return 1
   else
-    ln -s "$NGINX_AVAILABLE" /etc/nginx/sites-enabled/led-controller || return 1
+    lumi_run_update_step "$step_context: create Nginx site symlink" \
+      ln -s "$NGINX_AVAILABLE" /etc/nginx/sites-enabled/led-controller || return 1
     NGINX_CONFIG_CHANGED=1
   fi
-  nginx -t || return 1
+  lumi_run_update_step "$step_context: validate Nginx configuration" nginx -t || return 1
   if systemctl is-active --quiet nginx.service; then
     nginx_was_active=1
   fi
-  systemctl enable nginx.service || return 1
+  lumi_run_update_step "$step_context: enable Nginx service" \
+    systemctl enable nginx.service || return 1
   if (( nginx_was_active )); then
     if [[ "$NGINX_CONFIG_CHANGED" == 1 ]]; then
-      systemctl reload nginx.service || return 1
+      lumi_run_update_step "$step_context: reload Nginx service" \
+        systemctl reload nginx.service || return 1
     fi
   else
-    systemctl start nginx.service || return 1
+    lumi_run_update_step "$step_context: start Nginx service" \
+      systemctl start nginx.service || return 1
   fi
 
   if [[ -S "$SERVICE_RUNTIME_DIR/bus" && "$WIREPLUMBER_CONFIG_CHANGED" == 1 ]]; then
-    as_user_with_env \
+    lumi_run_update_step "$step_context: restart PipeWire user services" as_user_with_env \
       XDG_RUNTIME_DIR="$SERVICE_RUNTIME_DIR" \
       DBUS_SESSION_BUS_ADDRESS="unix:path=$SERVICE_RUNTIME_DIR/bus" \
       systemctl --user restart pipewire pipewire-pulse wireplumber || return 1
@@ -423,7 +451,7 @@ refresh_deployment_files() {
 wait_for_web_service_health() {
   local attempt
   for attempt in {1..60}; do
-    if curl --disable --fail --silent --show-error --max-time 0.25 \
+    if curl --disable --fail --silent --max-time 0.25 \
       http://127.0.0.1:8000/api/health >/dev/null; then
       return 0
     fi
@@ -443,19 +471,23 @@ rollback() {
   echo "Update failed; rolling back to $PREVIOUS_REF..." >&2
   local failed=0
   if (( UPDATE_SWITCHED )); then
-    if ! git_user switch --detach "$PREVIOUS_REF"; then
+    if ! lumi_run_update_step "Rollback: restore previous checkout" \
+      git_user switch --detach "$PREVIOUS_REF"; then
       echo "Rollback could not restore the previous revision; manual recovery is required." >&2
       return 1
     fi
   fi
   source "$SCRIPT_DIR/update-support.sh"
-  activate_rust_release "$PREVIOUS_REF" || failed=1
+  lumi_run_update_step "Rollback: activate previous Rust release" \
+    activate_rust_release "$PREVIOUS_REF" || failed=1
   RELEASE_ACTIVATED=0
-  install_rust_cli_command "$PROJECT_HOME" || failed=1
-  refresh_deployment_files || failed=1
-  if systemctl restart lumistripe-web.service; then
+  lumi_run_update_step "Rollback: install previous CLI command" \
+    install_rust_cli_command "$PROJECT_HOME" || failed=1
+  refresh_deployment_files "Rollback configuration" || failed=1
+  if lumi_run_update_step "Rollback: restart web service" \
+    systemctl restart lumistripe-web.service; then
     if systemctl is-active --quiet lumistripe-web.service; then
-      if ! wait_for_web_service_health; then
+      if ! lumi_run_update_step "Rollback: wait for web health" wait_for_web_service_health; then
         echo "Rolled-back web service did not become healthy in time." >&2
         failed=1
       fi
@@ -473,7 +505,8 @@ rollback() {
           "$SPOTIFY_ENV_CHANGED" == 1 || "$WIREPLUMBER_CONFIG_CHANGED" == 1 ]]; then
       rollback_spotify_restart=1
     fi
-    restart_spotify_service_if_needed "$rollback_spotify_restart" || failed=1
+    lumi_run_update_step "Rollback: restore Spotify service" \
+      restart_spotify_service_if_needed "$rollback_spotify_restart" || failed=1
   fi
   if (( failed )); then
     echo "Rollback failed; manual recovery is required." >&2
@@ -711,20 +744,26 @@ if spotify_environment_ready; then
         "$SPOTIFY_ENV_CHANGED" == 1 || "$WIREPLUMBER_CONFIG_CHANGED" == 1 ]]; then
     spotify_restart_required=1
   fi
-  restart_spotify_service_if_needed "$spotify_restart_required"
+  lumi_run_update_step "Service health: restart Spotify service" \
+    restart_spotify_service_if_needed "$spotify_restart_required"
 fi
-systemctl enable lumistripe-web.service
+lumi_run_update_step "Service health: enable web service" \
+  systemctl enable lumistripe-web.service
 if [[ "$APP_RELEASE_CHANGED" == 1 || "$WEB_SERVICE_FILE_CHANGED" == 1 ||
       "$WEB_ENV_CHANGED" == 1 ]] || \
   ! systemctl is-active --quiet lumistripe-web.service; then
-  systemctl restart lumistripe-web.service
+  lumi_run_update_step "Service health: restart web service" \
+    systemctl restart lumistripe-web.service
 else
   echo "LumiStripe binaries and service configuration are unchanged; skipping service restart."
 fi
-systemctl is-active --quiet lumistripe-web.service
+lumi_run_update_step "Service health: verify web service is active" \
+  systemctl is-active --quiet lumistripe-web.service
 
-if wait_for_web_service_health; then
-  write_lumistripe_install_state "$PROJECT_USER" "$PROJECT_DIR" "$EFFECTIVE_DEPLOY_MODE"
+if lumi_run_update_step "Service health: wait for dashboard health" \
+  wait_for_web_service_health; then
+  lumi_run_update_step "Service health: record installation state" \
+    write_lumistripe_install_state "$PROJECT_USER" "$PROJECT_DIR" "$EFFECTIVE_DEPLOY_MODE"
   lumi_phase_end "Service health"
   lumi_phase_report
   echo "LumiStripe updated to $(git_user rev-parse --short HEAD)."
