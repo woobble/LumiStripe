@@ -20,6 +20,7 @@ image_name=
 inside_container=0
 require_manifest=0
 SMOKE_WEB_PID=
+SMOKE_CONFIG_DIR=
 while (($#)); do
   option="$1"
   shift
@@ -198,8 +199,7 @@ run_inside_container() {
     fail '--require-manifest was set but the release manifest is missing'
   fi
   check_runtime
-  local config_dir
-  config_dir="$(mktemp -d /tmp/lumistripe-release-smoke.XXXXXX)" || fail 'could not create smoke-test temporary directory'
+  SMOKE_CONFIG_DIR="$(mktemp -d /tmp/lumistripe-release-smoke.XXXXXX)" || fail 'could not create smoke-test temporary directory'
   cleanup_runtime() {
     if [[ -n "$SMOKE_WEB_PID" ]] && kill -0 "$SMOKE_WEB_PID" 2>/dev/null; then
       kill -TERM "$SMOKE_WEB_PID" 2>/dev/null || true
@@ -207,11 +207,11 @@ run_inside_container() {
       kill -KILL "$SMOKE_WEB_PID" 2>/dev/null || true
       wait "$SMOKE_WEB_PID" 2>/dev/null || true
       SMOKE_WEB_PID=
-      if [[ -s "$config_dir/web.log" ]]; then
-        tail -c 4000 -- "$config_dir/web.log" >&2 || true
+      if [[ -s "$SMOKE_CONFIG_DIR/web.log" ]]; then
+        tail -c 4000 -- "$SMOKE_CONFIG_DIR/web.log" >&2 || true
       fi
     fi
-    rm -rf -- "$config_dir"
+    rm -rf -- "$SMOKE_CONFIG_DIR"
   }
   trap cleanup_runtime EXIT
   trap 'exit 130' INT
@@ -225,7 +225,7 @@ run_inside_container() {
     fail 'deployment helper failed to start'
   [[ "$helper_output" == *'Restricted LumiStripe deployment utilities'* ]] || \
     fail 'deployment helper did not display its command interface'
-  exercise_web "$config_dir"
+  exercise_web "$SMOKE_CONFIG_DIR"
 }
 
 if (( inside_container )); then

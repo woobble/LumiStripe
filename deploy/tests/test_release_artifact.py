@@ -23,6 +23,7 @@ release_artifact = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(release_artifact)
 
 COMMIT = "a" * 40
+RELEASE_SMOKE = Path(__file__).parents[1] / "release_smoke.sh"
 
 
 def _release(directory: Path, commit: str = COMMIT) -> Path:
@@ -440,6 +441,40 @@ def test_ci_release_smoke_platform_checks_and_qualification_gate_precede_publica
     assert '--simulate --host 127.0.0.1' in smoke_source
     assert '--spotify-backend disabled' in smoke_source
     assert 'LUMISTRIPE_ENABLE_SPOTIFY=0' not in smoke_source
+
+
+def test_release_smoke_exit_cleanup_survives_local_scope_exit(tmp_path: Path) -> None:
+    smoke_source = RELEASE_SMOKE.read_text(encoding="utf-8")
+    cleanup_body = smoke_source.split("  cleanup_runtime() {", maxsplit=1)[1].split(
+        "\n  }\n  trap cleanup_runtime EXIT", maxsplit=1
+    )[0]
+    config_dir = tmp_path / "smoke-config"
+    config_dir.mkdir()
+    environment = os.environ.copy()
+    environment["TEST_SMOKE_CONFIG_DIR"] = str(config_dir)
+    cleanup_script = f"""set -Eeuo pipefail
+SMOKE_WEB_PID=
+SMOKE_CONFIG_DIR="$TEST_SMOKE_CONFIG_DIR"
+cleanup_runtime() {{{cleanup_body}
+}}
+install_exit_trap() {{
+  local config_dir=scope-local-only
+  trap cleanup_runtime EXIT
+}}
+install_exit_trap
+"""
+
+    result = subprocess.run(
+        ["bash", "-uc", cleanup_script],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not config_dir.exists()
 
 
 def test_signed_release_is_verified_before_cache_and_release_staging(
