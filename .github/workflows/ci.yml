@@ -176,19 +176,13 @@ jobs:
           cargo build --release --locked
           --package lumistripe-web --features bluez,pipewire
 
-      - name: Install uv for the extended stability profile
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_extended_stability }}
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          enable-cache: false
-          python-version: "3.12"
-          version: "0.13.5"
-
       - name: Run the opt-in simulator stability profile
         id: extended-stability
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_extended_stability }}
+        env:
+          LUMI_STABILITY_DRIVER: target/release/lumistripe-stability-driver
         run: |
-          uv run --no-project --python 3.12 python deploy/stability_profile.py \
+          bash deploy/stability_profile.sh \
             --binary target/release/lumistripe-web \
             --duration-seconds 180 \
             --output "$RUNNER_TEMP/lumistripe-stability.json"
@@ -284,13 +278,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          enable-cache: false
-          python-version: "3.12"
-          version: "0.13.5"
-
       - name: Generate CI qualification report
         env:
           DEPLOYMENT_TEST_RESULT: ${{ needs.deployment-tests.result }}
@@ -302,7 +289,7 @@ jobs:
         run: |
           set -eu
           report_dir="$RUNNER_TEMP/ci-qualification"
-          uv run --no-project --python 3.12 python deploy/release_qualification.py \
+          bash deploy/release_qualification.sh \
             --project-root "$GITHUB_WORKSPACE" \
             --commit "$GITHUB_SHA" \
             --deployment-tests "$DEPLOYMENT_TEST_RESULT" \
@@ -352,13 +339,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          enable-cache: false
-          python-version: "3.12"
-          version: "0.13.5"
-
       - name: Verify release source commit
         id: verify_release_source
         run: |
@@ -400,12 +380,21 @@ jobs:
           release_dir="$RUNNER_TEMP/lumistripe-release/release"
           archive_name="lumistripe-linux-aarch64-$GITHUB_SHA.tar.gz"
           archive="$RUNNER_TEMP/$archive_name"
-          uv run --no-project --python 3.12 python deploy/release_artifact.py package \
-            --release-dir "$release_dir" \
-            --output "$archive" \
-            --commit "$GITHUB_SHA" \
-            --project-root "$GITHUB_WORKSPACE" \
-            --build-info "$RUNNER_TEMP/lumistripe-release/release-build-info.json"
+          docker run --rm --network none --read-only \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --user "$(id -u):$(id -g)" \
+            --mount "type=bind,src=$release_dir,dst=/release" \
+            --mount "type=bind,src=$RUNNER_TEMP,dst=/out" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/src,readonly" \
+            --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
+            --entrypoint /release/lumistripe-deploy-helper \
+            "lumistripe-release-smoke:$GITHUB_SHA" \
+            release-artifact package \
+              --release-dir /release \
+              --output "/out/$archive_name" \
+              --commit "$GITHUB_SHA" \
+              --project-root /src \
+              --build-info /out/lumistripe-release/release-build-info.json
           cp "$release_dir/manifest.json" "$archive.manifest.json"
           (cd "$RUNNER_TEMP" && sha256sum "$archive_name" > "$archive_name.sha256")
           echo "LUMI_RELEASE_ARCHIVE=$archive" >> "$GITHUB_ENV"
@@ -416,14 +405,20 @@ jobs:
           set -eu
           release_dir="$RUNNER_TEMP/lumistripe-release/release"
           archive="$RUNNER_TEMP/lumistripe-linux-aarch64-$GITHUB_SHA.tar.gz"
-          uv run --no-project --python 3.12 python deploy/release_artifact.py validate \
-            --release-dir "$release_dir" \
-            --commit "$GITHUB_SHA" \
-            --origin github \
-            --check-runtime
+          docker run --rm --network none --read-only \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --user "$(id -u):$(id -g)" \
+            --mount "type=bind,src=$release_dir,dst=/release,readonly" \
+            --entrypoint /release/lumistripe-deploy-helper \
+            "lumistripe-release-smoke:$GITHUB_SHA" \
+            release-artifact validate \
+              --release-dir /release \
+              --commit "$GITHUB_SHA" \
+              --origin github \
+              --check-runtime
           cmp "$release_dir/manifest.json" "$archive.manifest.json"
           (cd "$RUNNER_TEMP" && sha256sum --check "${archive##*/}.sha256")
-          uv run --no-project --python 3.12 python deploy/release_smoke.py \
+          bash deploy/release_smoke.sh \
             --release-dir "$release_dir" \
             --commit "$GITHUB_SHA" \
             --image "lumistripe-release-smoke:$GITHUB_SHA" \
@@ -443,7 +438,7 @@ jobs:
         id: verify_ubuntu_runtime
         run: |
           set -eu
-          uv run --no-project --python 3.12 python deploy/release_smoke.py \
+          bash deploy/release_smoke.sh \
             --release-dir "$RUNNER_TEMP/lumistripe-release/release" \
             --commit "$GITHUB_SHA" \
             --image "lumistripe-release-ubuntu-compat:$GITHUB_SHA" \
@@ -475,6 +470,38 @@ jobs:
             --bundle "$bundle"
           echo "LUMI_RELEASE_BUNDLE=$bundle" >> "$GITHUB_ENV"
 
+      - name: Prepare trusted deployment helper asset
+        id: prepare_helper
+        run: |
+          set -eu
+          helper="$RUNNER_TEMP/lumistripe-deploy-helper-linux-aarch64"
+          cp "$RUNNER_TEMP/lumistripe-release/release/lumistripe-deploy-helper" "$helper"
+          chmod 755 "$helper"
+          echo "LUMI_RELEASE_HELPER=$helper" >> "$GITHUB_ENV"
+
+      - name: Attest trusted deployment helper provenance
+        id: attest_helper
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/lumistripe-deploy-helper-linux-aarch64
+
+      - name: Verify trusted deployment helper provenance
+        id: verify_helper_provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          helper="$LUMI_RELEASE_HELPER"
+          bundle="$helper.sigstore.json"
+          cp "${{ steps.attest_helper.outputs.bundle-path }}" "$bundle"
+          gh attestation verify "$helper" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/ci.yml" \
+            --source-digest "$GITHUB_SHA" \
+            --deny-self-hosted-runners \
+            --bundle "$bundle"
+          echo "LUMI_RELEASE_HELPER_BUNDLE=$bundle" >> "$GITHUB_ENV"
+
       - name: Generate release qualification report
         if: ${{ always() }}
         env:
@@ -490,6 +517,8 @@ jobs:
           UBUNTU_VERIFY_RESULT: ${{ steps.verify_ubuntu_runtime.outcome || 'skipped' }}
           ATTEST_RESULT: ${{ steps.attest.outcome || 'skipped' }}
           VERIFY_PROVENANCE_RESULT: ${{ steps.verify_provenance.outcome || 'skipped' }}
+          HELPER_ATTEST_RESULT: ${{ steps.attest_helper.outcome || 'skipped' }}
+          HELPER_VERIFY_RESULT: ${{ steps.verify_helper_provenance.outcome || 'skipped' }}
         run: |
           set -eu
           combine_results() {
@@ -509,7 +538,7 @@ jobs:
           if [ -f "$release_dir/manifest.json" ]; then
             report_args+=(--release-dir "$release_dir")
           fi
-          uv run --no-project --python 3.12 python deploy/release_qualification.py \
+          bash deploy/release_qualification.sh \
             --project-root "$GITHUB_WORKSPACE" \
             "${report_args[@]}" \
             --commit "$GITHUB_SHA" \
@@ -524,7 +553,7 @@ jobs:
             --trixie-runtime "$TRIXIE_RESULT" \
             --ubuntu-2604-runtime "$(combine_results "$UBUNTU_BUILD_RESULT" "$UBUNTU_VERIFY_RESULT")" \
             --artifact-integrity "$(combine_results "$PACKAGE_RESULT" "$VALIDATE_RESULT")" \
-            --provenance "$(combine_results "$ATTEST_RESULT" "$VERIFY_PROVENANCE_RESULT")" \
+            --provenance "$(combine_results "$ATTEST_RESULT" "$VERIFY_PROVENANCE_RESULT" "$HELPER_ATTEST_RESULT" "$HELPER_VERIFY_RESULT")" \
             --target-architecture aarch64 \
             --target-triple aarch64-unknown-linux-gnu \
             --build-environment "GitHub-hosted ARM64 runner with Debian Trixie ARM64 build and runtime containers" \
@@ -551,16 +580,18 @@ jobs:
           checksum="$archive.sha256"
           manifest="$archive.manifest.json"
           bundle="$LUMI_RELEASE_BUNDLE"
+          helper="$LUMI_RELEASE_HELPER"
+          helper_bundle="$LUMI_RELEASE_HELPER_BUNDLE"
 
           tag="build-$GITHUB_SHA"
           gh release create "$tag" \
             --draft \
             --target "$GITHUB_SHA" \
             --title "LumiStripe $GITHUB_SHA" \
-            --notes "Commit-matched ARM64 Debian Trixie deployment bundle." \
-            "$archive" "$checksum" "$bundle" "$manifest"
+            --notes "Commit-matched ARM64 Debian Trixie deployment bundle and attested deployment verifier." \
+            "$archive" "$checksum" "$bundle" "$manifest" "$helper" "$helper_bundle"
 
-          expected_assets="$(printf '%s\n' "$archive_name" "$archive_name.sha256" "$archive_name.sigstore.json" "$archive_name.manifest.json" | jq -R . | jq -s 'sort')"
+          expected_assets="$(printf '%s\n' "$archive_name" "$archive_name.sha256" "$archive_name.sigstore.json" "$archive_name.manifest.json" "${helper##*/}" "${helper_bundle##*/}" | jq -R . | jq -s 'sort')"
           gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isImmutable,assets \
             | jq -e --arg tag "$tag" --argjson assets "$expected_assets" \
               'select(.tagName == $tag and .isDraft == true and ([.assets[].name] | sort == $assets))' \

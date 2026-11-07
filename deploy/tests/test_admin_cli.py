@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -34,6 +35,25 @@ def _parse(*arguments: str) -> subprocess.CompletedProcess[str]:
         check=False,
         timeout=5,
     )
+
+
+def test_admin_preserves_only_the_explicit_release_verifier_compatibility_flag() -> None:
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "LUMI_RELEASE_ARTIFACT_PYTHON_COMPAT": "1",
+            "LUMI_UNAPPROVED_TEST_VALUE": "must-be-cleared",
+        }
+    )
+    result = _source_call(
+        'admin_clear_unapproved_environment; '
+        'printf "compat=%s\nother=%s\n" '
+        '"${LUMI_RELEASE_ARTIFACT_PYTHON_COMPAT:-}" "${LUMI_UNAPPROVED_TEST_VALUE:-}"',
+        env=environment,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "compat=1" in result.stdout
+    assert "other=\n" in result.stdout
 
 
 def _help(*arguments: str) -> subprocess.CompletedProcess[str]:

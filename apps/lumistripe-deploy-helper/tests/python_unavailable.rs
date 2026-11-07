@@ -138,3 +138,94 @@ fn soloist_preflight_runs_without_python_on_path() {
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("is valid for"));
 }
+
+#[test]
+fn release_packaging_and_validation_run_without_python_on_path() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = TempDir::new().expect("temporary release fixture directory");
+    let project = directory.path().join("project");
+    let release = project.join("release");
+    std::fs::create_dir_all(release.join("static/assets"))
+        .expect("create release fixture directories");
+    std::fs::write(project.join(".bun-version"), "1.4.4\n")
+        .expect("write frontend toolchain version");
+    for name in [
+        "lumistripe-web",
+        "lumistripe-engine",
+        "lumistripe-deploy-helper",
+        "lumistripe",
+    ] {
+        let binary = release.join(name);
+        std::fs::write(&binary, "#!/bin/sh\nexit 0\n").expect("write release executable");
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755))
+            .expect("make release fixture executable");
+    }
+    std::fs::write(
+        release.join("static/index.html"),
+        "<!doctype html>fixture\n",
+    )
+    .expect("write release index");
+    std::fs::write(
+        release.join("static/assets/app.js"),
+        "window.fixture = true;\n",
+    )
+    .expect("write release asset");
+    let build_info = directory.path().join("runtime-build-info.json");
+    std::fs::write(
+        &build_info,
+        r#"{"architecture":"aarch64","target":"aarch64-unknown-linux-gnu","glibc_minimum":"2.36"}"#,
+    )
+    .expect("write validated runtime metadata");
+    let commit = "c3c6f7b54f21da1063a2ef4081b9cde7f6501234";
+    let archive = directory
+        .path()
+        .join(format!("lumistripe-linux-aarch64-{commit}.tar.gz"));
+
+    let packaged = Command::new(env!("CARGO_BIN_EXE_lumistripe-deploy-helper"))
+        .env_clear()
+        .env("PATH", PATH_WITHOUT_PYTHON)
+        .args([
+            "release-artifact",
+            "package",
+            "--release-dir",
+            release.to_str().expect("UTF-8 release path"),
+            "--output",
+            archive.to_str().expect("UTF-8 archive path"),
+            "--commit",
+            commit,
+            "--project-root",
+            project.to_str().expect("UTF-8 project path"),
+            "--build-info",
+            build_info.to_str().expect("UTF-8 build info path"),
+        ])
+        .output()
+        .expect("run Rust release packager without Python");
+    assert!(
+        packaged.status.success(),
+        "Rust release packaging failed without Python: {}",
+        String::from_utf8_lossy(&packaged.stderr)
+    );
+    assert!(archive.is_file());
+
+    let validated = Command::new(env!("CARGO_BIN_EXE_lumistripe-deploy-helper"))
+        .env_clear()
+        .env("PATH", PATH_WITHOUT_PYTHON)
+        .args([
+            "release-artifact",
+            "validate",
+            "--release-dir",
+            release.to_str().expect("UTF-8 release path"),
+            "--commit",
+            commit,
+            "--origin",
+            "github",
+        ])
+        .output()
+        .expect("run Rust release validator without Python");
+    assert!(
+        validated.status.success(),
+        "Rust release validation failed without Python: {}",
+        String::from_utf8_lossy(&validated.stderr)
+    );
+}

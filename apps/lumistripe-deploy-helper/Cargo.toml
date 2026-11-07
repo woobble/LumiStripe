@@ -17,9 +17,10 @@ libc.workspace = true
 regex.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
 tokio.workspace = true
 url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true

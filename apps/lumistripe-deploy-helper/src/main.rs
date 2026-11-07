@@ -19,6 +19,11 @@ struct Arguments {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Build, verify, and stage immutable LumiStripe release bundles.
+    ReleaseArtifact {
+        #[command(subcommand)]
+        action: release_artifact::Action,
+    },
     /// Check that the installed Spotify Soloist build is current enough to run.
     SoloistCheck {
         /// Path to the installed Soloist executable.
@@ -74,6 +79,13 @@ struct UpdateStateArguments {
 async fn main() -> ExitCode {
     let arguments = Arguments::parse();
     match arguments.command {
+        Command::ReleaseArtifact { action } => match release_artifact::run(action).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{error}");
+                ExitCode::from(error.exit_code())
+            }
+        },
         Command::SoloistCheck { binary } => {
             match soloist::validate_soloist_binary(
                 &binary,
@@ -138,6 +150,7 @@ async fn main() -> ExitCode {
 }
 
 mod network_helper;
+mod release_artifact;
 mod soloist_archive;
 mod spotify_device_name;
 mod update_state;

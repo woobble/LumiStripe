@@ -11,6 +11,7 @@ DEPLOY = Path(__file__).parents[1]
 SUPPORT = DEPLOY / "update-support.sh"
 WRAPPER = DEPLOY / "lumistripe-network"
 RELEASE_ARTIFACT = DEPLOY / "release_artifact.py"
+RELEASE_ARTIFACT_WRAPPER = DEPLOY / "release_artifact.sh"
 
 
 def _git(project: Path, *arguments: str) -> str:
@@ -63,6 +64,8 @@ def _project(tmp_path: Path) -> tuple[Path, str]:
     project.mkdir()
     (project / "deploy").mkdir()
     (project / "deploy/release_artifact.py").write_bytes(RELEASE_ARTIFACT.read_bytes())
+    (project / "deploy/release_artifact.sh").write_bytes(RELEASE_ARTIFACT_WRAPPER.read_bytes())
+    (project / "deploy/release_artifact.sh").chmod(0o755)
     _git(project, "init", "--quiet")
     _git(project, "config", "user.name", "LumiStripe test")
     _git(project, "config", "user.email", "test@example.invalid")
@@ -93,6 +96,8 @@ install() {
   fi
 }
 '''
+    environment = os.environ.copy()
+    environment["LUMI_RELEASE_ARTIFACT_PYTHON_COMPAT"] = "1"
     return subprocess.run(
         [
             "bash",
@@ -109,6 +114,7 @@ install() {
         capture_output=True,
         text=True,
         timeout=10,
+        env=environment,
     )
 
 

@@ -287,7 +287,7 @@ for required_file in \
   "$SCRIPT_DIR/lumistripe-web.service" \
   "$PROJECT_DIR/deploy/lumistripe-web-launcher.sh" \
   "$PROJECT_DIR/deploy/build-rust-backend.sh" \
-  "$SCRIPT_DIR/release_artifact.py" \
+  "$SCRIPT_DIR/release_artifact.sh" \
   "$SCRIPT_DIR/install-github-cli.sh" \
   "$SCRIPT_DIR/rust-toolchain.sh" \
   "$SCRIPT_DIR/lumistripe-spotify.service" \
@@ -346,7 +346,7 @@ install_system_packages() {
     libspa-0.2-bluetooth pipewire-alsa libasound2-plugins libportaudio2
     libatomic1 libdbus-1-3 libpipewire-0.3-0 libpulse0 libspa-0.2-modules
     network-manager iw nginx libnss3-tools curl ca-certificates git unzip
-    dbus-user-session util-linux python3-minimal
+    dbus-user-session util-linux jq file
   )
   local -a missing=()
   local package candidate
@@ -609,6 +609,7 @@ stage_prebuilt_release() {
       return 1
     }
   fi
+  prepare_rust_release_parent_directories || return 1
   tool="$(release_artifact_tool)" || return 1
   install_args=(install --commit "$DEPLOY_RELEASE_COMMIT" --release-root \
     "$PROJECT_DIR/target/rust-deploy/releases" --cache-root "$RELEASE_CACHE_DIR" \
@@ -616,7 +617,7 @@ stage_prebuilt_release() {
   if [[ -n "$OFFLINE_COMMIT" ]]; then
     install_args+=(--cached-only)
   fi
-  python3 "$tool" "${install_args[@]}"
+  "$tool" "${install_args[@]}"
 }
 
 create_environment_file() {

@@ -160,8 +160,11 @@ bun run build
 ```
 
 The frontend build writes ignored static assets to
-`apps/lumistripe-web/static`. The Python-based deployment regression harness
-is development-only; run it with Python and uv:
+`apps/lumistripe-web/static`. Installed binary deployment uses Bash and the
+Rust deployment helper without requiring a Python interpreter. Python remains
+development tooling for the pytest regression harness and is available only as
+an explicitly selected compatibility verifier. Run the deployment tests with
+Python and uv:
 
 ```bash
 uv run --no-project --with pytest python -m pytest -q deploy/tests

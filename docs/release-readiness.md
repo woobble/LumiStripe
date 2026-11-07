@@ -6,6 +6,15 @@ release confidence; they do not certify Raspberry Pi hardware behavior.
 
 ## Coverage audit
 
+Goal 24 moves ordinary appliance installation, update, admin status parsing,
+release smoke checks, qualification reports, and the optional stability profile
+to Bash and Rust. The normal installer no longer installs Python. The Rust
+deployment helper has unit coverage for deterministic packaging, manifests,
+checksums, archive path safety, commit matching, and extraction. Python remains
+in development tests and as an explicitly selected compatibility verifier.
+The first-use bootstrap code and CI asset attestation are implemented, but an
+actual published release has not yet exercised the end-user bootstrap on a Pi.
+
 The gap list below records the baseline audit completed before implementation.
 Since that audit, the release path now exercises the exact packaged ARM64
 directory before publication in Debian Trixie and Ubuntu 26.04 ARM64 runtime
@@ -71,7 +80,11 @@ The current integration harness does not execute the GitHub binary download
 and Sigstore verification path or compile Rust and frontend source inside the
 test container. Archive, checksum, manifest, architecture, provenance,
 interrupted-download, and missing-publication failures are covered by the
-release-verifier tests. Staging exhaustion is simulated with an ENOSPC failure
+release-verifier tests. Rust unit tests exercise the replacement helper's
+package, validation, and archive paths. The end-to-end lifecycle test still
+uses the explicitly selected Python compatibility verifier to construct
+isolated fixtures; the published online helper bootstrap and GitHub download
+path require a release run to exercise. Staging exhaustion is simulated with an ENOSPC failure
 at archive extraction; the test confirms the partial stage is removed and the
 verified cache remains available. Rollback failure and phase diagnostics are
 covered by the update tests. The installed binary lifecycle replays
@@ -119,8 +132,9 @@ Record the CI run URL and commit for each release candidate.
 - [ ] Rust formatting, Clippy, workspace tests, and x86_64 build pass.
 - [ ] ARM64 workspace tests and build pass on GitHub-hosted ARM64.
 - [ ] Frontend contract generation, lint, tests, and production build pass.
-- [ ] Release bundle validates its manifest, source commit, architecture,
-  runtime libraries, checksum, and Sigstore provenance.
+- [ ] Release bundle and standalone deployment helper validate their manifest
+  or asset digest, source commit, architecture, runtime libraries, and Sigstore
+  provenance.
 - [ ] The actual release bundle passes the ARM64 startup and HTTP smoke test.
 - [ ] Debian Trixie and Ubuntu 26.04 ARM64 userspace checks pass; Raspberry Pi
   OS userspace compatibility is reported as unverified by hosted CI.
@@ -133,6 +147,8 @@ Record the CI run URL and commit for each release candidate.
 
 - [ ] Install this commit on a fresh supported ARM64 system using the documented
   installer command.
+- [ ] On a first binary install, confirm the attested helper is installed as a
+  root-owned snapshot before the release is activated.
 - [ ] Confirm librespot is selected by default and protected configuration and
   installation metadata are present.
 - [ ] Confirm the web and Spotify services start and remain active after reboot.

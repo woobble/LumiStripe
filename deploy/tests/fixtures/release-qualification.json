@@ -1,0 +1,111 @@
+{
+  "checks": [
+    {
+      "evidence": "GitHub-hosted deployment-tests job",
+      "name": "Deployment regression tests",
+      "result": "passed",
+      "verification": "automated"
+    },
+    {
+      "evidence": "GitHub-hosted frontend job",
+      "name": "Frontend contract, lint, tests, and build",
+      "result": "passed",
+      "verification": "automated"
+    },
+    {
+      "evidence": "GitHub-hosted rust-engine job",
+      "name": "Rust formatting, Clippy, and x86_64 build",
+      "result": "passed",
+      "verification": "automated"
+    },
+    {
+      "evidence": "Rust workspace test suite on the GitHub-hosted x86_64 runner",
+      "name": "Application REST, WebSocket, simulator, and engine tests",
+      "result": "passed",
+      "verification": "automated"
+    },
+    {
+      "evidence": "Bounded synthetic audio, mocked Soloist, REST, resource, and shutdown profile",
+      "name": "Opt-in simulator stability profile",
+      "result": "not verified",
+      "verification": "automated when selected"
+    },
+    {
+      "evidence": "GitHub-hosted rust-engine-arm64 job",
+      "name": "Rust ARM64 tests and build",
+      "result": "passed",
+      "verification": "automated"
+    },
+    {
+      "evidence": "Publisher checkout, ARM64 runner, and existing build-tag guard",
+      "name": "Release source commit and immutable-tag eligibility",
+      "result": "passed",
+      "verification": "automated"
+    },
+    {
+      "evidence": "AArch64 Debian Trixie runtime container",
+      "name": "Debian Trixie ARM64 runtime compatibility",
+      "result": "passed",
+      "verification": "automated"
+    },
+    {
+      "evidence": "Packaged release directory, CLI, deployment helper, loopback web health, frontend assets, and clean shutdown",
+      "name": "Actual packaged ARM64 release startup smoke",
+      "result": "passed",
+      "verification": "automated"
+    },
+    {
+      "evidence": "Ubuntu 26.04 ARM64 container using the packaged release directory",
+      "name": "Ubuntu 26.04 LTS ARM64 runtime compatibility",
+      "result": "passed",
+      "verification": "automated"
+    },
+    {
+      "evidence": "Raspberry Pi OS is Trixie-based; no OS image is executed in hosted CI",
+      "name": "Raspberry Pi OS Trixie ARM64 userspace compatibility",
+      "result": "not verified",
+      "verification": "static inspection"
+    },
+    {
+      "evidence": "Rust release-artifact validation and Bash ARM64 smoke checks",
+      "name": "Release manifest, source commit, ELF architecture, and dependencies",
+      "result": "passed",
+      "verification": "automated"
+    },
+    {
+      "evidence": "gh attestation verify pinned to ci.yml and the source commit",
+      "name": "Sigstore build provenance",
+      "result": "passed",
+      "verification": "automated"
+    },
+    {
+      "evidence": "No Spotify account or live provider is used by CI",
+      "name": "Live Spotify authentication and playback",
+      "result": "not verified",
+      "verification": "manual acceptance required"
+    },
+    {
+      "evidence": "GPIO/SPI, Bluetooth radio, audio devices, power, and thermal behavior are not exercised",
+      "name": "Physical Raspberry Pi hardware behavior",
+      "result": "not verified",
+      "verification": "manual acceptance required"
+    }
+  ],
+  "known_limitations": [
+    "Raspberry Pi OS Trixie is not independently run in a hosted container; its hardware remains unverified.",
+    "Ubuntu 24.04 LTS is outside the prebuilt binary support matrix; source mode is available.",
+    "Live Spotify authentication and physical audio/LED behavior are manual acceptance checks."
+  ],
+  "schema_version": 1,
+  "source_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "target": {
+    "architecture": "aarch64",
+    "build_environment": "debian:trixie-slim",
+    "glibc_minimum": "2.38",
+    "triple": "aarch64-unknown-linux-gnu"
+  },
+  "toolchain": {
+    "bun": "1.4.4",
+    "rust": "1.99.1"
+  }
+}

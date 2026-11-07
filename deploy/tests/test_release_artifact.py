@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import subprocess
 import tarfile
 from pathlib import Path
@@ -14,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 SCRIPT = Path(__file__).parents[1] / "release_artifact.py"
+WRAPPER = Path(__file__).parents[1] / "release_artifact.sh"
 WORKFLOW = Path(__file__).parents[2] / ".github/workflows/ci.yml"
 SPEC = importlib.util.spec_from_file_location("release_artifact", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
@@ -257,6 +259,127 @@ def test_ci_release_publisher_checks_github_immutability() -> None:
     assert "publish-arm64-release:" in workflow
     assert "--json tagName,isDraft,isImmutable,assets" in workflow
     assert "isDraft == false and .isImmutable == true" in workflow
+    publisher = workflow.split("  publish-arm64-release:", maxsplit=1)[1]
+    assert "release-artifact package" in publisher
+    assert "release-artifact validate" in publisher
+    assert "release_artifact.py" not in publisher
+    assert "setup-uv" not in publisher
+    assert "actions/attest" in publisher
+    assert "id: attest_helper" in publisher
+    assert "lumistripe-deploy-helper-linux-aarch64" in publisher
+    assert "--deny-self-hosted-runners" in publisher
+    assert '"$helper" "$helper_bundle"' in publisher
+
+
+def test_release_wrapper_requires_an_attested_rust_helper_by_default(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    deploy = project / "deploy"
+    deploy.mkdir(parents=True)
+    wrapper = deploy / "release_artifact.sh"
+    wrapper.write_text(
+        WRAPPER.read_text(encoding="utf-8").replace(
+            "SNAPSHOT_DIR=/usr/local/libexec/lumistripe/deploy",
+            f"SNAPSHOT_DIR={project / 'snapshot'}",
+        ),
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    verifier = deploy / "release_artifact.py"
+    verifier.write_text("raise SystemExit('unexpected Python compatibility path')\n", encoding="utf-8")
+    commit = "a" * 40
+
+    missing = subprocess.run(
+        [
+            str(wrapper),
+            "install",
+            "--commit",
+            commit,
+            "--release-root",
+            str(project / "releases"),
+            "--cache-root",
+            str(project / "cache"),
+            "--uid",
+            str(os.getuid()),
+            "--gid",
+            str(os.getgid()),
+            "--cached-only",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env={**os.environ, "LUMI_PROJECT_DIR": str(project)},
+    )
+    assert missing.returncode == 12
+    assert "offline cached installation requires an already installed trusted Rust deployment helper" in missing.stderr
+    assert "unexpected Python compatibility path" not in missing.stderr
+
+    explicit_compatibility = subprocess.run(
+        [str(wrapper), "validate", "--release-dir", str(project / "release"), "--commit", commit],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env={
+            **os.environ,
+            "LUMI_PROJECT_DIR": str(project),
+            "LUMI_RELEASE_ARTIFACT_PYTHON_COMPAT": "1",
+        },
+    )
+    assert explicit_compatibility.returncode != 0
+    assert "unexpected Python compatibility path" in explicit_compatibility.stderr
+
+    source = WRAPPER.read_text(encoding="utf-8")
+    for required in (
+        "https://api.github.com/repos/$REPOSITORY/releases/tags/$tag",
+        '"$(uname -m)" == aarch64',
+        ".immutable == true",
+        "browser_download_url",
+        "sha256sum",
+        "gh attestation verify",
+        "--signer-workflow",
+        "--source-digest",
+        "--deny-self-hosted-runners",
+        "install -o root -g root -m 755",
+        "mv -fT",
+    ):
+        assert required in source
+
+
+def test_release_wrapper_uses_a_local_helper_without_python_on_path(tmp_path: Path) -> None:
+    binary_dir = tmp_path / "bin"
+    binary_dir.mkdir()
+    for command in ("bash", "dirname"):
+        resolved = shutil.which(command)
+        assert resolved is not None
+        (binary_dir / command).symlink_to(resolved)
+    assert shutil.which("python", path=str(binary_dir)) is None
+    assert shutil.which("python3", path=str(binary_dir)) is None
+
+    helper = tmp_path / "lumistripe-deploy-helper"
+    helper.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\"\n", encoding="utf-8")
+    helper.chmod(0o755)
+    environment = os.environ.copy()
+    environment["PATH"] = str(binary_dir)
+    environment["LUMI_RELEASE_HELPER"] = str(helper)
+    environment.pop("LUMI_RELEASE_ARTIFACT_PYTHON_COMPAT", None)
+
+    result = subprocess.run(
+        [str(WRAPPER), "validate", "--release-dir", str(tmp_path / "release")],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "release-artifact",
+        "validate",
+        "--release-dir",
+        str(tmp_path / "release"),
+    ]
 
 
 def test_ci_release_smoke_platform_checks_and_qualification_gate_precede_publication() -> None:
@@ -311,12 +434,12 @@ def test_ci_release_smoke_platform_checks_and_qualification_gate_precede_publica
     assert "inputs.run_extended_stability && always()" in stability_upload
     assert "if-no-files-found: warn" in stability_upload
 
-    smoke = Path(__file__).parents[1] / "release_smoke.py"
+    smoke = Path(__file__).parents[1] / "release_smoke.sh"
     smoke_source = smoke.read_text(encoding="utf-8")
-    assert '"--network",\n        "none"' in smoke_source
-    assert '"--simulate"' in smoke_source
-    assert '"--spotify-backend",\n            "disabled"' in smoke_source
-    assert '"LUMISTRIPE_ENABLE_SPOTIFY": "0"' not in smoke_source
+    assert '--network none' in smoke_source
+    assert '--simulate --host 127.0.0.1' in smoke_source
+    assert '--spotify-backend disabled' in smoke_source
+    assert 'LUMISTRIPE_ENABLE_SPOTIFY=0' not in smoke_source
 
 
 def test_signed_release_is_verified_before_cache_and_release_staging(

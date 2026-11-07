@@ -71,7 +71,7 @@ if [[ -d "$RELEASE_DIR" ]]; then
     -x "$RELEASE_DIR/lumistripe-web" && -x "$RELEASE_DIR/lumistripe-engine" && \
     -x "$RELEASE_DIR/lumistripe-deploy-helper" && -x "$RELEASE_DIR/lumistripe" && \
     -s "$RELEASE_DIR/static/index.html" ]]; then
-    python3 "$PROJECT_DIR/deploy/release_artifact.py" validate \
+    "$PROJECT_DIR/deploy/release_artifact.sh" validate \
       --release-dir "$RELEASE_DIR" --commit "$COMMIT" --origin source || exit 1
     activate_release
     echo "Reusing Rust binaries for $COMMIT."
@@ -125,7 +125,7 @@ install -m 755 -- "$BUILT_CLI" "$STAGE_DIR/lumistripe"
 }
 cp -a -- "$PROJECT_DIR/apps/lumistripe-web/static" "$STAGE_DIR/static"
 printf '%s\n' "$COMMIT" > "$STAGE_DIR/source-commit"
-python3 "$PROJECT_DIR/deploy/release_artifact.py" seal-local \
+"$PROJECT_DIR/deploy/release_artifact.sh" seal-local \
   --release-dir "$STAGE_DIR" --commit "$COMMIT" --project-root "$PROJECT_DIR"
 mv -- "$STAGE_DIR" "$RELEASE_DIR"
 STAGE_DIR=

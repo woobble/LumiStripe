@@ -75,7 +75,7 @@ def _docker_context_archive() -> bytes:
             ROOT / "deploy/docker/spotify-entrypoint.sh",
             arcname="deploy/docker/spotify-entrypoint.sh",
         )
-        for filename in ("release_artifact.py", "release_smoke.py"):
+        for filename in ("release_artifact.sh", "release_smoke.sh"):
             archive.add(
                 ROOT / "deploy" / filename,
                 arcname=f"deploy/{filename}",
@@ -112,13 +112,17 @@ def test_docker_development_image_builds_rust_binaries_without_python() -> None:
     assert "!apps/lumistripe-engine/src/*.rs" in dockerignore
     assert "!crates/**" in dockerignore
     assert "!tests/fixtures/**" in dockerignore
+    assert "!deploy/release_artifact.py" not in dockerignore
+    assert "!deploy/release_smoke.py" not in dockerignore
     assert "!target/" not in dockerignore
     assert "rust/Cargo.toml" not in dockerfile
     assert "!apps/lumistripe-web/frontend/**" in dockerignore
     assert "apps/lumistripe-web/frontend/.env*" in dockerignore
     assert "from release-runtime-check as release-smoke" in dockerfile
-    assert "--network=none python3" in dockerfile
-    assert "release_smoke.py" in dockerfile
+    assert "run --network=none lumi_release_helper=/release/lumistripe-deploy-helper" in dockerfile
+    assert "release_smoke.sh" in dockerfile
+    assert "lumi_release_helper=/release/lumistripe-deploy-helper" in dockerfile
+    assert "--require-manifest" not in dockerfile
 
     assert ".venv" not in compose
     assert "python" not in compose

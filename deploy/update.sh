@@ -97,7 +97,6 @@ NGINX_AVAILABLE=/etc/nginx/sites-available/led-controller
 command -v runuser >/dev/null || { echo "runuser is required" >&2; exit 1; }
 command -v flock >/dev/null || { echo "flock is required (install util-linux)" >&2; exit 1; }
 command -v curl >/dev/null || { echo "curl is required" >&2; exit 1; }
-command -v python3 >/dev/null || { echo "Python 3 is required for safe release validation." >&2; exit 1; }
 resolve_web_backend "" "$WEB_ENV_FILE" >/dev/null || exit 1
 SELECTED_SPOTIFY_BACKEND="$(resolve_spotify_backend "" "$WEB_ENV_FILE")" || exit 1
 
@@ -177,6 +176,7 @@ spotify_environment_ready() {
 git_user() { as_user git -C "$PROJECT_DIR" "$@"; }
 
 install_release_verifier() {
+  install_missing_apt_packages "release verification utilities" jq file || return 1
   "$SCRIPT_DIR/install-github-cli.sh"
 }
 
@@ -202,6 +202,7 @@ stage_prebuilt_release() {
   local tool
   local uid gid
   local -a install_args
+  prepare_rust_release_parent_directories || return 1
   tool="$(release_artifact_tool)" || return 1
   uid="$(id -u "$PROJECT_USER")"
   gid="$(id -g "$PROJECT_USER")"
@@ -216,7 +217,7 @@ stage_prebuilt_release() {
   if [[ "${2:-}" == --cached-only ]]; then
     install_args+=(--cached-only)
   fi
-  python3 "$tool" "${install_args[@]}"
+  "$tool" "${install_args[@]}"
 }
 
 build_rust_backend() {

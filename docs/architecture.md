@@ -74,6 +74,17 @@ Installations using the former `rust/target/rust-deploy` layout are migrated
 by copying and validating release state before the new updater uses it. Settings
 and application data remain outside the release tree.
 
+Deployment orchestration is Bash. The Rust deployment helper owns release
+manifest and checksum validation, bounded archive extraction, GitHub asset
+digest and Sigstore verification, protected caching, and atomic staging. On a
+first binary install, `deploy/release_artifact.sh` bootstraps that helper from
+the immutable commit release after checking the helper asset digest, pinned CI
+workflow and source-commit attestation, hosted-runner provenance, and AArch64
+ELF type. It installs the verified helper under a root-owned snapshot before
+the helper performs release operations. The normal install and update path does
+not require Python; an explicit compatibility flag remains for recovery from
+older installations until the published bootstrap path has appliance evidence.
+
 ## Audio and hardware
 
 The deployment layer persists `LUMI_SPOTIFY_BACKEND` in the protected web

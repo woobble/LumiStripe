@@ -189,6 +189,19 @@ helper, and frontend as one commit-matched release. Binary installs do not
 compile Rust or build the frontend on the Pi. Source mode installs Rust
 1.99.1, Bun, and build requirements as needed.
 
+The normal installer and updater use Bash, `jq`, and the Rust deployment helper;
+they do not install or invoke Python. On a first online binary install, before
+the Rust helper is already present, the root-owned `release_artifact.sh`
+downloads the helper asset from the requested immutable commit release. It
+checks the GitHub asset digest and size, verifies the attached Sigstore bundle
+against the pinned CI workflow and source commit with GitHub CLI 2.67 or newer,
+checks the AArch64 ELF type, then atomically installs a root-owned helper
+snapshot. The helper independently verifies the release archive, provenance,
+manifest, and cache before staging it. Offline cached installs require an
+already trusted Rust helper. `LUMI_RELEASE_ARTIFACT_PYTHON_COMPAT=1` explicitly
+selects the retained Python verifier for controlled compatibility recovery; it
+is not set by the installer or updater.
+
 `lumistripe-admin` delegates to the existing `deploy/install.sh`,
 `deploy/update.sh`, and `deploy/uninstall.sh` implementations. Those scripts,
 the release verifier, update lock, transactional activation, health check, and
@@ -212,10 +225,12 @@ Existing settings are migrated and preserved by the Rust application.
 The CI publisher builds the ARM64 release on a hosted ARM64 runner in a Debian
 Trixie container after the hosted deployment, frontend, Rust, and ARM64 checks
 pass. The release tag is `build-<full source commit>` and contains a
-deterministic archive, manifest, SHA-256 file, and signed provenance bundle.
-The Pi verifies the release belongs to that commit and the pinned CI workflow
-before it stages anything. The frontend is stored inside the release and is
-served from the same commit-matched directory as its Rust binaries.
+deterministic archive, manifest, SHA-256 file, archive provenance bundle, and a
+separately attested deployment helper with its Sigstore bundle. The Pi verifies
+the helper belongs to that commit and the pinned CI workflow before using it;
+the helper then verifies the release archive and provenance before staging.
+The frontend is stored inside the release and is served from the same
+commit-matched directory as its Rust binaries.
 
 Before enabling release publication, enable GitHub's repository-level release
 immutability setting. The publisher checks that each release is marked
@@ -229,9 +244,9 @@ indefinitely; local cache cleanup retains the active and previous releases for
 rollback.
 
 To build a release bundle locally for inspection, start from a clean checkout
-and a machine with Docker Buildx and `uv` installed. Local bundles are not
-attested and cannot be installed by binary mode; production releases must be
-published by CI.
+and a machine with Docker Buildx and ARM64 container execution support. Local
+bundles are not attested and cannot be installed by binary mode; production
+releases must be published by CI.
 
 ```bash
 COMMIT="$(git rev-parse HEAD)"
@@ -240,18 +255,31 @@ test -z "$(git status --porcelain)"
 docker buildx build \
   --platform linux/arm64 \
   --file deploy/docker/Dockerfile \
-  --target release-output \
+  --target release-smoke \
   --build-arg "BUN_VERSION=$(cat .bun-version)" \
   --build-arg "LUMI_RELEASE_COMMIT=$COMMIT" \
-  --output "type=local,dest=$OUT_DIR" \
+  --load \
+  --tag "lumistripe-release-local:$COMMIT" \
   .
+container="$(docker create "lumistripe-release-local:$COMMIT")"
+docker cp "$container:/release" "$OUT_DIR/"
+docker cp "$container:/release-build-info.json" "$OUT_DIR/release-build-info.json"
+docker rm "$container"
 ARCHIVE="lumistripe-linux-aarch64-$COMMIT.tar.gz"
-uv run --no-project --python 3.12 python deploy/release_artifact.py package \
-  --release-dir "$OUT_DIR/release" \
-  --output "$OUT_DIR/$ARCHIVE" \
-  --commit "$COMMIT" \
-  --project-root "$PWD" \
-  --build-info "$OUT_DIR/release-build-info.json"
+docker run --rm --network none --read-only \
+  --user "$(id -u):$(id -g)" \
+  --mount "type=bind,src=$OUT_DIR/release,dst=/release" \
+  --mount "type=bind,src=$OUT_DIR,dst=/out" \
+  --mount "type=bind,src=$PWD,dst=/src,readonly" \
+  --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
+  --entrypoint /release/lumistripe-deploy-helper \
+  "lumistripe-release-local:$COMMIT" \
+  release-artifact package \
+    --release-dir /release \
+    --output "/out/$ARCHIVE" \
+    --commit "$COMMIT" \
+    --project-root /src \
+    --build-info /out/release-build-info.json
 cp "$OUT_DIR/release/manifest.json" "$OUT_DIR/$ARCHIVE.manifest.json"
 (cd "$OUT_DIR" && sha256sum "$ARCHIVE" > "$ARCHIVE.sha256")
 ```

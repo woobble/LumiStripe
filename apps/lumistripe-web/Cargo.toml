@@ -18,6 +18,10 @@ path = "src/main.rs"
 name = "export-openapi"
 path = "src/bin/export_openapi.rs"
 
+[[bin]]
+name = "lumistripe-stability-driver"
+path = "src/bin/stability_driver.rs"
+
 [dependencies]
 axum.workspace = true
 base64.workspace = true

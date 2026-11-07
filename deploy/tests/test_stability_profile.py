@@ -1,52 +1,63 @@
 from __future__ import annotations
 
-import importlib.util
 import json
+import os
+import subprocess
 from pathlib import Path
 
-SCRIPT = Path(__file__).parents[1] / "stability_profile.py"
-SPEC = importlib.util.spec_from_file_location("stability_profile", SCRIPT)
-assert SPEC is not None and SPEC.loader is not None
-stability_profile = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(stability_profile)
+DEPLOY = Path(__file__).parents[1]
+SCRIPT = DEPLOY / "stability_profile.sh"
+DRIVER_SOURCE = DEPLOY.parent / "apps/lumistripe-web/src/bin/stability_driver.rs"
 
 
-def test_failed_profile_writes_diagnostic_report_and_keeps_failure_status(
-    tmp_path: Path, monkeypatch, capsys
-) -> None:
-    binary = tmp_path / "lumistripe-web"
+def test_failed_profile_writes_machine_readable_diagnostic_report(tmp_path: Path) -> None:
     output = tmp_path / "stability.json"
-    report = {
-        "result": "failed",
-        "api_error_count": 1,
-        "api_error_examples": ["/api/state: timed out"],
-        "validation_errors": ["observed 1 API errors and 0 dashboard state errors"],
-    }
-    monkeypatch.setattr(stability_profile, "run_profile", lambda *_args: report)
-    monkeypatch.setattr(
-        "sys.argv",
-        ["stability_profile.py", "--binary", str(binary), "--output", str(output)],
+    environment = os.environ.copy()
+    environment["LUMI_STABILITY_DRIVER"] = str(tmp_path / "missing-driver")
+
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "--binary", "/bin/true", "--duration-seconds", "30", "--output", str(output)],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
     )
 
-    assert stability_profile.main() == 1
+    assert result.returncode == 1
+    assert "Rust stability protocol driver is missing" in result.stderr
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["result"] == "failed"
+    assert report["validation_errors"] == [
+        f"Rust stability protocol driver is missing: {tmp_path / 'missing-driver'}"
+    ]
+    assert report["task_termination"] == "failed"
+    assert not list(tmp_path.glob(".stability.json.*"))
 
-    assert json.loads(output.read_text(encoding="utf-8")) == report
-    assert "stability profile failed" in capsys.readouterr().err
 
-
-def test_successful_profile_writes_report_and_returns_zero(
-    tmp_path: Path, monkeypatch, capsys
-) -> None:
-    binary = tmp_path / "lumistripe-web"
+def test_duration_is_bounded_before_any_process_starts(tmp_path: Path) -> None:
     output = tmp_path / "stability.json"
-    report = {"result": "passed", "api_error_count": 0}
-    monkeypatch.setattr(stability_profile, "run_profile", lambda *_args: report)
-    monkeypatch.setattr(
-        "sys.argv",
-        ["stability_profile.py", "--binary", str(binary), "--output", str(output)],
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "--binary", "/bin/true", "--duration-seconds", "29", "--output", str(output)],
+        check=False,
+        capture_output=True,
+        text=True,
     )
 
-    assert stability_profile.main() == 0
+    assert result.returncode == 2
+    assert "between 30 and 1800" in result.stderr
+    assert not output.exists()
 
-    assert json.loads(output.read_text(encoding="utf-8")) == report
-    assert "stability profile failed" not in capsys.readouterr().err
+
+def test_bash_orchestrates_http_while_rust_owns_websocket_protocols() -> None:
+    script = SCRIPT.read_text(encoding="utf-8")
+    driver = DRIVER_SOURCE.read_text(encoding="utf-8")
+
+    assert "curl --disable" in script
+    assert "setsid \"$binary\"" in script
+    assert "proc_sample" in script
+    assert "python3" not in script
+    assert "struct _AudioSocket" not in script
+    assert "MockSpotify" in driver
+    assert "AudioTelemetry" in driver
+    assert "tokio_tungstenite" in driver
+    assert "set -Eeuo pipefail" in script

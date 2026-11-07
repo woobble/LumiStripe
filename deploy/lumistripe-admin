@@ -719,6 +719,9 @@ admin_clear_unapproved_environment() {
       LUMI_PAIRING_CODE|LUMI_SPOTIFY_API_KEY)
         [[ "$allow_credentials" == 1 ]] || unset "$name"
         ;;
+      LUMI_RELEASE_ARTIFACT_PYTHON_COMPAT)
+        [[ "${!name}" == 1 ]] || unset "$name"
+        ;;
       *) unset "$name" ;;
     esac
   done < <(env | sed -n 's/=.*//p')
@@ -762,56 +765,103 @@ admin_active_release_commit() {
 
 admin_update_status_values() {
   local status_file="$1"
-  [[ -f "$status_file" && ! -L "$status_file" ]] || return 1
-  python3 - "$status_file" <<'PY'
-import json
-import os
-import re
-import stat
-import sys
-
-try:
-    descriptor = os.open(sys.argv[1], os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    try:
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode):
-            raise ValueError("regular file required")
-        with os.fdopen(descriptor, "rb", closefd=False) as handle:
-            raw = handle.read(1024 * 1024 + 1)
-    finally:
-        os.close(descriptor)
-    if len(raw) > 1024 * 1024:
-        raise ValueError("oversize")
-    value = json.loads(raw)
-    if not isinstance(value, dict):
-        raise ValueError("object required")
-except (OSError, ValueError, UnicodeError, json.JSONDecodeError):
-    print("unknown\tunknown\t-\t-")
-    raise SystemExit(0)
-
-available = value.get("available_commit")
-update = value.get("update_available")
-checked = value.get("checked_at")
-state = value.get("install_state")
-finished = value.get("install_finished_at")
-commit_re = re.compile(r"^[0-9a-f]{40}$")
-time_re = re.compile(r"^[0-9T:.+Z-]{1,64}$")
-if isinstance(available, str) and commit_re.fullmatch(available):
-    availability = "available:" + available
-elif update is False and isinstance(checked, str) and time_re.fullmatch(checked):
-    availability = "current"
-elif value.get("check_error"):
-    availability = "unavailable"
-else:
-    availability = "unknown"
-if state in ("success", "failed", "running", "idle"):
-    result = state
-else:
-    result = "unknown"
-checked_text = checked if isinstance(checked, str) and time_re.fullmatch(checked) else "-"
-finished_text = finished if isinstance(finished, str) and time_re.fullmatch(finished) else "-"
-print("\t".join((availability, result, checked_text, finished_text)))
-PY
+  local status_dir metadata directory_metadata owner_uid owner_gid mode size
+  local expected_uid expected_gid identity_before identity_after temporary result
+  local status_unknown=$'unknown\tunknown\t-\t-'
+  status_dir="$(dirname -- "$status_file")"
+  [[ -d "$status_dir" && ! -L "$status_dir" && -f "$status_file" && ! -L "$status_file" ]] || {
+    printf '%s\n' "$status_unknown"
+    return 0
+  }
+  [[ -n "$ADMIN_SERVICE_USER" ]] || {
+    printf '%s\n' "$status_unknown"
+    return 0
+  }
+  expected_uid="$(id -u "$ADMIN_SERVICE_USER" 2>/dev/null)" || {
+    printf '%s\n' "$status_unknown"
+    return 0
+  }
+  expected_gid="$(id -g "$ADMIN_SERVICE_USER" 2>/dev/null)" || {
+    printf '%s\n' "$status_unknown"
+    return 0
+  }
+  metadata="$(stat -c '%u %g %a %s %d:%i' -- "$status_file" 2>/dev/null)" || {
+    printf '%s\n' "$status_unknown"
+    return 0
+  }
+  read -r owner_uid owner_gid mode size identity_before <<< "$metadata"
+  directory_metadata="$(stat -c '%u %g %a' -- "$status_dir" 2>/dev/null)" || {
+    printf '%s\n' "$status_unknown"
+    return 0
+  }
+  local directory_uid directory_gid directory_mode
+  read -r directory_uid directory_gid directory_mode <<< "$directory_metadata"
+  [[ "$owner_uid:$owner_gid" == "$expected_uid:$expected_gid" &&
+     "$directory_uid:$directory_gid" == "$expected_uid:$expected_gid" &&
+     "$mode" =~ ^[0-7]+$ && "$directory_mode" =~ ^[0-7]+$ && "$size" =~ ^[0-9]+$ ]] || {
+    printf '%s\n' "$status_unknown"
+    return 0
+  }
+  (( (8#$mode & 0022) == 0 && (8#$directory_mode & 0022) == 0 && size <= 1048576 )) || {
+    printf '%s\n' "$status_unknown"
+    return 0
+  }
+  temporary="$(mktemp /tmp/lumistripe-admin-update-status.XXXXXX 2>/dev/null)" || {
+    printf '%s\n' "$status_unknown"
+    return 0
+  }
+  chmod 600 -- "$temporary" 2>/dev/null || {
+    rm -f -- "$temporary"
+    printf '%s\n' "$status_unknown"
+    return 0
+  }
+  if ! dd if="$status_file" of="$temporary" iflag=nofollow bs=1048577 count=1 status=none 2>/dev/null; then
+    rm -f -- "$temporary"
+    printf '%s\n' "$status_unknown"
+    return 0
+  fi
+  identity_after="$(stat -c '%d:%i' -- "$status_file" 2>/dev/null || true)"
+  size="$(wc -c < "$temporary" 2>/dev/null || printf '1048577')"
+  if [[ "$identity_before" != "$identity_after" || ! "$size" =~ ^[0-9]+$ ]] || (( size > 1048576 )); then
+    rm -f -- "$temporary"
+    printf '%s\n' "$status_unknown"
+    return 0
+  fi
+  if result="$(jq -sr -e '
+    def string_or_null($value): $value == null or ($value | type) == "string";
+    def valid_time($value): ($value | type) == "string" and ($value | test("^[0-9T:.+Z-]{1,64}$"));
+    if length != 1 or (.[0] | type) != "object" then error("one JSON object is required")
+    else .[0] as $value
+      | if (string_or_null($value.available_commit) | not) or
+           ($value.update_available != null and ($value.update_available | type) != "boolean") or
+           (string_or_null($value.checked_at) | not) or
+           (string_or_null($value.install_state) | not) or
+           (string_or_null($value.install_finished_at) | not) or
+           (string_or_null($value.check_error) | not)
+        then error("update status schema is invalid")
+        else
+          (if ($value.available_commit | type) == "string" and
+                ($value.available_commit | test("^[0-9a-f]{40}$"))
+           then "available:" + $value.available_commit
+           elif $value.update_available == false and valid_time($value.checked_at)
+           then "current"
+           elif ($value.check_error | type) == "string" and ($value.check_error | length) > 0
+           then "unavailable"
+           else "unknown" end) as $availability
+          | (if ["success", "failed", "running", "idle"] | index($value.install_state)
+             then $value.install_state else "unknown" end) as $install_result
+          | (if valid_time($value.checked_at) then $value.checked_at else "-" end) as $checked
+          | (if valid_time($value.install_finished_at) then $value.install_finished_at else "-" end) as $finished
+          | [$availability, $install_result, $checked, $finished] | @tsv
+        end
+    end
+  ' "$temporary" 2>/dev/null)"; then
+    rm -f -- "$temporary"
+    printf '%s\n' "$result"
+  else
+    rm -f -- "$temporary"
+    printf '%s\n' "$status_unknown"
+  fi
 }
 
 admin_service_state() {

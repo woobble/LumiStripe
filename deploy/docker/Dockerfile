@@ -74,8 +74,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
         binutils \
+        bash \
+        coreutils \
+        curl \
         file \
-        python3 \
+        jq \
         libasound2 \
         libatomic1 \
         libdbus-1-3 \
@@ -109,15 +112,16 @@ RUN set -eu; \
 
 # CI builds this target once, runs the bundle in an isolated Trixie runtime,
 # and then uses the loaded image to exercise the packaged release directory.
-# Python and inspection tools are present only in this validation image.
+# Inspection tools are present only in this validation image.
 FROM release-runtime-check AS release-smoke
 
 ARG LUMI_RELEASE_COMMIT
 
-COPY deploy/release_artifact.py /usr/local/libexec/lumistripe/release_artifact.py
-COPY deploy/release_smoke.py /usr/local/libexec/lumistripe/release_smoke.py
+COPY deploy/release_artifact.sh /usr/local/libexec/lumistripe/release_artifact.sh
+COPY deploy/release_smoke.sh /usr/local/libexec/lumistripe/release_smoke.sh
 
-RUN --network=none python3 /usr/local/libexec/lumistripe/release_smoke.py \
+RUN --network=none LUMI_RELEASE_HELPER=/release/lumistripe-deploy-helper \
+    /bin/bash /usr/local/libexec/lumistripe/release_smoke.sh \
         --inside-container \
         --release-dir /release \
         --commit "$LUMI_RELEASE_COMMIT"

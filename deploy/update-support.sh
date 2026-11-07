@@ -9,6 +9,24 @@ LUMI_INSTALL_STATE_FILE="$LUMI_INSTALL_STATE_DIR/install-state"
 
 FILE_CHANGED=0
 
+ensure_root_directory() {
+  local directory="$1"
+  local parent metadata owner mode
+  [[ "$directory" == /* && "$directory" != *$'\n'* && "$directory" != *$'\r'* ]] || return 1
+  [[ "$directory" == / ]] && return 0
+  parent="$(dirname -- "$directory")"
+  ensure_root_directory "$parent" || return 1
+  if [[ ! -e "$directory" && ! -L "$directory" ]]; then
+    mkdir -m 755 -- "$directory" || return 1
+    chown root:root -- "$directory" || return 1
+  fi
+  [[ -d "$directory" && ! -L "$directory" ]] || return 1
+  metadata="$(stat -c '%u:%a' -- "$directory" 2>/dev/null)" || return 1
+  owner="${metadata%%:*}"
+  mode="${metadata#*:}"
+  [[ "$owner" == 0 && "$mode" =~ ^[0-7]+$ ]] && (( (8#$mode & 0022) == 0 ))
+}
+
 install_file_if_changed() {
   local source_file="$1"
   local destination_file="$2"
@@ -18,6 +36,7 @@ install_file_if_changed() {
   local owner_uid
   local group_gid
   local destination_metadata
+  local destination_directory temporary
 
   FILE_CHANGED=0
   [[ -f "$source_file" && ! -L "$source_file" ]] || {
@@ -41,8 +60,28 @@ install_file_if_changed() {
       return 0
     fi
   fi
-  install -o "$owner" -g "$group" -m "$mode" -- \
-    "$source_file" "$destination_file" || return 1
+  destination_directory="$(dirname -- "$destination_file")"
+  [[ -d "$destination_directory" && ! -L "$destination_directory" ]] || {
+    echo "Managed deployment destination directory is missing or unsafe: $destination_directory" >&2
+    return 1
+  }
+  if [[ "$owner" == root ]]; then
+    local directory_metadata
+    directory_metadata="$(stat -c '%u:%a' -- "$destination_directory" 2>/dev/null)" || return 1
+    [[ "${directory_metadata%%:*}" == 0 &&
+       "${directory_metadata#*:}" =~ ^[0-7]+$ ]] &&
+      (( (8#${directory_metadata#*:} & 0022) == 0 )) || {
+      echo "Managed deployment destination directory is not root-protected: $destination_directory" >&2
+      return 1
+    }
+  fi
+  temporary="$(mktemp "$destination_directory/.${destination_file##*/}.XXXXXX")" || return 1
+  if ! install -o "$owner" -g "$group" -m "$mode" -- "$source_file" "$temporary" ||
+     ! mv -fT -- "$temporary" "$destination_file" ||
+     ! sync -f "$destination_directory"; then
+    rm -f -- "$temporary"
+    return 1
+  fi
   FILE_CHANGED=1
 }
 
@@ -210,10 +249,10 @@ binary_target_supported() {
 }
 
 release_artifact_tool() {
-  if [[ -f "$UPDATE_LIBEXEC_DIR/release_artifact.py" && ! -L "$UPDATE_LIBEXEC_DIR/release_artifact.py" ]]; then
-    printf '%s\n' "$UPDATE_LIBEXEC_DIR/release_artifact.py"
+  if [[ -f "$UPDATE_LIBEXEC_DIR/release_artifact.sh" && ! -L "$UPDATE_LIBEXEC_DIR/release_artifact.sh" ]]; then
+    printf '%s\n' "$UPDATE_LIBEXEC_DIR/release_artifact.sh"
   else
-    printf '%s\n' "$PROJECT_DIR/deploy/release_artifact.py"
+    printf '%s\n' "$PROJECT_DIR/deploy/release_artifact.sh"
   fi
 }
 
@@ -279,7 +318,30 @@ validate_rust_release() {
     return 1
   }
   tool="$(release_artifact_tool)" || return 1
-  python3 "$tool" validate --release-dir "$release_dir" --commit "$commit" || return 1
+  "$tool" validate --release-dir "$release_dir" --commit "$commit" || return 1
+}
+
+prepare_rust_release_parent_directories() {
+  local service_user="${SERVICE_USER:-${PROJECT_USER:-}}"
+  local service_group="${SERVICE_GROUP:-${PROJECT_GROUP:-}}"
+  local directory
+  [[ -n "$service_user" && -n "$service_group" ]] || {
+    echo "Could not resolve the LumiStripe service account for release staging." >&2
+    return 1
+  }
+  for directory in "$PROJECT_DIR/target" "$PROJECT_DIR/target/rust-deploy"; do
+    if [[ -L "$directory" || ( -e "$directory" && ! -d "$directory" ) ]]; then
+      echo "Rust deployment parent must be a real directory: $directory" >&2
+      return 1
+    fi
+    install -d -o "$service_user" -g "$service_group" -m 755 -- "$directory" || return 1
+  done
+  directory="$PROJECT_DIR/target/rust-deploy/releases"
+  if [[ -L "$directory" || ( -e "$directory" && ! -d "$directory" ) ]]; then
+    echo "Rust release storage must be a real directory: $directory" >&2
+    return 1
+  fi
+  install -d -o root -g root -m 755 -- "$directory"
 }
 
 activate_rust_release() {
@@ -350,12 +412,12 @@ ensure_current_release_static() {
   }
   tool="$(release_artifact_tool)" || return 1
   if declare -F as_user >/dev/null 2>&1 && [[ -n "$project_user" ]]; then
-    as_user python3 "$tool" migrate-legacy-static \
+    as_user "$tool" migrate-legacy-static \
       --release-dir "$release_dir" \
       --static-dir "$PROJECT_DIR/apps/lumistripe-web/static" \
       --commit "$commit" --project-root "$PROJECT_DIR"
   else
-    python3 "$tool" migrate-legacy-static \
+    "$tool" migrate-legacy-static \
       --release-dir "$release_dir" \
       --static-dir "$PROJECT_DIR/apps/lumistripe-web/static" \
       --commit "$commit" --project-root "$PROJECT_DIR"
@@ -614,7 +676,7 @@ install_privileged_network_helper() {
   if [[ -d "$RELEASE_CACHE_DIR/$release_commit" ]]; then
     tool="$(release_artifact_tool)" || return 1
     cached_stage="$(mktemp -d /tmp/lumistripe-verified-helper.XXXXXX)" || return 1
-    if ! python3 "$tool" extract-binary \
+    if ! "$tool" extract-binary \
       --cache-dir "$RELEASE_CACHE_DIR/$release_commit" \
       --commit "$release_commit" \
       --binary lumistripe-deploy-helper \
@@ -733,11 +795,23 @@ spotify_web_binary_supports_backend() {
     [[ "$EUID" != 0 ]] || return 1
     run_user="$(id -un)"
   fi
-  command -v runuser >/dev/null 2>&1 || return 1
+  command -v runuser >/dev/null 2>&1 || {
+    echo "Cannot inspect the Rust web executable without runuser: $binary" >&2
+    return 1
+  }
   help_text="$(runuser -u "$run_user" -- env -u LUMI_SPOTIFY_BACKEND \
-    timeout 10 "$binary" --help 2>/dev/null)" || return 1
-  [[ "$help_text" == *"--spotify-backend"* ]] || return 1
-  grep -Eq "possible values:.*(^|[[:space:],])${backend}([[:space:],]|$)" <<< "$help_text"
+    timeout 10 "$binary" --help 2>/dev/null)" || {
+    echo "Could not inspect the Rust web executable as $run_user: $binary" >&2
+    return 1
+  }
+  [[ "$help_text" == *"--spotify-backend"* ]] || {
+    echo "The Rust web executable does not advertise Spotify backend selection: $binary" >&2
+    return 1
+  }
+  grep -Eq "possible values:.*(^|[[:space:],])${backend}([[:space:],]|$)" <<< "$help_text" || {
+    echo "The Rust web executable does not advertise the configured $backend backend: $binary" >&2
+    return 1
+  }
 }
 
 write_spotify_backend_setting() {
@@ -887,14 +961,22 @@ install_update_support() {
   home_replacement="$(printf '%s' "$SERVICE_HOME" | sed 's/[&|\\]/\\&/g')"
   project_replacement="$(printf '%s' "$PROJECT_DIR" | sed 's/[&|\\]/\\&/g')"
 
-  install -d -o root -g root -m 755 "$UPDATE_LIBEXEC_DIR"
-  install -d -o root -g root -m 755 "$NETWORK_LIBEXEC_DIR"
+  ensure_root_directory "$UPDATE_LIBEXEC_DIR" || {
+    echo "Trusted deployment snapshot directory is missing or unsafe: $UPDATE_LIBEXEC_DIR" >&2
+    rm -rf -- "$rendered_dir"
+    return 1
+  }
+  ensure_root_directory "$NETWORK_LIBEXEC_DIR" || {
+    echo "Trusted network helper directory is missing or unsafe: $NETWORK_LIBEXEC_DIR" >&2
+    rm -rf -- "$rendered_dir"
+    return 1
+  }
   rm -f -- "$NETWORK_LIBEXEC_DIR/lumistripe_network.py"
   for template in \
     install.sh update.sh uninstall.sh update-support.sh lumistripe-admin \
     spotify-provider.sh \
     tls.sh soloist.sh package-provisioning.sh timing.sh \
-    build-rust-backend.sh release_artifact.py install-github-cli.sh rust-toolchain.sh \
+    build-rust-backend.sh release_artifact.sh release_artifact.py install-github-cli.sh rust-toolchain.sh \
     lumistripe-network lumistripe-network.sudoers \
     lumistripe-spotify-service.sudoers \
     90-lumistripe-bluetooth.conf 90-lumistripe-spotify.conf \
@@ -906,7 +988,7 @@ install_update_support() {
     lumistripe-update-trigger; do
     local mode=644
     case "$template" in
-      install.sh|update.sh|uninstall.sh|lumistripe-admin|spotify-provider.sh|build-rust-backend.sh|release_artifact.py|install-github-cli.sh|lumistripe-network|lumistripe-update-trigger) mode=755 ;;
+      install.sh|update.sh|uninstall.sh|lumistripe-admin|spotify-provider.sh|build-rust-backend.sh|release_artifact.sh|release_artifact.py|install-github-cli.sh|lumistripe-network|lumistripe-update-trigger) mode=755 ;;
     esac
     source_file="$SCRIPT_DIR/$template"
     destination_file="$UPDATE_LIBEXEC_DIR/$template"

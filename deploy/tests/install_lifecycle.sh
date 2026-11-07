@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+export LUMI_RELEASE_ARTIFACT_PYTHON_COMPAT=1
 
 project=/opt/lumistripe
 checkout_admin="$project/deploy/lumistripe-admin"

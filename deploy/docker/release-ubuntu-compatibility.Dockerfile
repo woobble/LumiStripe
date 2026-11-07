@@ -5,10 +5,13 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
+        bash \
         binutils \
         ca-certificates \
+        coreutils \
+        curl \
         file \
-        python3 \
+        jq \
         libasound2t64 \
         libatomic1 \
         libdbus-1-3 \
@@ -19,5 +22,5 @@ RUN apt-get update \
         libspa-0.2-modules \
     && rm -rf /var/lib/apt/lists/*
 
-COPY deploy/release_artifact.py /usr/local/libexec/lumistripe/release_artifact.py
-COPY deploy/release_smoke.py /usr/local/libexec/lumistripe/release_smoke.py
+COPY deploy/release_artifact.sh /usr/local/libexec/lumistripe/release_artifact.sh
+COPY deploy/release_smoke.sh /usr/local/libexec/lumistripe/release_smoke.sh

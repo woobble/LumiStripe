@@ -14,6 +14,7 @@ INSTALLER = Path(__file__).parents[1] / "install.sh"
 UPDATER = Path(__file__).parents[1] / "update.sh"
 ENV_TEMPLATE = Path(__file__).parents[1] / "lumistripe-web.env.example"
 RELEASE_ARTIFACT = Path(__file__).parents[1] / "release_artifact.py"
+RELEASE_ARTIFACT_WRAPPER = Path(__file__).parents[1] / "release_artifact.sh"
 
 
 def _git(project: Path, *arguments: str) -> str:
@@ -72,6 +73,7 @@ def _builder_environment(tmp_path: Path, cargo_log: Path) -> dict[str, str]:
             "LUMI_RUST_CARGO_BIN": str(fake_cargo),
             "LUMI_TEST_CARGO_LOG": str(cargo_log),
             "LUMI_TEST_BUILD_ID": "first",
+            "LUMI_RELEASE_ARTIFACT_PYTHON_COMPAT": "1",
             "HOME": str(tmp_path / "home"),
         }
     )
@@ -110,13 +112,18 @@ def _run_deploy_support(
 ) -> subprocess.CompletedProcess[str]:
     (project / "deploy").mkdir(parents=True, exist_ok=True)
     shutil.copyfile(RELEASE_ARTIFACT, project / "deploy/release_artifact.py")
+    shutil.copyfile(RELEASE_ARTIFACT_WRAPPER, project / "deploy/release_artifact.sh")
+    (project / "deploy/release_artifact.sh").chmod(0o755)
     command = 'set -Eeuo pipefail; PROJECT_DIR="$1"; source "$2"; shift 2; ' + function + ' "$@"'
+    environment = os.environ.copy()
+    environment["LUMI_RELEASE_ARTIFACT_PYTHON_COMPAT"] = "1"
     return subprocess.run(
         ["bash", "-c", command, function, str(project), str(UPDATE_SUPPORT), *arguments],
         check=False,
         capture_output=True,
         text=True,
         timeout=10,
+        env=environment,
     )
 
 
@@ -249,6 +256,8 @@ def test_web_launcher_defaults_to_rust_and_requires_an_active_release(tmp_path: 
         UPDATE_SUPPORT.read_text(encoding="utf-8"), encoding="utf-8"
     )
     shutil.copyfile(RELEASE_ARTIFACT, project / "deploy/release_artifact.py")
+    shutil.copyfile(RELEASE_ARTIFACT_WRAPPER, project / "deploy/release_artifact.sh")
+    (project / "deploy/release_artifact.sh").chmod(0o755)
     empty_path = tmp_path / "empty-path"
     empty_path.mkdir()
     for command in ("cat", "dirname"):
@@ -266,6 +275,7 @@ def test_web_launcher_defaults_to_rust_and_requires_an_active_release(tmp_path: 
             "PATH": str(empty_path),
             "LUMI_PROJECT_DIR": str(project),
             "LUMI_TEST_LAUNCH_LOG": str(launch_log),
+            "LUMI_RELEASE_ARTIFACT_PYTHON_COMPAT": "1",
         }
     )
 
@@ -483,7 +493,9 @@ def test_installer_rejects_python_configuration_before_mutating_it(tmp_path: Pat
 def test_binary_install_profile_skips_local_build_toolchains() -> None:
     installer = INSTALLER.read_text(encoding="utf-8")
     updater = UPDATER.read_text(encoding="utf-8")
-    assert "python3-minimal" in installer
+    assert "python3-minimal" not in installer
+    assert "jq" in installer
+    assert "file" in installer
     for text in (installer, updater):
         assert "uv " not in text
         assert "LUMI_PYTHON_VERSION" not in text
@@ -609,6 +621,8 @@ def test_rust_update_build_promotes_a_complete_commit_matched_release(
         UPDATE_SUPPORT.read_text(encoding="utf-8"), encoding="utf-8"
     )
     shutil.copyfile(RELEASE_ARTIFACT, project / "deploy/release_artifact.py")
+    shutil.copyfile(RELEASE_ARTIFACT_WRAPPER, project / "deploy/release_artifact.sh")
+    (project / "deploy/release_artifact.sh").chmod(0o755)
     (project / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
     (project / ".gitignore").write_text("/target/\n", encoding="utf-8")
     static = project / "apps/lumistripe-web/static"
@@ -620,7 +634,7 @@ def test_rust_update_build_promotes_a_complete_commit_matched_release(
     _git(project, "config", "user.email", "test@example.invalid")
     _git(project, "config", "commit.gpgsign", "false")
     _git(project, "config", "core.hooksPath", "/dev/null")
-    _git(project, "add", "Cargo.toml", ".gitignore", "deploy/update-support.sh", "deploy/release_artifact.py", "apps/lumistripe-web/static")
+    _git(project, "add", "Cargo.toml", ".gitignore", "deploy/update-support.sh", "deploy/release_artifact.py", "deploy/release_artifact.sh", "apps/lumistripe-web/static")
     first_commit = _commit(project, "first.txt")
     cargo_log = tmp_path / "cargo.log"
     environment = _builder_environment(tmp_path, cargo_log)
