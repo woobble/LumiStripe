@@ -105,6 +105,10 @@ printf 'binary update fixture\n' > "$project/lifecycle-binary-version"
 git -C "$project" add lifecycle-binary-version
 git -C "$project" commit --quiet -m 'binary update fixture'
 update_commit="$(git -C "$project" rev-parse HEAD)"
+printf 'binary interruption fixture\n' > "$project/lifecycle-binary-interruption"
+git -C "$project" add lifecycle-binary-interruption
+git -C "$project" commit --quiet -m 'binary interruption fixture'
+interrupt_commit="$(git -C "$project" rev-parse HEAD)"
 git -C "$project" switch --detach "$commit" >/dev/null
 seed_verified_cache "$fixture_release" "$update_commit" update
 
@@ -144,6 +148,127 @@ test ! -e /tmp/lumi-cargo-build.log
 test -L /home/pi/.local/bin/lumistripe-cli
 test "$(readlink /home/pi/.local/bin/lumistripe-cli)" = "$release_root/current/lumistripe"
 
+cache_entry="$cache_root/$update_commit"
+cache_archive="$cache_entry/bundle.tar.gz"
+cp -p "$cache_archive" /tmp/lumi-update-bundle.valid
+cp -p "$cache_entry/verified.json" /tmp/lumi-update-verified.valid
+cp -p "$cache_entry/bundle.sha256" /tmp/lumi-update-checksum.valid
+
+mv "$cache_entry" /tmp/lumi-update-cache.valid
+if PYTHONPATH=/tmp/lumi-test-python "$installed_admin" update \
+  --user pi --project-dir "$project" --mode binary --offline "$update_commit" \
+  > /tmp/lumi-binary-update-missing-cache.log 2>&1; then
+  printf 'offline update unexpectedly succeeded without a verified cached release\n' >&2
+  exit 1
+fi
+mv /tmp/lumi-update-cache.valid "$cache_entry"
+test "$(git_as_pi rev-parse HEAD)" = "$commit"
+test "$(readlink -f "$release_root/current")" = "$release_root/releases/$commit"
+grep -Fq 'requires an intact, previously verified cached release' /tmp/lumi-binary-update-missing-cache.log || {
+  cat /tmp/lumi-binary-update-missing-cache.log >&2
+  exit 1
+}
+test ! -e /tmp/lumi-cargo-build.log
+
+chmod u+w "$cache_archive"
+printf '%s\n' 'corrupt release bytes' >> "$cache_archive"
+chmod 444 "$cache_archive"
+if PYTHONPATH=/tmp/lumi-test-python "$installed_admin" update \
+  --user pi --project-dir "$project" --mode binary --offline "$update_commit" \
+  > /tmp/lumi-binary-update-corrupt-cache.log 2>&1; then
+  printf 'offline update unexpectedly accepted a modified verified archive\n' >&2
+  exit 1
+fi
+cp -p /tmp/lumi-update-bundle.valid "$cache_archive"
+chmod 444 "$cache_archive"
+test "$(git_as_pi rev-parse HEAD)" = "$commit"
+test "$(readlink -f "$release_root/current")" = "$release_root/releases/$commit"
+grep -Fq 'previously verified release cache archive was modified' /tmp/lumi-binary-update-corrupt-cache.log || {
+  cat /tmp/lumi-binary-update-corrupt-cache.log >&2
+  exit 1
+}
+test ! -e /tmp/lumi-cargo-build.log
+
+python3 - "$cache_entry" "$update_commit" <<'PY'
+import copy
+import hashlib
+import io
+import json
+import sys
+import tarfile
+from pathlib import Path
+
+cache = Path(sys.argv[1])
+commit = sys.argv[2]
+archive_path = cache / "bundle.tar.gz"
+temporary = cache / "bundle.invalid-target.tar.gz"
+with tarfile.open(archive_path, "r:gz") as source, tarfile.open(temporary, "w:gz") as output:
+    for original in source.getmembers():
+        member = copy.copy(original)
+        payload = source.extractfile(original) if original.isfile() else None
+        if original.name == "release/manifest.json":
+            assert payload is not None
+            manifest = json.loads(payload.read())
+            manifest["target"]["architecture"] = "armv7l"
+            encoded = (json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n").encode()
+            member.size = len(encoded)
+            output.addfile(member, io.BytesIO(encoded))
+        else:
+            output.addfile(member, payload)
+        if payload is not None:
+            payload.close()
+temporary.replace(archive_path)
+digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+verified_path = cache / "verified.json"
+verified = json.loads(verified_path.read_text(encoding="utf-8"))
+verified["archive_sha256"] = digest
+verified_path.write_text(json.dumps(verified, sort_keys=True, separators=(",", ":")) + "\n")
+verified_path.chmod(0o444)
+(cache / "bundle.sha256").write_text(
+    f"{digest}  lumistripe-linux-aarch64-{commit}.tar.gz\n", encoding="ascii"
+)
+(cache / "bundle.sha256").chmod(0o444)
+archive_path.chmod(0o444)
+PY
+
+if PYTHONPATH=/tmp/lumi-test-python "$installed_admin" update \
+  --user pi --project-dir "$project" --mode binary --offline "$update_commit" \
+  > /tmp/lumi-binary-update-wrong-target.log 2>&1; then
+  printf 'offline update unexpectedly accepted a wrong-architecture release manifest\n' >&2
+  exit 1
+fi
+cp -p /tmp/lumi-update-bundle.valid "$cache_archive"
+cp -p /tmp/lumi-update-verified.valid "$cache_entry/verified.json"
+cp -p /tmp/lumi-update-checksum.valid "$cache_entry/bundle.sha256"
+chmod 444 "$cache_archive" "$cache_entry/verified.json" "$cache_entry/bundle.sha256"
+test "$(git_as_pi rev-parse HEAD)" = "$commit"
+test "$(readlink -f "$release_root/current")" = "$release_root/releases/$commit"
+grep -Fq 'must be aarch64-unknown-linux-gnu' /tmp/lumi-binary-update-wrong-target.log
+test ! -e /tmp/lumi-cargo-build.log
+
+# The verifier and updater must never turn integrity failures into source builds.
+test ! -e /tmp/lumi-apt-used
+
+touch /tmp/lumi-fail-next-release-activation
+if PYTHONPATH=/tmp/lumi-test-python "$installed_admin" update \
+  --user pi --project-dir "$project" --mode binary --offline "$update_commit" \
+  > /tmp/lumi-binary-update-activation-failure.log 2>&1; then
+  printf 'injected release activation failure unexpectedly succeeded\n' >&2
+  exit 1
+fi
+grep -Fq 'injected release activation failure' /tmp/lumi-binary-update-activation-failure.log
+grep -Fq 'Update failed during Release activation (commit-matched release pointer and CLI activation' \
+  /tmp/lumi-binary-update-activation-failure.log
+grep -Fq 'The previous release' /tmp/lumi-binary-update-activation-failure.log
+test ! -e /tmp/lumi-fail-next-release-activation
+test "$(git_as_pi rev-parse HEAD)" = "$commit"
+test "$(readlink -f "$release_root/current")" = "$release_root/releases/$commit"
+if compgen -G "$release_root/.current.*.tmp" >/dev/null; then
+  printf 'failed release activation left a temporary pointer behind\n' >&2
+  exit 1
+fi
+test ! -e /tmp/lumi-apt-used
+
 touch /tmp/lumi-fail-next-web-restart
 if PYTHONPATH=/tmp/lumi-test-python "$installed_admin" update \
   --user pi --project-dir "$project" --mode binary --offline "$update_commit" \
@@ -158,18 +283,91 @@ grep -Fq 'The previous release' /tmp/lumi-binary-update-rollback.log
 test -d "$release_root/releases/$update_commit"
 test ! -e /tmp/lumi-apt-used
 
-if ! PYTHONPATH=/tmp/lumi-test-python "$installed_admin" update \
+rm -f /tmp/lumi-web-restart-blocked /tmp/lumi-web-restart-parent-pid
+touch /tmp/lumi-block-next-web-restart
+PYTHONPATH=/tmp/lumi-test-python "$installed_admin" update \
   --user pi --project-dir "$project" --mode binary --offline "$update_commit" \
-  > /tmp/lumi-binary-update-success.log 2>&1; then
+  > /tmp/lumi-binary-update-success.log 2>&1 &
+update_pid=$!
+for _attempt in $(seq 1 300); do
+  [ -e /tmp/lumi-web-restart-blocked ] && break
+  python3 -c 'import time; time.sleep(0.02)'
+done
+if [ ! -e /tmp/lumi-web-restart-blocked ]; then
+  touch /tmp/lumi-release-web-restart
+  wait "$update_pid" || true
+  cat /tmp/lumi-binary-update-success.log >&2
+  printf 'binary update did not reach the injected service restart barrier\n' >&2
+  exit 1
+fi
+
+if printf 'y\n' | PYTHONPATH=/tmp/lumi-test-python "$installed_admin" spotify disable \
+  > /tmp/lumi-provider-concurrent-update.log 2>&1; then
+  touch /tmp/lumi-release-web-restart
+  wait "$update_pid" || true
+  printf 'provider switch unexpectedly ran while an application update held the shared lock\n' >&2
+  exit 1
+fi
+grep -Fq 'an update is running; retry the provider change after it finishes' \
+  /tmp/lumi-provider-concurrent-update.log
+grep -Fqx 'LUMI_SPOTIFY_BACKEND=librespot' /etc/lumistripe/lumistripe-web.env
+touch /tmp/lumi-release-web-restart
+if ! wait "$update_pid"; then
   cat /tmp/lumi-binary-update-success.log >&2
   exit 1
 fi
 test "$(git_as_pi rev-parse HEAD)" = "$update_commit"
 test "$(readlink -f "$release_root/current")" = "$release_root/releases/$update_commit"
+seed_verified_cache "$fixture_release" "$interrupt_commit" interrupted-update
+
+rm -f /tmp/lumi-web-restart-blocked /tmp/lumi-web-restart-parent-pid
+touch /tmp/lumi-block-next-web-restart
+PYTHONPATH=/tmp/lumi-test-python "$installed_admin" update \
+  --user pi --project-dir "$project" --mode binary --offline "$interrupt_commit" \
+  > /tmp/lumi-binary-update-interrupted.log 2>&1 &
+interrupted_update_pid=$!
+for _attempt in $(seq 1 300); do
+  [ -e /tmp/lumi-web-restart-blocked ] && break
+  python3 -c 'import time; time.sleep(0.02)'
+done
+if [ ! -e /tmp/lumi-web-restart-blocked ]; then
+  touch /tmp/lumi-release-web-restart
+  wait "$interrupted_update_pid" || true
+  cat /tmp/lumi-binary-update-interrupted.log >&2
+  printf 'interrupted update did not reach the injected service restart barrier\n' >&2
+  exit 1
+fi
+update_shell_pid="$(cat /tmp/lumi-web-restart-parent-pid)"
+kill -TERM "$update_shell_pid"
+touch /tmp/lumi-release-web-restart
+if wait "$interrupted_update_pid"; then
+  printf 'interrupted binary update unexpectedly reported success\n' >&2
+  exit 1
+else
+  interrupted_status=$?
+fi
+test "$interrupted_status" -eq 143
+grep -Fq 'Update interrupted by TERM.' /tmp/lumi-binary-update-interrupted.log || {
+  cat /tmp/lumi-binary-update-interrupted.log >&2
+  exit 1
+}
+grep -Fq 'The previous release' /tmp/lumi-binary-update-interrupted.log
+test "$(git_as_pi rev-parse HEAD)" = "$update_commit"
+test "$(readlink -f "$release_root/current")" = "$release_root/releases/$update_commit"
+test -d "$release_root/releases/$interrupt_commit"
+
+if ! PYTHONPATH=/tmp/lumi-test-python "$installed_admin" update \
+  --user pi --project-dir "$project" --mode binary --offline "$interrupt_commit" \
+  > /tmp/lumi-binary-update-recovered.log 2>&1; then
+  cat /tmp/lumi-binary-update-recovered.log >&2
+  exit 1
+fi
+test "$(git_as_pi rev-parse HEAD)" = "$interrupt_commit"
+test "$(readlink -f "$release_root/current")" = "$release_root/releases/$interrupt_commit"
 
 : > /tmp/lumi-systemctl.log
 if ! PYTHONPATH=/tmp/lumi-test-python "$installed_admin" update \
-  --user pi --project-dir "$project" --mode binary --offline "$update_commit" \
+  --user pi --project-dir "$project" --mode binary --offline "$interrupt_commit" \
   > /tmp/lumi-binary-update-repeat.log 2>&1; then
   cat /tmp/lumi-binary-update-repeat.log >&2
   exit 1

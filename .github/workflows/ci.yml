@@ -194,12 +194,12 @@ jobs:
             --output "$RUNNER_TEMP/lumistripe-stability.json"
 
       - name: Upload stability profile report
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_extended_stability && success() }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_extended_stability && always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: simulator-stability-${{ github.sha }}
           path: ${{ runner.temp }}/lumistripe-stability.json
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
 
   rust-engine-arm64:
@@ -272,6 +272,64 @@ jobs:
             --package lumistripe-web --features bluez,pipewire
           file target/release/lumistripe-web | grep -q 'ARM aarch64'
 
+  qualification-report:
+    name: CI qualification report
+    if: ${{ always() }}
+    needs: [deployment-tests, frontend, rust-engine, rust-engine-arm64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: false
+          python-version: "3.12"
+          version: "0.13.5"
+
+      - name: Generate CI qualification report
+        env:
+          DEPLOYMENT_TEST_RESULT: ${{ needs.deployment-tests.result }}
+          FRONTEND_TEST_RESULT: ${{ needs.frontend.result }}
+          RUST_X86_TEST_RESULT: ${{ needs.rust-engine.result }}
+          RUST_APPLICATION_TEST_RESULT: ${{ needs.rust-engine.outputs.application-tests || needs.rust-engine.result }}
+          RUST_STABILITY_TEST_RESULT: ${{ needs.rust-engine.outputs.extended-stability || 'skipped' }}
+          RUST_ARM64_TEST_RESULT: ${{ needs.rust-engine-arm64.result }}
+        run: |
+          set -eu
+          report_dir="$RUNNER_TEMP/ci-qualification"
+          uv run --no-project --python 3.12 python deploy/release_qualification.py \
+            --project-root "$GITHUB_WORKSPACE" \
+            --commit "$GITHUB_SHA" \
+            --deployment-tests "$DEPLOYMENT_TEST_RESULT" \
+            --frontend-tests "$FRONTEND_TEST_RESULT" \
+            --rust-x86-tests "$RUST_X86_TEST_RESULT" \
+            --application-tests "$RUST_APPLICATION_TEST_RESULT" \
+            --stability-tests "$RUST_STABILITY_TEST_RESULT" \
+            --rust-arm64-tests "$RUST_ARM64_TEST_RESULT" \
+            --release-source skipped \
+            --release-smoke skipped \
+            --trixie-runtime skipped \
+            --ubuntu-2604-runtime skipped \
+            --artifact-integrity skipped \
+            --provenance skipped \
+            --build-environment "GitHub-hosted Ubuntu 24.04 x86_64 and ARM64 runners" \
+            --output-dir "$report_dir"
+          cat "$report_dir/release-qualification.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload CI qualification report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-qualification-${{ github.sha }}
+          path: ${{ runner.temp }}/ci-qualification/
+          if-no-files-found: error
+          retention-days: 30
+
   publish-arm64-release:
     name: Publish verified ARM64 release
     if: >-
@@ -294,7 +352,15 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: false
+          python-version: "3.12"
+          version: "0.13.5"
+
       - name: Verify release source commit
+        id: verify_release_source
         run: |
           set -eu
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
@@ -305,6 +371,7 @@ jobs:
           fi
 
       - name: Build and smoke-test the ARM64 release in Debian Trixie
+        id: build_trixie_release
         run: |
           set -eu
           docker buildx build \
@@ -326,14 +393,8 @@ jobs:
           test "$(cat "$release_dir/source-commit")" = "$GITHUB_SHA"
           test -s "$release_dir/static/index.html"
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          enable-cache: false
-          python-version: "3.12"
-          version: "0.13.5"
-
       - name: Package deterministic release archive and manifest
+        id: package_release
         run: |
           set -eu
           release_dir="$RUNNER_TEMP/lumistripe-release/release"
@@ -350,6 +411,7 @@ jobs:
           echo "LUMI_RELEASE_ARCHIVE=$archive" >> "$GITHUB_ENV"
 
       - name: Validate and smoke-test the packaged ARM64 release
+        id: validate_release
         run: |
           set -eu
           release_dir="$RUNNER_TEMP/lumistripe-release/release"
@@ -368,6 +430,7 @@ jobs:
             --require-manifest
 
       - name: Build Ubuntu 26.04 ARM64 runtime compatibility image
+        id: build_ubuntu_runtime
         run: |
           docker buildx build \
             --platform linux/arm64 \
@@ -377,6 +440,7 @@ jobs:
             .
 
       - name: Verify the release on Ubuntu 26.04 ARM64
+        id: verify_ubuntu_runtime
         run: |
           set -eu
           uv run --no-project --python 3.12 python deploy/release_smoke.py \
@@ -392,6 +456,7 @@ jobs:
           subject-path: ${{ env.LUMI_RELEASE_ARCHIVE }}
 
       - name: Verify release provenance
+        id: verify_provenance
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -410,18 +475,43 @@ jobs:
             --bundle "$bundle"
           echo "LUMI_RELEASE_BUNDLE=$bundle" >> "$GITHUB_ENV"
 
-      - name: Generate and upload release qualification report
+      - name: Generate release qualification report
+        if: ${{ always() }}
         env:
           DEPLOYMENT_TEST_RESULT: ${{ needs.deployment-tests.result }}
           FRONTEND_TEST_RESULT: ${{ needs.frontend.result }}
           RUST_X86_TEST_RESULT: ${{ needs.rust-engine.result }}
           RUST_ARM64_TEST_RESULT: ${{ needs.rust-engine-arm64.result }}
+          RELEASE_SOURCE_RESULT: ${{ steps.verify_release_source.outcome || 'skipped' }}
+          TRIXIE_RESULT: ${{ steps.build_trixie_release.outcome || 'skipped' }}
+          PACKAGE_RESULT: ${{ steps.package_release.outcome || 'skipped' }}
+          VALIDATE_RESULT: ${{ steps.validate_release.outcome || 'skipped' }}
+          UBUNTU_BUILD_RESULT: ${{ steps.build_ubuntu_runtime.outcome || 'skipped' }}
+          UBUNTU_VERIFY_RESULT: ${{ steps.verify_ubuntu_runtime.outcome || 'skipped' }}
+          ATTEST_RESULT: ${{ steps.attest.outcome || 'skipped' }}
+          VERIFY_PROVENANCE_RESULT: ${{ steps.verify_provenance.outcome || 'skipped' }}
         run: |
           set -eu
+          combine_results() {
+            saw_skipped=0
+            for result in "$@"; do
+              case "$result" in
+                failure|cancelled) echo failure; return ;;
+                success) ;;
+                *) saw_skipped=1 ;;
+              esac
+            done
+            if [ "$saw_skipped" -eq 0 ]; then echo success; else echo skipped; fi
+          }
           release_report_dir="$RUNNER_TEMP/release-qualification"
+          release_dir="$RUNNER_TEMP/lumistripe-release/release"
+          report_args=()
+          if [ -f "$release_dir/manifest.json" ]; then
+            report_args+=(--release-dir "$release_dir")
+          fi
           uv run --no-project --python 3.12 python deploy/release_qualification.py \
             --project-root "$GITHUB_WORKSPACE" \
-            --release-dir "$RUNNER_TEMP/lumistripe-release/release" \
+            "${report_args[@]}" \
             --commit "$GITHUB_SHA" \
             --deployment-tests "$DEPLOYMENT_TEST_RESULT" \
             --frontend-tests "$FRONTEND_TEST_RESULT" \
@@ -429,19 +519,26 @@ jobs:
             --application-tests "${{ needs.rust-engine.outputs.application-tests || needs.rust-engine.result }}" \
             --stability-tests "${{ needs.rust-engine.outputs.extended-stability || 'skipped' }}" \
             --rust-arm64-tests "$RUST_ARM64_TEST_RESULT" \
-            --trixie-runtime passed \
-            --ubuntu-2604-runtime passed \
-            --artifact-integrity passed \
-            --provenance passed \
+            --release-source "$RELEASE_SOURCE_RESULT" \
+            --release-smoke "$(combine_results "$TRIXIE_RESULT" "$VALIDATE_RESULT")" \
+            --trixie-runtime "$TRIXIE_RESULT" \
+            --ubuntu-2604-runtime "$(combine_results "$UBUNTU_BUILD_RESULT" "$UBUNTU_VERIFY_RESULT")" \
+            --artifact-integrity "$(combine_results "$PACKAGE_RESULT" "$VALIDATE_RESULT")" \
+            --provenance "$(combine_results "$ATTEST_RESULT" "$VERIFY_PROVENANCE_RESULT")" \
+            --target-architecture aarch64 \
+            --target-triple aarch64-unknown-linux-gnu \
+            --build-environment "GitHub-hosted ARM64 runner with Debian Trixie ARM64 build and runtime containers" \
             --output-dir "$release_report_dir"
           cat "$release_report_dir/release-qualification.md" >> "$GITHUB_STEP_SUMMARY"
+        shell: bash
 
       - name: Upload release qualification report
+        if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-qualification-${{ github.sha }}
           path: ${{ runner.temp }}/release-qualification/
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 90
 
       - name: Publish immutable GitHub release

@@ -51,7 +51,7 @@ def _check(
 def make_report(
     *,
     project_root: Path,
-    release_dir: Path,
+    release_dir: Path | None,
     commit: str,
     deployment_tests: str,
     frontend_tests: str,
@@ -59,17 +59,30 @@ def make_report(
     application_tests: str,
     stability_tests: str,
     rust_arm64_tests: str,
+    release_source: str,
+    release_smoke: str,
     trixie_runtime: str,
     ubuntu_2604_runtime: str,
     artifact_integrity: str,
     provenance: str,
+    target_architecture: str = "aarch64",
+    target_triple: str = "aarch64-unknown-linux-gnu",
+    build_environment: str = "not established",
 ) -> dict[str, Any]:
-    manifest = json.loads((release_dir / "manifest.json").read_text(encoding="utf-8"))
-    build_info = json.loads(
-        (release_dir.parent / "release-build-info.json").read_text(encoding="utf-8")
-    )
-    if manifest.get("source_commit") != commit or build_info.get("architecture") != "aarch64":
-        raise ValueError("qualification inputs do not match the requested release commit/architecture")
+    manifest: dict[str, Any] | None = None
+    if release_dir is not None:
+        manifest = json.loads((release_dir / "manifest.json").read_text(encoding="utf-8"))
+        build_info = json.loads(
+            (release_dir.parent / "release-build-info.json").read_text(encoding="utf-8")
+        )
+        if manifest.get("source_commit") != commit or build_info.get("architecture") != "aarch64":
+            raise ValueError("qualification inputs do not match the requested release commit/architecture")
+        target_architecture = str(build_info["architecture"])
+        target_triple = str(build_info["target"])
+        build_environment = str(manifest["toolchain"]["builder"])
+        glibc_minimum = str(manifest["runtime_abi"]["glibc_minimum"])
+    else:
+        glibc_minimum = "not measured"
 
     checks = [
         _check(
@@ -109,10 +122,22 @@ def make_report(
             "GitHub-hosted rust-engine-arm64 job",
         ),
         _check(
-            "Debian Trixie ARM64 runtime and release startup",
+            "Release source commit and immutable-tag eligibility",
+            release_source,
+            "automated",
+            "Publisher checkout, ARM64 runner, and existing build-tag guard",
+        ),
+        _check(
+            "Debian Trixie ARM64 runtime compatibility",
             trixie_runtime,
             "automated",
-            "AArch64 release-smoke image and packaged release smoke test",
+            "AArch64 Debian Trixie runtime container",
+        ),
+        _check(
+            "Actual packaged ARM64 release startup smoke",
+            release_smoke,
+            "automated",
+            "Packaged release directory, CLI, deployment helper, loopback web health, frontend assets, and clean shutdown",
         ),
         _check(
             "Ubuntu 26.04 LTS ARM64 runtime compatibility",
@@ -159,10 +184,10 @@ def make_report(
             "bun": (project_root / ".bun-version").read_text(encoding="utf-8").strip(),
         },
         "target": {
-            "architecture": build_info["architecture"],
-            "triple": build_info["target"],
-            "build_environment": "debian:trixie-slim",
-            "glibc_minimum": manifest["runtime_abi"]["glibc_minimum"],
+            "architecture": target_architecture,
+            "triple": target_triple,
+            "build_environment": build_environment,
+            "glibc_minimum": glibc_minimum,
         },
         "checks": checks,
         "known_limitations": [
@@ -201,7 +226,7 @@ def markdown_report(report: dict[str, Any]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-root", type=Path, required=True)
-    parser.add_argument("--release-dir", type=Path, required=True)
+    parser.add_argument("--release-dir", type=Path)
     parser.add_argument("--commit", required=True)
     parser.add_argument("--deployment-tests", required=True)
     parser.add_argument("--frontend-tests", required=True)
@@ -209,10 +234,15 @@ def main() -> int:
     parser.add_argument("--application-tests", required=True)
     parser.add_argument("--stability-tests", required=True)
     parser.add_argument("--rust-arm64-tests", required=True)
+    parser.add_argument("--release-source", required=True)
+    parser.add_argument("--release-smoke", required=True)
     parser.add_argument("--trixie-runtime", required=True)
     parser.add_argument("--ubuntu-2604-runtime", required=True)
     parser.add_argument("--artifact-integrity", required=True)
     parser.add_argument("--provenance", required=True)
+    parser.add_argument("--target-architecture", default="aarch64")
+    parser.add_argument("--target-triple", default="aarch64-unknown-linux-gnu")
+    parser.add_argument("--build-environment", default="not established")
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
 
@@ -227,10 +257,15 @@ def main() -> int:
             application_tests=args.application_tests,
             stability_tests=args.stability_tests,
             rust_arm64_tests=args.rust_arm64_tests,
+            release_source=args.release_source,
+            release_smoke=args.release_smoke,
             trixie_runtime=args.trixie_runtime,
             ubuntu_2604_runtime=args.ubuntu_2604_runtime,
             artifact_integrity=args.artifact_integrity,
             provenance=args.provenance,
+            target_architecture=args.target_architecture,
+            target_triple=args.target_triple,
+            build_environment=args.build_environment,
         )
         args.output_dir.mkdir(parents=True, exist_ok=True)
         (args.output_dir / "release-qualification.json").write_text(

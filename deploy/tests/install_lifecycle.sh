@@ -32,6 +32,21 @@ for name in lumistripe-web lumistripe-engine lumistripe-deploy-helper lumistripe
   test -x "$release_root/current/$name"
 done
 test "$(wc -l < /tmp/lumi-cargo-build.log)" -eq 4
+python3 - "$base_commit" <<'PY'
+import sys
+from pathlib import Path
+
+builds = [line.split() for line in Path("/tmp/lumi-cargo-build.log").read_text().splitlines()]
+expected = {
+    "lumistripe-web",
+    "lumistripe-engine",
+    "lumistripe-deploy-helper",
+    "lumistripe",
+}
+assert len(builds) == 4
+assert {commit for commit, _binary in builds} == {sys.argv[1]}
+assert {binary for _commit, binary in builds} == expected
+PY
 test ! -e /tmp/lumi-apt-used
 
 printf '{"preserved":true}\n' > /home/pi/.config/lumistripe-settings.json
@@ -125,6 +140,45 @@ if grep -Fqx 'active lumistripe-spotify.service' /tmp/lumi-systemctl-state; then
 test "$(cat /home/pi/.local/share/lumistripe/spotify/credentials.json)" = '{"device_id":"fixture-id"}'
 grep -Fqx 'LUMI_SPOTIFY_API_KEY=fixture-not-a-real-key' /etc/lumistripe/lumistripe-spotify.env
 
+rm -f /tmp/lumi-web-start-blocked /tmp/lumi-web-start-parent-pid /tmp/lumi-release-web-start
+touch /tmp/lumi-block-next-web-start
+"$installed_admin" spotify disable > /tmp/lumi-provider-interrupted.log 2>&1 <<'EOF' &
+y
+EOF
+provider_pid=$!
+for _ in {1..300}; do
+  [[ -e /tmp/lumi-web-start-blocked ]] && break
+  python3 -c 'import time; time.sleep(0.02)'
+done
+if [[ ! -e /tmp/lumi-web-start-blocked ]]; then
+  touch /tmp/lumi-release-web-start
+  wait "$provider_pid" || true
+  cat /tmp/lumi-provider-interrupted.log >&2
+  printf 'provider switch did not reach the injected restart barrier\n' >&2
+  exit 1
+fi
+provider_shell_pid="$(cat /tmp/lumi-web-start-parent-pid)"
+kill -TERM "$provider_shell_pid"
+touch /tmp/lumi-release-web-start
+if wait "$provider_pid"; then
+  printf 'interrupted provider switch unexpectedly succeeded\n' >&2
+  exit 1
+else
+  provider_status=$?
+fi
+test "$provider_status" -eq 143
+grep -Fq 'Spotify provider switch interrupted by TERM' /tmp/lumi-provider-interrupted.log
+grep -Fq 'The previous Spotify provider configuration and service state were restored' /tmp/lumi-provider-interrupted.log
+grep -Fqx 'LUMI_SPOTIFY_BACKEND=librespot' /etc/lumistripe/lumistripe-web.env
+grep -Fqx 'active lumistripe-web.service' /tmp/lumi-systemctl-state
+if grep -Fqx 'active lumistripe-spotify.service' /tmp/lumi-systemctl-state; then exit 1; fi
+test "$(cat /home/pi/.local/share/lumistripe/spotify/credentials.json)" = '{"device_id":"fixture-id"}'
+grep -Fqx 'LUMI_SPOTIFY_API_KEY=fixture-not-a-real-key' /etc/lumistripe/lumistripe-spotify.env
+if compgen -G '/run/lumistripe-provider-switch.*' >/dev/null; then
+  printf 'provider switch recovery backup remained after successful signal rollback\n' >&2
+  exit 1
+fi
+
 : > /tmp/lumi-systemctl.log
 if ! "$installed_admin" update --user pi --project-dir "$project" --mode source \
   > /tmp/lumi-update-current.log 2>&1; then
@@ -148,6 +202,14 @@ test "$(git_as_pi rev-parse HEAD)" = "$second_commit"
 test "$(readlink -f "$release_root/current")" = "$release_root/releases/$second_commit"
 grep -Fq "Activated version-matched Rust application" /tmp/lumi-update-success.log
 grep -Fqx 'restart lumistripe-web.service' /tmp/lumi-systemctl.log
+python3 - "$second_commit" <<'PY'
+import sys
+from pathlib import Path
+
+builds = [line.split() for line in Path("/tmp/lumi-cargo-build.log").read_text().splitlines()]
+assert len(builds) == 8
+assert {commit for commit, _binary in builds[-4:]} == {sys.argv[1]}
+PY
 
 runuser -u pi -- env HOME=/home/pi /bin/sh -c \
   'cd /opt/lumistripe && git switch main >/dev/null && printf "restart failure commit\\n" > lifecycle-version && git add lifecycle-version && git commit --quiet -m restart-failure'

@@ -293,8 +293,14 @@ activate_rust_release() {
     RELEASE_POINTER_CHANGED=0
     return 0
   fi
-  ln -s "releases/$commit" "$temporary" || return 1
-  mv -Tf -- "$temporary" "$current" || return 1
+  if ! ln -s "releases/$commit" "$temporary"; then
+    rm -f -- "$temporary" || echo "Could not remove temporary release pointer: $temporary" >&2
+    return 1
+  fi
+  if ! mv -Tf -- "$temporary" "$current"; then
+    rm -f -- "$temporary" || echo "Could not remove temporary release pointer: $temporary" >&2
+    return 1
+  fi
   RELEASE_POINTER_CHANGED=1
 }
 

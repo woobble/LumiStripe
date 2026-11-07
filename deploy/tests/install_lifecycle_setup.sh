@@ -174,9 +174,29 @@ case "$action" in
     if printf '%s\n' "$*" | grep -Fq -- '--now'; then put active "$service"; fi
     ;;
   start|restart)
+    if [ "$action" = start ] && [ "$service" = lumistripe-web.service ] && [ -e /tmp/lumi-block-next-web-start ]; then
+      rm -f /tmp/lumi-block-next-web-start
+      touch /tmp/lumi-web-start-blocked
+      printf '%s\n' "$PPID" > /tmp/lumi-web-start-parent-pid
+      while [ ! -e /tmp/lumi-release-web-start ]; do
+        python3 -c 'import time; time.sleep(0.02)'
+      done
+      rm -f /tmp/lumi-release-web-start
+      rm -f /tmp/lumi-web-start-blocked
+    fi
     if [ "$action" = start ] && [ "$service" = lumistripe-web.service ] && [ -e /tmp/lumi-fail-next-web-start ]; then
       rm -f /tmp/lumi-fail-next-web-start
       exit 1
+    fi
+    if [ "$action" = restart ] && [ "$service" = lumistripe-web.service ] && [ -e /tmp/lumi-block-next-web-restart ]; then
+      rm -f /tmp/lumi-block-next-web-restart
+      touch /tmp/lumi-web-restart-blocked
+      printf '%s\n' "$PPID" > /tmp/lumi-web-restart-parent-pid
+      while [ ! -e /tmp/lumi-release-web-restart ]; do
+        python3 -c 'import time; time.sleep(0.02)'
+      done
+      rm -f /tmp/lumi-release-web-restart
+      rm -f /tmp/lumi-web-restart-blocked
     fi
     if [ "$action" = restart ] && [ "$service" = lumistripe-web.service ] && [ -e /tmp/lumi-fail-next-web-restart ]; then
       rm -f /tmp/lumi-fail-next-web-restart
@@ -205,3 +225,21 @@ EOF
 chmod 755 /usr/bin/systemctl
 : > /tmp/lumi-user-systemctl.log
 chmod 666 /tmp/lumi-user-systemctl.log
+
+mv /usr/bin/mv /usr/bin/mv.real
+cat > /usr/bin/mv <<'EOF'
+#!/bin/sh
+if [ -e /tmp/lumi-fail-next-release-activation ]; then
+  destination=
+  for argument do destination="$argument"; done
+  case "$destination" in
+    */target/rust-deploy/current)
+      rm -f /tmp/lumi-fail-next-release-activation
+      printf 'injected release activation failure\n' >&2
+      exit 73
+      ;;
+  esac
+fi
+exec /usr/bin/mv.real "$@"
+EOF
+chmod 755 /usr/bin/mv

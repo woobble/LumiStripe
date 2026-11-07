@@ -13,6 +13,7 @@ lumi_phase_component() {
   case "${LUMI_ACTIVE_PHASE:-preflight}" in
     "Package setup") printf '%s\n' "system packages and runtime libraries" ;;
     Configuration) printf '%s\n' "deployment configuration and service files" ;;
+    "Release activation") printf '%s\n' "commit-matched release pointer and CLI activation" ;;
     "Source build") printf '%s\n' "Rust and frontend source build" ;;
     Soloist) printf '%s\n' "Spotify Soloist provider" ;;
     "Service health") printf '%s\n' "systemd service startup and health" ;;

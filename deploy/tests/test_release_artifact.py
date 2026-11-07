@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import importlib.util
 import io
@@ -230,6 +231,27 @@ def test_release_assets_require_a_published_immutable_release(
         release_artifact._release_assets(COMMIT)
 
 
+def test_missing_published_release_is_a_distinct_non_fallback_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(release_artifact, "_request_json", lambda _url: (404, None))
+    release_root = tmp_path / "project/target/rust-deploy/releases"
+    cache_root = tmp_path / "cache"
+
+    with pytest.raises(release_artifact.MissingArtifact, match="no prebuilt release is published"):
+        release_artifact.install_release(
+            COMMIT,
+            release_root,
+            cache_root,
+            uid=os.getuid(),
+            gid=os.getgid(),
+            require_supported_target=False,
+        )
+
+    assert list(release_root.iterdir()) == []
+    assert list(cache_root.iterdir()) == []
+
+
 def test_ci_release_publisher_checks_github_immutability() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     assert "publish-arm64-release:" in workflow
@@ -239,13 +261,21 @@ def test_ci_release_publisher_checks_github_immutability() -> None:
 
 def test_ci_release_smoke_platform_checks_and_qualification_gate_precede_publication() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
+    qualification_job = workflow.split("  qualification-report:", maxsplit=1)[1].split(
+        "  publish-arm64-release:", maxsplit=1
+    )[0]
+    assert "if: ${{ always() }}" in qualification_job
+    assert "Generate CI qualification report" in qualification_job
+    assert "--release-smoke skipped" in qualification_job
+    assert "Upload CI qualification report" in qualification_job
+
     publisher = workflow.split("  publish-arm64-release:", maxsplit=1)[1]
     required_steps = [
         "Build and smoke-test the ARM64 release in Debian Trixie",
         "Validate and smoke-test the packaged ARM64 release",
         "Verify the release on Ubuntu 26.04 ARM64",
         "Verify release provenance",
-        "Generate and upload release qualification report",
+        "Generate release qualification report",
         "Upload release qualification report",
         "Publish immutable GitHub release",
     ]
@@ -255,6 +285,31 @@ def test_ci_release_smoke_platform_checks_and_qualification_gate_precede_publica
     assert "--require-manifest" in publisher
     assert "needs: [deployment-tests, frontend, rust-engine, rust-engine-arm64]" in publisher
     assert publisher.index("gh release create") > positions[-1]
+    publish_step = publisher.split("      - name: Publish immutable GitHub release", maxsplit=1)[1]
+    assert "if: ${{ always() }}" not in publish_step
+    assert "continue-on-error: true" not in publisher
+
+    report_step = publisher.split("      - name: Generate release qualification report", maxsplit=1)[
+        1
+    ].split("      - name: Upload release qualification report", maxsplit=1)[0]
+    assert "if: ${{ always() }}" in report_step
+    assert "steps.verify_release_source.outcome" in report_step
+    assert "steps.verify_provenance.outcome" in report_step
+    assert 'combine_results "$TRIXIE_RESULT" "$VALIDATE_RESULT"' in report_step
+    assert 'combine_results "$PACKAGE_RESULT" "$VALIDATE_RESULT"' in report_step
+    assert 'combine_results "$ATTEST_RESULT" "$VERIFY_PROVENANCE_RESULT"' in report_step
+
+    upload_step = publisher.split("      - name: Upload release qualification report", maxsplit=1)[
+        1
+    ].split("      - name: Publish immutable GitHub release", maxsplit=1)[0]
+    assert "if: ${{ always() }}" in upload_step
+    assert "if-no-files-found: warn" in upload_step
+
+    stability_upload = workflow.split("      - name: Upload stability profile report", maxsplit=1)[
+        1
+    ].split("  rust-engine-arm64:", maxsplit=1)[0]
+    assert "inputs.run_extended_stability && always()" in stability_upload
+    assert "if-no-files-found: warn" in stability_upload
 
     smoke = Path(__file__).parents[1] / "release_smoke.py"
     smoke_source = smoke.read_text(encoding="utf-8")
@@ -354,6 +409,26 @@ def test_signed_release_is_verified_before_cache_and_release_staging(
         cached_only=True,
     )
     assert repeated == staged
+
+    def fail_for_full_staging_filesystem(
+        _archive_path: Path, _destination: Path, _commit: str
+    ) -> Path:
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(release_artifact, "extract_archive", fail_for_full_staging_filesystem)
+    full_disk_release_root = tmp_path / "full-disk/project/target/rust-deploy/releases"
+    with pytest.raises(OSError, match="No space left on device"):
+        release_artifact.install_release(
+            COMMIT,
+            full_disk_release_root,
+            tmp_path / "cache",
+            uid=os.getuid(),
+            gid=os.getgid(),
+            require_supported_target=False,
+            cached_only=True,
+        )
+    assert list(full_disk_release_root.iterdir()) == []
+    assert (tmp_path / f"cache/{COMMIT}/verified.json").is_file()
 
 
 def test_cached_only_install_rejects_a_missing_verified_bundle(

@@ -489,11 +489,16 @@ record_update_state() {
 }
 
 handle_update_error() {
-  local exit_status=$?
+  local exit_status="${LUMI_ERROR_STATUS:-$?}"
   local rollback_status=0
   local active_checkout=
   local active_release=
-  trap - ERR
+  unset LUMI_ERROR_STATUS
+  trap - ERR INT TERM HUP
+  if [[ -n "${LUMI_INTERRUPT_SIGNAL:-}" ]]; then
+    echo "Update interrupted by $LUMI_INTERRUPT_SIGNAL." >&2
+    unset LUMI_INTERRUPT_SIGNAL
+  fi
   echo "Update failed during $LUMI_ACTIVE_PHASE ($(lumi_phase_component); exit status $exit_status)." >&2
   rollback || rollback_status=$?
   if (( rollback_status == 0 )); then
@@ -516,12 +521,26 @@ handle_update_error() {
   record_update_state install-failed
   exit "$exit_status"
 }
+handle_update_signal() {
+  local signal_name="$1"
+  case "$signal_name" in
+    INT) LUMI_ERROR_STATUS=130 ;;
+    TERM) LUMI_ERROR_STATUS=143 ;;
+    HUP) LUMI_ERROR_STATUS=129 ;;
+    *) LUMI_ERROR_STATUS=1 ;;
+  esac
+  LUMI_INTERRUPT_SIGNAL="$signal_name"
+  handle_update_error
+}
+PREVIOUS_REF="$(git_user rev-parse HEAD)"
 trap handle_update_error ERR
+trap 'handle_update_signal INT' INT
+trap 'handle_update_signal TERM' TERM
+trap 'handle_update_signal HUP' HUP
 
 STATUS=$(git_user status --porcelain)
 [[ -z "$STATUS" ]] || { echo "Working tree is dirty; commit or stash changes before updating." >&2; exit 1; }
 record_update_state install-start
-PREVIOUS_REF=$(git_user rev-parse HEAD)
 migrate_legacy_rust_deploy_root
 ensure_current_release_static
 validate_rust_release "$PROJECT_DIR/target/rust-deploy/releases" "$PREVIOUS_REF"
@@ -636,12 +655,14 @@ if [[ "$EFFECTIVE_DEPLOY_MODE" == source ]]; then
     APP_RELEASE_CHANGED=1
   fi
 else
+  lumi_phase_start "Release activation"
   activate_rust_release "$TARGET_COMMIT"
   RELEASE_ACTIVATED=1
   if [[ "$TARGET_COMMIT" != "$PREVIOUS_REF" ]]; then
     APP_RELEASE_CHANGED=1
   fi
   install_rust_cli_command "$PROJECT_HOME"
+  lumi_phase_end "Release activation"
 fi
 lumi_phase_start "Soloist"
 if spotify_environment_ready; then

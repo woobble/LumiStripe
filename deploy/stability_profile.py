@@ -19,7 +19,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 _WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -295,7 +295,7 @@ def _run_process(
     binary: Path, *, spotify_uri: str | None = None
 ) -> tuple[
     subprocess.Popen[str],
-    tempfile.TemporaryFile[str],
+    TextIO,
     int,
     tempfile.TemporaryDirectory[str],
 ]:
@@ -340,7 +340,7 @@ def _run_process(
     return process, log, port, temporary
 
 
-def _stop_process(process: subprocess.Popen[str], log: tempfile.TemporaryFile[str]) -> str:
+def _stop_process(process: subprocess.Popen[str], log: TextIO) -> str:
     if process.poll() is None:
         process.send_signal(signal.SIGTERM)
     try:
@@ -364,7 +364,7 @@ def run_profile(binary: Path, duration_seconds: int) -> dict[str, Any]:
     spotify = _MockSpotify()
     spotify.start()
     process: subprocess.Popen[str] | None = None
-    log: tempfile.TemporaryFile[str] | None = None
+    log: TextIO | None = None
     config_root: tempfile.TemporaryDirectory[str] | None = None
     audio: _AudioSocket | None = None
     started_at = time.monotonic()
@@ -377,6 +377,7 @@ def run_profile(binary: Path, duration_seconds: int) -> dict[str, Any]:
     audio_messages = 0
     state_errors = 0
     spotify_states: set[tuple[bool, bool, bool, str]] = set()
+    simulator_output = ""
     try:
         process, log, port, config_root = _run_process(binary, spotify_uri=spotify.uri)
         base = f"http://127.0.0.1:{port}"
@@ -494,7 +495,7 @@ def run_profile(binary: Path, duration_seconds: int) -> dict[str, Any]:
         if audio is not None:
             audio.close()
             audio = None
-        _stop_process(process, log)
+        simulator_output = _stop_process(process, log)
         process = None
         log.close()
         log = None
@@ -516,16 +517,15 @@ def run_profile(binary: Path, duration_seconds: int) -> dict[str, Any]:
                 quick_log.close()
                 quick_root.cleanup()
 
+        validation_errors: list[str] = []
         if api_errors or state_errors:
-            raise RuntimeError(
-                f"stability profile observed {api_errors} API errors and "
-                f"{state_errors} dashboard state errors; samples: "
-                + "; ".join(api_error_examples)
+            validation_errors.append(
+                f"observed {api_errors} API errors and {state_errors} dashboard state errors"
             )
         if audio_messages == 0:
-            raise RuntimeError("stability profile received no audio telemetry")
+            validation_errors.append("received no audio telemetry")
         if spotify.connections < 2 or spotify.interruptions == 0:
-            raise RuntimeError(
+            validation_errors.append(
                 "mock Spotify did not complete a reconnect after a simulated network interruption"
             )
         observed_login_states = {state[1] for state in spotify_states}
@@ -533,26 +533,30 @@ def run_profile(binary: Path, duration_seconds: int) -> dict[str, Any]:
         if observed_login_states != {False, True} or not {"playing", "paused"}.issubset(
             observed_playback_states
         ):
-            raise RuntimeError(
+            validation_errors.append(
                 "mock Spotify transitions did not reach both login and playback states; "
                 f"observed {len(spotify_states)} API states"
             )
 
         if not samples:
-            raise RuntimeError("stability profile did not collect process resource samples")
+            validation_errors.append("did not collect process resource samples")
         cpu = [float(sample["cpu_seconds"]) for sample in samples]
-        return {
+        report = {
+            "result": "failed" if validation_errors else "passed",
             "duration_seconds": round(time.monotonic() - started_at, 2),
             "operations": operations,
             "resource_samples": len(samples),
-            "cpu_seconds_start_to_end": round(cpu[-1] - cpu[0], 3),
-            "rss_bytes_peak": max(int(sample["rss_bytes"]) for sample in samples),
-            "thread_count_peak": max(int(sample["threads"]) for sample in samples),
-            "file_descriptors_peak": max(int(sample["file_descriptors"]) for sample in samples),
+            "cpu_seconds_start_to_end": round(cpu[-1] - cpu[0], 3) if len(cpu) > 1 else 0.0,
+            "rss_bytes_peak": max((int(sample["rss_bytes"]) for sample in samples), default=0),
+            "thread_count_peak": max((int(sample["threads"]) for sample in samples), default=0),
+            "file_descriptors_peak": max(
+                (int(sample["file_descriptors"]) for sample in samples), default=0
+            ),
             "audio_telemetry_messages": audio_messages,
             "audio_queue_dropped_samples_max": max_audio_queue_drops,
             "render_queue_drops_max": max_render_queue_drops,
             "api_error_count": api_errors,
+            "api_error_examples": api_error_examples,
             "state_error_count": state_errors,
             "mock_spotify_connections": spotify.connections,
             "mock_spotify_state_transitions": spotify.transitions,
@@ -560,7 +564,10 @@ def run_profile(binary: Path, duration_seconds: int) -> dict[str, Any]:
             "simulated_network_interruptions": spotify.interruptions,
             "rapid_start_stop_cycles": rapid_start_stop,
             "task_termination": "clean",
+            "validation_errors": validation_errors,
+            "simulator_log_tail": simulator_output[-4000:],
         }
+        return report
     finally:
         if audio is not None:
             audio.close()
@@ -586,15 +593,25 @@ def main() -> int:
     args = parser.parse_args()
     if not 30 <= args.duration_seconds <= 1800:
         parser.error("--duration-seconds must be between 30 and 1800")
+    report: dict[str, Any]
     try:
         report = run_profile(args.binary.resolve(), args.duration_seconds)
-        serialized = json.dumps(report, indent=2, sort_keys=True) + "\n"
-        if args.output:
-            args.output.parent.mkdir(parents=True, exist_ok=True)
-            args.output.write_text(serialized, encoding="utf-8")
-        sys.stdout.write(serialized)
     except (OSError, RuntimeError, subprocess.SubprocessError, ValueError) as error:
         print(f"stability profile failed: {error}", file=sys.stderr)
+        report = {"result": "failed", "validation_errors": [str(error)]}
+    serialized = json.dumps(report, indent=2, sort_keys=True) + "\n"
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(serialized, encoding="utf-8")
+    sys.stdout.write(serialized)
+    if report.get("result") != "passed":
+        if not report.get("validation_errors"):
+            print("stability profile failed", file=sys.stderr)
+        else:
+            print(
+                "stability profile failed: " + "; ".join(report["validation_errors"]),
+                file=sys.stderr,
+            )
         return 1
     return 0
 

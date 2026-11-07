@@ -27,6 +27,7 @@ def _qualification_fixture(tmp_path: Path) -> tuple[Path, Path]:
             {
                 "source_commit": COMMIT,
                 "runtime_abi": {"glibc_minimum": "2.38"},
+                "toolchain": {"builder": "debian:trixie-slim"},
             }
         ),
         encoding="utf-8",
@@ -56,6 +57,8 @@ def test_report_records_automated_static_and_unverified_evidence(tmp_path: Path)
         application_tests="success",
         stability_tests="skipped",
         rust_arm64_tests="success",
+        release_source="success",
+        release_smoke="success",
         trixie_runtime="passed",
         ubuntu_2604_runtime="passed",
         artifact_integrity="passed",
@@ -69,6 +72,8 @@ def test_report_records_automated_static_and_unverified_evidence(tmp_path: Path)
     assert by_name["Deployment regression tests"]["result"] == "passed"
     assert by_name["Application REST, WebSocket, simulator, and engine tests"]["result"] == "passed"
     assert by_name["Opt-in simulator stability profile"]["result"] == "not verified"
+    assert by_name["Actual packaged ARM64 release startup smoke"]["result"] == "passed"
+    assert by_name["Release source commit and immutable-tag eligibility"]["result"] == "passed"
     assert by_name["Sigstore build provenance"]["verification"] == "automated"
     raspios = by_name["Raspberry Pi OS Trixie ARM64 userspace compatibility"]
     assert raspios["result"] == "not verified"
@@ -99,8 +104,42 @@ def test_report_rejects_release_metadata_from_a_different_commit(tmp_path: Path)
             application_tests="success",
             stability_tests="skipped",
             rust_arm64_tests="success",
+            release_source="success",
+            release_smoke="success",
             trixie_runtime="passed",
             ubuntu_2604_runtime="passed",
             artifact_integrity="passed",
             provenance="passed",
         )
+
+
+def test_ci_report_can_record_failed_gates_without_a_release_artifact(tmp_path: Path) -> None:
+    project, _release_dir = _qualification_fixture(tmp_path)
+    report = qualification.make_report(
+        project_root=project,
+        release_dir=None,
+        commit=COMMIT,
+        deployment_tests="success",
+        frontend_tests="failure",
+        rust_x86_tests="success",
+        application_tests="success",
+        stability_tests="skipped",
+        rust_arm64_tests="success",
+        release_source="failure",
+        release_smoke="failure",
+        trixie_runtime="failure",
+        ubuntu_2604_runtime="skipped",
+        artifact_integrity="failure",
+        provenance="skipped",
+        build_environment="GitHub-hosted Ubuntu 24.04 x86_64 and ARM64 runners",
+    )
+
+    by_name = {check["name"]: check for check in report["checks"]}
+    assert by_name["Frontend contract, lint, tests, and build"]["result"] == "failed"
+    assert report["target"]["architecture"] == "aarch64"
+    assert report["target"]["glibc_minimum"] == "not measured"
+    assert by_name["Debian Trixie ARM64 runtime compatibility"]["result"] == "failed"
+    assert by_name["Release source commit and immutable-tag eligibility"]["result"] == "failed"
+    assert by_name["Actual packaged ARM64 release startup smoke"]["result"] == "failed"
+    assert by_name["Release manifest, source commit, ELF architecture, and dependencies"]["result"] == "failed"
+    assert by_name["Sigstore build provenance"]["result"] == "not verified"

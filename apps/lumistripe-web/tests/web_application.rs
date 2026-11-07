@@ -703,6 +703,30 @@ fn app_config(static_dir: PathBuf) -> AppConfig {
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn corrupt_saved_settings_fail_startup_without_overwriting_the_file() {
+    let _guard = WEB_APPLICATION_TEST_LOCK.lock().await;
+    let temporary = TempDir::new().unwrap();
+    let static_dir = temporary.path().join("static");
+    fs::create_dir_all(&static_dir).unwrap();
+    let config = app_config(static_dir);
+    let original = br#"{"version":12"#;
+    fs::write(&config.settings_file, original).unwrap();
+
+    let startup = WebApplication::start(config.clone(), None).await;
+    let error = match startup {
+        Ok(mut app) => {
+            app.shutdown().await;
+            panic!("corrupt settings unexpectedly allowed application startup");
+        }
+        Err(error) => error,
+    };
+
+    assert!(error.contains("invalid JSON"), "{error}");
+    assert_eq!(fs::read(&config.settings_file).unwrap(), original);
+    assert!(direct_engine_children(std::process::id()).is_empty());
+}
+
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn simulator_cli_starts_native_web_stack_with_python_unavailable() {
@@ -720,6 +744,11 @@ async fn simulator_cli_starts_native_web_stack_with_python_unavailable() {
     )
     .unwrap();
     let settings_file = temporary.path().join("simulator-settings.json");
+    fs::write(
+        &settings_file,
+        br#"{"version":12,"selected_audio_device":"missing input fixture"}"#,
+    )
+    .unwrap();
     let log_path = temporary.path().join("simulator-web.log");
     let port_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = port_listener.local_addr().unwrap().port();
@@ -731,7 +760,7 @@ async fn simulator_cli_starts_native_web_stack_with_python_unavailable() {
         .args([
             "--simulate",
             "--host",
-            "0.0.0.0",
+            "127.0.0.1",
             "--port",
             &port.to_string(),
             "--pixels",

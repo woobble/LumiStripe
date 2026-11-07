@@ -467,6 +467,7 @@ provider_cleanup_backup() {
   done
   rmdir -- "$BACKUP_DIR" || return 1
   BACKUP_DIR=
+  trap - INT TERM HUP
 }
 
 provider_restore_file() {
@@ -617,6 +618,30 @@ provider_restore_service_state() {
   fi
 }
 
+provider_handle_switch_signal() {
+  local signal_name="$1" exit_status
+  case "$signal_name" in
+    INT) exit_status=130 ;;
+    TERM) exit_status=143 ;;
+    HUP) exit_status=129 ;;
+    *) exit_status=1 ;;
+  esac
+  trap - INT TERM HUP
+  provider_error "Spotify provider switch interrupted by $signal_name."
+  if [[ -n "$BACKUP_DIR" ]]; then
+    if provider_restore_service_state; then
+      if provider_cleanup_backup; then
+        provider_error "The previous Spotify provider configuration and service state were restored."
+      else
+        provider_error "Provider rollback completed, but its recovery backup could not be removed; inspect the LumiStripe services before retrying."
+      fi
+    else
+      provider_error "Provider rollback failed; manual recovery is required. The protected backup remains at $BACKUP_DIR."
+    fi
+  fi
+  exit "$exit_status"
+}
+
 provider_switch() {
   local target="$1" confirmation initial_backend
   case "$target" in
@@ -689,6 +714,9 @@ provider_switch() {
     provider_cleanup_backup || true
     return 1
   }
+  trap 'provider_handle_switch_signal INT' INT
+  trap 'provider_handle_switch_signal TERM' TERM
+  trap 'provider_handle_switch_signal HUP' HUP
 
   if [[ "$WEB_WAS_ACTIVE" == 1 ]] && ! systemctl stop lumistripe-web.service; then
     provider_error 'could not stop the LumiStripe web service before switching providers.'
